@@ -1,0 +1,42 @@
+{
+  "adapter": "cifar",
+  "code_file": "DM__training_CIFAR10_pixel.py",
+  "checkpoint": "models/cifar10_checkpoints/epoch_0005.ckpt",
+  "seed": 0,
+  "prompt": "airplane,ship",
+  "batch_size": 1,
+  "num_trajectory_steps_requested": 9,
+  "saved_timesteps": [
+    999,
+    874,
+    749,
+    624,
+    500,
+    375,
+    250,
+    125,
+    0
+  ],
+  "result_dir": "./samples/cifar/result_airplane_ship_seed0",
+  "generation_seconds_total": 275.5812544822693,
+  "generation_seconds_per_sample": 275.5812544822693,
+  "metadata": {
+    "adapter": "cifar",
+    "image_size": 32,
+    "in_channels": 3,
+    "class_cond": true,
+    "cond_mode": "multi_hot",
+    "label_names": [
+      "airplane",
+      "automobile",
+      "bird",
+      "cat",
+      "deer",
+      "dog",
+      "frog",
+      "horse",
+      "ship",
+      "truck"
+    ]
+  }
+}

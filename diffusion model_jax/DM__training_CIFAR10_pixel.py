@@ -1,0 +1,1036 @@
+"""
+50000 data points, 200 epochs, 1000 timesteps, 128 batch size, 2e-4 lr, 1e-4 weight decay, 0.999 ema decay, 100 log_every
+8.333hrs on A100 40GB, 16.5hr on V100 32GB, 25.5hrs on RTX 3090 24GB (with mixed precision)
+"""
+
+
+
+import os
+import math
+import time
+import pickle
+from dataclasses import dataclass, asdict
+from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
+
+import numpy as np
+import jax
+import jax.numpy as jnp
+from flax import linen as nn
+from flax.training import train_state
+import optax
+from flax.serialization import to_bytes, from_bytes
+
+
+# ============================================================
+# Device helpers
+# ============================================================
+
+def choose_device(prefer: str = "auto"):
+    if prefer == "gpu":
+        gpus = jax.devices("gpu")
+        if not gpus:
+            raise RuntimeError("Requested GPU, but JAX sees no GPU devices.")
+        return gpus[0]
+    if prefer == "cpu":
+        return jax.devices("cpu")[0]
+    backend = jax.default_backend()
+    return jax.devices(backend)[0]
+
+
+def maybe_to_dtype(x: jnp.ndarray, use_bfloat16: bool) -> jnp.ndarray:
+    if use_bfloat16:
+        return x.astype(jnp.bfloat16)
+    return x.astype(jnp.float32)
+
+
+# ============================================================
+# CIFAR-10 loader (Python pickled version)
+# ============================================================
+
+def unpickle(file_path: str):
+    with open(file_path, "rb") as fo:
+        return pickle.load(fo, encoding="bytes")
+
+
+def _decode_if_bytes(x):
+    return x.decode("utf-8") if isinstance(x, bytes) else x
+
+
+class CIFAR10Dataset:
+    def __init__(
+        self,
+        root: str,
+        batch_names: Optional[Sequence[str]] = None,
+        use_test: bool = False,
+        class_names: Optional[Sequence[str]] = None,
+        normalize: str = "minus_one_to_one",
+        channels_last: bool = True,
+        exclude_ranges: Optional[Sequence[Tuple[int, int, int]]] = None,
+        exclude_indices: Optional[Dict[int, Sequence[int]]] = None,
+        cond_mode: str = "class_id",
+    ):
+        self.root = root
+        self.channels_last = channels_last
+        self.normalize = normalize
+        self.exclude_ranges = list(exclude_ranges) if exclude_ranges is not None else []
+        self.exclude_indices = {
+            int(k): [int(vv) for vv in v]
+            for k, v in (exclude_indices.items() if exclude_indices is not None else [])
+        }
+        self.cond_mode = cond_mode
+
+        self.label_names = self._load_label_names()
+        self.name_to_id = {name: i for i, name in enumerate(self.label_names)}
+
+        if batch_names is None:
+            batch_names = ["test_batch"] if use_test else [
+                "data_batch_1",
+                "data_batch_2",
+                "data_batch_3",
+                "data_batch_4",
+                "data_batch_5",
+            ]
+        self.batch_names = list(batch_names)
+
+        x, y = self._load_batches(self.batch_names)
+
+        if class_names is not None:
+            keep_ids = np.array([self.name_to_id[name] for name in class_names], dtype=np.int32)
+            mask = np.isin(y, keep_ids)
+            x, y = x[mask], y[mask]
+
+        self.images = self._preprocess(x)
+        self.raw_labels = y.astype(np.int32)
+        self.labels = self._make_condition_targets(self.raw_labels)
+
+    def _load_label_names(self):
+        meta = unpickle(os.path.join(self.root, "batches.meta"))
+        return [_decode_if_bytes(x) for x in meta[b"label_names"]]
+
+    def _load_one(self, path: str):
+        d = unpickle(path)
+        return np.array(d[b"data"], dtype=np.uint8), np.array(d[b"labels"], dtype=np.int32)
+
+    def _apply_exclusions(
+        self,
+        batch_name: str,
+        x: np.ndarray,
+        y: np.ndarray,
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        if not self.exclude_ranges and not self.exclude_indices:
+            return x, y
+
+        if not batch_name.startswith("data_batch_"):
+            return x, y
+
+        try:
+            batch_id = int(batch_name.split("_")[-1])
+        except Exception:
+            return x, y
+
+        n = len(y)
+        keep_mask = np.ones(n, dtype=bool)
+
+        # range exclusions: [(batch_id, start_idx, count), ...]
+        for ex_batch_id, start_idx, count in self.exclude_ranges:
+            if int(ex_batch_id) != batch_id:
+                continue
+
+            start_idx = int(start_idx)
+            count = int(count)
+
+            if count <= 0:
+                print(
+                    f"[exclude_ranges warning] batch {batch_id}: "
+                    f"count={count} is not positive, skipping."
+                )
+                continue
+
+            if start_idx < 0:
+                print(
+                    f"[exclude_ranges warning] batch {batch_id}: "
+                    f"start_idx={start_idx} < 0, clamping to 0."
+                )
+                start_idx = 0
+
+            if start_idx >= n:
+                print(
+                    f"[exclude_ranges warning] batch {batch_id}: "
+                    f"start_idx={start_idx} exceeds batch size {n}. Nothing excluded."
+                )
+                continue
+
+            end_idx = start_idx + count
+            if end_idx > n:
+                print(
+                    f"[exclude_ranges warning] batch {batch_id}: "
+                    f"requested exclusion [{start_idx}, {end_idx}) exceeds batch size {n}. "
+                    f"Excluding only [{start_idx}, {n})."
+                )
+                end_idx = n
+
+            keep_mask[start_idx:end_idx] = False
+            print(
+                f"[exclude_ranges] batch {batch_id}: excluded rows [{start_idx}, {end_idx}) "
+                f"({end_idx - start_idx} samples)."
+            )
+
+        # exact-index exclusions: {batch_id: [idx1, idx2, ...]}
+        if batch_id in self.exclude_indices:
+            raw_idx = np.array(self.exclude_indices[batch_id], dtype=np.int64)
+
+            if raw_idx.size > 0:
+                valid_mask = (raw_idx >= 0) & (raw_idx < n)
+                invalid = raw_idx[~valid_mask]
+                valid_idx = np.unique(raw_idx[valid_mask])
+
+                if invalid.size > 0:
+                    print(
+                        f"[exclude_indices warning] batch {batch_id}: "
+                        f"{invalid.size} indices out of range [0, {n - 1}] were ignored."
+                    )
+
+                if valid_idx.size > 0:
+                    keep_mask[valid_idx] = False
+                    print(
+                        f"[exclude_indices] batch {batch_id}: "
+                        f"excluded {valid_idx.size} exact rows."
+                    )
+
+        return x[keep_mask], y[keep_mask]
+
+    def _load_batches(self, batch_names: Sequence[str]):
+        xs, ys = [], []
+        for name in batch_names:
+            x, y = self._load_one(os.path.join(self.root, name))
+            x, y = self._apply_exclusions(name, x, y)
+            xs.append(x)
+            ys.append(y)
+        return np.concatenate(xs, axis=0), np.concatenate(ys, axis=0)
+
+    def _preprocess(self, flat_x: np.ndarray):
+        x = flat_x.reshape(-1, 3, 32, 32).astype(np.float32)
+        if self.channels_last:
+            x = np.transpose(x, (0, 2, 3, 1))
+        if self.normalize == "minus_one_to_one":
+            x = x / 127.5 - 1.0
+        elif self.normalize == "zero_to_one":
+            x = x / 255.0
+        else:
+            raise ValueError("normalize must be 'minus_one_to_one' or 'zero_to_one'")
+        return x
+
+    def _make_condition_targets(self, y: np.ndarray):
+        y = y.astype(np.int32)
+        if self.cond_mode == "class_id":
+            return y
+        if self.cond_mode == "multi_hot":
+            out = np.zeros((len(y), len(self.label_names)), dtype=np.float32)
+            out[np.arange(len(y)), y] = 1.0
+            return out
+        raise ValueError("cond_mode must be 'class_id' or 'multi_hot'")
+
+    def available_labels(self) -> List[str]:
+        return list(self.label_names)
+
+    def __len__(self):
+        return len(self.labels)
+
+    def batch_iterator(
+        self,
+        batch_size: int,
+        shuffle: bool = True,
+        seed: int = 0,
+        drop_last: bool = False,
+    ):
+        idx = np.arange(len(self))
+        if shuffle:
+            rng = np.random.default_rng(seed)
+            rng.shuffle(idx)
+        for start in range(0, len(idx), batch_size):
+            end = start + batch_size
+            if end > len(idx) and drop_last:
+                break
+            b = idx[start:end]
+            yield self.images[b], self.labels[b]
+
+
+# ============================================================
+# Config
+# ============================================================
+
+@dataclass
+class TrainConfig:
+    # data
+    data_root: str = "./databases/cifar-10-batches-py"
+    batch_names: Optional[Tuple[str, ...]] = None
+    class_names: Optional[Tuple[str, ...]] = None
+    use_test: bool = False
+    exclude_ranges: Optional[Tuple[Tuple[int, int, int], ...]] = None
+    exclude_indices: Optional[Dict[int, Tuple[int, ...]]] = None
+
+    # model / diffusion
+    model_type: str = "unet"
+    image_size: int = 32
+    in_channels: int = 3
+    base_channels: int = 160
+    channel_mults: Tuple[int, ...] = (1, 2, 2)
+    num_res_blocks: int = 2
+    time_emb_dim: int = 128
+    num_classes: int = 10
+    class_cond: bool = True
+    cond_mode: str = "class_id"  # "class_id" or "multi_hot"
+    dropout: float = 0.1
+
+    # training
+    seed: int = 0
+    epochs: int = 200
+    batch_size: int = 128
+    learning_rate: float = 2e-4
+    weight_decay: float = 1e-4
+    grad_clip_norm: float = 1.0
+    ema_decay: float = 0.999
+    log_every: int = 100
+
+    # diffusion
+    timesteps: int = 1000
+    beta_start: float = 1e-4
+    beta_end: float = 0.02
+    predict_x0: bool = False
+
+    # device / precision
+    prefer_device: str = "auto"
+    use_bfloat16: bool = False
+
+    # checkpoint / resume
+    checkpoint_dir: str = "./models/cifar10_checkpoints"
+    save_every_epochs: int = 1
+    keep_last_k: int = None
+    resume_from: Optional[str] = None
+
+    # misc
+    num_workers: int = 0
+
+
+# ============================================================
+# Diffusion schedule
+# ============================================================
+
+@dataclass
+class DiffusionSchedule:
+    betas: jnp.ndarray
+    alphas: jnp.ndarray
+    alphas_cumprod: jnp.ndarray
+    sqrt_alphas_cumprod: jnp.ndarray
+    sqrt_one_minus_alphas_cumprod: jnp.ndarray
+
+
+def make_diffusion_schedule(T: int, beta_start: float, beta_end: float) -> DiffusionSchedule:
+    betas = jnp.linspace(beta_start, beta_end, T, dtype=jnp.float32)
+    alphas = 1.0 - betas
+    alphas_cumprod = jnp.cumprod(alphas)
+    return DiffusionSchedule(
+        betas=betas,
+        alphas=alphas,
+        alphas_cumprod=alphas_cumprod,
+        sqrt_alphas_cumprod=jnp.sqrt(alphas_cumprod),
+        sqrt_one_minus_alphas_cumprod=jnp.sqrt(1.0 - alphas_cumprod),
+    )
+
+
+def extract(a: jnp.ndarray, t: jnp.ndarray, x_shape: Tuple[int, ...]) -> jnp.ndarray:
+    out = a[t]
+    return out.reshape((x_shape[0],) + (1,) * (len(x_shape) - 1))
+
+
+def q_sample(schedule: DiffusionSchedule, x0: jnp.ndarray, t: jnp.ndarray, noise: jnp.ndarray) -> jnp.ndarray:
+    return (
+        extract(schedule.sqrt_alphas_cumprod, t, x0.shape) * x0
+        + extract(schedule.sqrt_one_minus_alphas_cumprod, t, x0.shape) * noise
+    )
+
+
+# ============================================================
+# Embeddings / blocks
+# ============================================================
+
+def sinusoidal_time_embedding(timesteps: jnp.ndarray, dim: int) -> jnp.ndarray:
+    half = dim // 2
+    freqs = jnp.exp(-math.log(10000) * jnp.arange(half) / max(half - 1, 1))
+    args = timesteps[:, None].astype(jnp.float32) * freqs[None, :]
+    emb = jnp.concatenate([jnp.sin(args), jnp.cos(args)], axis=-1)
+    if dim % 2 == 1:
+        emb = jnp.pad(emb, ((0, 0), (0, 1)))
+    return emb
+
+
+class TimeMLP(nn.Module):
+    emb_dim: int
+    out_dim: int
+
+    @nn.compact
+    def __call__(self, t: jnp.ndarray) -> jnp.ndarray:
+        x = sinusoidal_time_embedding(t, self.emb_dim)
+        x = nn.Dense(self.out_dim * 4)(x)
+        x = nn.swish(x)
+        x = nn.Dense(self.out_dim)(x)
+        return x
+
+
+class ClassEmbed(nn.Module):
+    num_classes: int
+    out_dim: int
+
+    @nn.compact
+    def __call__(self, y: jnp.ndarray) -> jnp.ndarray:
+        return nn.Embed(num_embeddings=self.num_classes, features=self.out_dim)(y)
+
+
+class CondMLP(nn.Module):
+    cond_dim: int
+    out_dim: int
+
+    @nn.compact
+    def __call__(self, y: jnp.ndarray) -> jnp.ndarray:
+        x = y.astype(jnp.float32)
+        x = nn.Dense(self.out_dim * 2)(x)
+        x = nn.swish(x)
+        x = nn.Dense(self.out_dim)(x)
+        return x
+
+
+class ResBlock(nn.Module):
+    channels: int
+    emb_dim: int
+    dropout: float = 0.0
+
+    @nn.compact
+    def __call__(self, x: jnp.ndarray, emb: jnp.ndarray, train: bool) -> jnp.ndarray:
+        h = nn.GroupNorm(num_groups=min(8, self.channels))(x)
+        h = nn.swish(h)
+        h = nn.Conv(self.channels, kernel_size=(3, 3), padding="SAME")(h)
+
+        emb_out = nn.Dense(self.channels)(nn.swish(emb))
+        h = h + emb_out[:, None, None, :]
+
+        h = nn.GroupNorm(num_groups=min(8, self.channels))(h)
+        h = nn.swish(h)
+        h = nn.Dropout(rate=self.dropout)(h, deterministic=not train)
+        h = nn.Conv(self.channels, kernel_size=(3, 3), padding="SAME")(h)
+
+        if x.shape[-1] != self.channels:
+            x = nn.Conv(self.channels, kernel_size=(1, 1))(x)
+        return x + h
+
+
+class Downsample(nn.Module):
+    channels: int
+
+    @nn.compact
+    def __call__(self, x):
+        return nn.Conv(self.channels, kernel_size=(3, 3), strides=(2, 2), padding="SAME")(x)
+
+
+class Upsample(nn.Module):
+    channels: int
+
+    @nn.compact
+    def __call__(self, x):
+        B, H, W, C = x.shape
+        x = jax.image.resize(x, (B, H * 2, W * 2, C), method="nearest")
+        return nn.Conv(self.channels, kernel_size=(3, 3), padding="SAME")(x)
+
+
+# ============================================================
+# CNN denoiser
+# ============================================================
+
+class CNNDenoiser(nn.Module):
+    in_channels: int = 3
+    base_channels: int = 64
+    time_emb_dim: int = 128
+    num_classes: int = 10
+    cond_mode: str = "class_id"
+    class_cond: bool = True
+    dropout: float = 0.0
+
+    @nn.compact
+    def __call__(self, x: jnp.ndarray, t: jnp.ndarray, y: Optional[jnp.ndarray], train: bool) -> jnp.ndarray:
+        ch = self.base_channels
+        emb = TimeMLP(self.time_emb_dim, ch)(t)
+        if self.class_cond and y is not None:
+            if self.cond_mode == "class_id":
+                emb = emb + ClassEmbed(self.num_classes, ch)(y)
+            elif self.cond_mode == "multi_hot":
+                emb = emb + CondMLP(self.num_classes, ch)(y)
+            else:
+                raise ValueError("cond_mode must be 'class_id' or 'multi_hot'")
+
+        h = nn.Conv(ch, kernel_size=(3, 3), padding="SAME")(x)
+        h = ResBlock(ch, ch, self.dropout)(h, emb, train)
+        h = ResBlock(ch, ch, self.dropout)(h, emb, train)
+        h = nn.Conv(ch, kernel_size=(3, 3), padding="SAME")(h)
+        h = nn.swish(h)
+        out = nn.Conv(self.in_channels, kernel_size=(3, 3), padding="SAME")(h)
+        return out
+
+
+# ============================================================
+# UNet denoiser
+# ============================================================
+
+class SimpleUNet(nn.Module):
+    in_channels: int = 3
+    base_channels: int = 64
+    channel_mults: Tuple[int, ...] = (1, 2, 2)
+    num_res_blocks: int = 2
+    time_emb_dim: int = 128
+    num_classes: int = 10
+    cond_mode: str = "class_id"
+    class_cond: bool = True
+    dropout: float = 0.0
+
+    @nn.compact
+    def __call__(self, x: jnp.ndarray, t: jnp.ndarray, y: Optional[jnp.ndarray], train: bool) -> jnp.ndarray:
+        emb = TimeMLP(self.time_emb_dim, self.base_channels * 4)(t)
+        if self.class_cond and y is not None:
+            if self.cond_mode == "class_id":
+                emb = emb + ClassEmbed(self.num_classes, self.base_channels * 4)(y)
+            elif self.cond_mode == "multi_hot":
+                emb = emb + CondMLP(self.num_classes, self.base_channels * 4)(y)
+            else:
+                raise ValueError("cond_mode must be 'class_id' or 'multi_hot'")
+
+        hs = []
+
+        h = nn.Conv(self.base_channels, kernel_size=(3, 3), padding="SAME")(x)
+
+        # down path
+        for level, mult in enumerate(self.channel_mults):
+            ch = self.base_channels * mult
+            for _ in range(self.num_res_blocks):
+                h = ResBlock(ch, self.base_channels * 4, self.dropout)(h, emb, train)
+                hs.append(h)
+            if level != len(self.channel_mults) - 1:
+                h = Downsample(ch)(h)
+
+        # middle
+        mid_ch = self.base_channels * self.channel_mults[-1]
+        h = ResBlock(mid_ch, self.base_channels * 4, self.dropout)(h, emb, train)
+        h = ResBlock(mid_ch, self.base_channels * 4, self.dropout)(h, emb, train)
+
+        # up path
+        for level, mult in reversed(list(enumerate(self.channel_mults))):
+            ch = self.base_channels * mult
+            for _ in range(self.num_res_blocks):
+                skip = hs.pop()
+                if h.shape[1] != skip.shape[1] or h.shape[2] != skip.shape[2]:
+                    raise ValueError(f"Skip shape mismatch: h={h.shape}, skip={skip.shape}")
+                h = jnp.concatenate([h, skip], axis=-1)
+                h = ResBlock(ch, self.base_channels * 4, self.dropout)(h, emb, train)
+            if level != 0:
+                h = Upsample(ch)(h)
+
+        h = nn.GroupNorm(num_groups=min(8, h.shape[-1]))(h)
+        h = nn.swish(h)
+        out = nn.Conv(self.in_channels, kernel_size=(3, 3), padding="SAME")(h)
+        return out
+
+
+# ============================================================
+# Flax train state with EMA
+# ============================================================
+
+class TrainState(train_state.TrainState):
+    ema_params: Any
+    rng: jax.Array
+
+
+def _save_checkpoint(checkpoint_dir: str, epoch: int, state: TrainState, cfg: TrainConfig, keep_last_k: int = 5):
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    ckpt_path = os.path.join(checkpoint_dir, f"epoch_{epoch:04d}.ckpt")
+    payload = {
+        "epoch": int(epoch),
+        "config": asdict(cfg),
+        "state_bytes": to_bytes(state),
+    }
+    with open(ckpt_path, "wb") as f:
+        pickle.dump(payload, f)
+
+    paths = []
+    for name in os.listdir(checkpoint_dir):
+        if name.startswith("epoch_") and name.endswith(".ckpt"):
+            try:
+                ep = int(name[len("epoch_"):-len(".ckpt")])
+                paths.append((ep, os.path.join(checkpoint_dir, name)))
+            except Exception:
+                pass
+    paths.sort(key=lambda x: x[0])
+    if keep_last_k is not None and keep_last_k > 0 and len(paths) > keep_last_k:
+        for _, old_path in paths[:-keep_last_k]:
+            try:
+                os.remove(old_path)
+            except FileNotFoundError:
+                pass
+
+
+def _restore_checkpoint(ckpt_path: str, state_template: TrainState) -> Tuple[TrainState, int]:
+    with open(ckpt_path, "rb") as f:
+        payload = pickle.load(f)
+    restored_state = from_bytes(state_template, payload["state_bytes"])
+    start_epoch = int(payload.get("epoch", 0))
+    return restored_state, start_epoch
+
+
+# ============================================================
+# Build model/state
+# ============================================================
+
+def build_model(cfg: TrainConfig) -> nn.Module:
+    if cfg.model_type == "cnn":
+        return CNNDenoiser(
+            in_channels=cfg.in_channels,
+            base_channels=cfg.base_channels,
+            time_emb_dim=cfg.time_emb_dim,
+            num_classes=cfg.num_classes,
+            cond_mode=cfg.cond_mode,
+            class_cond=cfg.class_cond,
+            dropout=cfg.dropout,
+        )
+    if cfg.model_type == "unet":
+        return SimpleUNet(
+            in_channels=cfg.in_channels,
+            base_channels=cfg.base_channels,
+            channel_mults=cfg.channel_mults,
+            num_res_blocks=cfg.num_res_blocks,
+            time_emb_dim=cfg.time_emb_dim,
+            num_classes=cfg.num_classes,
+            cond_mode=cfg.cond_mode,
+            class_cond=cfg.class_cond,
+            dropout=cfg.dropout,
+        )
+    raise ValueError("cfg.model_type must be 'cnn' or 'unet'")
+
+
+def create_train_state(cfg: TrainConfig, model: nn.Module, rng: jax.Array, device) -> TrainState:
+    dummy_x = jnp.zeros((1, cfg.image_size, cfg.image_size, cfg.in_channels), dtype=jnp.float32)
+    dummy_t = jnp.zeros((1,), dtype=jnp.int32)
+    if cfg.class_cond:
+        if cfg.cond_mode == "class_id":
+            dummy_y = jnp.zeros((1,), dtype=jnp.int32)
+        elif cfg.cond_mode == "multi_hot":
+            dummy_y = jnp.zeros((1, cfg.num_classes), dtype=jnp.float32)
+        else:
+            raise ValueError("cond_mode must be 'class_id' or 'multi_hot'")
+    else:
+        dummy_y = None
+
+    with jax.default_device(device):
+        variables = model.init(rng, dummy_x, dummy_t, dummy_y, train=True)
+        params = variables["params"]
+
+    tx = optax.chain(
+        optax.clip_by_global_norm(cfg.grad_clip_norm),
+        optax.adamw(learning_rate=cfg.learning_rate, weight_decay=cfg.weight_decay),
+    )
+    return TrainState.create(apply_fn=model.apply, params=params, tx=tx, ema_params=params, rng=rng)
+
+
+# ============================================================
+# Loss and step
+# ============================================================
+
+def mse_loss(pred: jnp.ndarray, target: jnp.ndarray) -> jnp.ndarray:
+    return jnp.mean((pred - target) ** 2)
+
+
+def make_train_step(schedule: DiffusionSchedule, cfg: TrainConfig):
+    @jax.jit
+    def train_step(state: TrainState, x0: jnp.ndarray, y: jnp.ndarray):
+        rng, noise_rng, t_rng, dropout_rng = jax.random.split(state.rng, 4)
+        B = x0.shape[0]
+        t = jax.random.randint(t_rng, (B,), 0, cfg.timesteps)
+        noise = jax.random.normal(noise_rng, x0.shape, dtype=x0.dtype)
+        xt = q_sample(schedule, x0, t, noise)
+        target = x0 if cfg.predict_x0 else noise
+
+        def loss_fn(params):
+            pred = state.apply_fn(
+                {"params": params},
+                xt,
+                t,
+                y if cfg.class_cond else None,
+                train=True,
+                rngs={"dropout": dropout_rng},
+            )
+            loss = mse_loss(pred, target)
+            return loss, {"pred_mean": jnp.mean(pred), "t_mean": jnp.mean(t.astype(jnp.float32))}
+
+        (loss, aux), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
+        new_state = state.apply_gradients(grads=grads)
+        ema_params = optax.incremental_update(new_state.params, state.ema_params, step_size=1.0 - cfg.ema_decay)
+        new_state = new_state.replace(ema_params=ema_params, rng=rng)
+        metrics = {"loss": loss, **aux}
+        return new_state, metrics
+
+    return train_step
+
+
+def make_eval_step(schedule: DiffusionSchedule, cfg: TrainConfig):
+    @jax.jit
+    def eval_step(state: TrainState, x0: jnp.ndarray, y: jnp.ndarray):
+        B = x0.shape[0]
+        base = jax.random.PRNGKey(0)
+        t_rng, noise_rng = jax.random.split(base)
+        t = jax.random.randint(t_rng, (B,), 0, cfg.timesteps)
+        noise = jax.random.normal(noise_rng, x0.shape, dtype=x0.dtype)
+        xt = q_sample(schedule, x0, t, noise)
+        target = x0 if cfg.predict_x0 else noise
+        pred = state.apply_fn(
+            {"params": state.ema_params},
+            xt,
+            t,
+            y if cfg.class_cond else None,
+            train=False,
+        )
+        loss = mse_loss(pred, target)
+        return {"loss": loss}
+
+    return eval_step
+
+
+# ============================================================
+# Optional sampling (DDPM ancestral, simple version)
+# ============================================================
+
+def predict_x0_from_eps(schedule: DiffusionSchedule, xt: jnp.ndarray, t: jnp.ndarray, eps: jnp.ndarray):
+    return (
+        xt - extract(schedule.sqrt_one_minus_alphas_cumprod, t, xt.shape) * eps
+    ) / extract(schedule.sqrt_alphas_cumprod, t, xt.shape)
+
+
+def p_sample_loop(
+    state: TrainState,
+    model: nn.Module,
+    schedule: DiffusionSchedule,
+    cfg: TrainConfig,
+    rng: jax.Array,
+    shape: Tuple[int, ...],
+    y: Optional[jnp.ndarray] = None,
+):
+    x = jax.random.normal(rng, shape)
+    betas = schedule.betas
+    alphas = schedule.alphas
+    alphas_cumprod = schedule.alphas_cumprod
+
+    for i in reversed(range(cfg.timesteps)):
+        t = jnp.full((shape[0],), i, dtype=jnp.int32)
+        pred = model.apply({"params": state.ema_params}, x, t, y if cfg.class_cond else None, train=False)
+        eps = pred if not cfg.predict_x0 else None
+        x0_pred = pred if cfg.predict_x0 else predict_x0_from_eps(schedule, x, t, pred)
+        x0_pred = jnp.clip(x0_pred, -1.0, 1.0)
+
+        alpha_t = alphas[i]
+        abar_t = alphas_cumprod[i]
+        beta_t = betas[i]
+        coef1 = 1.0 / jnp.sqrt(alpha_t)
+        coef2 = beta_t / jnp.sqrt(1.0 - abar_t)
+        mean = coef1 * (
+            x - coef2 * (
+                eps if eps is not None
+                else (x - jnp.sqrt(abar_t) * x0_pred) / jnp.sqrt(1.0 - abar_t)
+            )
+        )
+        if i > 0:
+            rng, step_rng = jax.random.split(rng)
+            noise = jax.random.normal(step_rng, shape)
+            x = mean + jnp.sqrt(beta_t) * noise
+        else:
+            x = mean
+    return x
+
+
+# ============================================================
+# Training loop
+# ============================================================
+
+def numpy_batch_to_jax(x_np: np.ndarray, y_np: np.ndarray, device, use_bfloat16: bool):
+    with jax.default_device(device):
+        x = jax.device_put(x_np)
+        x = maybe_to_dtype(x, use_bfloat16)
+        if y_np.ndim == 1:
+            y = jax.device_put(y_np.astype(np.int32))
+        else:
+            y = jax.device_put(y_np.astype(np.float32))
+    return x, y
+
+
+def train(cfg: TrainConfig):
+    # ----------------------------
+    # basic setup
+    # ----------------------------
+    device = choose_device(cfg.prefer_device)
+    print(f"Using backend={jax.default_backend()}, device={device}")
+    print("Config:", asdict(cfg))
+
+    train_drop_last = False
+    eval_drop_last = False
+
+    total_train_start = time.time()
+
+    # ----------------------------
+    # dataset
+    # ----------------------------
+    ds = CIFAR10Dataset(
+        root=cfg.data_root,
+        batch_names=cfg.batch_names,
+        use_test=cfg.use_test,
+        class_names=cfg.class_names,
+        normalize="minus_one_to_one",
+        channels_last=True,
+        exclude_ranges=cfg.exclude_ranges,
+        exclude_indices=cfg.exclude_indices,
+        cond_mode=cfg.cond_mode,
+    )
+
+    print(
+        f"Loaded {len(ds)} images from "
+        f"{cfg.batch_names if cfg.batch_names is not None else ('test' if cfg.use_test else 'all train batches')}"
+    )
+    if cfg.class_names is not None:
+        print(f"Class subset: {cfg.class_names}")
+
+    # update derived config values
+    cfg = TrainConfig(**{**asdict(cfg), "num_classes": len(ds.label_names)})
+
+    # ----------------------------
+    # step counts
+    # ----------------------------
+    if train_drop_last:
+        steps_per_epoch = len(ds) // cfg.batch_size
+    else:
+        steps_per_epoch = math.ceil(len(ds) / cfg.batch_size)
+
+    total_steps = steps_per_epoch * cfg.epochs
+    print(
+        f"steps_per_epoch={steps_per_epoch} "
+        f"(drop_last={train_drop_last}), total_epochs={cfg.epochs}, total_train_steps={total_steps}"
+    )
+
+    if steps_per_epoch == 0:
+        raise ValueError(
+            f"Dataset too small for batch_size={cfg.batch_size} when drop_last={train_drop_last}. "
+            f"Either reduce batch_size or set train_drop_last=False."
+        )
+
+    # ----------------------------
+    # model / optimizer / diffusion
+    # ----------------------------
+    rng = jax.random.PRNGKey(cfg.seed)
+    schedule = make_diffusion_schedule(cfg.timesteps, cfg.beta_start, cfg.beta_end)
+    model = build_model(cfg)
+    state = create_train_state(cfg, model, rng, device)
+    train_step = make_train_step(schedule, cfg)
+    eval_step = make_eval_step(schedule, cfg)
+
+    # ----------------------------
+    # resume checkpoint
+    # ----------------------------
+    start_epoch = 0
+    if cfg.resume_from is not None:
+        state, start_epoch = _restore_checkpoint(cfg.resume_from, state)
+        print(f"Resumed from checkpoint: {cfg.resume_from} (completed through epoch {start_epoch})")
+
+    global_step = start_epoch * steps_per_epoch
+
+    # ----------------------------
+    # training loop
+    # ----------------------------
+    for epoch in range(start_epoch + 1, cfg.epochs + 1):
+        epoch_start = time.time()
+        losses = []
+
+        for x_np, y_np in ds.batch_iterator(
+            batch_size=cfg.batch_size,
+            shuffle=True,
+            seed=cfg.seed + epoch,
+            drop_last=train_drop_last,
+        ):
+            x, y = numpy_batch_to_jax(x_np, y_np, device, cfg.use_bfloat16)
+            state, metrics = train_step(state, x, y)
+
+            loss_val = float(metrics["loss"])
+            losses.append(loss_val)
+            global_step += 1
+
+            if global_step % cfg.log_every == 0:
+                print(
+                    f"epoch={epoch}/{cfg.epochs} "
+                    f"step={global_step}/{total_steps} "
+                    f"loss={loss_val:.6f} "
+                    f"pred_mean={float(metrics['pred_mean']):.4f} "
+                    f"t_mean={float(metrics['t_mean']):.2f}"
+                )
+
+        epoch_loss = float(np.mean(losses)) if losses else float("nan")
+        epoch_elapsed = time.time() - epoch_start
+        print(f"[epoch {epoch}/{cfg.epochs}] train_loss={epoch_loss:.6f} time={epoch_elapsed:.1f}s")
+
+        # ----------------------------
+        # lightweight eval
+        # ----------------------------
+        for x_np, y_np in ds.batch_iterator(
+            batch_size=cfg.batch_size,
+            shuffle=False,
+            seed=0,
+            drop_last=eval_drop_last,
+        ):
+            x, y = numpy_batch_to_jax(x_np, y_np, device, cfg.use_bfloat16)
+            eval_metrics = eval_step(state, x, y)
+            print(f"[epoch {epoch}/{cfg.epochs}] eval_loss={float(eval_metrics['loss']):.6f}")
+            break
+
+        # ----------------------------
+        # save checkpoint
+        # ----------------------------
+        if cfg.save_every_epochs > 0 and (epoch % cfg.save_every_epochs == 0):
+            _save_checkpoint(
+                checkpoint_dir=cfg.checkpoint_dir,
+                epoch=epoch,
+                state=state,
+                cfg=cfg,
+                keep_last_k=cfg.keep_last_k,
+            )
+            print(f"Saved checkpoint for epoch {epoch} to {cfg.checkpoint_dir} (keeping last {cfg.keep_last_k})")
+
+    # ----------------------------
+    # total time
+    # ----------------------------
+    total_elapsed = time.time() - total_train_start
+    total_h = int(total_elapsed // 3600)
+    total_m = int((total_elapsed % 3600) // 60)
+    total_s = total_elapsed % 60
+
+    print(
+        f"Training finished. Total time: "
+        f"{total_h:02d}h {total_m:02d}m {total_s:05.2f}s "
+        f"({total_elapsed:.2f} seconds)"
+    )
+
+    return state, model, schedule, ds
+
+
+# ============================================================
+# Prompt helpers (useful for sampling scripts)
+# ============================================================
+
+def available_cifar10_labels(root: str = "./databases/cifar-10-batches-py") -> List[str]:
+    meta = unpickle(os.path.join(root, "batches.meta"))
+    return [_decode_if_bytes(x) for x in meta[b"label_names"]]
+
+
+def encode_cifar_prompt(
+    prompt,
+    label_names: Optional[Sequence[str]] = None,
+    cond_mode: str = "class_id",
+) -> np.ndarray:
+    """
+    Examples
+    --------
+    class_id mode:
+        encode_cifar_prompt("airplane", cond_mode="class_id") -> scalar int array
+        encode_cifar_prompt(0, cond_mode="class_id") -> scalar int array
+
+    multi_hot mode:
+        encode_cifar_prompt("airplane,ship", cond_mode="multi_hot") -> (10,) float array
+        encode_cifar_prompt(["airplane", "ship"], cond_mode="multi_hot") -> (10,) float array
+    """
+    if label_names is None:
+        label_names = available_cifar10_labels()
+    name_to_id = {name: i for i, name in enumerate(label_names)}
+
+    if cond_mode == "class_id":
+        if isinstance(prompt, str):
+            prompt = prompt.strip()
+            if "," in prompt:
+                raise ValueError(
+                    "cond_mode='class_id' accepts exactly one class. "
+                    "Use cond_mode='multi_hot' if you want prompts like 'airplane,ship'."
+                )
+            if prompt.isdigit():
+                cid = int(prompt)
+            else:
+                if prompt not in name_to_id:
+                    raise ValueError(f"Unknown CIFAR label: {prompt}. Available labels: {list(label_names)}")
+                cid = name_to_id[prompt]
+        else:
+            cid = int(prompt)
+
+        if cid < 0 or cid >= len(label_names):
+            raise ValueError(f"class id {cid} is out of range [0, {len(label_names)-1}]")
+        return np.array(cid, dtype=np.int32)
+
+    if cond_mode == "multi_hot":
+        if isinstance(prompt, str):
+            tokens = [tok.strip() for tok in prompt.split(",") if tok.strip()]
+        else:
+            tokens = [str(tok).strip() for tok in prompt]
+
+        if len(tokens) == 0:
+            raise ValueError("Empty prompt provided for multi_hot conditioning.")
+
+        vec = np.zeros((len(label_names),), dtype=np.float32)
+        for tok in tokens:
+            if tok.isdigit():
+                cid = int(tok)
+                if cid < 0 or cid >= len(label_names):
+                    raise ValueError(f"class id {cid} is out of range [0, {len(label_names)-1}]")
+            else:
+                if tok not in name_to_id:
+                    raise ValueError(f"Unknown CIFAR label: {tok}. Available labels: {list(label_names)}")
+                cid = name_to_id[tok]
+            vec[cid] = 1.0
+        return vec
+
+    raise ValueError("cond_mode must be 'class_id' or 'multi_hot'")
+
+
+# ============================================================
+# Example main
+# ============================================================
+
+if __name__ == "__main__":
+    cfg = TrainConfig(
+        data_root="./databases/cifar-10-batches-py",
+        batch_names=("data_batch_1","data_batch_2",),
+
+        # old style contiguous exclusions
+        exclude_ranges=((3, 1500, 500), (2, 200, 30), ),
+
+        # new style exact-index exclusions
+        #exclude_indices={
+        #    1: (0, 3, 7),
+        #    3: (15, 18, 22),
+        #},
+
+        model_type="unet",
+        prefer_device="auto",
+        epochs=5,
+        batch_size=128,
+        learning_rate=2e-4,
+        base_channels=160,
+        class_cond=True,
+        cond_mode="multi_hot", # "class_id" or "multi_hot"
+        checkpoint_dir="./models/cifar10_checkpoints",
+        save_every_epochs=1,
+        keep_last_k=None,
+        resume_from=None,
+    )
+
+    state, model, schedule, ds = train(cfg)
+
+    # Example sampling after training:
+    # rng = jax.random.PRNGKey(123)
+    # y = jnp.array([0, 1, 2, 3], dtype=jnp.int32) if cfg.class_cond else None
+    # samples = p_sample_loop(state, model, schedule, cfg, rng, (4, 32, 32, 3), y=y)
+    # print(samples.shape)

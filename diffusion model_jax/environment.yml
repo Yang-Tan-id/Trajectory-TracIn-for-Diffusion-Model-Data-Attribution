@@ -1,0 +1,20 @@
+name: experiment_dm
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - numpy
+  - pandas
+  - scipy
+  - matplotlib
+  - tqdm
+  - pillow
+  - scikit-learn
+  - ipykernel
+  - pip
+  - pip:
+      - "jax[cuda12]"
+      - flax
+      - optax
+      - orbax-checkpoint
+      - chex
