@@ -13,15 +13,15 @@ from torch.utils.data import DataLoader
 
 
 
-# You said you have this:
+
 from dataset_loader import ColorGridDataset
 
 def set_seed(seed: int):
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    # CPU only; if you later use GPU, also set cuda seeds.
-    torch.use_deterministic_algorithms(False)  # keep training sane; DDIM sampling will still be deterministic with eta=0.
+
+    torch.use_deterministic_algorithms(False)  
     
     
 @dataclass
@@ -58,7 +58,6 @@ def sinusoidal_time_embedding(t: torch.Tensor, dim: int) -> torch.Tensor:
     freqs = torch.exp(
         -math.log(10000) * torch.arange(0, half, device=t.device, dtype=torch.float32) / (half - 1)
     )
-    # (B, half)
     args = t.float().unsqueeze(1) * freqs.unsqueeze(0)
     emb = torch.cat([torch.sin(args), torch.cos(args)], dim=1)
     if dim % 2 == 1:
@@ -72,7 +71,6 @@ class CondEpsModel(nn.Module):
         super().__init__()
         self.time_dim = time_dim
 
-        # Embed time and cond into a shared vector
         self.time_mlp = nn.Sequential(
             nn.Linear(time_dim, base_ch),
             nn.SiLU(),
@@ -84,7 +82,6 @@ class CondEpsModel(nn.Module):
             nn.Linear(base_ch, base_ch),
         )
 
-        # Convolutional trunk
         self.in_conv = nn.Conv2d(in_ch, base_ch, 3, padding=1)
         self.block1 = nn.Sequential(
             nn.GroupNorm(8, base_ch),
@@ -114,14 +111,14 @@ class CondEpsModel(nn.Module):
         cond: (B,cond_dim)
         returns eps_pred: (B,C,H,W)
         """
-        # (B, time_dim)
+
         t_emb = sinusoidal_time_embedding(t, self.time_dim)
-        # (B, base_ch)
+
         emb = self.time_mlp(t_emb) + self.cond_mlp(cond)
-        bias = self.emb_to_bias(emb).unsqueeze(-1).unsqueeze(-1)  # (B, base_ch, 1, 1)
+        bias = self.emb_to_bias(emb).unsqueeze(-1).unsqueeze(-1) 
 
         h = self.in_conv(x)
-        # Add conditioning bias at multiple depths (cheap & effective)
+
         h = h + bias
         h = h + self.block1(h)
         h = h + bias
@@ -175,7 +172,7 @@ def ddim_sample(
     set_seed(seed)
     B, C, H, W = shape
 
-    # init x
+
     if x_T is None:
         x = torch.randn(shape, device=device)
     else:
@@ -199,11 +196,11 @@ def ddim_sample(
     save_set = set(save_steps)
     saved: Dict[int, torch.Tensor] = {}
 
-    # step 0 snapshot (initial)
+
     if 0 in save_set:
         saved[0] = x.detach().clone()
 
-    # DDIM updates; after i-th update, we are at step index i+1
+
     for i in range(len(ts) - 1):
         t = ts[i].repeat(B)
         t_prev = ts[i + 1].item()
@@ -238,10 +235,10 @@ def main():
     sample_every = 10
     ddim_steps   = 50
 
-    device = "cpu"  # you said no GPU
+    device = "cpu"  
     set_seed(seed)
 
-    # Dataset: supports grid_size if you added it; otherwise it will ignore
+  
     if "grid_size" in ColorGridDataset.__init__.__code__.co_varnames:
         ds = ColorGridDataset(csv_path, grid_size=grid_size)
     else:
@@ -249,7 +246,7 @@ def main():
 
     loader = DataLoader(ds, batch_size=batch_size, shuffle=True, num_workers=0, drop_last=True)
 
-    # Peek shapes
+
     x0, cond0 = ds[0]
     C, H, W = x0.shape
     cond_dim = cond0.numel()
@@ -288,7 +285,7 @@ def main():
         if (epoch % sample_every) == 0:
             model.eval()
             x_real, c_real = ds[random.randrange(len(ds))]
-            c_real = c_real.unsqueeze(0).to(device)  # (1,cond_dim)
+            c_real = c_real.unsqueeze(0).to(device)  
 
             x_gen = ddim_sample(
                 model=model,
@@ -314,7 +311,7 @@ def main():
         "vocab": getattr(ds, "vocab", None),
     }
     # usage:
-    save_path = next_checkpoint_path("models", save_name)  # e.g. models/49_10_001.pt
+    save_path = next_checkpoint_path("models", save_name)  
     torch.save(ckpt, save_path)
     print(f"Saved checkpoint to {save_path}")
 
