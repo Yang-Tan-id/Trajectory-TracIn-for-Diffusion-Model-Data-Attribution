@@ -1,0 +1,104 @@
+{
+  "n_runs": 6,
+  "axis_names": [
+    "blue",
+    "red",
+    "yellow"
+  ],
+  "mu_pos": [
+    0.31327671936374896,
+    0.3458577319721224,
+    0.3408655486641286
+  ],
+  "mu_neg": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "records": [
+    {
+      "label": "b",
+      "input_json": "tracein_end_runs/model_109900_b_endpoint_journey_trak/baseline/result_topk.json",
+      "pos_triplet": [
+        0.3057877168502178,
+        0.34034119084740033,
+        0.3538710923023818
+      ],
+      "neg_triplet": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "label": "by",
+      "input_json": "tracein_end_runs/model_109900_by_endpoint_journey_trak/baseline/result_topk.json",
+      "pos_triplet": [
+        0.29737942055575595,
+        0.34634507227490335,
+        0.35627550716934075
+      ],
+      "neg_triplet": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "label": "r",
+      "input_json": "tracein_end_runs/model_109900_r_endpoint_journey_trak/baseline/result_topk.json",
+      "pos_triplet": [
+        0.3067812202177899,
+        0.3460916515030148,
+        0.3471271282791954
+      ],
+      "neg_triplet": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "label": "rb",
+      "input_json": "tracein_end_runs/model_109900_rb_endpoint_journey_trak/baseline/result_topk.json",
+      "pos_triplet": [
+        0.3281196130056939,
+        0.3315108176211773,
+        0.34036956937312884
+      ],
+      "neg_triplet": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "label": "y",
+      "input_json": "tracein_end_runs/model_109900_y_endpoint_journey_trak/baseline/result_topk.json",
+      "pos_triplet": [
+        0.31730022768282945,
+        0.35203984595580634,
+        0.3306599263613642
+      ],
+      "neg_triplet": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "label": "yr",
+      "input_json": "tracein_end_runs/model_109900_yr_endpoint_journey_trak/baseline/result_topk.json",
+      "pos_triplet": [
+        0.32429211787020684,
+        0.3588178136304325,
+        0.3168900684993607
+      ],
+      "neg_triplet": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    }
+  ]
+}

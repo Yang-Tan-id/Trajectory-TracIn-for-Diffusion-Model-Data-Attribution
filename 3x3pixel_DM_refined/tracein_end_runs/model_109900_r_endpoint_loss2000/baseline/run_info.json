@@ -1,0 +1,13 @@
+{
+  "ref_ckpt": "models_checkpoints/r/model_109900/baseline/baseline_0350.pt",
+  "T": 2000,
+  "ddim_steps": 2000,
+  "M_scored": 2000,
+  "device": "cuda",
+  "seed": 808,
+  "time_started": 2527140.182298367,
+  "use_six_index_lists": true,
+  "endpoint_mc_samples": 8,
+  "train_mc_samples": 8,
+  "elapsed_sec": 35139.04011843586
+}

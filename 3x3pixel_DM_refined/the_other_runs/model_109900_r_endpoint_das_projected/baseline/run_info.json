@@ -1,0 +1,31 @@
+{
+  "ref_ckpt": "models_checkpoints/r/model_109900/baseline/baseline_0350.pt",
+  "num_ckpts": 1,
+  "ckpt_stride": 1,
+  "max_num_ckpts": 1,
+  "used_ckpts": [
+    "baseline_0350.pt"
+  ],
+  "T": 2000,
+  "ddim_steps": 2000,
+  "M_scored": 29700,
+  "M_ref_for_H": 200,
+  "device": "cuda",
+  "seed": 808,
+  "timesteps": [
+    0,
+    400,
+    800,
+    1200,
+    1600,
+    1999
+  ],
+  "num_mc_noise": 8,
+  "damping": 0.001,
+  "proj_dim": 4069,
+  "num_terms_total": 48,
+  "elapsed_sec": 507900.53682863107,
+  "extra_random_points": 0,
+  "hessian_mode": "selected",
+  "solver": "projected_das_countsketch"
+}

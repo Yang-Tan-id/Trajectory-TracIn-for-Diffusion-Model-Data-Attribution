@@ -1,0 +1,104 @@
+{
+  "n_runs": 6,
+  "axis_names": [
+    "blue",
+    "red",
+    "yellow"
+  ],
+  "mu_pos": [
+    0.25299244897032963,
+    0.37238153880886454,
+    0.37462601222080577
+  ],
+  "mu_neg": [
+    0.3039932909234409,
+    0.30000764505111593,
+    0.39599906402544316
+  ],
+  "records": [
+    {
+      "label": "b",
+      "input_json": "tracein_traj_runs/model_109900_b_traj_objective2000/baseline/result_topk.json",
+      "pos_triplet": [
+        0.3217466653071757,
+        0.34075285529059407,
+        0.3375004794022302
+      ],
+      "neg_triplet": [
+        0.23816066847163686,
+        0.2859037594467222,
+        0.47593557208164095
+      ]
+    },
+    {
+      "label": "by",
+      "input_json": "tracein_traj_runs/model_109900_by_traj_objective2000/baseline/result_topk.json",
+      "pos_triplet": [
+        0.25527162336158177,
+        0.383249327632649,
+        0.3614790490057692
+      ],
+      "neg_triplet": [
+        0.28202680352995135,
+        0.3085689231120833,
+        0.40940427335796536
+      ]
+    },
+    {
+      "label": "r",
+      "input_json": "tracein_traj_runs/model_109900_r_traj_objective2000/baseline/result_topk.json",
+      "pos_triplet": [
+        0.2502101753911536,
+        0.38706596933167675,
+        0.3627238552771697
+      ],
+      "neg_triplet": [
+        0.29164663189257256,
+        0.2876860053095872,
+        0.4206673627978402
+      ]
+    },
+    {
+      "label": "rb",
+      "input_json": "tracein_traj_runs/model_109900_rb_traj_objective2000/baseline/result_topk.json",
+      "pos_triplet": [
+        0.24015550624486473,
+        0.370729219433,
+        0.3891152743221352
+      ],
+      "neg_triplet": [
+        0.3181001077338996,
+        0.2930555082969682,
+        0.38884438396913223
+      ]
+    },
+    {
+      "label": "y",
+      "input_json": "tracein_traj_runs/model_109900_y_traj_objective2000/baseline/result_topk.json",
+      "pos_triplet": [
+        0.23367588810748605,
+        0.3387693382473296,
+        0.42755477364518435
+      ],
+      "neg_triplet": [
+        0.3322178454231933,
+        0.3554225311087426,
+        0.31235962346806406
+      ]
+    },
+    {
+      "label": "yr",
+      "input_json": "tracein_traj_runs/model_109900_yr_traj_objective2000/baseline/result_topk.json",
+      "pos_triplet": [
+        0.21689483540971602,
+        0.413722522917938,
+        0.369382641672346
+      ],
+      "neg_triplet": [
+        0.36180768848939177,
+        0.26940914303259206,
+        0.3687831684780162
+      ]
+    }
+  ]
+}

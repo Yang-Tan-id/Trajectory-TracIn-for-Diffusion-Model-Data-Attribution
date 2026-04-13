@@ -1,0 +1,35 @@
+BATCH SUMMARY (triplets are group shares over score-mass)
+n_runs = 6
+
+AXES (1+2, 3+4, 5+6) renamed to:
+  (blue, red, yellow)
+
+GLOBAL ZERO (center) — per-dim mean across runs:
+  mu_pos (blue,red,yellow) = 0.3956, 0.3055, 0.2988
+  mu_neg (blue,red,yellow) = 0.3350, 0.3498, 0.3152
+
+PER RUN:
+- b
+    pos = 0.3889, 0.2906, 0.3205
+    neg = 0.3321, 0.3392, 0.3286
+    file = tracein_end_runs/model_109900_b_endpoint_loss2000/baseline/result_topk.json
+- by
+    pos = 0.3875, 0.3100, 0.3025
+    neg = 0.3344, 0.3206, 0.3450
+    file = tracein_end_runs/model_109900_by_endpoint_loss2000/baseline/result_topk.json
+- r
+    pos = 0.4009, 0.2951, 0.3039
+    neg = 0.3404, 0.3375, 0.3221
+    file = tracein_end_runs/model_109900_r_endpoint_loss2000/baseline/result_topk.json
+- rb
+    pos = 0.3807, 0.2873, 0.3320
+    neg = 0.3442, 0.3210, 0.3347
+    file = tracein_end_runs/model_109900_rb_endpoint_loss2000/baseline/result_topk.json
+- y
+    pos = 0.4133, 0.3193, 0.2674
+    neg = 0.3300, 0.3811, 0.2890
+    file = tracein_end_runs/model_109900_y_endpoint_loss2000/baseline/result_topk.json
+- yr
+    pos = 0.4024, 0.3309, 0.2666
+    neg = 0.3287, 0.3994, 0.2719
+    file = tracein_end_runs/model_109900_yr_endpoint_loss2000/baseline/result_topk.json

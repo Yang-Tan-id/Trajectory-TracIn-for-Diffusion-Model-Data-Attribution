@@ -1,0 +1,62 @@
+{
+  "n_runs": 3,
+  "axis_names": [
+    "blue",
+    "red",
+    "yellow"
+  ],
+  "mu_pos": [
+    0.5568785748747381,
+    0.249013071469911,
+    0.1941083536553508
+  ],
+  "mu_neg": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "records": [
+    {
+      "label": "r",
+      "input_json": "tracein_end_runs/model_109900_r_endpoint_das_projected/baseline/result_topk.json",
+      "pos_triplet": [
+        0.03736166301210951,
+        0.4050984200816686,
+        0.5575399169062218
+      ],
+      "neg_triplet": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "label": "y",
+      "input_json": "tracein_end_runs/model_109900_y_endpoint_das_projected/baseline/result_topk.json",
+      "pos_triplet": [
+        0.633718535906009,
+        0.34186481213959463,
+        0.02441665195439636
+      ],
+      "neg_triplet": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "label": "yr",
+      "input_json": "tracein_end_runs/model_109900_yr_endpoint_das_projected/baseline/result_topk.json",
+      "pos_triplet": [
+        0.9995555257060957,
+        7.598218846985183e-05,
+        0.00036849210543424786
+      ],
+      "neg_triplet": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    }
+  ]
+}

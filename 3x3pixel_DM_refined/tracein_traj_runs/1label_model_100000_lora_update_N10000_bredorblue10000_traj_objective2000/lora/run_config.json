@@ -1,0 +1,27 @@
+{
+  "device": "cpu",
+  "seed": 8848,
+  "csv_path": "generated_database/49_100000.csv",
+  "grid_size": 3,
+  "model_root": "models_checkpoints/model_100000",
+  "baseline_dir": "models_checkpoints/model_100000/baseline",
+  "lora_update_dir": "models_checkpoints/model_100000/lora_update_N10000_bredorblue10000",
+  "query_labels": [
+    "shape_color_purple"
+  ],
+  "ddim_steps": 2000,
+  "eta": 0.0,
+  "num_traj_t": 100,
+  "m_proj": 4,
+  "max_train_points": 2000,
+  "topk": 2000,
+  "use_baseline_ckpts": false,
+  "use_lora_ckpts": true,
+  "reference_ckpt": null,
+  "random_subset": true,
+  "use_two_index_lists": true,
+  "idx_list_1": "models_checkpoints/model_100000/lora_update_N10000_bpurple10000/subset.csv",
+  "idx_list_2": "models_checkpoints/model_100000/lora_update_N10000_bredorblue10000/subset.csv",
+  "idx_col_name": "idx",
+  "out_dir": "tracein_traj_runs/model_100000_lora_update_N10000_bredorblue10000_traj_objective2000/lora"
+}

@@ -1,0 +1,104 @@
+{
+  "n_runs": 6,
+  "axis_names": [
+    "blue",
+    "red",
+    "yellow"
+  ],
+  "mu_pos": [
+    0.395615625084321,
+    0.3055436321747886,
+    0.2988407427408904
+  ],
+  "mu_neg": [
+    0.3349740374421426,
+    0.3498028581599178,
+    0.31522310439793966
+  ],
+  "records": [
+    {
+      "label": "b",
+      "input_json": "tracein_end_runs/model_109900_b_endpoint_loss2000/baseline/result_topk.json",
+      "pos_triplet": [
+        0.3888601025088626,
+        0.29062151376912243,
+        0.3205183837220151
+      ],
+      "neg_triplet": [
+        0.3321314352563676,
+        0.33924779761845175,
+        0.32862076712518057
+      ]
+    },
+    {
+      "label": "by",
+      "input_json": "tracein_end_runs/model_109900_by_endpoint_loss2000/baseline/result_topk.json",
+      "pos_triplet": [
+        0.38752767591986687,
+        0.30995714758719045,
+        0.30251517649294263
+      ],
+      "neg_triplet": [
+        0.33442487697946743,
+        0.3205945944547212,
+        0.3449805285658113
+      ]
+    },
+    {
+      "label": "r",
+      "input_json": "tracein_end_runs/model_109900_r_endpoint_loss2000/baseline/result_topk.json",
+      "pos_triplet": [
+        0.4009400701557335,
+        0.2951218872406266,
+        0.3039380426036398
+      ],
+      "neg_triplet": [
+        0.3403816952280225,
+        0.3374832684365515,
+        0.322135036335426
+      ]
+    },
+    {
+      "label": "rb",
+      "input_json": "tracein_end_runs/model_109900_rb_endpoint_loss2000/baseline/result_topk.json",
+      "pos_triplet": [
+        0.38065814311173485,
+        0.28733451717185526,
+        0.33200733971640994
+      ],
+      "neg_triplet": [
+        0.34421767266893755,
+        0.32104206522618617,
+        0.3347402621048764
+      ]
+    },
+    {
+      "label": "y",
+      "input_json": "tracein_end_runs/model_109900_y_endpoint_loss2000/baseline/result_topk.json",
+      "pos_triplet": [
+        0.41329256640816575,
+        0.31928711544955585,
+        0.2674203181422784
+      ],
+      "neg_triplet": [
+        0.3299500787607059,
+        0.38109063317662933,
+        0.2889592880626647
+      ]
+    },
+    {
+      "label": "yr",
+      "input_json": "tracein_end_runs/model_109900_yr_endpoint_loss2000/baseline/result_topk.json",
+      "pos_triplet": [
+        0.4024151924015624,
+        0.330939611830381,
+        0.2666451957680566
+      ],
+      "neg_triplet": [
+        0.3287384657593543,
+        0.3993587900469667,
+        0.271902744193679
+      ]
+    }
+  ]
+}

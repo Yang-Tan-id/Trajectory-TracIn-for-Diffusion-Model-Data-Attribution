@@ -1,0 +1,10 @@
+{
+  "ref_ckpt": "models_checkpoints/model_100000/baseline/baseline_0350.pt",
+  "T": 2000,
+  "ddim_steps": 2000,
+  "M_scored": 500,
+  "device": "cpu",
+  "seed": 1,
+  "time_started": 500449.681886791,
+  "use_two_index_lists": true
+}

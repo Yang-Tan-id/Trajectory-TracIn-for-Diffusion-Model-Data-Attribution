@@ -1,0 +1,31 @@
+PER-SRC SCORE SUMS + SHARES (score-based, not counts)
+src | pos_sum | neg_sum | abs_neg_sum | pos_share(all_pos_sum) | neg_share(all_abs_neg_sum) | zero_count
+----------------------------------------------------------------------------------------------------------------------
+  1 | 15261.576 | -9840.727 |    9840.727 |              0.1682 |                  0.1477 |          0
+  2 | 13491.209 | -13532.720 |   13532.720 |              0.1487 |                  0.2032 |          0
+  3 | 15054.473 | -8943.440 |    8943.440 |              0.1660 |                  0.1343 |          0
+  4 | 14824.878 | -7928.759 |    7928.759 |              0.1634 |                  0.1190 |          0
+  5 | 16121.727 | -14309.233 |   14309.233 |              0.1777 |                  0.2148 |          0
+  6 | 15955.817 | -12049.117 |   12049.117 |              0.1759 |                  0.1809 |          0
+
+TOTALS
+------
+sum_pos_sum=90709.679493
+sum_neg_sum=-66603.996824  (negative)
+sum_abs_neg_sum=66603.996824
+sum_zero_count=0
+
+GROUPED SHARES (1+2 : 3+4 : 5+6) — SCORE SUMS
+------------------------------------------------
+Positive score-mass share of ALL positive scores:
+  src 1+2: pos_sum=28752.784637  (share=0.3170)
+  src 3+4: pos_sum=29879.350681  (share=0.3294)
+  src 5+6: pos_sum=32077.544175  (share=0.3536)
+Negative score-mass share of ALL negative scores (using abs values):
+  src 1+2: abs_neg_sum=23373.447172  (share=0.3509)
+  src 3+4: abs_neg_sum=16872.199008  (share=0.2533)
+  src 5+6: abs_neg_sum=26358.350643  (share=0.3957)
+
+Triplet ratios (as decimals, sum to 1.0 when totals > 0):
+  pos_sum (1+2, 3+4, 5+6) = 0.3170, 0.3294, 0.3536
+  abs_neg_sum (1+2, 3+4, 5+6) = 0.3509, 0.2533, 0.3957

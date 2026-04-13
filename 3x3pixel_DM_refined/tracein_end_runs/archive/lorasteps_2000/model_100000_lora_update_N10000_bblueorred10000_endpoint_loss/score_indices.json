@@ -1,0 +1,47 @@
+{
+  "N_eff": 10,
+  "items": [
+    {
+      "src": 1,
+      "idx": 82808
+    },
+    {
+      "src": 2,
+      "idx": 61151
+    },
+    {
+      "src": 2,
+      "idx": 96821
+    },
+    {
+      "src": 2,
+      "idx": 88768
+    },
+    {
+      "src": 2,
+      "idx": 83844
+    },
+    {
+      "src": 1,
+      "idx": 97241
+    },
+    {
+      "src": 2,
+      "idx": 88875
+    },
+    {
+      "src": 1,
+      "idx": 8618
+    },
+    {
+      "src": 1,
+      "idx": 72373
+    },
+    {
+      "src": 1,
+      "idx": 35625
+    }
+  ],
+  "idx_list_1": "models_checkpoints/model_100000/lora_update_N10000_bpurple10000/subset.csv",
+  "idx_list_2": "models_checkpoints/model_100000/lora_update_N10000_bblueorred10000/subset.csv"
+}

@@ -1,0 +1,104 @@
+{
+  "n_runs": 6,
+  "axis_names": [
+    "blue",
+    "red",
+    "yellow"
+  ],
+  "mu_pos": [
+    0.354259339459617,
+    0.32325263169816215,
+    0.3224880288422208
+  ],
+  "mu_neg": [
+    0.0,
+    0.0,
+    0.0
+  ],
+  "records": [
+    {
+      "label": "b",
+      "input_json": "tracein_end_runs/model_109900_b_endpoint_dtrak/baseline/result_topk.json",
+      "pos_triplet": [
+        0.3498182482658433,
+        0.32132484373992454,
+        0.3288569079942322
+      ],
+      "neg_triplet": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "label": "by",
+      "input_json": "tracein_end_runs/model_109900_by_endpoint_dtrak/baseline/result_topk.json",
+      "pos_triplet": [
+        0.3444864531473692,
+        0.3280824680456745,
+        0.3274310788069563
+      ],
+      "neg_triplet": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "label": "r",
+      "input_json": "tracein_end_runs/model_109900_r_endpoint_dtrak/baseline/result_topk.json",
+      "pos_triplet": [
+        0.34665492166519946,
+        0.31649343360185817,
+        0.3368516447329423
+      ],
+      "neg_triplet": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "label": "rb",
+      "input_json": "tracein_end_runs/model_109900_rb_endpoint_dtrak/baseline/result_topk.json",
+      "pos_triplet": [
+        0.3510454600954588,
+        0.32267640505437406,
+        0.3262781348501672
+      ],
+      "neg_triplet": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "label": "y",
+      "input_json": "tracein_end_runs/model_109900_y_endpoint_dtrak/baseline/result_topk.json",
+      "pos_triplet": [
+        0.36479447368313495,
+        0.3306128501355499,
+        0.30459267618131514
+      ],
+      "neg_triplet": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "label": "yr",
+      "input_json": "tracein_end_runs/model_109900_yr_endpoint_dtrak/baseline/result_topk.json",
+      "pos_triplet": [
+        0.36875647990069643,
+        0.3203257896115918,
+        0.3109177304877117
+      ],
+      "neg_triplet": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    }
+  ]
+}

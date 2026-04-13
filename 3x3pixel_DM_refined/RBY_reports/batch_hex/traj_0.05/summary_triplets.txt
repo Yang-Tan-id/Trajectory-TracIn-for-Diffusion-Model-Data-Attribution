@@ -1,0 +1,31 @@
+BATCH SUMMARY (triplets are group shares over score-mass)
+n_runs = 5
+
+AXES (1+2, 3+4, 5+6) renamed to:
+  (blue, red, yellow)
+
+GLOBAL ZERO (center) — per-dim mean across runs:
+  mu_pos (blue,red,yellow) = 0.2569, 0.3791, 0.3640
+  mu_neg (blue,red,yellow) = 0.2983, 0.2889, 0.4127
+
+PER RUN:
+- b
+    pos = 0.3217, 0.3408, 0.3375
+    neg = 0.2382, 0.2859, 0.4759
+    file = tracein_traj_runs/model_109900_b_traj_objective2000/baseline/result_topk.json
+- by
+    pos = 0.2553, 0.3832, 0.3615
+    neg = 0.2820, 0.3086, 0.4094
+    file = tracein_traj_runs/model_109900_by_traj_objective2000/baseline/result_topk.json
+- r
+    pos = 0.2502, 0.3871, 0.3627
+    neg = 0.2916, 0.2877, 0.4207
+    file = tracein_traj_runs/model_109900_r_traj_objective2000/baseline/result_topk.json
+- rb
+    pos = 0.2402, 0.3707, 0.3891
+    neg = 0.3181, 0.2931, 0.3888
+    file = tracein_traj_runs/model_109900_rb_traj_objective2000/baseline/result_topk.json
+- yr
+    pos = 0.2169, 0.4137, 0.3694
+    neg = 0.3618, 0.2694, 0.3688
+    file = tracein_traj_runs/model_109900_yr_traj_objective2000/baseline/result_topk.json

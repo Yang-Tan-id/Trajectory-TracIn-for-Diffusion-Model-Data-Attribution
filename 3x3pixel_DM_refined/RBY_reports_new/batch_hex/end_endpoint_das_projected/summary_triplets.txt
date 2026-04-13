@@ -1,0 +1,23 @@
+BATCH SUMMARY (triplets are group shares over score-mass)
+n_runs = 3
+
+AXES (1+2, 3+4, 5+6) renamed to:
+  (blue, red, yellow)
+
+GLOBAL ZERO (center) — per-dim mean across runs:
+  mu_pos (blue,red,yellow) = 0.5569, 0.2490, 0.1941
+  mu_neg (blue,red,yellow) = 0.0000, 0.0000, 0.0000
+
+PER RUN:
+- r
+    pos = 0.0374, 0.4051, 0.5575
+    neg = 0.0000, 0.0000, 0.0000
+    file = tracein_end_runs/model_109900_r_endpoint_das_projected/baseline/result_topk.json
+- y
+    pos = 0.6337, 0.3419, 0.0244
+    neg = 0.0000, 0.0000, 0.0000
+    file = tracein_end_runs/model_109900_y_endpoint_das_projected/baseline/result_topk.json
+- yr
+    pos = 0.9996, 0.0001, 0.0004
+    neg = 0.0000, 0.0000, 0.0000
+    file = tracein_end_runs/model_109900_yr_endpoint_das_projected/baseline/result_topk.json

@@ -1,0 +1,40 @@
+{
+  "device": "cuda",
+  "seed": 808,
+  "csv_path": "generated_database/49_100000.csv",
+  "grid_size": 3,
+  "baseline_dir": "models_checkpoints/yr/model_109900/baseline",
+  "query_labels": [
+    "background_color_red",
+    "background_color_blue",
+    "background_color_yellow"
+  ],
+  "ddim_steps": 2000,
+  "eta": 0.0,
+  "idx_list_1": "generated_database/RBY/subset/blue_A_idx.csv",
+  "idx_list_2": "generated_database/RBY/subset/blue_B_idx.csv",
+  "idx_list_3": "generated_database/RBY/subset/red_A_idx.csv",
+  "idx_list_4": "generated_database/RBY/subset/red_B_idx.csv",
+  "idx_list_5": "generated_database/RBY/subset/yellow_A_idx.csv",
+  "idx_list_6": "generated_database/RBY/subset/yellow_B_idx.csv",
+  "idx_col_name": "idx",
+  "extra_random_points": 0,
+  "batch_size": 64,
+  "timesteps": [
+    0,
+    400,
+    800,
+    1200,
+    1600,
+    1999
+  ],
+  "num_mc_noise": 8,
+  "damping": 0.001,
+  "hessian_mode": "selected",
+  "proj_dim": 4069,
+  "max_ref_points_for_H": 200,
+  "ckpt_stride": 1,
+  "max_num_ckpts": 1,
+  "topk": 2000,
+  "out_dir": "tracein_end_runs/model_109900_yr_endpoint_das_projected/baseline"
+}
