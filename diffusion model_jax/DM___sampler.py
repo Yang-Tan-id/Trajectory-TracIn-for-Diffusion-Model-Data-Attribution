@@ -1,38 +1,32 @@
+from __future__ import annotations
 
 """
-5min to run 1000-step trajectory.
-"""
-"""
+DM___sampler.py — unified JAX diffusion sampler with optional trajectory saving.
 
-DM___sampler.py
-
-Unified JAX diffusion sampler with optional trajectory saving.
+About 5 minutes to run a 1000-step trajectory (typical).
 
 Example
 -------
-python DM___sampler.py \
-    --adapter cifar \
-    --code-file "DM__training_CIFAR10_pixel.py" \
-    --checkpoint "models/cifar10_checkpoints/epoch_0005.ckpt" \
-    --seed 0 \
-    --prompt "airplane,ship" \
-    --batch-size 1 \
-    --num-trajectory-steps 9 \
+python DM___sampler.py \\
+    --adapter cifar \\
+    --code-file "DM__training_CIFAR10_pixel.py" \\
+    --checkpoint "models/cifar10_checkpoints/epoch_0005.ckpt" \\
+    --seed 0 \\
+    --prompt "airplane,ship" \\
+    --batch-size 1 \\
+    --num-trajectory-steps 9 \\
     --outdir ./samples/cifar
-    
-python DM___sampler.py \
-  --adapter x3 \
-  --code-file "DM__training_X3_pixel.py" \
-  --checkpoint "models/x3_checkpoints/epoch_0005.ckpt" \
-  --seed 0 \
-  --prompt "background_color_red,shape_color_blue,shape_ring" \
-  --batch-size 1 \
-  --num-trajectory-steps 9 \
-  --outdir ./samples/x3    
 
+python DM___sampler.py \\
+  --adapter x3 \\
+  --code-file "DM__training_X3_pixel.py" \\
+  --checkpoint "models/x3_checkpoints/epoch_0005.ckpt" \\
+  --seed 0 \\
+  --prompt "background_color_red,shape_color_blue,shape_ring" \\
+  --batch-size 1 \\
+  --num-trajectory-steps 9 \\
+  --outdir ./samples/x3
 """
-
-from __future__ import annotations
 
 import argparse
 import csv
@@ -232,46 +226,60 @@ class ModelAdapter(ABC):
         betas = self.schedule.betas
         alphas = self.schedule.alphas
         alphas_cumprod = self.schedule.alphas_cumprod
+        cond_y = y if getattr(self.cfg, "class_cond", True) else None
+        t_seq = jnp.arange(self.cfg.timesteps - 1, -1, -1, dtype=jnp.int32)
 
-        x = jax.random.normal(rng, shape)
-        saved: Dict[int, np.ndarray] = {}
+        @jax.jit
+        def _sample_scan_loop(init_rng: jax.Array):
+            init_x = jax.random.normal(init_rng, shape)
 
-        for i in reversed(range(self.cfg.timesteps)):
-            t = jnp.full((shape[0],), i, dtype=jnp.int32)
-            pred = self.model.apply(
-                {"params": self.state.ema_params},
-                x,
-                t,
-                y if getattr(self.cfg, "class_cond", True) else None,
-                train=False,
-            )
-
-            eps = pred if not self.cfg.predict_x0 else None
-            x0_pred = pred if self.cfg.predict_x0 else self.predict_x0_from_eps(x, t, pred)
-
-            if i in save_timesteps:
-                saved[i] = np.array(self.decode_samples(np.array(x0_pred)))
-
-            alpha_t = alphas[i]
-            abar_t = alphas_cumprod[i]
-            beta_t = betas[i]
-            coef1 = 1.0 / jnp.sqrt(alpha_t)
-            coef2 = beta_t / jnp.sqrt(1.0 - abar_t)
-            mean = coef1 * (
-                x - coef2 * (
-                    eps if eps is not None
-                    else (x - jnp.sqrt(abar_t) * x0_pred) / jnp.sqrt(1.0 - abar_t)
+            def body_fn(carry, i):
+                x, loop_rng = carry
+                t = jnp.full((shape[0],), i, dtype=jnp.int32)
+                pred = self.model.apply(
+                    {"params": self.state.ema_params},
+                    x,
+                    t,
+                    cond_y,
+                    train=False,
                 )
-            )
 
-            if i > 0:
-                rng, step_rng = jax.random.split(rng)
+                x0_pred = pred if self.cfg.predict_x0 else self.predict_x0_from_eps(x, t, pred)
+                eps = pred if not self.cfg.predict_x0 else (
+                    x - jnp.sqrt(alphas_cumprod[i]) * x0_pred
+                ) / jnp.sqrt(1.0 - alphas_cumprod[i])
+
+                alpha_t = alphas[i]
+                abar_t = alphas_cumprod[i]
+                beta_t = betas[i]
+                coef1 = 1.0 / jnp.sqrt(alpha_t)
+                coef2 = beta_t / jnp.sqrt(1.0 - abar_t)
+                mean = coef1 * (x - coef2 * eps)
+
+                loop_rng, step_rng = jax.random.split(loop_rng)
                 noise = jax.random.normal(step_rng, shape)
-                x = mean + jnp.sqrt(beta_t) * noise
-            else:
-                x = mean
+                next_x = jax.lax.cond(
+                    i > 0,
+                    lambda _: mean + jnp.sqrt(beta_t) * noise,
+                    lambda _: mean,
+                    operand=None,
+                )
+                return (next_x, loop_rng), x0_pred
 
-        final_images = self.decode_samples(np.array(x))
+            (final_x, _), x0_preds = jax.lax.scan(body_fn, (init_x, init_rng), t_seq)
+            return final_x, x0_preds
+
+        final_x, x0_preds_seq = _sample_scan_loop(rng)
+        final_images = self.decode_samples(np.array(final_x))
+        saved: Dict[int, np.ndarray] = {}
+        x0_preds_seq_np = np.array(x0_preds_seq)
+
+        for i in save_timesteps:
+            if i < 0 or i >= self.cfg.timesteps:
+                continue
+            seq_idx = self.cfg.timesteps - 1 - i
+            saved[i] = np.array(self.decode_samples(x0_preds_seq_np[seq_idx]))
+
         if 0 not in saved:
             saved[0] = np.array(final_images)
         return final_images, saved
@@ -282,11 +290,70 @@ class ModelAdapter(ABC):
 # ============================================================
 
 class CIFARAdapter(ModelAdapter):
+    def __init__(
+        self,
+        code_file: str,
+        checkpoint: str,
+        prefer_device: str = "auto",
+        cifar_data_root: Optional[str] = None,
+    ):
+        super().__init__(code_file, checkpoint, prefer_device)
+        self._cifar_data_root_override = cifar_data_root
+
     def _load_module(self):
         return load_python_module(self.code_file, "user_cifar_train_module")
 
     def _build_config(self):
         return self.module.TrainConfig(**self.cfg_dict)
+
+    def setup(self):
+        self.module = self._load_module()
+        self.cfg = self._build_config()
+        self.cfg.data_root = self._resolve_cifar_data_root()
+        self.schedule = self.module.make_diffusion_schedule(
+            self.cfg.timesteps, self.cfg.beta_start, self.cfg.beta_end
+        )
+        self.model, self.state = self._restore_model_and_state()
+
+    def _resolve_cifar_data_root(self) -> str:
+        """batches.meta must exist; checkpoint paths are often relative to cwd or the training script dir."""
+        meta_name = "batches.meta"
+
+        def has_meta(root: str) -> bool:
+            return os.path.isfile(os.path.join(root, meta_name))
+
+        if self._cifar_data_root_override is not None:
+            root = os.path.abspath(os.path.expanduser(self._cifar_data_root_override))
+            if not has_meta(root):
+                raise FileNotFoundError(
+                    f"CIFAR {meta_name} not found under --cifar-data-root.\n"
+                    f"  Expected: {os.path.join(root, meta_name)}"
+                )
+            return root
+
+        cfg_root = os.path.abspath(os.path.expanduser(self.cfg.data_root))
+        if has_meta(cfg_root):
+            return cfg_root
+
+        raw = self.cfg.data_root
+        if not os.path.isabs(os.path.expanduser(raw)):
+            rel = raw[2:] if raw.startswith("./") else raw
+            code_dir = os.path.dirname(os.path.abspath(self.code_file))
+            candidate = os.path.normpath(os.path.join(code_dir, rel))
+            if has_meta(candidate):
+                print(
+                    f"[cifar] data_root not found at {cfg_root}; using {candidate} (relative to --code-file directory)"
+                )
+                return candidate
+
+        raise FileNotFoundError(
+            "Could not find CIFAR batches.meta for class names / prompts.\n"
+            f"  Tried checkpoint config path: {os.path.join(cfg_root, meta_name)}\n"
+            "  If you run from a directory that does not contain ./databases/..., either:\n"
+            "    cd to the same directory you used for training, or\n"
+            '    pass --cifar-data-root /path/to/cifar-10-batches-py\n'
+            "  (the directory that directly contains batches.meta)."
+        )
 
     def _load_label_names(self) -> List[str]:
         meta_path = os.path.join(self.cfg.data_root, "batches.meta")
@@ -397,6 +464,7 @@ class CIFARAdapter(ModelAdapter):
         labels = self._load_label_names()
         return {
             "adapter": "cifar",
+            "data_root": self.cfg.data_root,
             "image_size": int(self.cfg.image_size),
             "in_channels": int(self.cfg.in_channels),
             "class_cond": bool(self.cfg.class_cond),
@@ -512,9 +580,24 @@ ADAPTERS = {
 }
 
 
-def make_adapter(name: str, code_file: str, checkpoint: str, prefer_device: str = "auto") -> ModelAdapter:
+def make_adapter(
+    name: str,
+    code_file: str,
+    checkpoint: str,
+    prefer_device: str = "auto",
+    cifar_data_root: Optional[str] = None,
+) -> ModelAdapter:
     if name not in ADAPTERS:
         raise ValueError(f"Unknown adapter '{name}'. Available: {sorted(ADAPTERS.keys())}")
+    if cifar_data_root is not None and name != "cifar":
+        raise ValueError("--cifar-data-root is only valid with --adapter cifar")
+    if name == "cifar":
+        return CIFARAdapter(
+            code_file=code_file,
+            checkpoint=checkpoint,
+            prefer_device=prefer_device,
+            cifar_data_root=cifar_data_root,
+        )
     return ADAPTERS[name](code_file=code_file, checkpoint=checkpoint, prefer_device=prefer_device)
 
 
@@ -533,6 +616,12 @@ def main():
     parser.add_argument("--num-trajectory-steps", type=int, default=9,
                         help="Number of evenly spaced reverse timesteps to save, including near start and final.")
     parser.add_argument("--print-metadata", action="store_true")
+    parser.add_argument(
+        "--cifar-data-root",
+        type=str,
+        default=None,
+        help="Path to cifar-10-batches-py (folder containing batches.meta). Use when the saved data_root is wrong for your cwd.",
+    )
 
     args = parser.parse_args()
 
@@ -541,6 +630,7 @@ def main():
         code_file=args.code_file,
         checkpoint=args.checkpoint,
         prefer_device=args.prefer_device,
+        cifar_data_root=args.cifar_data_root,
     )
     adapter.setup()
 

@@ -8,7 +8,10 @@
 import os
 import math
 import time
+import sys
 import pickle
+import functools
+from collections import deque
 from dataclasses import dataclass, asdict
 from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
 
@@ -16,6 +19,7 @@ import numpy as np
 import jax
 import jax.numpy as jnp
 from flax import linen as nn
+from flax import jax_utils
 from flax.training import train_state
 import optax
 from flax.serialization import to_bytes, from_bytes
@@ -37,10 +41,31 @@ def choose_device(prefer: str = "auto"):
     return jax.devices(backend)[0]
 
 
+def choose_devices(prefer: str = "auto") -> List[jax.Device]:
+    if prefer == "gpu":
+        devices = jax.devices("gpu")
+        if not devices:
+            raise RuntimeError("Requested GPU, but JAX sees no GPU devices.")
+        return devices
+    if prefer == "cpu":
+        return jax.devices("cpu")
+    backend = jax.default_backend()
+    return jax.devices(backend)
+
+
 def maybe_to_dtype(x: jnp.ndarray, use_bfloat16: bool) -> jnp.ndarray:
     if use_bfloat16:
         return x.astype(jnp.bfloat16)
     return x.astype(jnp.float32)
+
+
+def resolve_compute_dtype(use_bfloat16: bool):
+    return jnp.bfloat16 if use_bfloat16 else jnp.float32
+
+
+def resolve_param_dtype():
+    # Keep params in fp32 for stability; use compute dtype for activations.
+    return jnp.float32
 
 
 # ============================================================
@@ -299,8 +324,10 @@ class TrainConfig:
     predict_x0: bool = False
 
     # device / precision
-    prefer_device: str = "auto"
+    prefer_device: str = "gpu"
     use_bfloat16: bool = False
+    use_data_parallel: bool = True
+    num_devices: Optional[int] = None
 
     # checkpoint / resume
     checkpoint_dir: str = "./models/cifar10_checkpoints"
@@ -310,6 +337,15 @@ class TrainConfig:
 
     # misc
     num_workers: int = 0
+    use_tqdm: bool = True
+
+    # logging
+    use_wandb: bool = True
+    wandb_project: str = "DA-unet-cifar10-pixel-training"
+    wandb_entity: Optional[str] = "clearoboticslab"
+    wandb_run_name: Optional[str] = None
+    wandb_mode: str = "online"  # "online", "offline", or "disabled"
+    wandb_log_step_metrics: bool = False
 
 
 # ============================================================
@@ -367,35 +403,46 @@ def sinusoidal_time_embedding(timesteps: jnp.ndarray, dim: int) -> jnp.ndarray:
 class TimeMLP(nn.Module):
     emb_dim: int
     out_dim: int
+    dtype: Any = jnp.float32
+    param_dtype: Any = jnp.float32
 
     @nn.compact
     def __call__(self, t: jnp.ndarray) -> jnp.ndarray:
         x = sinusoidal_time_embedding(t, self.emb_dim)
-        x = nn.Dense(self.out_dim * 4)(x)
+        x = nn.Dense(self.out_dim * 4, dtype=self.dtype, param_dtype=self.param_dtype)(x)
         x = nn.swish(x)
-        x = nn.Dense(self.out_dim)(x)
+        x = nn.Dense(self.out_dim, dtype=self.dtype, param_dtype=self.param_dtype)(x)
         return x
 
 
 class ClassEmbed(nn.Module):
     num_classes: int
     out_dim: int
+    dtype: Any = jnp.float32
+    param_dtype: Any = jnp.float32
 
     @nn.compact
     def __call__(self, y: jnp.ndarray) -> jnp.ndarray:
-        return nn.Embed(num_embeddings=self.num_classes, features=self.out_dim)(y)
+        return nn.Embed(
+            num_embeddings=self.num_classes,
+            features=self.out_dim,
+            dtype=self.dtype,
+            param_dtype=self.param_dtype,
+        )(y)
 
 
 class CondMLP(nn.Module):
     cond_dim: int
     out_dim: int
+    dtype: Any = jnp.float32
+    param_dtype: Any = jnp.float32
 
     @nn.compact
     def __call__(self, y: jnp.ndarray) -> jnp.ndarray:
-        x = y.astype(jnp.float32)
-        x = nn.Dense(self.out_dim * 2)(x)
+        x = y.astype(self.dtype)
+        x = nn.Dense(self.out_dim * 2, dtype=self.dtype, param_dtype=self.param_dtype)(x)
         x = nn.swish(x)
-        x = nn.Dense(self.out_dim)(x)
+        x = nn.Dense(self.out_dim, dtype=self.dtype, param_dtype=self.param_dtype)(x)
         return x
 
 
@@ -403,42 +450,86 @@ class ResBlock(nn.Module):
     channels: int
     emb_dim: int
     dropout: float = 0.0
+    dtype: Any = jnp.float32
+    param_dtype: Any = jnp.float32
 
     @nn.compact
     def __call__(self, x: jnp.ndarray, emb: jnp.ndarray, train: bool) -> jnp.ndarray:
-        h = nn.GroupNorm(num_groups=min(8, self.channels))(x)
+        h = nn.GroupNorm(
+            num_groups=min(8, self.channels),
+            dtype=self.dtype,
+            param_dtype=self.param_dtype,
+        )(x)
         h = nn.swish(h)
-        h = nn.Conv(self.channels, kernel_size=(3, 3), padding="SAME")(h)
+        h = nn.Conv(
+            self.channels,
+            kernel_size=(3, 3),
+            padding="SAME",
+            dtype=self.dtype,
+            param_dtype=self.param_dtype,
+        )(h)
 
-        emb_out = nn.Dense(self.channels)(nn.swish(emb))
+        emb_out = nn.Dense(self.channels, dtype=self.dtype, param_dtype=self.param_dtype)(nn.swish(emb))
         h = h + emb_out[:, None, None, :]
 
-        h = nn.GroupNorm(num_groups=min(8, self.channels))(h)
+        h = nn.GroupNorm(
+            num_groups=min(8, self.channels),
+            dtype=self.dtype,
+            param_dtype=self.param_dtype,
+        )(h)
         h = nn.swish(h)
         h = nn.Dropout(rate=self.dropout)(h, deterministic=not train)
-        h = nn.Conv(self.channels, kernel_size=(3, 3), padding="SAME")(h)
+        h = nn.Conv(
+            self.channels,
+            kernel_size=(3, 3),
+            padding="SAME",
+            dtype=self.dtype,
+            param_dtype=self.param_dtype,
+        )(h)
 
         if x.shape[-1] != self.channels:
-            x = nn.Conv(self.channels, kernel_size=(1, 1))(x)
+            x = nn.Conv(
+                self.channels,
+                kernel_size=(1, 1),
+                dtype=self.dtype,
+                param_dtype=self.param_dtype,
+            )(x)
         return x + h
 
 
 class Downsample(nn.Module):
     channels: int
+    dtype: Any = jnp.float32
+    param_dtype: Any = jnp.float32
 
     @nn.compact
     def __call__(self, x):
-        return nn.Conv(self.channels, kernel_size=(3, 3), strides=(2, 2), padding="SAME")(x)
+        return nn.Conv(
+            self.channels,
+            kernel_size=(3, 3),
+            strides=(2, 2),
+            padding="SAME",
+            dtype=self.dtype,
+            param_dtype=self.param_dtype,
+        )(x)
 
 
 class Upsample(nn.Module):
     channels: int
+    dtype: Any = jnp.float32
+    param_dtype: Any = jnp.float32
 
     @nn.compact
     def __call__(self, x):
         B, H, W, C = x.shape
         x = jax.image.resize(x, (B, H * 2, W * 2, C), method="nearest")
-        return nn.Conv(self.channels, kernel_size=(3, 3), padding="SAME")(x)
+        return nn.Conv(
+            self.channels,
+            kernel_size=(3, 3),
+            padding="SAME",
+            dtype=self.dtype,
+            param_dtype=self.param_dtype,
+        )(x)
 
 
 # ============================================================
@@ -453,25 +544,43 @@ class CNNDenoiser(nn.Module):
     cond_mode: str = "class_id"
     class_cond: bool = True
     dropout: float = 0.0
+    dtype: Any = jnp.float32
+    param_dtype: Any = jnp.float32
 
     @nn.compact
     def __call__(self, x: jnp.ndarray, t: jnp.ndarray, y: Optional[jnp.ndarray], train: bool) -> jnp.ndarray:
         ch = self.base_channels
-        emb = TimeMLP(self.time_emb_dim, ch)(t)
+        emb = TimeMLP(self.time_emb_dim, ch, dtype=self.dtype, param_dtype=self.param_dtype)(t)
         if self.class_cond and y is not None:
             if self.cond_mode == "class_id":
-                emb = emb + ClassEmbed(self.num_classes, ch)(y)
+                emb = emb + ClassEmbed(
+                    self.num_classes,
+                    ch,
+                    dtype=self.dtype,
+                    param_dtype=self.param_dtype,
+                )(y)
             elif self.cond_mode == "multi_hot":
-                emb = emb + CondMLP(self.num_classes, ch)(y)
+                emb = emb + CondMLP(
+                    self.num_classes,
+                    ch,
+                    dtype=self.dtype,
+                    param_dtype=self.param_dtype,
+                )(y)
             else:
                 raise ValueError("cond_mode must be 'class_id' or 'multi_hot'")
 
-        h = nn.Conv(ch, kernel_size=(3, 3), padding="SAME")(x)
-        h = ResBlock(ch, ch, self.dropout)(h, emb, train)
-        h = ResBlock(ch, ch, self.dropout)(h, emb, train)
-        h = nn.Conv(ch, kernel_size=(3, 3), padding="SAME")(h)
+        h = nn.Conv(ch, kernel_size=(3, 3), padding="SAME", dtype=self.dtype, param_dtype=self.param_dtype)(x)
+        h = ResBlock(ch, ch, self.dropout, dtype=self.dtype, param_dtype=self.param_dtype)(h, emb, train)
+        h = ResBlock(ch, ch, self.dropout, dtype=self.dtype, param_dtype=self.param_dtype)(h, emb, train)
+        h = nn.Conv(ch, kernel_size=(3, 3), padding="SAME", dtype=self.dtype, param_dtype=self.param_dtype)(h)
         h = nn.swish(h)
-        out = nn.Conv(self.in_channels, kernel_size=(3, 3), padding="SAME")(h)
+        out = nn.Conv(
+            self.in_channels,
+            kernel_size=(3, 3),
+            padding="SAME",
+            dtype=self.dtype,
+            param_dtype=self.param_dtype,
+        )(h)
         return out
 
 
@@ -489,35 +598,76 @@ class SimpleUNet(nn.Module):
     cond_mode: str = "class_id"
     class_cond: bool = True
     dropout: float = 0.0
+    dtype: Any = jnp.float32
+    param_dtype: Any = jnp.float32
 
     @nn.compact
     def __call__(self, x: jnp.ndarray, t: jnp.ndarray, y: Optional[jnp.ndarray], train: bool) -> jnp.ndarray:
-        emb = TimeMLP(self.time_emb_dim, self.base_channels * 4)(t)
+        emb = TimeMLP(
+            self.time_emb_dim,
+            self.base_channels * 4,
+            dtype=self.dtype,
+            param_dtype=self.param_dtype,
+        )(t)
         if self.class_cond and y is not None:
             if self.cond_mode == "class_id":
-                emb = emb + ClassEmbed(self.num_classes, self.base_channels * 4)(y)
+                emb = emb + ClassEmbed(
+                    self.num_classes,
+                    self.base_channels * 4,
+                    dtype=self.dtype,
+                    param_dtype=self.param_dtype,
+                )(y)
             elif self.cond_mode == "multi_hot":
-                emb = emb + CondMLP(self.num_classes, self.base_channels * 4)(y)
+                emb = emb + CondMLP(
+                    self.num_classes,
+                    self.base_channels * 4,
+                    dtype=self.dtype,
+                    param_dtype=self.param_dtype,
+                )(y)
             else:
                 raise ValueError("cond_mode must be 'class_id' or 'multi_hot'")
 
         hs = []
 
-        h = nn.Conv(self.base_channels, kernel_size=(3, 3), padding="SAME")(x)
+        h = nn.Conv(
+            self.base_channels,
+            kernel_size=(3, 3),
+            padding="SAME",
+            dtype=self.dtype,
+            param_dtype=self.param_dtype,
+        )(x)
 
         # down path
         for level, mult in enumerate(self.channel_mults):
             ch = self.base_channels * mult
             for _ in range(self.num_res_blocks):
-                h = ResBlock(ch, self.base_channels * 4, self.dropout)(h, emb, train)
+                h = ResBlock(
+                    ch,
+                    self.base_channels * 4,
+                    self.dropout,
+                    dtype=self.dtype,
+                    param_dtype=self.param_dtype,
+                )(h, emb, train)
                 hs.append(h)
             if level != len(self.channel_mults) - 1:
-                h = Downsample(ch)(h)
+                h = Downsample(ch, dtype=self.dtype, param_dtype=self.param_dtype)(h)
 
         # middle
         mid_ch = self.base_channels * self.channel_mults[-1]
-        h = ResBlock(mid_ch, self.base_channels * 4, self.dropout)(h, emb, train)
-        h = ResBlock(mid_ch, self.base_channels * 4, self.dropout)(h, emb, train)
+        h = ResBlock(
+            mid_ch,
+            self.base_channels * 4,
+            self.dropout,
+            dtype=self.dtype,
+            param_dtype=self.param_dtype,
+        )(h, emb, train)
+        h = ResBlock(
+            mid_ch,
+            self.base_channels * 4,
+            self.dropout,
+            dtype=self.dtype,
+            param_dtype=self.param_dtype,
+        )(h, emb, train)
 
         # up path
         for level, mult in reversed(list(enumerate(self.channel_mults))):
@@ -527,13 +677,29 @@ class SimpleUNet(nn.Module):
                 if h.shape[1] != skip.shape[1] or h.shape[2] != skip.shape[2]:
                     raise ValueError(f"Skip shape mismatch: h={h.shape}, skip={skip.shape}")
                 h = jnp.concatenate([h, skip], axis=-1)
-                h = ResBlock(ch, self.base_channels * 4, self.dropout)(h, emb, train)
+                h = ResBlock(
+                    ch,
+                    self.base_channels * 4,
+                    self.dropout,
+                    dtype=self.dtype,
+                    param_dtype=self.param_dtype,
+                )(h, emb, train)
             if level != 0:
-                h = Upsample(ch)(h)
+                h = Upsample(ch, dtype=self.dtype, param_dtype=self.param_dtype)(h)
 
-        h = nn.GroupNorm(num_groups=min(8, h.shape[-1]))(h)
+        h = nn.GroupNorm(
+            num_groups=min(8, h.shape[-1]),
+            dtype=self.dtype,
+            param_dtype=self.param_dtype,
+        )(h)
         h = nn.swish(h)
-        out = nn.Conv(self.in_channels, kernel_size=(3, 3), padding="SAME")(h)
+        out = nn.Conv(
+            self.in_channels,
+            kernel_size=(3, 3),
+            padding="SAME",
+            dtype=self.dtype,
+            param_dtype=self.param_dtype,
+        )(h)
         return out
 
 
@@ -548,7 +714,7 @@ class TrainState(train_state.TrainState):
 
 def _save_checkpoint(checkpoint_dir: str, epoch: int, state: TrainState, cfg: TrainConfig, keep_last_k: int = 5):
     os.makedirs(checkpoint_dir, exist_ok=True)
-    ckpt_path = os.path.join(checkpoint_dir, f"epoch_{epoch:04d}.ckpt")
+    ckpt_path = os.path.join(checkpoint_dir, f"seed_{cfg.seed}_epoch_{epoch:04d}.ckpt")
     payload = {
         "epoch": int(epoch),
         "config": asdict(cfg),
@@ -559,9 +725,9 @@ def _save_checkpoint(checkpoint_dir: str, epoch: int, state: TrainState, cfg: Tr
 
     paths = []
     for name in os.listdir(checkpoint_dir):
-        if name.startswith("epoch_") and name.endswith(".ckpt"):
+        if name.endswith(".ckpt") and "_epoch_" in name:
             try:
-                ep = int(name[len("epoch_"):-len(".ckpt")])
+                ep = int(name.split("_epoch_")[-1].split(".ckpt")[0])
                 paths.append((ep, os.path.join(checkpoint_dir, name)))
             except Exception:
                 pass
@@ -587,6 +753,8 @@ def _restore_checkpoint(ckpt_path: str, state_template: TrainState) -> Tuple[Tra
 # ============================================================
 
 def build_model(cfg: TrainConfig) -> nn.Module:
+    compute_dtype = resolve_compute_dtype(cfg.use_bfloat16)
+    param_dtype = resolve_param_dtype()
     if cfg.model_type == "cnn":
         return CNNDenoiser(
             in_channels=cfg.in_channels,
@@ -596,6 +764,8 @@ def build_model(cfg: TrainConfig) -> nn.Module:
             cond_mode=cfg.cond_mode,
             class_cond=cfg.class_cond,
             dropout=cfg.dropout,
+            dtype=compute_dtype,
+            param_dtype=param_dtype,
         )
     if cfg.model_type == "unet":
         return SimpleUNet(
@@ -608,12 +778,15 @@ def build_model(cfg: TrainConfig) -> nn.Module:
             cond_mode=cfg.cond_mode,
             class_cond=cfg.class_cond,
             dropout=cfg.dropout,
+            dtype=compute_dtype,
+            param_dtype=param_dtype,
         )
     raise ValueError("cfg.model_type must be 'cnn' or 'unet'")
 
 
 def create_train_state(cfg: TrainConfig, model: nn.Module, rng: jax.Array, device) -> TrainState:
-    dummy_x = jnp.zeros((1, cfg.image_size, cfg.image_size, cfg.in_channels), dtype=jnp.float32)
+    compute_dtype = resolve_compute_dtype(cfg.use_bfloat16)
+    dummy_x = jnp.zeros((1, cfg.image_size, cfg.image_size, cfg.in_channels), dtype=compute_dtype)
     dummy_t = jnp.zeros((1,), dtype=jnp.int32)
     if cfg.class_cond:
         if cfg.cond_mode == "class_id":
@@ -663,14 +836,13 @@ def make_train_step(schedule: DiffusionSchedule, cfg: TrainConfig):
                 train=True,
                 rngs={"dropout": dropout_rng},
             )
-            loss = mse_loss(pred, target)
-            return loss, {"pred_mean": jnp.mean(pred), "t_mean": jnp.mean(t.astype(jnp.float32))}
+            return mse_loss(pred, target)
 
-        (loss, aux), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
+        loss, grads = jax.value_and_grad(loss_fn)(state.params)
         new_state = state.apply_gradients(grads=grads)
         ema_params = optax.incremental_update(new_state.params, state.ema_params, step_size=1.0 - cfg.ema_decay)
         new_state = new_state.replace(ema_params=ema_params, rng=rng)
-        metrics = {"loss": loss, **aux}
+        metrics = {"loss": loss}
         return new_state, metrics
 
     return train_step
@@ -679,9 +851,8 @@ def make_train_step(schedule: DiffusionSchedule, cfg: TrainConfig):
 def make_eval_step(schedule: DiffusionSchedule, cfg: TrainConfig):
     @jax.jit
     def eval_step(state: TrainState, x0: jnp.ndarray, y: jnp.ndarray):
+        rng, t_rng, noise_rng = jax.random.split(state.rng, 3)
         B = x0.shape[0]
-        base = jax.random.PRNGKey(0)
-        t_rng, noise_rng = jax.random.split(base)
         t = jax.random.randint(t_rng, (B,), 0, cfg.timesteps)
         noise = jax.random.normal(noise_rng, x0.shape, dtype=x0.dtype)
         xt = q_sample(schedule, x0, t, noise)
@@ -694,7 +865,65 @@ def make_eval_step(schedule: DiffusionSchedule, cfg: TrainConfig):
             train=False,
         )
         loss = mse_loss(pred, target)
-        return {"loss": loss}
+        new_state = state.replace(rng=rng)
+        return new_state, {"loss": loss}
+
+    return eval_step
+
+
+def make_train_step_pmap(schedule: DiffusionSchedule, cfg: TrainConfig):
+    @functools.partial(jax.pmap, axis_name="data")
+    def train_step(state: TrainState, x0: jnp.ndarray, y: jnp.ndarray):
+        rng, noise_rng, t_rng, dropout_rng = jax.random.split(state.rng, 4)
+        B = x0.shape[0]
+        t = jax.random.randint(t_rng, (B,), 0, cfg.timesteps)
+        noise = jax.random.normal(noise_rng, x0.shape, dtype=x0.dtype)
+        xt = q_sample(schedule, x0, t, noise)
+        target = x0 if cfg.predict_x0 else noise
+
+        def loss_fn(params):
+            pred = state.apply_fn(
+                {"params": params},
+                xt,
+                t,
+                y if cfg.class_cond else None,
+                train=True,
+                rngs={"dropout": dropout_rng},
+            )
+            return mse_loss(pred, target)
+
+        loss, grads = jax.value_and_grad(loss_fn)(state.params)
+        grads = jax.lax.pmean(grads, axis_name="data")
+        loss = jax.lax.pmean(loss, axis_name="data")
+        new_state = state.apply_gradients(grads=grads)
+        ema_params = optax.incremental_update(new_state.params, state.ema_params, step_size=1.0 - cfg.ema_decay)
+        new_state = new_state.replace(ema_params=ema_params, rng=rng)
+        metrics = {"loss": loss}
+        return new_state, metrics
+
+    return train_step
+
+
+def make_eval_step_pmap(schedule: DiffusionSchedule, cfg: TrainConfig):
+    @functools.partial(jax.pmap, axis_name="data")
+    def eval_step(state: TrainState, x0: jnp.ndarray, y: jnp.ndarray):
+        rng, t_rng, noise_rng = jax.random.split(state.rng, 3)
+        B = x0.shape[0]
+        t = jax.random.randint(t_rng, (B,), 0, cfg.timesteps)
+        noise = jax.random.normal(noise_rng, x0.shape, dtype=x0.dtype)
+        xt = q_sample(schedule, x0, t, noise)
+        target = x0 if cfg.predict_x0 else noise
+        pred = state.apply_fn(
+            {"params": state.ema_params},
+            xt,
+            t,
+            y if cfg.class_cond else None,
+            train=False,
+        )
+        loss = mse_loss(pred, target)
+        loss = jax.lax.pmean(loss, axis_name="data")
+        new_state = state.replace(rng=rng)
+        return new_state, {"loss": loss}
 
     return eval_step
 
@@ -718,36 +947,45 @@ def p_sample_loop(
     shape: Tuple[int, ...],
     y: Optional[jnp.ndarray] = None,
 ):
-    x = jax.random.normal(rng, shape)
     betas = schedule.betas
     alphas = schedule.alphas
     alphas_cumprod = schedule.alphas_cumprod
+    cond_y = y if cfg.class_cond else None
+    t_seq = jnp.arange(cfg.timesteps - 1, -1, -1, dtype=jnp.int32)
 
-    for i in reversed(range(cfg.timesteps)):
-        t = jnp.full((shape[0],), i, dtype=jnp.int32)
-        pred = model.apply({"params": state.ema_params}, x, t, y if cfg.class_cond else None, train=False)
-        eps = pred if not cfg.predict_x0 else None
-        x0_pred = pred if cfg.predict_x0 else predict_x0_from_eps(schedule, x, t, pred)
-        x0_pred = jnp.clip(x0_pred, -1.0, 1.0)
+    @jax.jit
+    def _sample_scan_loop(init_rng: jax.Array):
+        init_x = jax.random.normal(init_rng, shape)
 
-        alpha_t = alphas[i]
-        abar_t = alphas_cumprod[i]
-        beta_t = betas[i]
-        coef1 = 1.0 / jnp.sqrt(alpha_t)
-        coef2 = beta_t / jnp.sqrt(1.0 - abar_t)
-        mean = coef1 * (
-            x - coef2 * (
-                eps if eps is not None
-                else (x - jnp.sqrt(abar_t) * x0_pred) / jnp.sqrt(1.0 - abar_t)
-            )
-        )
-        if i > 0:
-            rng, step_rng = jax.random.split(rng)
+        def body_fn(carry, i):
+            x, loop_rng = carry
+            t = jnp.full((shape[0],), i, dtype=jnp.int32)
+            pred = model.apply({"params": state.ema_params}, x, t, cond_y, train=False)
+            eps = pred if not cfg.predict_x0 else (x - jnp.sqrt(alphas_cumprod[i]) * pred) / jnp.sqrt(1.0 - alphas_cumprod[i])
+            x0_pred = pred if cfg.predict_x0 else predict_x0_from_eps(schedule, x, t, pred)
+            x0_pred = jnp.clip(x0_pred, -1.0, 1.0)
+
+            alpha_t = alphas[i]
+            abar_t = alphas_cumprod[i]
+            beta_t = betas[i]
+            coef1 = 1.0 / jnp.sqrt(alpha_t)
+            coef2 = beta_t / jnp.sqrt(1.0 - abar_t)
+            mean = coef1 * (x - coef2 * eps)
+
+            loop_rng, step_rng = jax.random.split(loop_rng)
             noise = jax.random.normal(step_rng, shape)
-            x = mean + jnp.sqrt(beta_t) * noise
-        else:
-            x = mean
-    return x
+            next_x = jax.lax.cond(
+                i > 0,
+                lambda _: mean + jnp.sqrt(beta_t) * noise,
+                lambda _: mean,
+                operand=None,
+            )
+            return (next_x, loop_rng), None
+
+        (final_x, _), _ = jax.lax.scan(body_fn, (init_x, init_rng), t_seq)
+        return final_x
+
+    return _sample_scan_loop(rng)
 
 
 # ============================================================
@@ -765,18 +1003,142 @@ def numpy_batch_to_jax(x_np: np.ndarray, y_np: np.ndarray, device, use_bfloat16:
     return x, y
 
 
+def numpy_batch_to_jax_pmap(
+    x_np: np.ndarray,
+    y_np: np.ndarray,
+    devices: Sequence[jax.Device],
+    use_bfloat16: bool,
+):
+    n_devices = len(devices)
+    if x_np.shape[0] % n_devices != 0:
+        raise ValueError(
+            f"Batch size {x_np.shape[0]} must be divisible by number of devices {n_devices} for pmap."
+        )
+
+    per_device = x_np.shape[0] // n_devices
+    x_np = x_np.reshape((n_devices, per_device) + x_np.shape[1:])
+    y_np = y_np.reshape((n_devices, per_device) + y_np.shape[1:])
+
+    x_np = x_np.astype(np.float32, copy=False)
+    if y_np.ndim == 2:
+        y_np = y_np.astype(np.int32, copy=False)
+    else:
+        y_np = y_np.astype(np.float32, copy=False)
+
+    x_dtype = jnp.bfloat16 if use_bfloat16 else jnp.float32
+    x = jax.device_put_sharded([jnp.asarray(x_np[i], dtype=x_dtype) for i in range(n_devices)], devices)
+    y = jax.device_put_sharded([y_np[i] for i in range(n_devices)], devices)
+    return x, y
+
+
+def prefetch_device_batches(
+    np_batch_iter: Iterator[Tuple[np.ndarray, np.ndarray]],
+    device,
+    use_bfloat16: bool,
+    prefetch_size: int = 2,
+):
+    queue = deque()
+
+    def _push_one():
+        x_np, y_np = next(np_batch_iter)
+        queue.append(numpy_batch_to_jax(x_np, y_np, device, use_bfloat16))
+
+    for _ in range(max(1, prefetch_size)):
+        try:
+            _push_one()
+        except StopIteration:
+            break
+
+    while queue:
+        batch = queue.popleft()
+        try:
+            _push_one()
+        except StopIteration:
+            pass
+        yield batch
+
+
+def prefetch_device_batches_pmap(
+    np_batch_iter: Iterator[Tuple[np.ndarray, np.ndarray]],
+    devices: Sequence[jax.Device],
+    use_bfloat16: bool,
+    prefetch_size: int = 2,
+):
+    queue = deque()
+
+    def _push_one():
+        x_np, y_np = next(np_batch_iter)
+        queue.append(numpy_batch_to_jax_pmap(x_np, y_np, devices, use_bfloat16))
+
+    for _ in range(max(1, prefetch_size)):
+        try:
+            _push_one()
+        except StopIteration:
+            break
+
+    while queue:
+        batch = queue.popleft()
+        try:
+            _push_one()
+        except StopIteration:
+            pass
+        yield batch
+
+
 def train(cfg: TrainConfig):
     # ----------------------------
     # basic setup
     # ----------------------------
-    device = choose_device(cfg.prefer_device)
-    print(f"Using backend={jax.default_backend()}, device={device}")
-    print("Config:", asdict(cfg))
+    all_devices = choose_devices(cfg.prefer_device)
+    if cfg.num_devices is not None:
+        if cfg.num_devices <= 0:
+            raise ValueError(f"num_devices must be positive or None, got {cfg.num_devices}")
+        if cfg.num_devices > len(all_devices):
+            raise ValueError(
+                f"Requested num_devices={cfg.num_devices}, but only {len(all_devices)} devices are visible."
+            )
+        devices = all_devices[: cfg.num_devices]
+    else:
+        devices = all_devices
 
-    train_drop_last = False
+    use_pmap = cfg.use_data_parallel and len(devices) > 1
+    device = devices[0]
+    print(f"Using backend={jax.default_backend()}, primary_device={device}")
+    print(f"Visible devices ({len(devices)}): {[str(d) for d in devices]}")
+    print(f"Data parallel enabled: {use_pmap}")
+    print("Config:", asdict(cfg))
+    print(
+        "Precision policy:",
+        f"compute_dtype={resolve_compute_dtype(cfg.use_bfloat16)},",
+        f"param_dtype={resolve_param_dtype()}",
+    )
+
+    # Keep train batch shape static to avoid recompilation on a short last batch.
+    train_drop_last = True
     eval_drop_last = False
 
     total_train_start = time.time()
+    wandb_run = None
+    if cfg.use_wandb:
+        try:
+            import wandb
+        except ImportError as e:
+            raise ImportError(
+                "cfg.use_wandb=True but wandb is not installed. "
+                "Install with: pip install wandb"
+            ) from e
+        wandb_run = wandb.init(
+            project=cfg.wandb_project,
+            entity=cfg.wandb_entity,
+            name=cfg.wandb_run_name,
+            mode=cfg.wandb_mode,
+            config=asdict(cfg),
+        )
+        # Make epoch the default x-axis for train/eval metrics.
+        wandb_run.define_metric("train/epoch")
+        wandb_run.define_metric("train/loss_epoch", step_metric="train/epoch")
+        wandb_run.define_metric("train/epoch_time_s", step_metric="train/epoch")
+        wandb_run.define_metric("eval/loss", step_metric="train/epoch")
 
     # ----------------------------
     # dataset
@@ -822,6 +1184,10 @@ def train(cfg: TrainConfig):
             f"Dataset too small for batch_size={cfg.batch_size} when drop_last={train_drop_last}. "
             f"Either reduce batch_size or set train_drop_last=False."
         )
+    if use_pmap and (cfg.batch_size % len(devices) != 0):
+        raise ValueError(
+            f"batch_size={cfg.batch_size} must be divisible by num_devices={len(devices)} for pmap training."
+        )
 
     # ----------------------------
     # model / optimizer / diffusion
@@ -830,8 +1196,15 @@ def train(cfg: TrainConfig):
     schedule = make_diffusion_schedule(cfg.timesteps, cfg.beta_start, cfg.beta_end)
     model = build_model(cfg)
     state = create_train_state(cfg, model, rng, device)
-    train_step = make_train_step(schedule, cfg)
-    eval_step = make_eval_step(schedule, cfg)
+    if use_pmap:
+        state = jax_utils.replicate(state, devices=devices)
+        sharded_rng = jax.random.split(rng, len(devices))
+        state = state.replace(rng=sharded_rng)
+        train_step = make_train_step_pmap(schedule, cfg)
+        eval_step = make_eval_step_pmap(schedule, cfg)
+    else:
+        train_step = make_train_step(schedule, cfg)
+        eval_step = make_eval_step(schedule, cfg)
 
     # ----------------------------
     # resume checkpoint
@@ -846,62 +1219,123 @@ def train(cfg: TrainConfig):
     # ----------------------------
     # training loop
     # ----------------------------
-    for epoch in range(start_epoch + 1, cfg.epochs + 1):
-        epoch_start = time.time()
-        losses = []
+    try:
+        for epoch in range(start_epoch + 1, cfg.epochs + 1):
+            epoch_start = time.time()
+            epoch_loss_sum = jnp.array(0.0, dtype=jnp.float32)
+            epoch_steps = 0
 
-        for x_np, y_np in ds.batch_iterator(
-            batch_size=cfg.batch_size,
-            shuffle=True,
-            seed=cfg.seed + epoch,
-            drop_last=train_drop_last,
-        ):
-            x, y = numpy_batch_to_jax(x_np, y_np, device, cfg.use_bfloat16)
-            state, metrics = train_step(state, x, y)
+            train_np_iter = ds.batch_iterator(
+                batch_size=cfg.batch_size,
+                shuffle=True,
+                seed=cfg.seed + epoch,
+                drop_last=train_drop_last,
+            )
+            if use_pmap:
+                train_iter = prefetch_device_batches_pmap(train_np_iter, devices, cfg.use_bfloat16)
+            else:
+                train_iter = prefetch_device_batches(train_np_iter, device, cfg.use_bfloat16)
 
-            loss_val = float(metrics["loss"])
-            losses.append(loss_val)
-            global_step += 1
-
-            if global_step % cfg.log_every == 0:
-                print(
-                    f"epoch={epoch}/{cfg.epochs} "
-                    f"step={global_step}/{total_steps} "
-                    f"loss={loss_val:.6f} "
-                    f"pred_mean={float(metrics['pred_mean']):.4f} "
-                    f"t_mean={float(metrics['t_mean']):.2f}"
+            if cfg.use_tqdm:
+                try:
+                    from tqdm.auto import tqdm
+                except ImportError as e:
+                    raise ImportError(
+                        "cfg.use_tqdm=True but tqdm is not installed. "
+                        "Install with: pip install tqdm"
+                    ) from e
+                train_iter = tqdm(
+                    train_iter,
+                    total=steps_per_epoch,
+                    desc=f"Epoch {epoch}/{cfg.epochs}",
+                    leave=True,
+                    dynamic_ncols=True,
+                    file=sys.stdout,
                 )
 
-        epoch_loss = float(np.mean(losses)) if losses else float("nan")
-        epoch_elapsed = time.time() - epoch_start
-        print(f"[epoch {epoch}/{cfg.epochs}] train_loss={epoch_loss:.6f} time={epoch_elapsed:.1f}s")
+            for x, y in train_iter:
+                state, metrics = train_step(state, x, y)
+                epoch_loss_sum = epoch_loss_sum + metrics["loss"]
+                epoch_steps += 1
+                global_step += 1
 
-        # ----------------------------
-        # lightweight eval
-        # ----------------------------
-        for x_np, y_np in ds.batch_iterator(
-            batch_size=cfg.batch_size,
-            shuffle=False,
-            seed=0,
-            drop_last=eval_drop_last,
-        ):
-            x, y = numpy_batch_to_jax(x_np, y_np, device, cfg.use_bfloat16)
-            eval_metrics = eval_step(state, x, y)
-            print(f"[epoch {epoch}/{cfg.epochs}] eval_loss={float(eval_metrics['loss']):.6f}")
-            break
+                if global_step % cfg.log_every == 0:
+                    if use_pmap:
+                        loss_val = float(metrics["loss"][0])
+                    else:
+                        loss_val = float(metrics["loss"])
+                    print(
+                        f"epoch={epoch}/{cfg.epochs} "
+                        f"step={global_step}/{total_steps} "
+                        f"loss={loss_val:.6f}"
+                    )
+                    if cfg.use_tqdm:
+                        train_iter.set_postfix(loss=f"{loss_val:.4f}")
+                    if wandb_run is not None and cfg.wandb_log_step_metrics:
+                        wandb_run.log(
+                            {
+                                "train/loss_step": loss_val,
+                                "train/epoch": epoch,
+                                "train/global_step": global_step,
+                            },
+                            step=global_step,
+                        )
 
-        # ----------------------------
-        # save checkpoint
-        # ----------------------------
-        if cfg.save_every_epochs > 0 and (epoch % cfg.save_every_epochs == 0):
-            _save_checkpoint(
-                checkpoint_dir=cfg.checkpoint_dir,
-                epoch=epoch,
-                state=state,
-                cfg=cfg,
-                keep_last_k=cfg.keep_last_k,
+            epoch_loss_arr = epoch_loss_sum / max(1, epoch_steps)
+            epoch_loss = float(epoch_loss_arr[0]) if use_pmap else float(epoch_loss_arr)
+            epoch_elapsed = time.time() - epoch_start
+            print(f"[epoch {epoch}/{cfg.epochs}] train_loss={epoch_loss:.6f} time={epoch_elapsed:.1f}s")
+            if wandb_run is not None:
+                wandb_run.log(
+                    {
+                        "train/loss_epoch": epoch_loss,
+                        "train/epoch_time_s": epoch_elapsed,
+                        "train/epoch": epoch,
+                    }
+                )
+
+            # ----------------------------
+            # lightweight eval
+            # ----------------------------
+            eval_np_iter = ds.batch_iterator(
+                batch_size=cfg.batch_size,
+                shuffle=False,
+                seed=0,
+                drop_last=eval_drop_last,
             )
-            print(f"Saved checkpoint for epoch {epoch} to {cfg.checkpoint_dir} (keeping last {cfg.keep_last_k})")
+            if use_pmap:
+                eval_iter = prefetch_device_batches_pmap(eval_np_iter, devices, cfg.use_bfloat16)
+            else:
+                eval_iter = prefetch_device_batches(eval_np_iter, device, cfg.use_bfloat16)
+            for x, y in eval_iter:
+                state, eval_metrics = eval_step(state, x, y)
+                eval_loss = float(eval_metrics["loss"][0]) if use_pmap else float(eval_metrics["loss"])
+                print(f"[epoch {epoch}/{cfg.epochs}] eval_loss={eval_loss:.6f}")
+                if wandb_run is not None:
+                    wandb_run.log(
+                        {
+                            "eval/loss": eval_loss,
+                            "train/epoch": epoch,
+                        }
+                    )
+                break
+
+            # ----------------------------
+            # save checkpoint
+            # ----------------------------
+            if cfg.save_every_epochs > 0 and (epoch % cfg.save_every_epochs == 0):
+                save_state = jax_utils.unreplicate(state) if use_pmap else state
+                _save_checkpoint(
+                    checkpoint_dir=cfg.checkpoint_dir,
+                    epoch=epoch,
+                    state=save_state,
+                    cfg=cfg,
+                    keep_last_k=cfg.keep_last_k,
+                )
+                print(f"Saved checkpoint for epoch {epoch} to {cfg.checkpoint_dir} (keeping last {cfg.keep_last_k})")
+    finally:
+        if wandb_run is not None:
+            wandb_run.finish()
 
     # ----------------------------
     # total time
@@ -917,7 +1351,8 @@ def train(cfg: TrainConfig):
         f"({total_elapsed:.2f} seconds)"
     )
 
-    return state, model, schedule, ds
+    out_state = jax_utils.unreplicate(state) if use_pmap else state
+    return out_state, model, schedule, ds
 
 
 # ============================================================
@@ -1015,7 +1450,7 @@ if __name__ == "__main__":
 
         model_type="unet",
         prefer_device="auto",
-        epochs=5,
+        epochs=200,
         batch_size=128,
         learning_rate=2e-4,
         base_channels=160,

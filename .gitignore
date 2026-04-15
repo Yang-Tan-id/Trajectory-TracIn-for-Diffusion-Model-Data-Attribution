@@ -1,0 +1,13 @@
+# Model checkpoints and training outputs
+models/
+
+# Generated samples / local experiment outputs
+samples/
+
+# Weights & Biases runs
+wandb/
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+*$py.class
