@@ -1437,16 +1437,9 @@ def encode_cifar_prompt(
 if __name__ == "__main__":
     cfg = TrainConfig(
         data_root="./databases/cifar-10-batches-py",
-        batch_names=("data_batch_1","data_batch_2",),
-
-        # old style contiguous exclusions
-        exclude_ranges=((3, 1500, 500), (2, 200, 30), ),
-
-        # new style exact-index exclusions
-        #exclude_indices={
-        #    1: (0, 3, 7),
-        #    3: (15, 18, 22),
-        #},
+        batch_names=None,  # None -> use all training batches: data_batch_1..5
+        exclude_ranges=None,
+        exclude_indices=None,
 
         model_type="unet",
         prefer_device="auto",
