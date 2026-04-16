@@ -7,15 +7,7 @@ About 5 minutes to run a 1000-step trajectory (typical).
 
 Example
 -------
-python DM___sampler.py \\
-    --adapter cifar \\
-    --code-file "DM__training_CIFAR10_pixel.py" \\
-    --checkpoint "models/cifar10_checkpoints/epoch_0005.ckpt" \\
-    --seed 0 \\
-    --prompt "airplane,ship" \\
-    --batch-size 1 \\
-    --num-trajectory-steps 9 \\
-    --outdir ./samples/cifar
+python3 "diffusion model_jax/DM___sampler.py"   --adapter cifar   --code-file "diffusion model_jax/DM__training_CIFAR10_pixel.py"   --checkpoint "diffusion model_jax/models/cifar10_checkpoints/seed_0_epoch_0200.ckpt"   --seed 8   --prompt "truck"   --batch-size 1   --num-trajectory-steps 20   --outdir "./samples/cifar"   --prefer-device gpu  --print-metadata
 
 python DM___sampler.py \\
   --adapter x3 \\
