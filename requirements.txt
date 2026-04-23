@@ -1,0 +1,12 @@
+numpy
+flax
+optax
+pillow
+tqdm
+wandb
+
+# Install JAX separately for your hardware:
+# CPU-only:
+#   pip install jax
+# NVIDIA GPU (CUDA):
+#   pip install "jax[cuda]"
