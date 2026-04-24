@@ -1,0 +1,43 @@
+{
+  "adapter": "artbench_latent",
+  "code_file": "DM__training_ARTBENCH_latent.py",
+  "checkpoint": "models/artbench_latent_dm_checkpoints/seed_0_epoch_0100.ckpt",
+  "seed": 0,
+  "prompt": "realism,",
+  "batch_size": 1,
+  "num_trajectory_steps_requested": 9,
+  "saved_timesteps": [
+    999,
+    874,
+    749,
+    624,
+    500,
+    375,
+    250,
+    125,
+    0
+  ],
+  "result_dir": "./samples/artbench_multi/result_realism_seed0",
+  "generation_seconds_total": 25.5341956615448,
+  "generation_seconds_per_sample": 25.5341956615448,
+  "metadata": {
+    "adapter": "artbench_latent",
+    "latent_image_size": 16,
+    "latent_channels": 4,
+    "cond_mode": "multi_hot",
+    "label_names": [
+      "art_nouveau",
+      "baroque",
+      "expressionism",
+      "impressionism",
+      "post_impressionism",
+      "realism",
+      "renaissance",
+      "romanticism",
+      "surrealism",
+      "ukiyo_e"
+    ],
+    "autoencoder_model_dir": "./models/artbench_latent_autoencoder",
+    "decoded_image_size": 128
+  }
+}

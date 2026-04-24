@@ -2,10 +2,13 @@
 models/
 
 # Generated samples / local experiment outputs
-samples/
+#samples/
 
 # Weights & Biases runs
 wandb/
+
+#Databases
+#databases/
 
 # Python bytecode
 __pycache__/
