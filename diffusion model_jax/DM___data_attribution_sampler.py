@@ -148,6 +148,7 @@ def save_seed_outputs(
     saved_states: Dict[int, np.ndarray],
     decoded_final: np.ndarray,
     upscale: int,
+    max_png_side: int,
 ):
     os.makedirs(seed_dir, exist_ok=True)
 
@@ -169,6 +170,7 @@ def save_seed_outputs(
             img,
             os.path.join(seed_dir, f"decoded_final_{sample_idx:03d}.png"),
             upscale=max(1, int(upscale)),
+            max_side=int(max_png_side),
         )
 
     info = {
@@ -197,6 +199,12 @@ def main():
     parser.add_argument("--outdir", type=str, default="./attribution_samples")
     parser.add_argument("--num-trajectory-steps", type=int, default=100)
     parser.add_argument("--upscale", type=int, default=4)
+    parser.add_argument(
+        "--max-png-side",
+        type=int,
+        default=2048,
+        help="Shrink saved PNGs so their longest side is at most this many pixels. Use 0 to disable.",
+    )
     parser.add_argument("--cifar-data-root", type=str, default=None)
     parser.add_argument("--artbench-ae-checkpoint", type=str, default=None)
 
@@ -265,6 +273,7 @@ def main():
             saved_states=saved_states,
             decoded_final=decoded_final,
             upscale=args.upscale,
+            max_png_side=args.max_png_side,
         )
 
         elapsed = time.time() - seed_start

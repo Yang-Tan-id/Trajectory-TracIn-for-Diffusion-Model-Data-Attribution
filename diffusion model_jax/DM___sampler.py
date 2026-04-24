@@ -22,9 +22,9 @@ python DM___sampler.py \\
   --num-trajectory-steps 9 \\
   --outdir ./samples/x3
 
-python3 DM___sampler.py --adapter artbench_latent --code-file "DM__training_ARTBENCH_latent.py" --checkpoint "models/artbench_latent_dm_checkpoints256/seed_0_epoch_0100.ckpt" --artbench-ae-checkpoint "models/artbench_latent_autoencoder/ae_state.ckpt" --seed 476 --prompt "realism," --batch-size 1 --num-trajectory-steps 9 --outdir ./samples/artbench_multi
+python3 DM___sampler.py --adapter artbench_latent --code-file "DM__training_ARTBENCH_latent.py" --checkpoint "models/artbench_latent_dm_checkpoints256/seed_0_epoch_0100.ckpt" --artbench-ae-checkpoint "models/artbench_latent_autoencoder/ae_state.ckpt" --seed 476 --prompt "realism," --batch-size 1 --num-trajectory-steps 9 --outdir ./samples/artbench_multi --upscale 1
 
-python3 DM___sampler.py --adapter artbench_latent --code-file "DM__training_ARTBENCH_latent.py" --checkpoint "models/artbench_latent_dm_checkpoints256/seed_0_epoch_0100.ckpt" --artbench-ae-checkpoint "models/artbench_latent_autoencoder/ae_state.ckpt" --seed 0 --prompt "baroque,surrealism" --batch-size 1 --num-trajectory-steps 9 --outdir ./samples/artbench_multi
+python3 DM___sampler.py --adapter artbench_latent --code-file "DM__training_ARTBENCH_latent.py" --checkpoint "models/artbench_latent_dm_checkpoints256/seed_0_epoch_0100.ckpt" --artbench-ae-checkpoint "models/artbench_latent_autoencoder/ae_state.ckpt" --seed 0 --prompt "baroque,surrealism" --batch-size 1 --num-trajectory-steps 9 --outdir ./samples/artbench_multi --upscale 1
   Note: the ArtBench latent checkpoint must have been trained with dm_cond_mode="multi_hot" for multi prompt usage.
 """
 
@@ -93,12 +93,24 @@ def sanitize_for_path(x: str, max_len: int = 80) -> str:
     return x[:max_len]
 
 
-def save_image_nhwc(img: np.ndarray, out_path: str, upscale: int = 1):
+def _resize_to_max_side(pil: Image.Image, max_side: Optional[int]) -> Image.Image:
+    if max_side is None or max_side <= 0:
+        return pil
+    side = max(pil.width, pil.height)
+    if side <= max_side:
+        return pil
+    scale = max_side / float(side)
+    new_size = (max(1, int(round(pil.width * scale))), max(1, int(round(pil.height * scale))))
+    return pil.resize(new_size, resample=Image.LANCZOS)
+
+
+def save_image_nhwc(img: np.ndarray, out_path: str, upscale: int = 1, max_side: Optional[int] = 2048):
     arr = np.clip(img, 0.0, 1.0)
     arr = (arr * 255.0).round().astype(np.uint8)
     pil = Image.fromarray(arr)
     if upscale > 1:
         pil = pil.resize((pil.width * upscale, pil.height * upscale), resample=Image.NEAREST)
+    pil = _resize_to_max_side(pil, max_side)
     pil.save(out_path)
 
 
@@ -119,7 +131,13 @@ def selected_timesteps_evenly(total_timesteps: int, num_steps: int) -> List[int]
     return out
 
 
-def make_image_grid(images: List[np.ndarray], labels: List[str], out_path: str, upscale: int = 1):
+def make_image_grid(
+    images: List[np.ndarray],
+    labels: List[str],
+    out_path: str,
+    upscale: int = 1,
+    max_side: Optional[int] = 2048,
+):
     if not images:
         raise ValueError("No images to place in grid.")
 
@@ -149,6 +167,7 @@ def make_image_grid(images: List[np.ndarray], labels: List[str], out_path: str, 
         canvas.paste(pil, (x0, y0))
         draw.text((x0 + 2, y0 + tile_h + 1), label, fill=(0, 0, 0))
 
+    canvas = _resize_to_max_side(canvas, max_side)
     canvas.save(out_path)
 
 
@@ -765,7 +784,13 @@ def main():
     parser.add_argument("--prefer-device", type=str, default="auto", choices=["auto", "cpu", "gpu"])
     parser.add_argument("--outdir", type=str, default="./generated_samples")
     parser.add_argument("--prefix", type=str, default="sample")
-    parser.add_argument("--upscale", type=int, default=64, help="Only affects saved PNG size.")
+    parser.add_argument("--upscale", type=int, default=1, help="Only affects saved PNG size.")
+    parser.add_argument(
+        "--max-png-side",
+        type=int,
+        default=2048,
+        help="Shrink saved PNGs so their longest side is at most this many pixels. Use 0 to disable.",
+    )
     parser.add_argument("--num-trajectory-steps", type=int, default=9,
                         help="Number of evenly spaced reverse timesteps to save, including near start and final.")
     parser.add_argument("--print-metadata", action="store_true")
@@ -855,21 +880,21 @@ def main():
             labels.append(f"t={t}")
 
             png_path = os.path.join(sample_dir, f"t_{t:04d}.png")
-            save_image_nhwc(img, png_path, upscale=max(1, int(args.upscale)))
+            save_image_nhwc(img, png_path, upscale=max(1, int(args.upscale)), max_side=int(args.max_png_side))
 
         traj_arr = np.stack(traj_stack, axis=0)
         np.save(os.path.join(sample_dir, "trajectory.npy"), traj_arr)
 
         grid_path = os.path.join(sample_dir, "trajectory_grid.png")
-        make_image_grid(traj_stack, labels, grid_path, upscale=max(1, int(args.upscale)))
+        make_image_grid(traj_stack, labels, grid_path, upscale=max(1, int(args.upscale)), max_side=int(args.max_png_side))
 
         final_png = os.path.join(sample_dir, "final.png")
-        save_image_nhwc(final_images[b], final_png, upscale=max(1, int(args.upscale)))
+        save_image_nhwc(final_images[b], final_png, upscale=max(1, int(args.upscale)), max_side=int(args.max_png_side))
 
     # Also save one batch-wide final image copy for convenience
     for i, img in enumerate(final_images):
         save_image_nhwc(img, os.path.join(result_dir, f"{args.prefix}_final_{i:03d}.png"),
-                        upscale=max(1, int(args.upscale)))
+                        upscale=max(1, int(args.upscale)), max_side=int(args.max_png_side))
 
     print(f"Saved results to: {result_dir}")
     print(f"Saved timesteps: {ordered_ts}")
