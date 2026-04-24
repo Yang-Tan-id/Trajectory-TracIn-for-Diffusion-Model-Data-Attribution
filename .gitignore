@@ -1,5 +1,5 @@
 # Model checkpoints and training outputs
-models/
+#models/
 
 # Generated samples / local experiment outputs
 samples/
