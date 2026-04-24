@@ -7,7 +7,10 @@ About 5 minutes to run a 1000-step trajectory (typical).
 
 Example
 -------
-python3 "diffusion model_jax/DM___sampler.py"   --adapter cifar   --code-file "diffusion model_jax/DM__training_CIFAR10_pixel.py"   --checkpoint "diffusion model_jax/models/cifar10_checkpoints/seed_0_epoch_0200.ckpt"   --seed 8   --prompt "truck"   --batch-size 1   --num-trajectory-steps 20   --outdir "./samples/cifar"   --prefer-device gpu  --print-metadata
+python3 "DM___sampler.py"   --adapter cifar   --code-file "DM__training_CIFAR10_pixel.py"   --checkpoint "models/cifar10_checkpoints/seed_0_epoch_0200.ckpt"   --seed 8   --prompt "truck"   --batch-size 1   --num-trajectory-steps 20   --outdir "./samples/cifar"   --prefer-device gpu  --print-metadata
+
+python3 "diffusion model_jax/DM___sampler.py"   --adapter cifar   --code-file "diffusion model_jax/DM__training_CIFAR10_pixel.py"   --checkpoint "diffusion model_jax/models/cifar10_checkpoints/seed_0_epoch_0200.ckpt"   --seed 8   --prompt "airplane,ship"   --batch-size 1   --num-trajectory-steps 20   --outdir "./samples/cifar_multi"   --prefer-device gpu  --print-metadata
+  Note: the CIFAR checkpoint must have been trained with cond_mode="multi_hot" for multi prompt usage.
 
 python DM___sampler.py \\
   --adapter x3 \\
@@ -18,6 +21,11 @@ python DM___sampler.py \\
   --batch-size 1 \\
   --num-trajectory-steps 9 \\
   --outdir ./samples/x3
+
+python3 DM___sampler.py --adapter artbench_latent --code-file "DM__training_ARTBENCH_latent.py" --checkpoint "models/artbench_latent_dm_checkpoints256/seed_0_epoch_0100.ckpt" --artbench-ae-checkpoint "models/artbench_latent_autoencoder/ae_state.ckpt" --seed 476 --prompt "realism," --batch-size 1 --num-trajectory-steps 9 --outdir ./samples/artbench_multi
+
+python3 DM___sampler.py --adapter artbench_latent --code-file "DM__training_ARTBENCH_latent.py" --checkpoint "models/artbench_latent_dm_checkpoints256/seed_0_epoch_0100.ckpt" --artbench-ae-checkpoint "models/artbench_latent_autoencoder/ae_state.ckpt" --seed 0 --prompt "baroque,surrealism" --batch-size 1 --num-trajectory-steps 9 --outdir ./samples/artbench_multi
+  Note: the ArtBench latent checkpoint must have been trained with dm_cond_mode="multi_hot" for multi prompt usage.
 """
 
 import argparse
@@ -199,10 +207,20 @@ class ModelAdapter(ABC):
     def metadata(self) -> Dict[str, Any]:
         raise NotImplementedError
 
+    def _extract_schedule_values(self, values: jnp.ndarray, t: jnp.ndarray, x_shape: Tuple[int, ...]) -> jnp.ndarray:
+        extract_fn = getattr(self.module, "extract", None)
+        if extract_fn is None and hasattr(self.module, "base"):
+            extract_fn = getattr(self.module.base, "extract", None)
+        if extract_fn is None:
+            raise AttributeError(
+                f"Module '{self.module.__name__}' does not provide extract(...) and has no base.extract(...)."
+            )
+        return extract_fn(values, t, x_shape)
+
     def predict_x0_from_eps(self, xt: jnp.ndarray, t: jnp.ndarray, eps: jnp.ndarray):
         return (
-            xt - self.module.extract(self.schedule.sqrt_one_minus_alphas_cumprod, t, xt.shape) * eps
-        ) / self.module.extract(self.schedule.sqrt_alphas_cumprod, t, xt.shape)
+            xt - self._extract_schedule_values(self.schedule.sqrt_one_minus_alphas_cumprod, t, xt.shape) * eps
+        ) / self._extract_schedule_values(self.schedule.sqrt_alphas_cumprod, t, xt.shape)
 
     def sample_with_trajectory(
         self,
@@ -566,9 +584,142 @@ class X3Adapter(ModelAdapter):
         }
 
 
+# ============================================================
+# ArtBench latent adapter
+# ============================================================
+
+class ArtBenchLatentAdapter(ModelAdapter):
+    def __init__(
+        self,
+        code_file: str,
+        checkpoint: str,
+        prefer_device: str = "auto",
+        artbench_ae_checkpoint: Optional[str] = None,
+    ):
+        super().__init__(code_file, checkpoint, prefer_device)
+        self._artbench_ae_checkpoint_override = artbench_ae_checkpoint
+        self.ae_payload = None
+        self.ae_cfg = None
+        self.ae_model = None
+        self.ae_state = None
+
+    def _load_module(self):
+        return load_python_module(self.code_file, "user_artbench_latent_train_module")
+
+    def _build_config(self):
+        return self.module.base.TrainConfig(**self.cfg_dict)
+
+    def _resolve_ae_checkpoint(self) -> str:
+        if self._artbench_ae_checkpoint_override is not None:
+            path = os.path.abspath(os.path.expanduser(self._artbench_ae_checkpoint_override))
+            if not os.path.isfile(path):
+                raise FileNotFoundError(f"ArtBench AE checkpoint not found: {path}")
+            return path
+
+        code_dir = os.path.dirname(os.path.abspath(self.code_file))
+        candidate = os.path.join(code_dir, "models", "artbench_latent_autoencoder", "ae_state.ckpt")
+        if os.path.isfile(candidate):
+            print(f"[artbench_latent] using default AE checkpoint: {candidate}")
+            return candidate
+
+        raise FileNotFoundError(
+            "Could not find an ArtBench autoencoder checkpoint.\n"
+            "Pass --artbench-ae-checkpoint /path/to/ae_state.ckpt"
+        )
+
+    def setup(self):
+        self.module = self._load_module()
+        self.cfg = self._build_config()
+        self.schedule = self.module.base.make_diffusion_schedule(
+            self.cfg.timesteps, self.cfg.beta_start, self.cfg.beta_end
+        )
+        self.model, self.state = self._restore_model_and_state()
+        self.ae_model, self.ae_state, self.ae_cfg = self._restore_autoencoder()
+
+    def _restore_model_and_state(self):
+        model = self.module.base.build_model(self.cfg)
+        rng = jax.random.PRNGKey(self.cfg.seed)
+        state_template = self.module.base.create_train_state(self.cfg, model, rng, self.device)
+        state, start_epoch = self.module.base._restore_checkpoint(self.checkpoint, state_template)
+        print(f"[artbench_latent] restored diffusion checkpoint through epoch {start_epoch}")
+        return model, state
+
+    def _restore_autoencoder(self):
+        ae_ckpt_path = self._resolve_ae_checkpoint()
+        self.ae_payload = load_checkpoint_payload(ae_ckpt_path)
+        ae_cfg_dict = dict(self.ae_payload.get("config", {}))
+        if not ae_cfg_dict:
+            raise ValueError(f"AE checkpoint does not contain a saved config: {ae_ckpt_path}")
+        ae_cfg = self.module.LatentArtBenchConfig(**ae_cfg_dict)
+
+        compute_dtype = self.module.base.resolve_compute_dtype(ae_cfg.use_bfloat16)
+        param_dtype = self.module.base.resolve_param_dtype()
+        num_downsamples = int(np.log2(ae_cfg.ae_downsample_factor))
+        ae_model = self.module.Autoencoder(
+            base_channels=ae_cfg.ae_base_channels,
+            latent_channels=ae_cfg.latent_channels,
+            num_downsamples=num_downsamples,
+            dtype=compute_dtype,
+            param_dtype=param_dtype,
+        )
+        rng = jax.random.PRNGKey(ae_cfg.seed)
+        state_template = self.module.create_autoencoder_state(ae_cfg, ae_model, rng, self.device)
+        ae_state = self.module._restore_autoencoder_checkpoint(ae_ckpt_path, state_template)
+        print(f"[artbench_latent] restored autoencoder checkpoint: {ae_ckpt_path}")
+        return ae_model, ae_state, ae_cfg
+
+    def _label_names(self) -> List[str]:
+        if self.ae_cfg.class_names is not None:
+            return [str(x) for x in self.ae_cfg.class_names]
+
+        split_root = os.path.join(self.ae_cfg.data_root, self.ae_cfg.train_split)
+        labels = []
+        for name in sorted(os.listdir(split_root)):
+            path = os.path.join(split_root, name)
+            if os.path.isdir(path) and not name.startswith("."):
+                labels.append(name)
+        return labels
+
+    def make_condition(self, prompt: str, batch_size: int):
+        labels = self._label_names()
+        cond_mode = getattr(self.cfg, "cond_mode", "class_id")
+        encoded = self.module.encode_artbench_prompt(prompt, labels, cond_mode=cond_mode)
+
+        with jax.default_device(self.device):
+            if cond_mode == "class_id":
+                class_id = int(encoded)
+                return jax.device_put(jnp.full((batch_size,), class_id, dtype=jnp.int32))
+
+            mat = np.repeat(np.asarray(encoded, dtype=np.float32)[None, :], batch_size, axis=0)
+            return jax.device_put(jnp.array(mat, dtype=jnp.float32))
+
+    def sample_shape(self, batch_size: int) -> Tuple[int, ...]:
+        return (batch_size, self.cfg.image_size, self.cfg.image_size, self.cfg.in_channels)
+
+    def decode_samples(self, samples_nhwc: np.ndarray) -> np.ndarray:
+        decode_fn = jax.jit(
+            lambda params, z: self.ae_model.apply({"params": params}, z, method=self.ae_model.decode)
+        )
+        z = jnp.asarray(samples_nhwc, dtype=jnp.float32)
+        recon = np.asarray(decode_fn(self.ae_state.params, z), dtype=np.float32)
+        return np.clip((recon + 1.0) / 2.0, 0.0, 1.0)
+
+    def metadata(self) -> Dict[str, Any]:
+        return {
+            "adapter": "artbench_latent",
+            "latent_image_size": int(self.cfg.image_size),
+            "latent_channels": int(self.cfg.in_channels),
+            "cond_mode": getattr(self.cfg, "cond_mode", "class_id"),
+            "label_names": self._label_names(),
+            "autoencoder_model_dir": getattr(self.ae_cfg, "autoencoder_model_dir", None),
+            "decoded_image_size": int(self.ae_cfg.image_size),
+        }
+
+
 ADAPTERS = {
     "cifar": CIFARAdapter,
     "x3": X3Adapter,
+    "artbench_latent": ArtBenchLatentAdapter,
 }
 
 
@@ -578,17 +729,27 @@ def make_adapter(
     checkpoint: str,
     prefer_device: str = "auto",
     cifar_data_root: Optional[str] = None,
+    artbench_ae_checkpoint: Optional[str] = None,
 ) -> ModelAdapter:
     if name not in ADAPTERS:
         raise ValueError(f"Unknown adapter '{name}'. Available: {sorted(ADAPTERS.keys())}")
     if cifar_data_root is not None and name != "cifar":
         raise ValueError("--cifar-data-root is only valid with --adapter cifar")
+    if artbench_ae_checkpoint is not None and name != "artbench_latent":
+        raise ValueError("--artbench-ae-checkpoint is only valid with --adapter artbench_latent")
     if name == "cifar":
         return CIFARAdapter(
             code_file=code_file,
             checkpoint=checkpoint,
             prefer_device=prefer_device,
             cifar_data_root=cifar_data_root,
+        )
+    if name == "artbench_latent":
+        return ArtBenchLatentAdapter(
+            code_file=code_file,
+            checkpoint=checkpoint,
+            prefer_device=prefer_device,
+            artbench_ae_checkpoint=artbench_ae_checkpoint,
         )
     return ADAPTERS[name](code_file=code_file, checkpoint=checkpoint, prefer_device=prefer_device)
 
@@ -614,6 +775,12 @@ def main():
         default=None,
         help="Path to cifar-10-batches-py (folder containing batches.meta). Use when the saved data_root is wrong for your cwd.",
     )
+    parser.add_argument(
+        "--artbench-ae-checkpoint",
+        type=str,
+        default=None,
+        help="Path to the ArtBench latent autoencoder checkpoint (ae_state.ckpt). Required for --adapter artbench_latent unless the default models/artbench_latent_autoencoder/ae_state.ckpt exists next to --code-file.",
+    )
 
     args = parser.parse_args()
 
@@ -623,6 +790,7 @@ def main():
         checkpoint=args.checkpoint,
         prefer_device=args.prefer_device,
         cifar_data_root=args.cifar_data_root,
+        artbench_ae_checkpoint=args.artbench_ae_checkpoint,
     )
     adapter.setup()
 

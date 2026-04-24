@@ -18,3 +18,4 @@ dependencies:
       - optax
       - orbax-checkpoint
       - chex
+      - wandb

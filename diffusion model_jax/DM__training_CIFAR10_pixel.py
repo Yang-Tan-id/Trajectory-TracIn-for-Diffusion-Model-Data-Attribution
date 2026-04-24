@@ -340,11 +340,11 @@ class TrainConfig:
     use_tqdm: bool = True
 
     # logging
-    use_wandb: bool = True
+    use_wandb: bool = False,
     wandb_project: str = "DA-unet-cifar10-pixel-training"
     wandb_entity: Optional[str] = "clearoboticslab"
     wandb_run_name: Optional[str] = None
-    wandb_mode: str = "online"  # "online", "offline", or "disabled"
+    wandb_mode: str = "offline"  # "online", "offline", or "disabled"
     wandb_log_step_metrics: bool = False
 
 
