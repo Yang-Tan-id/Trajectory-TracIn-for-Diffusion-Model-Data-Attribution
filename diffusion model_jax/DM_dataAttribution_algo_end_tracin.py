@@ -468,6 +468,14 @@ class EndpointTraceInConfig:
     query: Any = None
     seed: int = 0
 
+    # optional precomputed sampler input
+    # Accepts either:
+    #   - a seed directory containing final_state.npy / seed_info.json, or
+    #   - a sampler run root containing manifest.json and seed_* directories.
+    attribution_sample_dir: Optional[str] = None
+    attribution_sample_seed: Optional[int] = None
+    attribution_sample_index: int = 0
+
     # endpoint generation
     timesteps: int = 1000
     beta_start: float = 1e-4
@@ -540,6 +548,130 @@ def get_adapter(cfg: EndpointTraceInConfig):
     if cfg.task_type == "cifar10":
         return CIFAR10TaskAdapter(module)
     raise ValueError("task_type must be 'x3' or 'cifar10'")
+
+
+def _find_attribution_seed_dir(sample_dir: str, seed: Optional[int]) -> str:
+    sample_dir = os.path.abspath(os.path.expanduser(sample_dir))
+    if os.path.isfile(os.path.join(sample_dir, "final_state.npy")):
+        return sample_dir
+
+    if seed is not None:
+        candidate = os.path.join(sample_dir, f"seed_{int(seed):06d}")
+        if os.path.isfile(os.path.join(candidate, "final_state.npy")):
+            return candidate
+        raise FileNotFoundError(f"No final_state.npy found for seed {seed}: {candidate}")
+
+    seed_dirs = []
+    if os.path.isdir(sample_dir):
+        for name in os.listdir(sample_dir):
+            path = os.path.join(sample_dir, name)
+            if name.startswith("seed_") and os.path.isfile(os.path.join(path, "final_state.npy")):
+                seed_dirs.append(path)
+    seed_dirs.sort()
+    if not seed_dirs:
+        raise FileNotFoundError(
+            "Could not find final_state.npy. Pass either a seed_* directory or a sampler run root."
+        )
+    return seed_dirs[0]
+
+
+def _load_json_if_exists(path: str) -> Dict[str, Any]:
+    if not os.path.isfile(path):
+        return {}
+    with open(path, "r") as f:
+        return json.load(f)
+
+
+def load_cifar_attribution_endpoint(cfg: EndpointTraceInConfig) -> Tuple[jnp.ndarray, Dict[str, Any]]:
+    if cfg.attribution_sample_dir is None:
+        raise ValueError("attribution_sample_dir is required.")
+    if cfg.task_type != "cifar10":
+        raise ValueError("attribution_sample_dir mode is currently intended for task_type='cifar10'.")
+
+    seed_dir = _find_attribution_seed_dir(cfg.attribution_sample_dir, cfg.attribution_sample_seed)
+    final_path = os.path.join(seed_dir, "final_state.npy")
+    final_state = np.load(final_path)
+    if final_state.ndim != 4:
+        raise ValueError(f"Expected final_state.npy to have shape (B,H,W,C), got {final_state.shape}")
+
+    sample_idx = int(cfg.attribution_sample_index)
+    if sample_idx < 0 or sample_idx >= final_state.shape[0]:
+        raise IndexError(
+            f"attribution_sample_index={sample_idx} is out of range for batch size {final_state.shape[0]}"
+        )
+
+    x0_ref_np = final_state[sample_idx:sample_idx + 1].astype(np.float32)
+    seed_info = _load_json_if_exists(os.path.join(seed_dir, "seed_info.json"))
+    run_root = os.path.dirname(seed_dir)
+    manifest = _load_json_if_exists(os.path.join(run_root, "manifest.json"))
+
+    meta = {
+        "seed_dir": seed_dir,
+        "final_state_path": final_path,
+        "sample_index": sample_idx,
+        "final_state_shape": list(final_state.shape),
+        "loaded_x0_ref_shape": list(x0_ref_np.shape),
+        "seed_info": seed_info,
+        "manifest": manifest,
+    }
+    return jnp.asarray(x0_ref_np, dtype=jnp.float32), meta
+
+
+def infer_query_from_attribution_meta(meta: Dict[str, Any]) -> Optional[Any]:
+    seed_info = meta.get("seed_info") or {}
+    if seed_info.get("prompt") is not None:
+        return seed_info["prompt"]
+    manifest = meta.get("manifest") or {}
+    if manifest.get("prompt") is not None:
+        return manifest["prompt"]
+    return None
+
+
+def repeat_condition_to_batch(cond, batch_size: int):
+    if cond is None:
+        return None
+    batch_size = int(batch_size)
+    if batch_size <= 1 or cond.shape[0] == batch_size:
+        return cond
+    if cond.shape[0] != 1:
+        raise ValueError(f"Cannot repeat condition with leading dim {cond.shape[0]} to batch {batch_size}")
+    reps = (batch_size,) + (1,) * (cond.ndim - 1)
+    return jnp.tile(cond, reps)
+
+
+def resolve_checkpoint_path_from_manifest(manifest_ckpt: Optional[str]) -> Optional[str]:
+    if not manifest_ckpt:
+        return None
+
+    ckpt_path = os.path.abspath(os.path.expanduser(str(manifest_ckpt)))
+    if os.path.isfile(ckpt_path):
+        return ckpt_path
+
+    basename = os.path.basename(str(manifest_ckpt))
+    if not basename:
+        return None
+
+    search_roots = [
+        os.getcwd(),
+        os.path.join(os.getcwd(), "diffusion model_jax", "models"),
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "models"),
+    ]
+
+    matches = []
+    seen_roots = set()
+    for root in search_roots:
+        root = os.path.abspath(root)
+        if root in seen_roots or not os.path.isdir(root):
+            continue
+        seen_roots.add(root)
+        for dirpath, _, filenames in os.walk(root):
+            if basename in filenames:
+                matches.append(os.path.join(dirpath, basename))
+
+    matches = sorted(set(matches))
+    if not matches:
+        return None
+    return matches[0]
 
 
 # ============================================================
@@ -681,37 +813,69 @@ def run_endpoint_tracein(cfg: EndpointTraceInConfig):
     state_template = adapter.build_state_template(cfg, model, device)
 
     schedule = make_diffusion_schedule(cfg.timesteps, cfg.beta_start, cfg.beta_end)
+
+    precomputed_sample_meta = None
+    x0_ref = None
+    if cfg.attribution_sample_dir is not None:
+        print(f"[setup] loading precomputed attribution sample: {cfg.attribution_sample_dir}")
+        x0_ref, precomputed_sample_meta = load_cifar_attribution_endpoint(cfg)
+        inferred_query = infer_query_from_attribution_meta(precomputed_sample_meta)
+        if cfg.query is None:
+            if inferred_query is None:
+                raise ValueError(
+                    "query is None and no prompt was found in seed_info.json or manifest.json."
+                )
+            cfg.query = inferred_query
+            print(f"[setup] inferred query from attribution sample prompt: {cfg.query}")
+        print(f"[setup] loaded x0_ref shape={tuple(x0_ref.shape)}")
+
     query_cond = adapter.make_query_cond(ds, cfg.query, cfg)
+    if x0_ref is not None:
+        query_cond = repeat_condition_to_batch(query_cond, int(x0_ref.shape[0]))
 
-    # reference checkpoint
+    # reference checkpoint / endpoint
     ref_ckpt = cfg.reference_ckpt
-    if ref_ckpt is None:
-        if cfg.baseline_dir is None:
-            raise ValueError("reference_ckpt is None and baseline_dir is also None.")
-        ref_ckpt = latest_checkpoint_in_dir(cfg.baseline_dir)
+    if x0_ref is None:
+        if ref_ckpt is None:
+            if cfg.baseline_dir is None:
+                raise ValueError("reference_ckpt is None and baseline_dir is also None.")
+            ref_ckpt = latest_checkpoint_in_dir(cfg.baseline_dir)
 
-    if ref_ckpt is None:
-        raise FileNotFoundError("No reference checkpoint found.")
+        if ref_ckpt is None:
+            raise FileNotFoundError("No reference checkpoint found.")
 
-    print(f"[setup] reference_ckpt={ref_ckpt}")
+        print(f"[setup] reference_ckpt={ref_ckpt}")
 
-    ref_state, ref_payload = adapter.restore_state(ref_ckpt, state_template)
-    ref_params = ref_state.ema_params
+        ref_state, ref_payload = adapter.restore_state(ref_ckpt, state_template)
+        ref_params = ref_state.ema_params
 
-    eps_fn = lambda p, x, t, c: adapter.eps_apply(model, p, x, t, c)
-    x0_ref = compute_reference_endpoint_ddim(
-        eps_fn=eps_fn,
-        params=ref_params,
-        schedule=schedule,
-        cond=query_cond,
-        shape=tuple(example_x.shape),
-        seed=int(cfg.seed),
-        ddim_steps=int(cfg.ddim_steps),
-    )
+        eps_fn = lambda p, x, t, c: adapter.eps_apply(model, p, x, t, c)
+        x0_ref = compute_reference_endpoint_ddim(
+            eps_fn=eps_fn,
+            params=ref_params,
+            schedule=schedule,
+            cond=query_cond,
+            shape=tuple(example_x.shape),
+            seed=int(cfg.seed),
+            ddim_steps=int(cfg.ddim_steps),
+        )
+    else:
+        print("[setup] using precomputed sampler final_state.npy as endpoint x0_ref")
 
     # checkpoints to score
     baseline_ckpts = list_checkpoints_sorted(cfg.baseline_dir) if cfg.use_baseline_ckpts and cfg.baseline_dir else []
     lora_ckpts = list_checkpoints_sorted(cfg.lora_update_dir) if cfg.use_lora_ckpts and cfg.lora_update_dir else []
+
+    if (
+        cfg.use_baseline_ckpts
+        and not baseline_ckpts
+        and precomputed_sample_meta is not None
+    ):
+        manifest_ckpt = (precomputed_sample_meta.get("manifest") or {}).get("checkpoint")
+        resolved_manifest_ckpt = resolve_checkpoint_path_from_manifest(manifest_ckpt)
+        if resolved_manifest_ckpt is not None:
+            baseline_ckpts = [resolved_manifest_ckpt]
+            print(f"[setup] using sampler manifest checkpoint for scoring: {resolved_manifest_ckpt}")
 
     if cfg.checkpoint_limit is not None and cfg.checkpoint_limit > 0:
         if len(baseline_ckpts) > cfg.checkpoint_limit:
@@ -722,6 +886,11 @@ def run_endpoint_tracein(cfg: EndpointTraceInConfig):
             lora_ckpts = [lora_ckpts[i] for i in idx]
 
     print(f"[setup] baseline_ckpts={len(baseline_ckpts)} | lora_ckpts={len(lora_ckpts)}")
+    if not baseline_ckpts and not lora_ckpts:
+        raise FileNotFoundError(
+            "No checkpoints selected for scoring. Set baseline_dir/lora_update_dir, "
+            "or pass an attribution sample run root whose manifest.json contains a valid checkpoint."
+        )
 
     # candidate set
     N = len(ds)
@@ -740,6 +909,8 @@ def run_endpoint_tracein(cfg: EndpointTraceInConfig):
 
     run_info = {
         "ref_ckpt": ref_ckpt,
+        "attribution_sample_dir": cfg.attribution_sample_dir,
+        "attribution_sample_meta": precomputed_sample_meta,
         "T": int(T),
         "ddim_steps": int(cfg.ddim_steps),
         "M_scored": int(M),
@@ -912,9 +1083,45 @@ def run_endpoint_tracein(cfg: EndpointTraceInConfig):
 # Example main
 # ============================================================
 
+# Usage examples
+#
+# 1) From the repo root, generate CIFAR attribution samples first:
+#
+#    cd "diffusion model_jax"
+#    python3 DM___data_attribution_sampler.py \
+#      --adapter cifar \
+#      --code-file DM__training_CIFAR10_pixel.py \
+#      --checkpoint models/cifar10_checkpoints/seed_0_epoch_0200.ckpt \
+#      --prompt truck \
+#      --seeds 0,1,2,3 \
+#      --batch-size 1 \
+#      --num-trajectory-steps 100 \
+#      --outdir ./attribution_samples \
+#      --prefer-device gpu \
+#      --cifar-data-root ./databases/cifar-10-batches-py
+#
+# 2) Then run endpoint TracIn using one sampled CIFAR endpoint.
+#    Set mode = "cifar10_sample" below, or construct the same config in a
+#    separate driver script and call run_endpoint_tracein(cfg).
+#
+#    cd "diffusion model_jax"
+#    python3 DM_dataAttribution_algo_end_tracin.py
+#
+#    The input sample is final_state.npy from:
+#      attribution_samples/cifar/prompt_truck/ckpt_seed_0_epoch_0200/seed_000000/
+#
+#    The output scores are written to:
+#      endpoint_tracein_cifar10_from_sample/
+#
+#    Key outputs:
+#      scores.npy
+#      result_topk.json
+#      score_indices.json
+#      run_info.json
+
 
 if __name__ == "__main__":
-    mode = "cifar10_multi"   # choose from: "x3", "cifar10_single", "cifar10_multi"
+    mode = "cifar10_multi"   # choose from: "x3", "cifar10_single", "cifar10_multi", "cifar10_sample"
 
     if mode == "x3":
         cfg = EndpointTraceInConfig(
@@ -983,10 +1190,43 @@ if __name__ == "__main__":
             out_dir="./endpoint_tracein_cifar10_multi",
         )
 
+    elif mode == "cifar10_sample":
+        cfg = EndpointTraceInConfig(
+            task_type="cifar10",
+            module_name="DM__training_CIFAR10_pixel",
+            # Optional: leave baseline_dir unset to use the checkpoint recorded
+            # in the sampler manifest. If that path is stale, it is resolved by
+            # checkpoint filename under ./models.
+            baseline_dir=None,
+            use_baseline_ckpts=True,
+            use_lora_ckpts=False,
+            attribution_sample_dir=(
+                "./attribution_samples/cifar/prompt_truck/"
+                "ckpt_seed_0_epoch_0200"
+            ),
+            attribution_sample_seed=0,
+            attribution_sample_index=0,
+            # Leave query=None to infer "truck" from seed_info.json/manifest.json.
+            query=None,
+            data_root="./databases/cifar-10-batches-py",
+            model_type="unet",
+            image_size=32,
+            in_channels=3,
+            cond_mode="multi_hot",
+            t_min_end=0,
+            t_max_end_frac=0.2,
+            endpoint_mc_samples=3,
+            train_mc_samples=3,
+            max_train_points=1000,
+            random_subset=True,
+            topk=1000,
+            out_dir="./endpoint_tracein_cifar10_from_sample",
+        )
+
     else:
         raise ValueError(
             f"Unknown mode: {mode}. "
-            "Expected one of: 'x3', 'cifar10_single', 'cifar10_multi'."
+            "Expected one of: 'x3', 'cifar10_single', 'cifar10_multi', 'cifar10_sample'."
         )
 
     run_endpoint_tracein(cfg)
