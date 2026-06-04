@@ -1527,7 +1527,7 @@ if __name__ == "__main__":
             topk=2000,
 
             progress_every=50,
-            out_dir="./traj_attr_x3",
+            out_dir="./attribution_results/traj_tracein/traj_attr_x3",
         )
 
     elif EXAMPLE == "cifar10_single":
@@ -1558,7 +1558,7 @@ if __name__ == "__main__":
             topk=10000,
 
             progress_every=10,
-            out_dir="./traj_attr_cifar10_single",
+            out_dir="./attribution_results/traj_tracein/traj_attr_cifar10_single",
         )
 
     elif EXAMPLE == "cifar10_multi":
@@ -1595,7 +1595,7 @@ if __name__ == "__main__":
             topk=10000,
 
             progress_every=25,
-            out_dir="./traj_attr_cifar10_multi",
+            out_dir="./attribution_results/traj_tracein/traj_attr_cifar10_multi",
         )
 
     elif EXAMPLE == "cifar10_sample":
@@ -1638,7 +1638,7 @@ if __name__ == "__main__":
 
             topk=10000,
             progress_every=512,
-            out_dir="./traj_attr_cifar10_from_sample",
+            out_dir="./attribution_results/traj_tracein/traj_attr_cifar10_from_sample",
         )
 
     elif EXAMPLE == "artbench_latent_sample":
@@ -1678,7 +1678,7 @@ if __name__ == "__main__":
 
             topk=10000,
             progress_every=512,
-            out_dir="./traj_attr_artbench_latent_from_sample",
+            out_dir="./attribution_results/traj_tracein/traj_attr_artbench_latent_from_sample",
         )
 
     else:
