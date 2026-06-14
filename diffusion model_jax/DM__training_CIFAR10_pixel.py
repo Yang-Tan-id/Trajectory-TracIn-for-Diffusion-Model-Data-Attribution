@@ -18,6 +18,7 @@ from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
 import numpy as np
 import jax
 import jax.numpy as jnp
+from jax.sharding import Mesh, NamedSharding, PartitionSpec as P
 from flax import linen as nn
 from flax import jax_utils
 from flax.training import train_state
@@ -338,6 +339,7 @@ class TrainConfig:
     # misc
     num_workers: int = 0
     use_tqdm: bool = True
+    prefetch_size: int = 4
 
     # logging
     use_wandb: bool = False,
@@ -872,6 +874,7 @@ def make_eval_step(schedule: DiffusionSchedule, cfg: TrainConfig):
 
 
 def make_train_step_pmap(schedule: DiffusionSchedule, cfg: TrainConfig):
+    # Do not use donate_argnums with pmap+replicated TrainState; JAX may donate the same buffer twice.
     @functools.partial(jax.pmap, axis_name="data")
     def train_step(state: TrainState, x0: jnp.ndarray, y: jnp.ndarray):
         rng, noise_rng, t_rng, dropout_rng = jax.random.split(state.rng, 4)
@@ -1003,6 +1006,11 @@ def numpy_batch_to_jax(x_np: np.ndarray, y_np: np.ndarray, device, use_bfloat16:
     return x, y
 
 
+def _pmap_batch_sharding(devices: Sequence[jax.Device]) -> NamedSharding:
+    mesh = Mesh(np.array(devices, dtype=object), ("data",))
+    return NamedSharding(mesh, P("data"))
+
+
 def numpy_batch_to_jax_pmap(
     x_np: np.ndarray,
     y_np: np.ndarray,
@@ -1025,9 +1033,10 @@ def numpy_batch_to_jax_pmap(
     else:
         y_np = y_np.astype(np.float32, copy=False)
 
-    x_dtype = jnp.bfloat16 if use_bfloat16 else jnp.float32
-    x = jax.device_put_sharded([jnp.asarray(x_np[i], dtype=x_dtype) for i in range(n_devices)], devices)
-    y = jax.device_put_sharded([y_np[i] for i in range(n_devices)], devices)
+    sharding = _pmap_batch_sharding(devices)
+    x = jax.device_put(x_np, sharding)
+    x = maybe_to_dtype(x, use_bfloat16)
+    y = jax.device_put(y_np, sharding)
     return x, y
 
 
@@ -1232,9 +1241,13 @@ def train(cfg: TrainConfig):
                 drop_last=train_drop_last,
             )
             if use_pmap:
-                train_iter = prefetch_device_batches_pmap(train_np_iter, devices, cfg.use_bfloat16)
+                train_iter = prefetch_device_batches_pmap(
+                    train_np_iter, devices, cfg.use_bfloat16, prefetch_size=cfg.prefetch_size
+                )
             else:
-                train_iter = prefetch_device_batches(train_np_iter, device, cfg.use_bfloat16)
+                train_iter = prefetch_device_batches(
+                    train_np_iter, device, cfg.use_bfloat16, prefetch_size=cfg.prefetch_size
+                )
 
             if cfg.use_tqdm:
                 try:
@@ -1304,9 +1317,13 @@ def train(cfg: TrainConfig):
                 drop_last=eval_drop_last,
             )
             if use_pmap:
-                eval_iter = prefetch_device_batches_pmap(eval_np_iter, devices, cfg.use_bfloat16)
+                eval_iter = prefetch_device_batches_pmap(
+                    eval_np_iter, devices, cfg.use_bfloat16, prefetch_size=cfg.prefetch_size
+                )
             else:
-                eval_iter = prefetch_device_batches(eval_np_iter, device, cfg.use_bfloat16)
+                eval_iter = prefetch_device_batches(
+                    eval_np_iter, device, cfg.use_bfloat16, prefetch_size=cfg.prefetch_size
+                )
             for x, y in eval_iter:
                 state, eval_metrics = eval_step(state, x, y)
                 eval_loss = float(eval_metrics["loss"][0]) if use_pmap else float(eval_metrics["loss"])
@@ -1437,21 +1454,30 @@ def encode_cifar_prompt(
 if __name__ == "__main__":
     cfg = TrainConfig(
         data_root="./databases/cifar-10-batches-py",
-        batch_names=None,  # None -> use all training batches: data_batch_1..5
+        batch_names=None,
         exclude_ranges=None,
         exclude_indices=None,
 
+        class_names=("horse", "automobile"),  # 只训练这两个 CIFAR10 label
+
         model_type="unet",
-        prefer_device="auto",
+        prefer_device="gpu",
+        use_data_parallel=True,
+        use_bfloat16=True,
+        batch_size=256,
+        prefetch_size=4,
         epochs=200,
-        batch_size=128,
         learning_rate=2e-4,
         base_channels=160,
         class_cond=True,
-        cond_mode="multi_hot", # "class_id" or "multi_hot"
-        checkpoint_dir="./models/cifar10_checkpoints",
-        save_every_epochs=1,
+        cond_mode="multi_hot",
+        checkpoint_dir="./models/cifar10_checkpoints_horse_automobile",
+        # save_every_epochs=1,
+        save_every_epochs=4,
         keep_last_k=None,
+        # keep_last_k=5,
+        use_wandb=False,
+        wandb_mode="offline",
         resume_from=None,
     )
 

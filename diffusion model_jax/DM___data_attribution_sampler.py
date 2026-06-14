@@ -18,16 +18,16 @@ of re-sampling each query.
 
 Examples
 --------
-python DM___data_attribution_sampler.py --adapter cifar --code-file DM__training_CIFAR10_pixel.py --checkpoint models/cifar10_checkpoints/seed_0_epoch_0200.ckpt --prompt truck --seeds 0,1,2,3 --batch-size 1 --num-trajectory-steps 100 --outdir ./attribution_samples --prefer-device gpu
+python DM___data_attribution_sampler.py --adapter cifar --code-file DM__training_CIFAR10_pixel.py --checkpoint models/cifar10_checkpoints_horse_automobile/seed_0_epoch_0200.ckpt --model-tag horse_automobile --prompt horse --seeds 0,1,2,3 --batch-size 1 --num-trajectory-steps 100 --outdir ./attribution_samples --prefer-device gpu
 
-python DM___data_attribution_sampler.py --adapter artbench_latent --code-file DM__training_ARTBENCH_latent.py --checkpoint models/artbench_latent_dm_checkpoints256/seed_0_epoch_0100.ckpt --artbench-ae-checkpoint models/artbench_latent_autoencoder/ae_state.ckpt --prompt "baroque,surrealism" --seeds 0,1,2,3 --batch-size 1 --num-trajectory-steps 100 --outdir ./attribution_samples --prefer-device auto
+python DM___data_attribution_sampler.py --adapter artbench_latent --code-file DM__training_ARTBENCH_latent.py --checkpoint models/artbench_latent_dm_checkpoints256/seed_0_epoch_0100.ckpt --model-tag artbench256 --artbench-ae-checkpoint models/artbench_latent_autoencoder/ae_state.ckpt --prompt "baroque,surrealism" --seeds 0,1,2,3 --batch-size 1 --num-trajectory-steps 100 --outdir ./attribution_samples --prefer-device auto
 """
 
 import argparse
 import json
 import os
 import time
-from typing import Dict, List, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import jax
 import jax.numpy as jnp
@@ -51,14 +51,22 @@ def parse_seeds_arg(seeds_text: str) -> List[int]:
     return [int(tok) for tok in tokens]
 
 
-def resolve_output_root(outdir: str, adapter_name: str, checkpoint: str, prompt: str) -> str:
+def resolve_output_root(
+    outdir: str,
+    adapter_name: str,
+    checkpoint: str,
+    prompt: str,
+    model_tag: Optional[str] = None,
+) -> str:
     ckpt_stem = os.path.splitext(os.path.basename(checkpoint))[0]
     safe_prompt = sampler.sanitize_for_path(prompt)
+    safe_model_tag = sampler.sanitize_for_path(model_tag) if model_tag else None
+    ckpt_dir = f"model_{safe_model_tag}__ckpt_{ckpt_stem}" if safe_model_tag else f"ckpt_{ckpt_stem}"
     return os.path.join(
         outdir,
         adapter_name,
         f"prompt_{safe_prompt}",
-        f"ckpt_{ckpt_stem}",
+        ckpt_dir,
     )
 
 
@@ -142,6 +150,7 @@ def save_seed_outputs(
     adapter: sampler.ModelAdapter,
     seed: int,
     prompt: str,
+    model_tag: Optional[str],
     ordered_timesteps: Sequence[int],
     save_timesteps: Sequence[int],
     final_state: np.ndarray,
@@ -176,6 +185,7 @@ def save_seed_outputs(
     info = {
         "seed": int(seed),
         "prompt": prompt,
+        "model_tag": model_tag,
         "batch_size": int(decoded_final.shape[0]),
         "save_timesteps": list(int(x) for x in ordered_timesteps),
         "save_positions": pos_arr.tolist(),
@@ -192,6 +202,15 @@ def main():
     parser.add_argument("--adapter", type=str, required=True, choices=sorted(sampler.ADAPTERS.keys()))
     parser.add_argument("--code-file", type=str, required=True)
     parser.add_argument("--checkpoint", type=str, required=True)
+    parser.add_argument(
+        "--model-tag",
+        type=str,
+        default=None,
+        help=(
+            "Optional short model label written into the output folder and metadata, "
+            "for example horse_automobile or full_cifar10."
+        ),
+    )
     parser.add_argument("--prompt", type=str, required=True, help="Fixed prompt used for all seeds.")
     parser.add_argument("--seeds", type=str, required=True, help="Comma-separated integer seeds, e.g. 0,1,2,3")
     parser.add_argument("--batch-size", type=int, default=1)
@@ -224,13 +243,20 @@ def main():
     save_timesteps = sampler.selected_timesteps_evenly(adapter.cfg.timesteps, args.num_trajectory_steps)
     ordered_timesteps = sorted(save_timesteps, reverse=True)
 
-    run_root = resolve_output_root(args.outdir, args.adapter, args.checkpoint, args.prompt)
+    run_root = resolve_output_root(
+        args.outdir,
+        args.adapter,
+        args.checkpoint,
+        args.prompt,
+        model_tag=args.model_tag,
+    )
     os.makedirs(run_root, exist_ok=True)
 
     manifest = {
         "adapter": args.adapter,
         "code_file": os.path.abspath(args.code_file),
         "checkpoint": os.path.abspath(args.checkpoint),
+        "model_tag": args.model_tag,
         "prompt": args.prompt,
         "seeds": seeds,
         "batch_size": int(args.batch_size),
@@ -243,6 +269,7 @@ def main():
         json.dump(manifest, f, indent=2)
 
     print(f"[setup] adapter={args.adapter}")
+    print(f"[setup] model_tag={args.model_tag}")
     print(f"[setup] prompt={args.prompt}")
     print(f"[setup] num_seeds={len(seeds)} | batch_size={args.batch_size}")
     print(f"[setup] saving {len(ordered_timesteps)} evenly spaced timesteps")
@@ -267,6 +294,7 @@ def main():
             adapter=adapter,
             seed=seed,
             prompt=args.prompt,
+            model_tag=args.model_tag,
             ordered_timesteps=ordered_timesteps,
             save_timesteps=ordered_timesteps,
             final_state=final_state,
