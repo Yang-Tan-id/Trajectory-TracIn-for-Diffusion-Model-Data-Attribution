@@ -22,6 +22,34 @@ python DM___sampler.py \\
   --num-trajectory-steps 9 \\
   --outdir ./samples/x3
 
+python3 "DM___sampler.py" \
+  --adapter cifar \
+  --code-file "DM__training_CIFAR10_pixel.py" \
+  --checkpoint "counterfactual_models/cifar__horse_automobile__horse__seed_0__remove_top5000__endpoint_das/seed_0_epoch_0200.ckpt" \
+  --seed 0 \
+  --prompt "horse" \
+  --batch-size 1 \
+  --num-trajectory-steps 100 \
+  --outdir "./samples/cifar__horse_automobile__horse__seed_0__remove_top5000__endpoint_das" \
+  --prefer-device gpu \
+  --print-metadata \
+  --upscale 1
+
+
+python3 "DM___sampler.py" \
+  --adapter cifar \
+  --code-file "DM__training_CIFAR10_pixel.py" \
+  --checkpoint "models/cifar10_checkpoints_horse_automobile/seed_0_epoch_0200.ckpt" \
+  --seed 0 \
+  --prompt "horse" \
+  --batch-size 1 \
+  --num-trajectory-steps 100 \
+  --outdir "./samples/cifar10_checkpoints_horse_automobile" \
+  --prefer-device gpu \
+  --print-metadata \
+  --upscale 1
+
+
 python3 DM___sampler.py --adapter artbench_latent --code-file "DM__training_ARTBENCH_latent.py" --checkpoint "models/artbench_latent_dm_checkpoints256/seed_0_epoch_0100.ckpt" --artbench-ae-checkpoint "models/artbench_latent_autoencoder/ae_state.ckpt" --seed 476 --prompt "realism," --batch-size 1 --num-trajectory-steps 9 --outdir ./samples/artbench_multi --upscale 1
 
 python3 DM___sampler.py --adapter artbench_latent --code-file "DM__training_ARTBENCH_latent.py" --checkpoint "models/artbench_latent_dm_checkpoints256/seed_0_epoch_0100.ckpt" --artbench-ae-checkpoint "models/artbench_latent_autoencoder/ae_state.ckpt" --seed 0 --prompt "baroque,surrealism" --batch-size 1 --num-trajectory-steps 9 --outdir ./samples/artbench_multi --upscale 1
@@ -39,11 +67,13 @@ import re
 import time
 from abc import ABC, abstractmethod
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import jax
 import jax.numpy as jnp
 import numpy as np
+from flax import serialization
 from PIL import Image, ImageDraw
 
 
@@ -396,11 +426,24 @@ class CIFARAdapter(ModelAdapter):
 
     def _restore_model_and_state(self):
         model = self.module.build_model(self.cfg)
-        rng = jax.random.PRNGKey(self.cfg.seed)
-        state_template = self.module.create_train_state(self.cfg, model, rng, self.device)
-        state, start_epoch = self.module._restore_checkpoint(self.checkpoint, state_template)
-        print(f"[cifar] restored checkpoint through epoch {start_epoch}")
-        return model, state
+        payload = load_checkpoint_payload(self.checkpoint)
+        start_epoch = int(payload.get("epoch", 0))
+        try:
+            state_dict = serialization.msgpack_restore(payload["state_bytes"])
+            ema_params = state_dict.get("ema_params", state_dict.get("params"))
+            if ema_params is None:
+                raise KeyError("state_bytes did not contain ema_params or params")
+            ema_params = jax.device_put(ema_params, self.device)
+            state = SimpleNamespace(ema_params=ema_params)
+            print(f"[cifar] restored lightweight EMA checkpoint through epoch {start_epoch}")
+            return model, state
+        except Exception as e:
+            print(f"[cifar] lightweight EMA restore failed ({type(e).__name__}: {e}); falling back to full TrainState restore")
+            rng = jax.random.PRNGKey(self.cfg.seed)
+            state_template = self.module.create_train_state(self.cfg, model, rng, self.device)
+            state, start_epoch = self.module._restore_checkpoint(self.checkpoint, state_template)
+            print(f"[cifar] restored checkpoint through epoch {start_epoch}")
+            return model, state
 
     def _cond_mode(self) -> str:
         return getattr(self.cfg, "cond_mode", "class_id")
