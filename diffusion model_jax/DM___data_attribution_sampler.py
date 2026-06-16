@@ -18,8 +18,18 @@ of re-sampling each query.
 
 Examples
 --------
-python DM___data_attribution_sampler.py --adapter cifar --code-file DM__training_CIFAR10_pixel.py --checkpoint models/cifar10_checkpoints_horse_automobile/seed_0_epoch_0200.ckpt --model-tag horse_automobile --prompt horse --seeds 0,1,2,3 --batch-size 1 --num-trajectory-steps 100 --outdir ./attribution_samples --prefer-device gpu
-
+python DM___data_attribution_sampler.py \
+  --adapter cifar \
+  --code-file DM__training_CIFAR10_pixel.py \
+  --checkpoint models/cifar10_checkpoints_horse_automobile/seed_0_epoch_0200.ckpt \
+  --model-tag horse_automobile \
+  --prompt horse \
+  --seeds 0,1,2,3 \
+  --batch-size 1 \
+  --num-trajectory-steps 100 \
+  --outdir ./attribution_samples \
+  --prefer-device gpu
+  
 python DM___data_attribution_sampler.py --adapter artbench_latent --code-file DM__training_ARTBENCH_latent.py --checkpoint models/artbench_latent_dm_checkpoints256/seed_0_epoch_0100.ckpt --model-tag artbench256 --artbench-ae-checkpoint models/artbench_latent_autoencoder/ae_state.ckpt --prompt "baroque,surrealism" --seeds 0,1,2,3 --batch-size 1 --num-trajectory-steps 100 --outdir ./attribution_samples --prefer-device auto
 """
 
@@ -318,3 +328,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+

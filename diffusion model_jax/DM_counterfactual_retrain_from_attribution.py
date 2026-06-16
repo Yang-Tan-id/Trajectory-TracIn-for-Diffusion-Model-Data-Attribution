@@ -9,7 +9,7 @@ re-trains DM__training_CIFAR10_pixel with those rows excluded.
 
 Example
 -------
-python DM_counterfactual_retrain_from_attribution.py \
+CUDA_VISIBLE_DEVICES=2 python3 DM_counterfactual_retrain_from_attribution.py \
   --result-dirs \
     attribution_results/traj_tracein/cifar2_traj_attr_cifar10_horse_automobile_from_sample_range_1_2000 \
     attribution_results/traj_tracein/cifar2_traj_attr_cifar10_horse_automobile_from_sample_range_2001_4000 \
@@ -17,12 +17,25 @@ python DM_counterfactual_retrain_from_attribution.py \
     attribution_results/traj_tracein/cifar2_traj_attr_cifar10_horse_automobile_from_sample_range_6001_8000 \
     attribution_results/traj_tracein/cifar2_traj_attr_cifar10_horse_automobile_from_sample_range_8001_10000 \
   --base-checkpoint models/cifar10_checkpoints_horse_automobile/seed_0_epoch_0200.ckpt \
-  --topk 1000 \
+  --topk 5000 \
   --dataset-tag cifar \
   --model-tag horse_automobile \
   --query horse \
   --seed 0 \
+  --score-tag traj_tracin \
   --prefer-device gpu
+  
+CUDA_VISIBLE_DEVICES=3 python3 DM_counterfactual_retrain_from_attribution.py \
+  --result-dirs \
+    attribution_results/endpoint_das/cifar2_endpoint_das_horse_automobile_from_sample_range_1_10000 \
+  --base-checkpoint models/cifar10_checkpoints_horse_automobile/seed_0_epoch_0200.ckpt \
+  --topk 5000 \
+  --dataset-tag cifar \
+  --model-tag horse_automobile \
+  --query horse \
+  --seed 0 \
+  --score-tag endpoint_das \
+  --prefer-device gpu  
 """
 
 import argparse
