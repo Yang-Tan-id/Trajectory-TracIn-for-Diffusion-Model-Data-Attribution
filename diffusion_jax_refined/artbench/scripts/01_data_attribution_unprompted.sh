@@ -14,10 +14,10 @@ for ALGORITHM in ${ALGORITHMS}; do
     RANGE_LIST="${ATTRIBUTION_RANGES//,/ }"
     for RANGE_VALUE in ${RANGE_LIST}; do
       echo "Running unprompted attribution: ${ALGORITHM} range=${RANGE_VALUE}"
-      SCORE_INDEX_RANGES="${RANGE_VALUE}" python "${ROOT}/../common/unprompted_diffusers_attribution.py" "${ROOT}/dataset_config.py" --algorithm "${ALGORITHM}"
+      SCORE_INDEX_RANGES="${RANGE_VALUE}" python "${ROOT}/../common/unprompted_jax_attribution.py" "${ROOT}/dataset_config.py" --algorithm "${ALGORITHM}"
     done
   else
     echo "Running unprompted attribution: ${ALGORITHM}"
-    python "${ROOT}/../common/unprompted_diffusers_attribution.py" "${ROOT}/dataset_config.py" --algorithm "${ALGORITHM}"
+    python "${ROOT}/../common/unprompted_jax_attribution.py" "${ROOT}/dataset_config.py" --algorithm "${ALGORITHM}"
   fi
 done

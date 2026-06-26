@@ -379,7 +379,58 @@ class CIFAR10TaskAdapter(BaseTaskAdapter):
         return model.apply({"params": params}, x, t, cond, train=False)
 
     def make_query_cond(self, ds, query_spec, cfg):
+        if not cfg.class_cond:
+            if cfg.cond_mode == "class_id":
+                return jnp.zeros((1,), dtype=jnp.int32)
+            return jnp.zeros((1, cfg.num_classes), dtype=jnp.float32)
         q = encode_cifar_query(query=query_spec, label_names=ds.label_names, cond_mode=cfg.cond_mode)
+        if cfg.cond_mode == "class_id":
+            return jnp.array([int(q)], dtype=jnp.int32)
+        return jnp.array(q[None, :], dtype=jnp.float32)
+
+
+class ArtBenchLatentTaskAdapter(BaseTaskAdapter):
+    def iter_dataset(self, cfg):
+        npz_path = cfg.latent_npz_path or os.path.join(cfg.cache_dir, "train_latents.npz")
+        return self.m.ArtBenchLatentDataset(
+            npz_path=npz_path,
+            one_hot_labels=(cfg.cond_mode == "multi_hot"),
+            class_names=cfg.class_names,
+            exclude_indices=cfg.latent_exclude_indices,
+        )
+
+    def get_example_batch(self, ds):
+        return self.get_item(ds, 0)
+
+    def get_item(self, ds, idx):
+        x, y = ds[idx]
+        x = jnp.array(x[None, ...], dtype=jnp.float32)
+        if y.ndim == 0:
+            cond = jnp.array(y[None], dtype=jnp.int32)
+        else:
+            cond = jnp.array(y[None, ...], dtype=jnp.float32)
+        return x, cond
+
+    def build_state_template(self, cfg, model, device):
+        rng = jax.random.PRNGKey(cfg.seed)
+        return self.m.base.create_train_state(cfg, model, rng, device)
+
+    def build_model(self, cfg):
+        return self.m.base.build_model(cfg)
+
+    def eps_apply(self, model, params, x, t, cond):
+        return model.apply({"params": params}, x, t, cond, train=False)
+
+    def make_query_cond(self, ds, query_spec, cfg):
+        if not cfg.class_cond:
+            if cfg.cond_mode == "class_id":
+                return jnp.zeros((1,), dtype=jnp.int32)
+            return jnp.zeros((1, cfg.num_classes), dtype=jnp.float32)
+        q = self.m.encode_artbench_prompt(
+            prompt=query_spec,
+            label_names=ds.label_names,
+            cond_mode=cfg.cond_mode,
+        )
         if cfg.cond_mode == "class_id":
             return jnp.array([int(q)], dtype=jnp.int32)
         return jnp.array(q[None, :], dtype=jnp.float32)
@@ -463,6 +514,11 @@ class JourneyTRAKJAXConfig:
     num_workers: int = 0
     cond_mode: str = "class_id"
 
+    # artbench_latent fields
+    latent_npz_path: Optional[str] = None
+    cache_dir: str = "./latents/artbench256"
+    latent_exclude_indices: Optional[Tuple[int, ...]] = None
+
 
 def get_adapter(cfg: JourneyTRAKJAXConfig):
     module = __import__(cfg.module_name)
@@ -470,7 +526,9 @@ def get_adapter(cfg: JourneyTRAKJAXConfig):
         return X3TaskAdapter(module)
     if cfg.task_type == "cifar10":
         return CIFAR10TaskAdapter(module)
-    raise ValueError("task_type must be 'x3' or 'cifar10'")
+    if cfg.task_type == "artbench_latent":
+        return ArtBenchLatentTaskAdapter(module)
+    raise ValueError("task_type must be 'x3', 'cifar10', or 'artbench_latent'")
 
 
 # ============================================================

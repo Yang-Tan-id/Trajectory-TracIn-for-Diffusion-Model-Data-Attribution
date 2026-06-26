@@ -314,6 +314,9 @@ class TrainConfig:
     batch_size: int = 128
     learning_rate: float = 2e-4
     weight_decay: float = 1e-4
+    adam_b1: float = 0.9
+    adam_b2: float = 0.999
+    adam_eps: float = 1e-8
     grad_clip_norm: float = 1.0
     ema_decay: float = 0.999
     log_every: int = 100
@@ -806,7 +809,13 @@ def create_train_state(cfg: TrainConfig, model: nn.Module, rng: jax.Array, devic
 
     tx = optax.chain(
         optax.clip_by_global_norm(cfg.grad_clip_norm),
-        optax.adamw(learning_rate=cfg.learning_rate, weight_decay=cfg.weight_decay),
+        optax.adamw(
+            learning_rate=cfg.learning_rate,
+            b1=getattr(cfg, "adam_b1", 0.9),
+            b2=getattr(cfg, "adam_b2", 0.999),
+            eps=getattr(cfg, "adam_eps", 1e-8),
+            weight_decay=cfg.weight_decay,
+        ),
     )
     return TrainState.create(apply_fn=model.apply, params=params, tx=tx, ema_params=params, rng=rng)
 

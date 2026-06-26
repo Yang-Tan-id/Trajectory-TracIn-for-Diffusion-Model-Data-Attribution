@@ -83,6 +83,7 @@ class LatentArtBenchConfig:
 
     # diffusion on latents
     dm_model_type: str = "unet"
+    dm_class_cond: bool = True
     dm_cond_mode: str = "class_id"  # "class_id" or "multi_hot"
     dm_base_channels: int = 160
     dm_channel_mults: Tuple[int, ...] = (1, 2, 2)
@@ -93,6 +94,9 @@ class LatentArtBenchConfig:
     dm_batch_size: int = 128
     dm_learning_rate: float = 2e-4
     dm_weight_decay: float = 1e-4
+    dm_adam_b1: float = 0.9
+    dm_adam_b2: float = 0.999
+    dm_adam_eps: float = 1e-8
     dm_grad_clip_norm: float = 1.0
     dm_ema_decay: float = 0.999
     dm_log_every: int = 100
@@ -406,7 +410,7 @@ def train_latent_diffusion(cfg: LatentArtBenchConfig, train_latent_ds: ArtBenchL
         num_res_blocks=cfg.dm_num_res_blocks,
         time_emb_dim=cfg.dm_time_emb_dim,
         num_classes=train_latent_ds.num_classes,
-        class_cond=True,
+        class_cond=cfg.dm_class_cond,
         cond_mode=cfg.dm_cond_mode,
         dropout=cfg.dm_dropout,
         seed=cfg.seed,
@@ -414,6 +418,9 @@ def train_latent_diffusion(cfg: LatentArtBenchConfig, train_latent_ds: ArtBenchL
         batch_size=cfg.dm_batch_size,
         learning_rate=cfg.dm_learning_rate,
         weight_decay=cfg.dm_weight_decay,
+        adam_b1=cfg.dm_adam_b1,
+        adam_b2=cfg.dm_adam_b2,
+        adam_eps=cfg.dm_adam_eps,
         grad_clip_norm=cfg.dm_grad_clip_norm,
         ema_decay=cfg.dm_ema_decay,
         log_every=cfg.dm_log_every,

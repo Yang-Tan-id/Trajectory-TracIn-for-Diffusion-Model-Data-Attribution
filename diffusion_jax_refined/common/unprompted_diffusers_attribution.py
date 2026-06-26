@@ -145,10 +145,12 @@ def run_attribution(config_path: str, algorithm: str) -> None:
     lds_index_root = getattr(cfg, "LDS_INDEX_ROOT", None)
 
     subset_index = int(os.environ.get("SUBSET_INDEX", "0"))
-    train_seed = int(os.environ.get("TRAIN_SEED", os.environ.get("UNPROMPTED_MODEL_SEED", "0")))
+    train_seed = int(os.environ.get("TRAIN_SEED", os.environ.get("UNPROMPTED_MODEL_SEED", "42")))
+    use_subset = os.environ.get("UNPROMPTED_USE_SUBSET", "0") in ("1", "true", "True", "yes")
+    default_model_name = f"ddpm-sub-{subset_index}-{train_seed}" if use_subset else f"ddpm-full-{train_seed}"
     model_dir = Path(os.environ.get(
         "UNPROMPTED_MODEL_DIR",
-        str(Path(model_root) / algorithm / "unprompted" / f"ddpm-sub-{subset_index}-{train_seed}"),
+        str(Path(model_root) / "unprompted" / default_model_name),
     ))
     out_dir = Path(os.environ.get("UNPROMPTED_ATTRIBUTION_OUT_DIR", str(Path(attribution_root) / f"{algorithm}_unprompted")))
 
@@ -163,7 +165,7 @@ def run_attribution(config_path: str, algorithm: str) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     index_path = None
-    if lds_index_root is not None:
+    if use_subset and lds_index_root is not None:
         candidate = Path(lds_index_root) / f"sub-idx-{subset_index}.pkl"
         if candidate.exists():
             index_path = str(candidate)
@@ -218,6 +220,7 @@ def run_attribution(config_path: str, algorithm: str) -> None:
         "model_dir": str(model_dir),
         "hf_dataset_root": hf_root,
         "index_path": index_path,
+        "use_subset": use_subset,
         "subset_index": subset_index,
         "train_seed": train_seed,
         "score_index_ranges": ranges,

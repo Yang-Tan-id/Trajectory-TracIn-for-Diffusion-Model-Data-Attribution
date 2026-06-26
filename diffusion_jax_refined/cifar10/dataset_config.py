@@ -38,6 +38,7 @@ MODEL_ROOT = RESULT_ROOT / "model"
 ATTRIBUTION_ROOT = RESULT_ROOT / "attribution_score"
 EVAL_ROOT = RESULT_ROOT / "eval"
 PROMPTED_JAX_MODEL_ROOT = MODEL_ROOT / "prompted_jax"
+UNPROMPTED_JAX_MODEL_ROOT = MODEL_ROOT / "unprompted_jax"
 SAMPLING_ROOT = EVAL_ROOT / "sampling"
 
 QUERY = "truck"
@@ -45,8 +46,16 @@ DATA_ROOT = str(DATASET_STORAGE_ROOT / "cifar-10-batches-py")
 HF_DATASET_ROOT = str(DATASET_STORAGE_ROOT / "hf_cifar10")
 LDS_INDEX_ROOT = DATASET_STORAGE_ROOT / "indices" / "lds-val"
 CHECKPOINT_DIR = str(PROMPTED_JAX_MODEL_ROOT)
-REFERENCE_CKPT = str(PROMPTED_JAX_MODEL_ROOT / "seed_0_epoch_0200.ckpt")
-ATTRIBUTION_SAMPLE_DIR = str(SAMPLING_ROOT / "cifar" / "prompt_truck" / "model_prompted_jax__ckpt_seed_0_epoch_0200")
+REFERENCE_CKPT = str(PROMPTED_JAX_MODEL_ROOT / "seed_42_epoch_0200.ckpt")
+ATTRIBUTION_SAMPLE_DIR = str(SAMPLING_ROOT / "cifar" / "prompt_truck" / "model_prompted_jax__ckpt_seed_42_epoch_0200")
+UNPROMPTED_TRAIN_SEED = int(os.environ.get("TRAIN_SEED", "42"))
+UNPROMPTED_EPOCHS = int(os.environ.get("JAX_EPOCHS", "200"))
+UNPROMPTED_CKPT_STEM = f"seed_{UNPROMPTED_TRAIN_SEED}_epoch_{UNPROMPTED_EPOCHS:04d}"
+UNPROMPTED_JAX_REFERENCE_CKPT = str(UNPROMPTED_JAX_MODEL_ROOT / f"{UNPROMPTED_CKPT_STEM}.ckpt")
+UNPROMPTED_ATTRIBUTION_SAMPLE_DIR = str(
+    SAMPLING_ROOT / "cifar" / "prompt_unconditional"
+    / f"model_unprompted_jax__ckpt_{UNPROMPTED_CKPT_STEM}"
+)
 SCORE_INDEX_RANGES = _parse_score_index_ranges(((1, 50000),))
 
 
@@ -54,7 +63,7 @@ COMMON_CIFAR = {
     "task_type": "cifar10",
     "module_name": "DM__training_CIFAR10_pixel",
     "query": QUERY,
-    "seed": 0,
+    "seed": 42,
     "data_root": DATA_ROOT,
     "class_names": None,
     "model_type": "unet",
@@ -155,34 +164,32 @@ ATTRIBUTION_CONFIGS = {
 def attribution_config(algorithm: str) -> dict:
     return deepcopy(ATTRIBUTION_CONFIGS[algorithm])
 
+def unprompted_attribution_config(algorithm: str) -> dict:
+    config = attribution_config(algorithm)
+    config.update(class_cond=False, query="unconditional")
+    for key in ("baseline_dir", "checkpoint_dir"):
+        if key in config:
+            config[key] = str(UNPROMPTED_JAX_MODEL_ROOT)
+    if "reference_ckpt" in config:
+        config["reference_ckpt"] = UNPROMPTED_JAX_REFERENCE_CKPT
+    if "attribution_sample_dir" in config:
+        config["attribution_sample_dir"] = UNPROMPTED_ATTRIBUTION_SAMPLE_DIR
+    return config
+
+
+def unprompted_training_command() -> list[str]:
+    return [
+        "python",
+        str(REFINE_ROOT / "common" / "prompted_jax_training.py"),
+        str(DATASET_DIR / "dataset_config.py"),
+        "--algorithm=shared",
+        "--unconditional",
+    ]
+
 
 def commands_for_algorithm(algorithm: str) -> dict[str, list[str]]:
-    seed = os.environ.get("TRAIN_SEED", "0")
-    subset_index = os.environ.get("SUBSET_INDEX", "0")
-    run_name = f"CIFAR10-unprompted-{algorithm}-sub{subset_index}-seed{seed}"
     return {
-        "training": [
-            "python",
-            str(REFINE_ROOT / "training" / "train_diffusers_unconditional.py"),
-            f"--seed={seed}",
-            "--logger=wandb",
-            f"--wandb_name={run_name}",
-            "--model_config_name_or_path=config.json",
-            f"--dataset_name_or_path={HF_DATASET_ROOT}",
-            f"--index_path={LDS_INDEX_ROOT / f'sub-idx-{subset_index}.pkl'}",
-            "--dataloader_num_workers=8",
-            "--resolution=32",
-            "--center_crop",
-            "--random_flip",
-            "--train_batch_size=128",
-            "--num_epochs=200",
-            "--checkpointing_steps=100000",
-            "--gradient_accumulation_steps=1",
-            "--learning_rate=1e-4",
-            "--adam_weight_decay=1e-6",
-            "--save_images_epochs=100000",
-            f"--save_path={MODEL_ROOT / algorithm / 'unprompted' / f'ddpm-sub-{subset_index}-{seed}'}",
-        ],
+        "training": unprompted_training_command(),
         "attribution": ["python", "run_attribution.py"],
         "eval": ["python", "run_eval.py"],
     }

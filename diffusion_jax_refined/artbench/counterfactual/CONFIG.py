@@ -6,7 +6,7 @@ DATASET_DIR = Path(__file__).resolve().parents[1]
 if str(DATASET_DIR) not in sys.path:
     sys.path.insert(0, str(DATASET_DIR))
 
-from dataset_config import ATTRIBUTION_ROOT, EVAL_ROOT, EXPERIMENT_TAG
+from dataset_config import ATTRIBUTION_ROOT, DATASET_NAME, EVAL_ROOT, EXPERIMENT_TAG
 
 ALGORITHM = os.environ.get("ALGORITHM", "das")
 NOTE_PATH = EVAL_ROOT / "counterfactual" / ALGORITHM / "counterfactual_note.txt"
@@ -25,4 +25,3 @@ COMMANDS = {
         ),
     ]
 }
-

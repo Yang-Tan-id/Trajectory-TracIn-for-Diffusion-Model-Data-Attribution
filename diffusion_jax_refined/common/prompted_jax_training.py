@@ -32,10 +32,12 @@ def _optional_float(name: str, default):
     return float(value)
 
 
-def _checkpoint_dir(cfg_module, algorithm: str) -> str:
+def _checkpoint_dir(cfg_module, algorithm: str, *, unconditional: bool = False) -> str:
     explicit = os.environ.get("JAX_CHECKPOINT_DIR")
     if explicit:
         return explicit
+    if unconditional:
+        return str(Path(require_attr(cfg_module, "MODEL_ROOT")) / "unprompted_jax")
     per_algorithm = os.environ.get("JAX_PER_ALGORITHM", "0") in ("1", "true", "True", "yes")
     if per_algorithm:
         result_root = require_attr(cfg_module, "MODEL_ROOT")
@@ -43,7 +45,12 @@ def _checkpoint_dir(cfg_module, algorithm: str) -> str:
     return require_attr(cfg_module, "CHECKPOINT_DIR")
 
 
-def run_prompted_cifar_training(config_path: str | Path, algorithm: str) -> None:
+def run_prompted_cifar_training(
+    config_path: str | Path,
+    algorithm: str,
+    *,
+    unconditional: bool = False,
+) -> None:
     cfg_module = load_config(config_path)
     dataset_name = require_attr(cfg_module, "DATASET_NAME")
     experiment_tag = require_attr(cfg_module, "EXPERIMENT_TAG")
@@ -68,14 +75,17 @@ def run_prompted_cifar_training(config_path: str | Path, algorithm: str) -> None
         num_res_blocks=2,
         time_emb_dim=128,
         num_classes=10,
-        class_cond=True,
+        class_cond=not unconditional,
         cond_mode=getattr(cfg_module, "COMMON_CIFAR", {}).get("cond_mode", "multi_hot"),
         dropout=_optional_float("JAX_DROPOUT", 0.1),
-        seed=_optional_int("TRAIN_SEED", 0),
+        seed=_optional_int("TRAIN_SEED", 42),
         epochs=_optional_int("JAX_EPOCHS", 200),
-        batch_size=_optional_int("JAX_BATCH_SIZE", 256),
-        learning_rate=_optional_float("JAX_LEARNING_RATE", 2e-4),
-        weight_decay=_optional_float("JAX_WEIGHT_DECAY", 1e-4),
+        batch_size=_optional_int("JAX_BATCH_SIZE", 128 if unconditional else 256),
+        learning_rate=_optional_float("JAX_LEARNING_RATE", 1e-4 if unconditional else 2e-4),
+        weight_decay=_optional_float("JAX_WEIGHT_DECAY", 1e-6 if unconditional else 1e-4),
+        adam_b1=_optional_float("JAX_ADAM_B1", 0.95 if unconditional else 0.9),
+        adam_b2=_optional_float("JAX_ADAM_B2", 0.999),
+        adam_eps=_optional_float("JAX_ADAM_EPS", 1e-8),
         grad_clip_norm=_optional_float("JAX_GRAD_CLIP_NORM", 1.0),
         ema_decay=_optional_float("JAX_EMA_DECAY", 0.999),
         log_every=_optional_int("JAX_LOG_EVERY", 100),
@@ -84,10 +94,13 @@ def run_prompted_cifar_training(config_path: str | Path, algorithm: str) -> None
         beta_end=0.02,
         predict_x0=False,
         prefer_device=os.environ.get("JAX_DEVICE", "gpu"),
-        use_bfloat16=os.environ.get("JAX_BFLOAT16", "1") in ("1", "true", "True", "yes"),
+        use_bfloat16=os.environ.get(
+            "JAX_BFLOAT16",
+            "0" if unconditional else "1",
+        ) in ("1", "true", "True", "yes"),
         use_data_parallel=os.environ.get("JAX_DATA_PARALLEL", "1") in ("1", "true", "True", "yes"),
         num_devices=_optional_int("JAX_NUM_DEVICES", None),
-        checkpoint_dir=_checkpoint_dir(cfg_module, algorithm),
+        checkpoint_dir=_checkpoint_dir(cfg_module, algorithm, unconditional=unconditional),
         save_every_epochs=_optional_int("JAX_SAVE_EVERY_EPOCHS", 4),
         keep_last_k=_optional_int("JAX_KEEP_LAST_K", None),
         resume_from=os.environ.get("JAX_RESUME_FROM") or None,
@@ -99,26 +112,34 @@ def run_prompted_cifar_training(config_path: str | Path, algorithm: str) -> None
         wandb_entity=os.environ.get("JAX_WANDB_ENTITY") or "clearoboticslab",
         wandb_run_name=os.environ.get(
             "JAX_WANDB_RUN_NAME",
-            f"{dataset_name}-{experiment_tag}-{algorithm}-prompted-jax-seed{_optional_int('TRAIN_SEED', 0)}",
+            f"{dataset_name}-{experiment_tag}-{algorithm}-"
+            f"{'unprompted' if unconditional else 'prompted'}-jax-"
+            f"seed{_optional_int('TRAIN_SEED', 0)}",
         ),
         wandb_mode=os.environ.get("JAX_WANDB_MODE", "offline"),
         wandb_log_step_metrics=os.environ.get("JAX_WANDB_LOG_STEP_METRICS", "0") in ("1", "true", "True", "yes"),
     )
 
     print("=" * 88)
-    print("Prompted JAX training")
+    print(f"{'Unprompted' if unconditional else 'Prompted'} JAX training")
     print(f"dataset       : {dataset_name}")
     print(f"experiment    : {experiment_tag}")
     print(f"algorithm     : {algorithm}")
     print(f"checkpoint_dir: {train_cfg.checkpoint_dir}")
     print(f"class_names   : {train_cfg.class_names}")
     print(f"cond_mode     : {train_cfg.cond_mode}")
+    print(f"class_cond    : {train_cfg.class_cond}")
     print("=" * 88)
     print(asdict(train_cfg))
     train_mod.train(train_cfg)
 
 
-def run_prompted_artbench_training(config_path: str | Path, algorithm: str) -> None:
+def run_prompted_artbench_training(
+    config_path: str | Path,
+    algorithm: str,
+    *,
+    unconditional: bool = False,
+) -> None:
     cfg_module = load_config(config_path)
     dataset_name = require_attr(cfg_module, "DATASET_NAME")
     experiment_tag = require_attr(cfg_module, "EXPERIMENT_TAG")
@@ -154,11 +175,15 @@ def run_prompted_artbench_training(config_path: str | Path, algorithm: str) -> N
         latent_channels=_optional_int("ARTBENCH_LATENT_CHANNELS", 4),
         ae_downsample_factor=_optional_int("ARTBENCH_AE_DOWNSAMPLE_FACTOR", 4),
         dm_model_type="unet",
+        dm_class_cond=not unconditional,
         dm_cond_mode=getattr(cfg_module, "COMMON_ARTBENCH", {}).get("cond_mode", "multi_hot"),
         dm_epochs=_optional_int("JAX_EPOCHS", 100),
         dm_batch_size=_optional_int("JAX_BATCH_SIZE", 128),
-        dm_learning_rate=_optional_float("JAX_LEARNING_RATE", 2e-4),
-        dm_weight_decay=_optional_float("JAX_WEIGHT_DECAY", 1e-4),
+        dm_learning_rate=_optional_float("JAX_LEARNING_RATE", 1e-4 if unconditional else 2e-4),
+        dm_weight_decay=_optional_float("JAX_WEIGHT_DECAY", 1e-6 if unconditional else 1e-4),
+        dm_adam_b1=_optional_float("JAX_ADAM_B1", 0.95 if unconditional else 0.9),
+        dm_adam_b2=_optional_float("JAX_ADAM_B2", 0.999),
+        dm_adam_eps=_optional_float("JAX_ADAM_EPS", 1e-8),
         dm_grad_clip_norm=_optional_float("JAX_GRAD_CLIP_NORM", 1.0),
         dm_ema_decay=_optional_float("JAX_EMA_DECAY", 0.999),
         dm_log_every=_optional_int("JAX_LOG_EVERY", 100),
@@ -171,25 +196,29 @@ def run_prompted_artbench_training(config_path: str | Path, algorithm: str) -> N
         dm_num_res_blocks=2,
         dm_time_emb_dim=128,
         dm_dropout=_optional_float("JAX_DROPOUT", 0.1),
-        seed=_optional_int("TRAIN_SEED", 0),
-        use_bfloat16=os.environ.get("JAX_BFLOAT16", "1") in ("1", "true", "True", "yes"),
+        seed=_optional_int("TRAIN_SEED", 42),
+        use_bfloat16=os.environ.get(
+            "JAX_BFLOAT16",
+            "0" if unconditional else "1",
+        ) in ("1", "true", "True", "yes"),
         prefer_device=os.environ.get("JAX_DEVICE", "gpu"),
         use_tqdm=os.environ.get("JAX_TQDM", "1") in ("1", "true", "True", "yes"),
         reuse_autoencoder=os.environ.get("ARTBENCH_REUSE_AUTOENCODER", "1") in ("1", "true", "True", "yes"),
         cache_dir=str(latent_root),
         autoencoder_model_dir=str(Path(model_root) / "autoencoder"),
-        dm_checkpoint_dir=_checkpoint_dir(cfg_module, algorithm),
+        dm_checkpoint_dir=_checkpoint_dir(cfg_module, algorithm, unconditional=unconditional),
         keep_last_k=_optional_int("JAX_KEEP_LAST_K", None),
     )
 
     print("=" * 88)
-    print("Prompted ArtBench JAX latent training")
+    print(f"{'Unprompted' if unconditional else 'Prompted'} ArtBench JAX latent training")
     print(f"dataset          : {dataset_name}")
     print(f"experiment       : {experiment_tag}")
     print(f"algorithm        : {algorithm}")
     print(f"dm_checkpoint_dir: {train_cfg.dm_checkpoint_dir}")
     print(f"autoencoder_dir  : {train_cfg.autoencoder_model_dir}")
     print(f"cache_dir        : {train_cfg.cache_dir}")
+    print(f"class_cond       : {train_cfg.dm_class_cond}")
     print("=" * 88)
     train_mod.train(train_cfg)
 
@@ -198,14 +227,23 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run prompted JAX training from a refine dataset config.")
     parser.add_argument("config", type=str)
     parser.add_argument("--algorithm", default=os.environ.get("ALGORITHM", "shared"))
+    parser.add_argument("--unconditional", action="store_true")
     args = parser.parse_args()
 
     cfg_module = load_config(args.config)
     dataset_name = require_attr(cfg_module, "DATASET_NAME")
     if dataset_name == "artbench":
-        run_prompted_artbench_training(args.config, args.algorithm)
+        run_prompted_artbench_training(
+            args.config,
+            args.algorithm,
+            unconditional=args.unconditional,
+        )
     else:
-        run_prompted_cifar_training(args.config, args.algorithm)
+        run_prompted_cifar_training(
+            args.config,
+            args.algorithm,
+            unconditional=args.unconditional,
+        )
 
 
 if __name__ == "__main__":

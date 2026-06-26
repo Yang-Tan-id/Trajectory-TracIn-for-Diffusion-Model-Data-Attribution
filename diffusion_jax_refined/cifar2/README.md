@@ -1,6 +1,109 @@
 # CIFAR2 refine runs
 
-Default setup: horse/automobile, multi-hot prompt `horse,automobile`.
+Default setup:
 
-Change paths and experiment tag in `dataset_config.py`.
+- Dataset: CIFAR-10 filtered to `horse` and `automobile`
+- Prompt/query: `horse,automobile`
+- Default training seed: `TRAIN_SEED=42`
+- Default experiment: `EXPERIMENT_TAG=experiment1`
 
+Change dataset-level defaults in `dataset_config.py`.
+
+## Prompted JAX Flow
+
+Prompted JAX is the conditional model path. One experiment should normally have
+one training seed and one prompted checkpoint.
+
+```bash
+cd diffusion_jax_refined/cifar2
+
+EXPERIMENT_TAG=experiment1 TRAIN_SEED=42 CUDA_VISIBLE_DEVICES=0 bash scripts/00_train.sh
+EXPERIMENT_TAG=experiment1 SAMPLE_SEEDS=0,1,2 CUDA_VISIBLE_DEVICES=0 bash scripts/00_sample.sh
+EXPERIMENT_TAG=experiment1 ALGORITHMS="das end_tracin dtrak journey_trak" CUDA_VISIBLE_DEVICES=0 bash scripts/01_data_attribution.sh
+EXPERIMENT_TAG=experiment1 ALGORITHMS="das" TOPK=5000 CUDA_VISIBLE_DEVICES=0 bash scripts/02_metric_counterfactual.sh
+EXPERIMENT_TAG=experiment1 ALGORITHMS="das" LDS_M=100 LDS_SUBSET_SIZE=5000 CUDA_VISIBLE_DEVICES=0 bash scripts/03_metric_lds.sh
+```
+
+Prompted checkpoint path:
+
+```text
+result/experiment1/model/prompted_jax/seed_42_epoch_0200.ckpt
+```
+
+Generated sample trajectories:
+
+```text
+result/experiment1/eval/sampling/
+```
+
+## Prompted Traj TracIn Range Split
+
+Trajectory TracIn should usually be split by score-index ranges:
+
+```bash
+cd diffusion_jax_refined/cifar2
+
+EXPERIMENT_TAG=experiment1 ALGORITHMS="traj_tracin" \
+ATTRIBUTION_RANGES="1-2500,2501-5000,5001-7500,7501-10000" \
+CUDA_VISIBLE_DEVICES=0 bash scripts/01_data_attribution.sh
+```
+
+For multiple GPUs, run disjoint ranges in separate terminals:
+
+```bash
+EXPERIMENT_TAG=experiment1 ALGORITHMS="traj_tracin" ATTRIBUTION_RANGES="1-2500,2501-5000" bash scripts/01_data_attribution.sh
+CUDA_VISIBLE_DEVICES=1 EXPERIMENT_TAG=experiment1 ALGORITHMS="traj_tracin" ATTRIBUTION_RANGES="5001-7500,7501-10000" bash scripts/01_data_attribution.sh
+```
+
+Use the same range list when evaluating:
+
+```bash
+EXPERIMENT_TAG=experiment1 ALGORITHMS="traj_tracin" ATTRIBUTION_RANGES="1-2500,2501-5000,5001-7500,7501-10000" TOPK=5000 bash scripts/02_metric_counterfactual.sh
+EXPERIMENT_TAG=experiment1 ALGORITHMS="traj_tracin" ATTRIBUTION_RANGES="1-2500,2501-5000,5001-7500,7501-10000" LDS_M=100 LDS_SUBSET_SIZE=5000 bash scripts/03_metric_lds.sh
+```
+
+## Unprompted JAX Flow
+
+Unprompted uses the same JAX UNet, sample format, and five attribution engines
+as prompted, with `class_cond=False`. Training, sampling, attribution, and
+evaluation are separate commands.
+
+```bash
+cd diffusion_jax_refined/cifar2
+
+EXPERIMENT_TAG=experiment1 TRAIN_SEED=42 CUDA_VISIBLE_DEVICES=0 bash scripts/00_train_unprompted.sh
+EXPERIMENT_TAG=experiment1 TRAIN_SEED=42 SAMPLE_SEEDS=0 CUDA_VISIBLE_DEVICES=0 bash scripts/00_sample_unprompted.sh
+EXPERIMENT_TAG=experiment1 TRAIN_SEED=42 ALGORITHMS="das traj_tracin dtrak end_tracin journey_trak" CUDA_VISIBLE_DEVICES=0 bash scripts/01_data_attribution_unprompted.sh
+EXPERIMENT_TAG=experiment1 ALGORITHMS="das" TOPK=5000 bash scripts/02_metric_counterfactual_unprompted.sh
+EXPERIMENT_TAG=experiment1 ALGORITHMS="das" LDS_M=100 LDS_SUBSET_SIZE=5000 bash scripts/03_metric_lds_unprompted.sh
+```
+
+Default unprompted model path:
+
+```text
+result/experiment1/model/unprompted_jax/seed_42_epoch_0200.ckpt
+```
+
+`01_data_attribution_unprompted.sh` only reads the sample and trajectory created
+by `00_sample_unprompted.sh`; it does not run sampling automatically.
+
+## Unprompted Traj TracIn Range Split
+
+```bash
+cd diffusion_jax_refined/cifar2
+
+EXPERIMENT_TAG=experiment1 TRAIN_SEED=42 CUDA_VISIBLE_DEVICES=0 bash scripts/00_train_unprompted.sh
+EXPERIMENT_TAG=experiment1 TRAIN_SEED=42 SAMPLE_SEEDS=0 CUDA_VISIBLE_DEVICES=0 bash scripts/00_sample_unprompted.sh
+
+EXPERIMENT_TAG=experiment1 TRAIN_SEED=42 ALGORITHMS="traj_tracin" \
+ATTRIBUTION_RANGES="1-2500,2501-5000,5001-7500,7501-10000" \
+CUDA_VISIBLE_DEVICES=0 bash scripts/01_data_attribution_unprompted.sh
+
+EXPERIMENT_TAG=experiment1 ALGORITHMS="traj_tracin" \
+ATTRIBUTION_RANGES="1-2500,2501-5000,5001-7500,7501-10000" \
+TOPK=5000 bash scripts/02_metric_counterfactual_unprompted.sh
+
+EXPERIMENT_TAG=experiment1 ALGORITHMS="traj_tracin" \
+ATTRIBUTION_RANGES="1-2500,2501-5000,5001-7500,7501-10000" \
+LDS_M=100 LDS_SUBSET_SIZE=5000 bash scripts/03_metric_lds_unprompted.sh
+```

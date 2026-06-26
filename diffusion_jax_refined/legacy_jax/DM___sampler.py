@@ -743,6 +743,8 @@ class ArtBenchLatentAdapter(ModelAdapter):
         return labels
 
     def make_condition(self, prompt: str, batch_size: int):
+        if not self.cfg.class_cond:
+            return None
         labels = self._label_names()
         cond_mode = getattr(self.cfg, "cond_mode", "class_id")
         encoded = self.module.encode_artbench_prompt(prompt, labels, cond_mode=cond_mode)

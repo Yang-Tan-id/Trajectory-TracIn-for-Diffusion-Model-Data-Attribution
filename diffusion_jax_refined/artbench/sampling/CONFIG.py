@@ -1,11 +1,20 @@
 from pathlib import Path
+import os
 import sys
 
 DATASET_DIR = Path(__file__).resolve().parents[1]
 if str(DATASET_DIR) not in sys.path:
     sys.path.insert(0, str(DATASET_DIR))
 
-from dataset_config import EVAL_ROOT, QUERY, REFERENCE_CKPT
+from dataset_config import DATASET_NAME, EVAL_ROOT, EXPERIMENT_TAG, QUERY, REFERENCE_CKPT, UNPROMPTED_JAX_REFERENCE_CKPT
+
+SAMPLE_SEEDS = os.environ.get("SAMPLE_SEEDS", "0")
+SAMPLE_BATCH_SIZE = os.environ.get("SAMPLE_BATCH_SIZE", "1")
+SAMPLE_TRAJECTORY_STEPS = os.environ.get("SAMPLE_TRAJECTORY_STEPS", "100")
+UNPROMPTED = os.environ.get("UNPROMPTED", "0") in ("1", "true", "True", "yes")
+SAMPLE_CHECKPOINT = UNPROMPTED_JAX_REFERENCE_CKPT if UNPROMPTED else REFERENCE_CKPT
+SAMPLE_PROMPT = "unconditional" if UNPROMPTED else QUERY
+MODEL_TAG = "unprompted_jax" if UNPROMPTED else "prompted_jax"
 
 COMMAND_CWD = "legacy_jax"
 COMMANDS = {
@@ -14,13 +23,13 @@ COMMANDS = {
         "DM___data_attribution_sampler.py",
         "--adapter=artbench_latent",
         "--code-file=DM__training_ARTBENCH_latent.py",
-        f"--checkpoint={REFERENCE_CKPT}",
-        "--model-tag=prompted_jax",
-        f"--prompt={QUERY}",
-        "--seeds=0",
-        "--batch-size=1",
+        f"--checkpoint={SAMPLE_CHECKPOINT}",
+        f"--model-tag={MODEL_TAG}",
+        f"--prompt={SAMPLE_PROMPT}",
+        f"--seeds={SAMPLE_SEEDS}",
+        f"--batch-size={SAMPLE_BATCH_SIZE}",
         "--prefer-device=gpu",
         f"--outdir={EVAL_ROOT / 'sampling'}",
-        "--num-trajectory-steps=100",
+        f"--num-trajectory-steps={SAMPLE_TRAJECTORY_STEPS}",
     ]
 }

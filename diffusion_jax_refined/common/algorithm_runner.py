@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+import pickle
 from pathlib import Path
 from typing import Any, Callable
 
@@ -83,3 +84,61 @@ def run_algorithm_config(config_path: str | Path) -> Any:
         pass
     return result
 
+
+def run_unprompted_algorithm_config(
+    dataset_config_path: str | Path,
+    algorithm: str,
+) -> Any:
+    cfg_module = load_config(dataset_config_path)
+    dataset_name = require_attr(cfg_module, "DATASET_NAME")
+    experiment_tag = require_attr(cfg_module, "EXPERIMENT_TAG")
+    config_factory = require_attr(cfg_module, "unprompted_attribution_config")
+    config_values = dict(config_factory(algorithm))
+
+    if algorithm not in ENGINE_MAP:
+        raise ValueError(f"Unsupported algorithm {algorithm!r}; expected one of {sorted(ENGINE_MAP)}")
+
+    ensure_experiment_dirs(dataset_name, experiment_tag)
+    config_values.setdefault(
+        "out_dir",
+        build_output_dir(dataset_name, experiment_tag, f"{algorithm}_unprompted"),
+    )
+
+    add_legacy_jax_to_path()
+    chdir_legacy_jax_root()
+    module_name, config_class_name, run_name = ENGINE_MAP[algorithm]
+    module = __import__(module_name)
+    config_class = getattr(module, config_class_name)
+    run_fn: Callable[[Any], Any] = getattr(module, run_name)
+
+    reference_ckpt = config_values.get("reference_ckpt")
+    if reference_ckpt and Path(reference_ckpt).is_file():
+        with open(reference_ckpt, "rb") as handle:
+            payload = pickle.load(handle)
+        checkpoint_config = payload.get("config", {})
+        accepted_fields = set(getattr(config_class, "__dataclass_fields__", {}))
+        for key, value in checkpoint_config.items():
+            if key in accepted_fields:
+                config_values[key] = value
+        if "timesteps_total" in accepted_fields and "timesteps" in checkpoint_config:
+            config_values["timesteps_total"] = checkpoint_config["timesteps"]
+        if checkpoint_config.get("class_cond") is not False:
+            raise ValueError(
+                f"Expected an unconditional checkpoint, but class_cond is not False: {reference_ckpt}"
+            )
+
+    cfg = config_class(**config_values)
+
+    print("=" * 88)
+    print(f"dataset       : {dataset_name}")
+    print(f"experiment    : {experiment_tag}")
+    print(f"algorithm     : {algorithm} (unprompted JAX)")
+    print(f"legacy engine : {module_name}.{run_name}")
+    print(f"out_dir       : {cfg.out_dir}")
+    print("=" * 88)
+    result = run_fn(cfg)
+    try:
+        print("[config]", asdict(cfg))
+    except Exception:
+        pass
+    return result

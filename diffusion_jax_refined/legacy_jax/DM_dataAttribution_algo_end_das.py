@@ -411,6 +411,10 @@ class CIFAR10TaskAdapter(BaseTaskAdapter):
         return model.apply({"params": params}, x, t, cond, train=False)
 
     def make_query_cond(self, ds, query_spec, cfg):
+        if not cfg.class_cond:
+            if cfg.cond_mode == "class_id":
+                return jnp.zeros((1,), dtype=jnp.int32)
+            return jnp.zeros((1, cfg.num_classes), dtype=jnp.float32)
         q = encode_cifar_query(query=query_spec, label_names=ds.label_names, cond_mode=cfg.cond_mode)
         if cfg.cond_mode == "class_id":
             return jnp.array([int(q)], dtype=jnp.int32)
@@ -459,6 +463,10 @@ class ArtBenchLatentTaskAdapter(BaseTaskAdapter):
         return model.apply({"params": params}, x, t, cond, train=False)
 
     def make_query_cond(self, ds, query_spec, cfg):
+        if not cfg.class_cond:
+            if cfg.cond_mode == "class_id":
+                return jnp.zeros((1,), dtype=jnp.int32)
+            return jnp.zeros((1, cfg.num_classes), dtype=jnp.float32)
         q = self.m.encode_artbench_prompt(
             prompt=query_spec,
             label_names=ds.label_names,

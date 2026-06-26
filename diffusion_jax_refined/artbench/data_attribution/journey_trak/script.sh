@@ -6,6 +6,8 @@ START_INDEX="${2:-0}"
 END_INDEX="${3:-0}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 ALGORITHM="$(basename "$PWD")"
+TRAIN_SEEDS="${TRAIN_SEEDS:-${TRAIN_SEED:-42}}"
+UNPROMPTED_USE_SUBSET="${UNPROMPTED_USE_SUBSET:-0}"
 CUDA_DEVICE="${CUDA_DEVICE:-${CUDA:-${CUDA_VISIBLE_DEVICES:-0}}}"
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-${CUDA_DEVICE}}"
 export NUM_PROCESSES="${NUM_PROCESSES:-1}"
@@ -13,13 +15,7 @@ export GPU_IDS="${GPU_IDS:-${CUDA_DEVICE}}"
 export MAIN_PROCESS_PORT="${MAIN_PROCESS_PORT:-29500}"
 
 run_unprompted_training() {
-  for TRAIN_SEED_VALUE in 0 1 2; do
-    export TRAIN_SEED="${TRAIN_SEED_VALUE}"
-    for SUBSET_INDEX_VALUE in $(seq "${START_INDEX}" "${END_INDEX}"); do
-      export SUBSET_INDEX="${SUBSET_INDEX_VALUE}"
-      python run_training.py
-    done
-  done
+  bash "/scripts/00_train_unprompted.sh" "" ""
 }
 
 case "${MODE}" in
@@ -28,7 +24,7 @@ case "${MODE}" in
     ALGORITHMS="${ALGORITHM}" bash "${ROOT}/scripts/00_train_prompted_jax.sh"
     ;;
   train_unprompted)
-    echo "${ALGORITHM}: unprompted diffusers training on CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}, GPU_IDS=${GPU_IDS}"
+    echo "shared unprompted diffusers training on CUDA_VISIBLE_DEVICES=, GPU_IDS="
     run_unprompted_training
     ;;
   attribution)
@@ -51,7 +47,7 @@ case "${MODE}" in
     ALGORITHMS="${ALGORITHM}" bash "${ROOT}/scripts/03_metric_lds_unprompted.sh"
     ;;
   all_unprompted)
-    echo "${ALGORITHM}: unprompted diffusers training + attribution + eval"
+    echo "shared unprompted diffusers training +  attribution + eval"
     run_unprompted_training
     ALGORITHMS="${ALGORITHM}" bash "${ROOT}/scripts/01_data_attribution_unprompted.sh"
     ALGORITHMS="${ALGORITHM}" bash "${ROOT}/scripts/02_metric_counterfactual_unprompted.sh"
