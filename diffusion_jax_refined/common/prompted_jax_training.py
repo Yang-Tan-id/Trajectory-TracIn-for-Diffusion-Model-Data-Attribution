@@ -80,7 +80,7 @@ def run_prompted_cifar_training(
         dropout=_optional_float("JAX_DROPOUT", 0.1),
         seed=_optional_int("TRAIN_SEED", 42),
         epochs=_optional_int("JAX_EPOCHS", 200),
-        batch_size=_optional_int("JAX_BATCH_SIZE", 128 if unconditional else 256),
+        batch_size=_optional_int("JAX_BATCH_SIZE", 128 if unconditional else 128),
         learning_rate=_optional_float("JAX_LEARNING_RATE", 1e-4 if unconditional else 2e-4),
         weight_decay=_optional_float("JAX_WEIGHT_DECAY", 1e-6 if unconditional else 1e-4),
         adam_b1=_optional_float("JAX_ADAM_B1", 0.95 if unconditional else 0.9),
