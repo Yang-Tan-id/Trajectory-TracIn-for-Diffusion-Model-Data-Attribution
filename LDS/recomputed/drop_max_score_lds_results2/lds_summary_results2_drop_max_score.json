@@ -1,0 +1,15 @@
+{
+  "source_csv": "/Users/rachelsomething/Downloads/lds_results2.csv",
+  "dropped": "row with maximum pred_sum_tau",
+  "removed_row_index_zero_based": 16,
+  "removed_subset_id": "16",
+  "removed_pred_sum_tau": -204567.1849128562,
+  "removed_true_f": 484.0,
+  "num_points_original": 100,
+  "num_points_used": 99,
+  "lds_spearman": 0.006773894539937362,
+  "lds_percent": 0.6773894539937362,
+  "csv": "/Users/rachelsomething/Desktop/Clear lab/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/LDS/recomputed/drop_max_score_lds_results2/lds_results2_drop_max_score.csv",
+  "plot_png": "/Users/rachelsomething/Desktop/Clear lab/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/LDS/recomputed/drop_max_score_lds_results2/lds_scatter_results2_drop_max_score.png",
+  "plot_svg": "/Users/rachelsomething/Desktop/Clear lab/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/LDS/recomputed/drop_max_score_lds_results2/lds_scatter_results2_drop_max_score.svg"
+}

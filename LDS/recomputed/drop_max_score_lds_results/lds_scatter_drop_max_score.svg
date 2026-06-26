@@ -1,0 +1,40 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="650" viewBox="0 0 900 650">
+<rect width="100%" height="100%" fill="white"/>
+<text x="450.0" y="34" text-anchor="middle" font-family="Arial, sans-serif" font-size="20">LDS=0.1167 (11.67%)</text>
+<line x1="105.00" y1="62" x2="105.00" y2="565" stroke="#d4d4d4" stroke-width="1" opacity="0.65"/>
+<text x="105.00" y="593" text-anchor="middle" font-family="Arial, sans-serif" font-size="13">-251486</text>
+<line x1="257.00" y1="62" x2="257.00" y2="565" stroke="#d4d4d4" stroke-width="1" opacity="0.65"/>
+<text x="257.00" y="593" text-anchor="middle" font-family="Arial, sans-serif" font-size="13">-247979</text>
+<line x1="409.00" y1="62" x2="409.00" y2="565" stroke="#d4d4d4" stroke-width="1" opacity="0.65"/>
+<text x="409.00" y="593" text-anchor="middle" font-family="Arial, sans-serif" font-size="13">-244471</text>
+<line x1="561.00" y1="62" x2="561.00" y2="565" stroke="#d4d4d4" stroke-width="1" opacity="0.65"/>
+<text x="561.00" y="593" text-anchor="middle" font-family="Arial, sans-serif" font-size="13">-240963</text>
+<line x1="713.00" y1="62" x2="713.00" y2="565" stroke="#d4d4d4" stroke-width="1" opacity="0.65"/>
+<text x="713.00" y="593" text-anchor="middle" font-family="Arial, sans-serif" font-size="13">-237455</text>
+<line x1="865.00" y1="62" x2="865.00" y2="565" stroke="#d4d4d4" stroke-width="1" opacity="0.65"/>
+<text x="865.00" y="593" text-anchor="middle" font-family="Arial, sans-serif" font-size="13">-233948</text>
+<line x1="105" y1="565.00" x2="865" y2="565.00" stroke="#d4d4d4" stroke-width="1" opacity="0.65"/>
+<text x="93" y="569.00" text-anchor="end" font-family="Arial, sans-serif" font-size="13">0.04395</text>
+<line x1="105" y1="464.40" x2="865" y2="464.40" stroke="#d4d4d4" stroke-width="1" opacity="0.65"/>
+<text x="93" y="468.40" text-anchor="end" font-family="Arial, sans-serif" font-size="13">0.04417</text>
+<line x1="105" y1="363.80" x2="865" y2="363.80" stroke="#d4d4d4" stroke-width="1" opacity="0.65"/>
+<text x="93" y="367.80" text-anchor="end" font-family="Arial, sans-serif" font-size="13">0.04439</text>
+<line x1="105" y1="263.20" x2="865" y2="263.20" stroke="#d4d4d4" stroke-width="1" opacity="0.65"/>
+<text x="93" y="267.20" text-anchor="end" font-family="Arial, sans-serif" font-size="13">0.04461</text>
+<line x1="105" y1="162.60" x2="865" y2="162.60" stroke="#d4d4d4" stroke-width="1" opacity="0.65"/>
+<text x="93" y="166.60" text-anchor="end" font-family="Arial, sans-serif" font-size="13">0.04483</text>
+<line x1="105" y1="62.00" x2="865" y2="62.00" stroke="#d4d4d4" stroke-width="1" opacity="0.65"/>
+<text x="93" y="66.00" text-anchor="end" font-family="Arial, sans-serif" font-size="13">0.04504</text>
+<rect x="105" y="62" width="760" height="503" fill="none" stroke="black" stroke-width="1.4"/>
+<circle cx="395.37" cy="473.01" r="5.5" fill="#1f77b4" fill-opacity="0.8"><title>subset 1: pred=-244785.27461109278, true=0.04415034130215645</title></circle>
+<circle cx="803.61" cy="317.99" r="5.5" fill="#1f77b4" fill-opacity="0.8"><title>subset 2: pred=-235364.24189914775, true=0.044487364590168</title></circle>
+<circle cx="683.41" cy="110.68" r="5.5" fill="#1f77b4" fill-opacity="0.8"><title>subset 3: pred=-238138.29820480893, true=0.04493807256221771</title></circle>
+<circle cx="672.43" cy="425.61" r="5.5" fill="#1f77b4" fill-opacity="0.8"><title>subset 4: pred=-238391.68228946713, true=0.044253379106521606</title></circle>
+<circle cx="409.33" cy="500.08" r="5.5" fill="#1f77b4" fill-opacity="0.8"><title>subset 5: pred=-244463.24812044553, true=0.04409147799015045</title></circle>
+<circle cx="157.41" cy="384.69" r="5.5" fill="#1f77b4" fill-opacity="0.8"><title>subset 6: pred=-250276.7523617216, true=0.04434235394001007</title></circle>
+<circle cx="415.21" cy="516.32" r="5.5" fill="#1f77b4" fill-opacity="0.8"><title>subset 7: pred=-244327.47330625754, true=0.04405616968870163</title></circle>
+<circle cx="384.67" cy="288.52" r="5.5" fill="#1f77b4" fill-opacity="0.8"><title>subset 8: pred=-245032.36920901792, true=0.04455143213272095</title></circle>
+<circle cx="812.59" cy="416.75" r="5.5" fill="#1f77b4" fill-opacity="0.8"><title>subset 9: pred=-235157.16940034466, true=0.04427265748381615</title></circle>
+<text x="485.0" y="622" text-anchor="middle" font-family="Arial, sans-serif" font-size="16">Predicted sum of attribution scores</text>
+<g transform="translate(28 313.5) rotate(-90)"><text text-anchor="middle" font-family="Arial, sans-serif" font-size="16">True counterfactual f</text></g>
+</svg>

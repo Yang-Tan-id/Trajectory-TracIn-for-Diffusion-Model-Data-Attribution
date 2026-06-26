@@ -1,0 +1,134 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="640" viewBox="0 0 900 640">
+<rect width="100%" height="100%" fill="white"/>
+<style>text{font-family:Arial,Helvetica,sans-serif;fill:#263238}.grid{stroke:#d8dee4;stroke-width:1}.axis{stroke:#263238;stroke-width:1.5}.pt{fill:#2f6f73;fill-opacity:.78;stroke:#12343b;stroke-width:.7}</style>
+<text x="450.0" y="30" text-anchor="middle" font-size="20">LDS after clamping negative scores to 0: 0.0597 (5.97%)</text>
+<rect x="105" y="55" width="760" height="495" fill="#fbfcfd" stroke="#b7c0c8"/>
+<line class="grid" x1="105.0" y1="55" x2="105.0" y2="550"/>
+<line class="grid" x1="105" y1="550.0" x2="865" y2="550.0"/>
+<text x="105.0" y="574" text-anchor="middle" font-size="12">-497,534</text>
+<text x="93" y="554.0" text-anchor="end" font-size="12">383</text>
+<line class="grid" x1="257.0" y1="55" x2="257.0" y2="550"/>
+<line class="grid" x1="105" y1="451.0" x2="865" y2="451.0"/>
+<text x="257.0" y="574" text-anchor="middle" font-size="12">-489,845</text>
+<text x="93" y="455.0" text-anchor="end" font-size="12">433</text>
+<line class="grid" x1="409.0" y1="55" x2="409.0" y2="550"/>
+<line class="grid" x1="105" y1="352.0" x2="865" y2="352.0"/>
+<text x="409.0" y="574" text-anchor="middle" font-size="12">-482,157</text>
+<text x="93" y="356.0" text-anchor="end" font-size="12">483</text>
+<line class="grid" x1="561.0" y1="55" x2="561.0" y2="550"/>
+<line class="grid" x1="105" y1="253.0" x2="865" y2="253.0"/>
+<text x="561.0" y="574" text-anchor="middle" font-size="12">-474,469</text>
+<text x="93" y="257.0" text-anchor="end" font-size="12">533</text>
+<line class="grid" x1="713.0" y1="55" x2="713.0" y2="550"/>
+<line class="grid" x1="105" y1="154.0" x2="865" y2="154.0"/>
+<text x="713.0" y="574" text-anchor="middle" font-size="12">-466,780</text>
+<text x="93" y="158.0" text-anchor="end" font-size="12">583</text>
+<line class="grid" x1="865.0" y1="55" x2="865.0" y2="550"/>
+<line class="grid" x1="105" y1="55.0" x2="865" y2="55.0"/>
+<text x="865.0" y="574" text-anchor="middle" font-size="12">-459,092</text>
+<text x="93" y="59.0" text-anchor="end" font-size="12">633</text>
+<line class="axis" x1="105" y1="550" x2="865" y2="550"/>
+<line class="axis" x1="105" y1="55" x2="105" y2="550"/>
+<circle class="pt" cx="494.8" cy="81.5" r="4.2"><title>subset 0: pred=-477817, true_f=620</title></circle>
+<circle class="pt" cx="336.3" cy="416.9" r="4.2"><title>subset 1: pred=-485832, true_f=450</title></circle>
+<circle class="pt" cx="422.9" cy="428.8" r="4.2"><title>subset 2: pred=-481455, true_f=444</title></circle>
+<circle class="pt" cx="524.0" cy="397.2" r="4.2"><title>subset 3: pred=-476342, true_f=460</title></circle>
+<circle class="pt" cx="468.6" cy="192.0" r="4.2"><title>subset 4: pred=-479143, true_f=564</title></circle>
+<circle class="pt" cx="318.6" cy="405.1" r="4.2"><title>subset 5: pred=-486729, true_f=456</title></circle>
+<circle class="pt" cx="362.0" cy="432.7" r="4.2"><title>subset 6: pred=-484532, true_f=442</title></circle>
+<circle class="pt" cx="320.1" cy="357.7" r="4.2"><title>subset 7: pred=-486656, true_f=480</title></circle>
+<circle class="pt" cx="327.6" cy="310.4" r="4.2"><title>subset 8: pred=-486276, true_f=504</title></circle>
+<circle class="pt" cx="365.1" cy="464.3" r="4.2"><title>subset 9: pred=-484379, true_f=426</title></circle>
+<circle class="pt" cx="456.4" cy="263.0" r="4.2"><title>subset 10: pred=-479758, true_f=528</title></circle>
+<circle class="pt" cx="588.9" cy="460.3" r="4.2"><title>subset 11: pred=-473058, true_f=428</title></circle>
+<circle class="pt" cx="473.6" cy="393.3" r="4.2"><title>subset 12: pred=-478890, true_f=462</title></circle>
+<circle class="pt" cx="640.5" cy="397.2" r="4.2"><title>subset 13: pred=-470448, true_f=460</title></circle>
+<circle class="pt" cx="245.1" cy="365.6" r="4.2"><title>subset 14: pred=-490446, true_f=476</title></circle>
+<circle class="pt" cx="697.5" cy="286.7" r="4.2"><title>subset 15: pred=-467563, true_f=516</title></circle>
+<circle class="pt" cx="824.3" cy="349.9" r="4.2"><title>subset 16: pred=-461151, true_f=484</title></circle>
+<circle class="pt" cx="339.1" cy="349.9" r="4.2"><title>subset 17: pred=-485694, true_f=484</title></circle>
+<circle class="pt" cx="458.5" cy="503.8" r="4.2"><title>subset 18: pred=-479652, true_f=406</title></circle>
+<circle class="pt" cx="147.3" cy="353.8" r="4.2"><title>subset 19: pred=-495392, true_f=482</title></circle>
+<circle class="pt" cx="643.2" cy="413.0" r="4.2"><title>subset 20: pred=-470312, true_f=452</title></circle>
+<circle class="pt" cx="461.5" cy="491.9" r="4.2"><title>subset 21: pred=-479500, true_f=412</title></circle>
+<circle class="pt" cx="375.1" cy="432.7" r="4.2"><title>subset 22: pred=-483870, true_f=442</title></circle>
+<circle class="pt" cx="173.7" cy="223.6" r="4.2"><title>subset 23: pred=-494061, true_f=548</title></circle>
+<circle class="pt" cx="487.3" cy="448.5" r="4.2"><title>subset 24: pred=-478195, true_f=434</title></circle>
+<circle class="pt" cx="395.7" cy="326.2" r="4.2"><title>subset 25: pred=-482828, true_f=496</title></circle>
+<circle class="pt" cx="376.4" cy="440.6" r="4.2"><title>subset 26: pred=-483806, true_f=438</title></circle>
+<circle class="pt" cx="454.6" cy="393.3" r="4.2"><title>subset 27: pred=-479853, true_f=462</title></circle>
+<circle class="pt" cx="385.8" cy="468.2" r="4.2"><title>subset 28: pred=-483329, true_f=424</title></circle>
+<circle class="pt" cx="482.9" cy="389.3" r="4.2"><title>subset 29: pred=-478420, true_f=464</title></circle>
+<circle class="pt" cx="391.3" cy="342.0" r="4.2"><title>subset 30: pred=-483052, true_f=488</title></circle>
+<circle class="pt" cx="306.5" cy="523.5" r="4.2"><title>subset 31: pred=-487342, true_f=396</title></circle>
+<circle class="pt" cx="240.6" cy="495.9" r="4.2"><title>subset 32: pred=-490677, true_f=410</title></circle>
+<circle class="pt" cx="478.2" cy="468.2" r="4.2"><title>subset 33: pred=-478659, true_f=424</title></circle>
+<circle class="pt" cx="416.6" cy="294.6" r="4.2"><title>subset 34: pred=-481772, true_f=512</title></circle>
+<circle class="pt" cx="590.8" cy="369.6" r="4.2"><title>subset 35: pred=-472961, true_f=474</title></circle>
+<circle class="pt" cx="350.4" cy="413.0" r="4.2"><title>subset 36: pred=-485123, true_f=452</title></circle>
+<circle class="pt" cx="182.1" cy="330.1" r="4.2"><title>subset 37: pred=-493632, true_f=494</title></circle>
+<circle class="pt" cx="370.8" cy="270.9" r="4.2"><title>subset 38: pred=-484091, true_f=524</title></circle>
+<circle class="pt" cx="145.7" cy="393.3" r="4.2"><title>subset 39: pred=-495474, true_f=462</title></circle>
+<circle class="pt" cx="190.0" cy="330.1" r="4.2"><title>subset 40: pred=-493236, true_f=494</title></circle>
+<circle class="pt" cx="370.2" cy="345.9" r="4.2"><title>subset 41: pred=-484119, true_f=486</title></circle>
+<circle class="pt" cx="392.6" cy="334.1" r="4.2"><title>subset 42: pred=-482988, true_f=492</title></circle>
+<circle class="pt" cx="242.5" cy="306.4" r="4.2"><title>subset 43: pred=-490577, true_f=506</title></circle>
+<circle class="pt" cx="284.5" cy="488.0" r="4.2"><title>subset 44: pred=-488457, true_f=414</title></circle>
+<circle class="pt" cx="288.5" cy="495.9" r="4.2"><title>subset 45: pred=-488252, true_f=410</title></circle>
+<circle class="pt" cx="337.6" cy="389.3" r="4.2"><title>subset 46: pred=-485769, true_f=464</title></circle>
+<circle class="pt" cx="717.0" cy="456.4" r="4.2"><title>subset 47: pred=-466579, true_f=430</title></circle>
+<circle class="pt" cx="356.5" cy="345.9" r="4.2"><title>subset 48: pred=-484810, true_f=486</title></circle>
+<circle class="pt" cx="427.5" cy="377.5" r="4.2"><title>subset 49: pred=-481220, true_f=470</title></circle>
+<circle class="pt" cx="499.7" cy="184.1" r="4.2"><title>subset 50: pred=-477570, true_f=568</title></circle>
+<circle class="pt" cx="427.6" cy="432.7" r="4.2"><title>subset 51: pred=-481215, true_f=442</title></circle>
+<circle class="pt" cx="381.6" cy="298.6" r="4.2"><title>subset 52: pred=-483542, true_f=510</title></circle>
+<circle class="pt" cx="554.1" cy="416.9" r="4.2"><title>subset 53: pred=-474817, true_f=450</title></circle>
+<circle class="pt" cx="339.5" cy="373.5" r="4.2"><title>subset 54: pred=-485672, true_f=472</title></circle>
+<circle class="pt" cx="420.7" cy="176.2" r="4.2"><title>subset 55: pred=-481565, true_f=572</title></circle>
+<circle class="pt" cx="458.7" cy="353.8" r="4.2"><title>subset 56: pred=-479644, true_f=482</title></circle>
+<circle class="pt" cx="334.2" cy="377.5" r="4.2"><title>subset 57: pred=-485942, true_f=470</title></circle>
+<circle class="pt" cx="534.2" cy="263.0" r="4.2"><title>subset 58: pred=-475825, true_f=528</title></circle>
+<circle class="pt" cx="488.9" cy="377.5" r="4.2"><title>subset 59: pred=-478115, true_f=470</title></circle>
+<circle class="pt" cx="288.2" cy="468.2" r="4.2"><title>subset 60: pred=-488268, true_f=424</title></circle>
+<circle class="pt" cx="477.7" cy="314.3" r="4.2"><title>subset 61: pred=-478681, true_f=502</title></circle>
+<circle class="pt" cx="480.6" cy="397.2" r="4.2"><title>subset 62: pred=-478534, true_f=460</title></circle>
+<circle class="pt" cx="428.3" cy="361.7" r="4.2"><title>subset 63: pred=-481183, true_f=478</title></circle>
+<circle class="pt" cx="458.7" cy="176.2" r="4.2"><title>subset 64: pred=-479646, true_f=572</title></circle>
+<circle class="pt" cx="501.0" cy="491.9" r="4.2"><title>subset 65: pred=-477504, true_f=412</title></circle>
+<circle class="pt" cx="394.9" cy="436.7" r="4.2"><title>subset 66: pred=-482872, true_f=440</title></circle>
+<circle class="pt" cx="467.2" cy="342.0" r="4.2"><title>subset 67: pred=-479212, true_f=488</title></circle>
+<circle class="pt" cx="681.9" cy="440.6" r="4.2"><title>subset 68: pred=-468351, true_f=438</title></circle>
+<circle class="pt" cx="493.2" cy="377.5" r="4.2"><title>subset 69: pred=-477898, true_f=470</title></circle>
+<circle class="pt" cx="368.9" cy="464.3" r="4.2"><title>subset 70: pred=-484188, true_f=426</title></circle>
+<circle class="pt" cx="476.1" cy="314.3" r="4.2"><title>subset 71: pred=-478761, true_f=502</title></circle>
+<circle class="pt" cx="372.2" cy="436.7" r="4.2"><title>subset 72: pred=-484018, true_f=440</title></circle>
+<circle class="pt" cx="481.9" cy="424.8" r="4.2"><title>subset 73: pred=-478471, true_f=446</title></circle>
+<circle class="pt" cx="470.7" cy="334.1" r="4.2"><title>subset 74: pred=-479036, true_f=492</title></circle>
+<circle class="pt" cx="400.9" cy="405.1" r="4.2"><title>subset 75: pred=-482569, true_f=456</title></circle>
+<circle class="pt" cx="385.8" cy="298.6" r="4.2"><title>subset 76: pred=-483329, true_f=510</title></circle>
+<circle class="pt" cx="532.3" cy="365.6" r="4.2"><title>subset 77: pred=-475919, true_f=476</title></circle>
+<circle class="pt" cx="296.5" cy="338.0" r="4.2"><title>subset 78: pred=-487850, true_f=490</title></circle>
+<circle class="pt" cx="442.7" cy="306.4" r="4.2"><title>subset 79: pred=-480454, true_f=506</title></circle>
+<circle class="pt" cx="411.9" cy="436.7" r="4.2"><title>subset 80: pred=-482011, true_f=440</title></circle>
+<circle class="pt" cx="485.7" cy="318.3" r="4.2"><title>subset 81: pred=-478277, true_f=500</title></circle>
+<circle class="pt" cx="410.1" cy="373.5" r="4.2"><title>subset 82: pred=-482101, true_f=472</title></circle>
+<circle class="pt" cx="514.0" cy="353.8" r="4.2"><title>subset 83: pred=-476847, true_f=482</title></circle>
+<circle class="pt" cx="372.6" cy="401.2" r="4.2"><title>subset 84: pred=-484000, true_f=458</title></circle>
+<circle class="pt" cx="386.7" cy="270.9" r="4.2"><title>subset 85: pred=-483284, true_f=524</title></circle>
+<circle class="pt" cx="331.1" cy="424.8" r="4.2"><title>subset 86: pred=-486095, true_f=446</title></circle>
+<circle class="pt" cx="583.0" cy="448.5" r="4.2"><title>subset 87: pred=-473358, true_f=434</title></circle>
+<circle class="pt" cx="553.2" cy="314.3" r="4.2"><title>subset 88: pred=-474865, true_f=502</title></circle>
+<circle class="pt" cx="642.3" cy="448.5" r="4.2"><title>subset 89: pred=-470358, true_f=434</title></circle>
+<circle class="pt" cx="499.6" cy="361.7" r="4.2"><title>subset 90: pred=-477574, true_f=478</title></circle>
+<circle class="pt" cx="433.2" cy="393.3" r="4.2"><title>subset 91: pred=-480934, true_f=462</title></circle>
+<circle class="pt" cx="547.9" cy="389.3" r="4.2"><title>subset 92: pred=-475130, true_f=464</title></circle>
+<circle class="pt" cx="430.9" cy="389.3" r="4.2"><title>subset 93: pred=-481047, true_f=464</title></circle>
+<circle class="pt" cx="384.0" cy="318.3" r="4.2"><title>subset 94: pred=-483423, true_f=500</title></circle>
+<circle class="pt" cx="493.7" cy="393.3" r="4.2"><title>subset 95: pred=-477874, true_f=462</title></circle>
+<circle class="pt" cx="264.6" cy="440.6" r="4.2"><title>subset 96: pred=-489462, true_f=438</title></circle>
+<circle class="pt" cx="218.3" cy="460.3" r="4.2"><title>subset 97: pred=-491805, true_f=428</title></circle>
+<circle class="pt" cx="432.1" cy="428.8" r="4.2"><title>subset 98: pred=-480987, true_f=444</title></circle>
+<circle class="pt" cx="510.3" cy="314.3" r="4.2"><title>subset 99: pred=-477033, true_f=502</title></circle>
+<text x="485.0" y="615" text-anchor="middle" font-size="15">Predicted sum of attribution scores (negative raw scores clamped before applying sign)</text>
+<text x="22" y="302.5" text-anchor="middle" font-size="15" transform="rotate(-90 22 302.5)">True counterfactual f</text>
+</svg>

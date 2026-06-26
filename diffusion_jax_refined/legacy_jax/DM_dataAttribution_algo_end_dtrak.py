@@ -4,7 +4,7 @@ import json
 import pickle
 import hashlib
 from dataclasses import dataclass, asdict
-from typing import Any, Dict, List, Tuple, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 import jax
@@ -21,6 +21,22 @@ except Exception:
 # Utilities
 # ============================================================
 
+def tree_scalar_mul(tree, c):
+    return jax.tree_util.tree_map(lambda x: x * c, tree)
+
+
+def tree_add(a, b):
+    return jax.tree_util.tree_map(lambda x, y: x + y, a, b)
+
+
+def tree_sub(a, b):
+    return jax.tree_util.tree_map(lambda x, y: x - y, a, b)
+
+
+def tree_zeros_like(tree):
+    return jax.tree_util.tree_map(jnp.zeros_like, tree)
+
+
 def tree_vdot(a, b):
     leaves_a, _ = jax.tree_util.tree_flatten(a)
     leaves_b, _ = jax.tree_util.tree_flatten(b)
@@ -28,6 +44,15 @@ def tree_vdot(a, b):
     for x, y in zip(leaves_a, leaves_b):
         out = out + jnp.vdot(x.astype(jnp.float32), y.astype(jnp.float32))
     return out
+
+
+def tree_mask(tree, mask_tree):
+    return jax.tree_util.tree_map(lambda x, m: x if m else jnp.zeros_like(x), tree, mask_tree)
+
+
+def tree_any(mask_tree):
+    leaves, _ = jax.tree_util.tree_flatten(mask_tree)
+    return any(bool(x) for x in leaves)
 
 
 def format_seconds(sec: float) -> str:
@@ -50,46 +75,6 @@ def format_eta(done: int, total: int, elapsed: float, warmup_steps: int = 3) -> 
     return format_seconds(remain)
 
 
-def ensure_dir(path: str):
-    os.makedirs(path, exist_ok=True)
-
-
-def save_json(path: str, obj):
-    ensure_dir(os.path.dirname(path))
-    with open(path, "w") as f:
-        json.dump(obj, f, indent=2)
-
-
-def list_checkpoints_sorted(checkpoint_dir: str, suffix: str = ".ckpt") -> List[str]:
-    paths = []
-    if not os.path.isdir(checkpoint_dir):
-        return paths
-    for name in os.listdir(checkpoint_dir):
-        if name.endswith(suffix):
-            paths.append(os.path.join(checkpoint_dir, name))
-    paths.sort()
-    return paths
-
-
-def normalize_query_tokens(query_spec) -> List[str]:
-    if isinstance(query_spec, str):
-        return [tok.strip() for tok in query_spec.split(",") if tok.strip()]
-    if isinstance(query_spec, (list, tuple)):
-        return [str(tok).strip() for tok in query_spec if str(tok).strip()]
-    return [str(query_spec).strip()]
-
-
-def _stable_int_seed(*parts: Any) -> int:
-    s = "|".join(map(str, parts)).encode("utf-8")
-    h = hashlib.sha256(s).digest()
-    v = int.from_bytes(h[:8], "little", signed=False)
-    return int(v % (2**31 - 1))
-
-
-def make_jax_key(*parts: Any):
-    return jax.random.PRNGKey(_stable_int_seed(*parts))
-
-
 def should_print_progress(done: int, total: int, every: int) -> bool:
     return done == 1 or done % every == 0 or done == total
 
@@ -98,6 +83,16 @@ def iter_with_tqdm(iterable, total: Optional[int], desc: str, enabled: bool = Tr
     if enabled and tqdm is not None:
         return tqdm(iterable, total=total, desc=desc, dynamic_ncols=True, leave=True)
     return iterable
+
+
+def ensure_dir(path: str):
+    os.makedirs(path, exist_ok=True)
+
+
+def save_json(path: str, obj):
+    ensure_dir(os.path.dirname(path))
+    with open(path, "w") as f:
+        json.dump(obj, f, indent=2)
 
 
 def tree_to_device(tree, device):
@@ -135,6 +130,41 @@ def first_leaf_device_str(tree) -> str:
     if not leaves:
         return "empty"
     return array_device_str(leaves[0])
+
+
+def list_checkpoints_sorted(checkpoint_dir: str, suffix: str = ".ckpt") -> List[str]:
+    paths = []
+    if not os.path.isdir(checkpoint_dir):
+        return paths
+    for name in os.listdir(checkpoint_dir):
+        if name.endswith(suffix):
+            paths.append(os.path.join(checkpoint_dir, name))
+    paths.sort()
+    return paths
+
+
+def latest_checkpoint_in_dir(checkpoint_dir: str, suffix: str = ".ckpt") -> Optional[str]:
+    paths = list_checkpoints_sorted(checkpoint_dir, suffix=suffix)
+    return paths[-1] if paths else None
+
+
+def normalize_query_tokens(query_spec) -> List[str]:
+    if isinstance(query_spec, str):
+        return [tok.strip() for tok in query_spec.split(",") if tok.strip()]
+    if isinstance(query_spec, (list, tuple)):
+        return [str(tok).strip() for tok in query_spec if str(tok).strip()]
+    return [str(query_spec).strip()]
+
+
+def _stable_int_seed(*parts: Any) -> int:
+    s = "|".join(map(str, parts)).encode("utf-8")
+    h = hashlib.sha256(s).digest()
+    v = int.from_bytes(h[:8], "little", signed=False)
+    return int(v % (2**31 - 1))
+
+
+def make_jax_key(*parts: Any):
+    return jax.random.PRNGKey(_stable_int_seed(*parts))
 
 
 def encode_cifar_query(
@@ -232,6 +262,12 @@ def q_sample(schedule: DiffusionSchedule, x0: jnp.ndarray, t: jnp.ndarray, noise
     )
 
 
+def predict_x0_from_eps(schedule: DiffusionSchedule, xt: jnp.ndarray, t: jnp.ndarray, eps: jnp.ndarray):
+    return (
+        xt - extract(schedule.sqrt_one_minus_alphas_cumprod, t, xt.shape) * eps
+    ) / extract(schedule.sqrt_alphas_cumprod, t, xt.shape)
+
+
 def ddim_step_from_eps(
     eps_fn,
     params,
@@ -292,7 +328,51 @@ def compute_reference_endpoint_ddim(
 
 
 # ============================================================
-# Adapters
+# Parameter mask helpers
+# ============================================================
+
+def flatten_keys(tree, prefix=()):
+    out = {}
+    if isinstance(tree, dict):
+        for k, v in tree.items():
+            out.update(flatten_keys(v, prefix + (str(k),)))
+    else:
+        out[prefix] = tree
+    return out
+
+
+def build_param_mask(params, mode: str):
+    flat = flatten_keys(params)
+    out = {}
+
+    def insert(d, key_tuple, value):
+        cur = d
+        for k in key_tuple[:-1]:
+            if k not in cur:
+                cur[k] = {}
+            cur = cur[k]
+        cur[key_tuple[-1]] = value
+
+    for key in flat.keys():
+        key_str = "/".join(key).lower()
+        is_lora = ("lora" in key_str)
+
+        if mode == "all":
+            val = True
+        elif mode == "baseline":
+            val = not is_lora
+        elif mode == "lora":
+            val = is_lora
+        else:
+            raise ValueError("mode must be 'all', 'baseline', or 'lora'")
+
+        insert(out, key, val)
+
+    return out
+
+
+# ============================================================
+# Task adapters
 # ============================================================
 
 class BaseTaskAdapter:
@@ -336,7 +416,7 @@ class BaseTaskAdapter:
 
 class X3TaskAdapter(BaseTaskAdapter):
     def iter_dataset(self, cfg):
-        return self.m.ColorGridDatasetJAX(
+        ds = self.m.ColorGridDatasetJAX(
             csv_path=cfg.csv_path,
             grid_size=cfg.grid_size,
             fixed_s=cfg.fixed_s,
@@ -345,6 +425,7 @@ class X3TaskAdapter(BaseTaskAdapter):
             row_indices=cfg.row_indices,
             subset_ranges=cfg.subset_ranges,
         )
+        return ds
 
     def get_example_batch(self, ds):
         x, y = ds[0]
@@ -352,7 +433,9 @@ class X3TaskAdapter(BaseTaskAdapter):
 
     def get_item(self, ds, idx):
         x, y = ds[idx]
-        return jnp.array(x[None, ...], dtype=jnp.float32), jnp.array(y[None, ...], dtype=jnp.float32)
+        x = jnp.array(x[None, ...], dtype=jnp.float32)
+        cond = jnp.array(y[None, ...], dtype=jnp.float32)
+        return x, cond
 
     def build_state_template(self, cfg, model, device):
         cond_dim = len(self.iter_dataset(cfg).vocab)
@@ -375,7 +458,7 @@ class X3TaskAdapter(BaseTaskAdapter):
 
 class CIFAR10TaskAdapter(BaseTaskAdapter):
     def iter_dataset(self, cfg):
-        return self.m.CIFAR10Dataset(
+        ds = self.m.CIFAR10Dataset(
             root=cfg.data_root,
             batch_names=cfg.batch_names,
             use_test=cfg.use_test,
@@ -386,6 +469,7 @@ class CIFAR10TaskAdapter(BaseTaskAdapter):
             exclude_indices=cfg.exclude_indices,
             cond_mode=cfg.cond_mode,
         )
+        return ds
 
     def get_example_batch(self, ds):
         x = jnp.array(ds.images[0:1], dtype=jnp.float32)
@@ -411,10 +495,16 @@ class CIFAR10TaskAdapter(BaseTaskAdapter):
         return model.apply({"params": params}, x, t, cond, train=False)
 
     def make_query_cond(self, ds, query_spec, cfg):
-        q = encode_cifar_query(query=query_spec, label_names=ds.label_names, cond_mode=cfg.cond_mode)
+        q = encode_cifar_query(
+            query=query_spec,
+            label_names=ds.label_names,
+            cond_mode=cfg.cond_mode,
+        )
         if cfg.cond_mode == "class_id":
             return jnp.array([int(q)], dtype=jnp.int32)
-        return jnp.array(q[None, :], dtype=jnp.float32)
+        if cfg.cond_mode == "multi_hot":
+            return jnp.array(q[None, :], dtype=jnp.float32)
+        raise ValueError("cond_mode must be 'class_id' or 'multi_hot'")
 
 
 class ArtBenchLatentTaskAdapter(BaseTaskAdapter):
@@ -466,13 +556,20 @@ class ArtBenchLatentTaskAdapter(BaseTaskAdapter):
         )
         if cfg.cond_mode == "class_id":
             return jnp.array([int(q)], dtype=jnp.int32)
-        return jnp.array(q[None, :], dtype=jnp.float32)
+        if cfg.cond_mode == "multi_hot":
+            return jnp.array(q[None, :], dtype=jnp.float32)
+        raise ValueError("cond_mode must be 'class_id' or 'multi_hot'")
 
+
+# ============================================================
+# Config
+# ============================================================
 
 @dataclass
-class EndpointProjectedDASJAXConfig:
+class EndpointDTrakJAXConfig:
     task_type: str
     module_name: str
+
     baseline_dir: str
     reference_ckpt: Optional[str] = None
 
@@ -485,33 +582,34 @@ class EndpointProjectedDASJAXConfig:
     seed: int = 808
     query: Any = None
 
-    timesteps_total: int = 2000
+    timesteps: int = 2000
     beta_start: float = 1e-4
     beta_end: float = 0.02
     ddim_steps: int = 2000
     eta: float = 0.0
 
-    timesteps: Tuple[int, ...] = (0, 400, 800, 1200, 1600, 1999)
-    num_mc_noise: int = 8
-    damping: float = 1e-3
+    t_min_end: int = 0
+    t_max_end_frac: float = 0.2
+
+    num_checkpoints_to_use: int = -1
+
     proj_dim: int = 4096
-    normalize_projected_grads: bool = True
-    normalize_eps: float = 1e-8
-    use_sherman_morrison_denominator: bool = False
-
-    ckpt_stride: int = 1
-    max_num_ckpts: Optional[int] = 1
-
+    damping: float = 1e-3
+    num_samples: int = 1
     batch_size: int = 64
+    train_expectation_samples: int = 8
+    query_expectation_samples: int = 8
+    progress_every_batches: int = 10
+    use_tqdm: bool = True
+    use_jax_countsketch: bool = True
+
     max_train_points: int = 1024
     random_subset: bool = True
     score_index_ranges: Optional[Tuple[Tuple[int, int], ...]] = None
     score_index_base: int = 1
-    progress_every_batches: int = 10
-    use_tqdm: bool = True
 
     topk: int = 2000
-    out_dir: str = "./endpoint_das_projected_jax_out"
+    out_dir: str = "./endpoint_dtrak_jax_out"
 
     # x3 fields
     csv_path: Optional[str] = None
@@ -560,7 +658,7 @@ class EndpointProjectedDASJAXConfig:
     latent_exclude_indices: Optional[Tuple[int, ...]] = None
 
 
-def get_adapter(cfg: EndpointProjectedDASJAXConfig):
+def get_adapter(cfg: EndpointDTrakJAXConfig):
     module = __import__(cfg.module_name)
     if cfg.task_type == "x3":
         return X3TaskAdapter(module)
@@ -572,10 +670,10 @@ def get_adapter(cfg: EndpointProjectedDASJAXConfig):
 
 
 # ============================================================
-# Projected DAS helpers
+# Losses
 # ============================================================
 
-def denoising_loss_fixed_t_noise_jax(
+def diffusion_train_loss_expected_jax(
     adapter,
     model,
     params,
@@ -583,20 +681,67 @@ def denoising_loss_fixed_t_noise_jax(
     x0,
     cond,
     *,
-    t: jnp.ndarray,
-    noise: jnp.ndarray,
+    rng,
+    num_expectation_samples: int,
 ):
-    xt = q_sample(schedule, x0, t, noise)
-    pred = adapter.eps_apply(model, params, xt, t, cond)
-    return jnp.mean((pred - noise) ** 2)
+    losses = []
+    local_rng = rng
+    T = int(schedule.betas.shape[0])
 
+    for _ in range(int(num_expectation_samples)):
+        local_rng, t_rng, noise_rng = jax.random.split(local_rng, 3)
+        t = jax.random.randint(t_rng, (x0.shape[0],), 0, T, dtype=jnp.int32)
+        noise = jax.random.normal(noise_rng, x0.shape, dtype=x0.dtype)
+        xt = q_sample(schedule, x0, t, noise)
+        pred = adapter.eps_apply(model, params, xt, t, cond)
+        losses.append(jnp.mean((pred - noise) ** 2))
+
+    return jnp.mean(jnp.stack(losses))
+
+
+def diffusion_query_loss_expected_jax(
+    adapter,
+    model,
+    params,
+    schedule,
+    x0_ref,
+    cond,
+    *,
+    t_min: int,
+    t_max: int,
+    rng,
+    num_expectation_samples: int,
+):
+    T = int(schedule.betas.shape[0])
+    t_min = max(0, min(T - 1, int(t_min)))
+    t_max = max(0, min(T - 1, int(t_max)))
+    if t_max < t_min:
+        t_max = t_min
+
+    losses = []
+    local_rng = rng
+
+    for _ in range(int(num_expectation_samples)):
+        local_rng, t_rng, noise_rng = jax.random.split(local_rng, 3)
+        t = jax.random.randint(t_rng, (x0_ref.shape[0],), t_min, t_max + 1, dtype=jnp.int32)
+        noise = jax.random.normal(noise_rng, x0_ref.shape, dtype=x0_ref.dtype)
+        xt_ref = q_sample(schedule, x0_ref, t, noise)
+        pred = adapter.eps_apply(model, params, xt_ref, t, cond)
+        losses.append(jnp.mean((pred - noise) ** 2))
+
+    return jnp.mean(jnp.stack(losses))
+
+
+# ============================================================
+# Projected gradient features (CountSketch)
+# ============================================================
 
 def _countsketch_project_grad_jax(
     grads,
     d: int,
     *,
     seed_parts: Tuple[Any, ...],
-) -> jnp.ndarray:
+):
     out = np.zeros((d,), dtype=np.float32)
 
     leaves, _ = jax.tree_util.tree_flatten(grads)
@@ -644,111 +789,122 @@ def build_countsketch_projector_jax(params, d: int, *, seed_parts: Tuple[Any, ..
     return jax.jit(project)
 
 
-def maybe_normalize_phi(phi, normalize: bool, eps: float):
-    if not normalize:
-        return phi
-    return phi / (jnp.linalg.norm(phi) + jnp.asarray(eps, dtype=phi.dtype))
-
-
-def make_projected_loss_grad_fn(
-    adapter,
-    model,
-    schedule,
-    projector,
+def grad_feature_phi_jax(
+    loss_fn,
+    params,
     *,
-    normalize_projected_grads: bool,
-    normalize_eps: float,
+    proj_dim: int,
+    seed_parts: Tuple[Any, ...],
+    projector=None,
 ):
-    def phi_fn(params, x0, cond, t, noise):
+    grads = jax.grad(loss_fn)(params)
+    if projector is not None:
+        return projector(grads)
+    return _countsketch_project_grad_jax(
+        grads,
+        proj_dim,
+        seed_parts=seed_parts,
+    )
+
+
+def make_query_phi_fn(adapter, model, schedule, projector, *, t_min: int, t_max: int, num_expectation_samples: int):
+    def query_phi(params, x0_ref, cond, rng):
         def loss_fn(p):
-            return denoising_loss_fixed_t_noise_jax(
+            return diffusion_query_loss_expected_jax(
+                adapter=adapter,
+                model=model,
+                params=p,
+                schedule=schedule,
+                x0_ref=x0_ref,
+                cond=cond,
+                t_min=t_min,
+                t_max=t_max,
+                rng=rng,
+                num_expectation_samples=num_expectation_samples,
+            )
+
+        L, grads = jax.value_and_grad(loss_fn)(params)
+        return L, projector(grads)
+
+    return jax.jit(query_phi)
+
+
+def make_train_phi_fn(adapter, model, schedule, projector, *, num_expectation_samples: int):
+    def train_phi(params, x0, cond, rng):
+        def loss_fn(p):
+            return diffusion_train_loss_expected_jax(
                 adapter=adapter,
                 model=model,
                 params=p,
                 schedule=schedule,
                 x0=x0,
                 cond=cond,
-                t=t,
-                noise=noise,
+                rng=rng,
+                num_expectation_samples=num_expectation_samples,
             )
 
-        loss, grads = jax.value_and_grad(loss_fn)(params)
-        phi = projector(grads)
-        phi = maybe_normalize_phi(phi, normalize_projected_grads, normalize_eps)
-        return loss, phi
+        grads = jax.grad(loss_fn)(params)
+        return projector(grads)
 
-    return jax.jit(phi_fn)
-
-
-def make_projected_eps_grad_fn(
-    adapter,
-    model,
-    schedule,
-    projector,
-    *,
-    normalize_projected_grads: bool,
-    normalize_eps: float,
-):
-    def phi_fn(params, x0, cond, t, noise, output_probe):
-        xt = q_sample(schedule, x0, t, noise)
-        pred = adapter.eps_apply(model, params, xt, t, cond)
-        residual = pred - noise
-
-        def scalar_eps_fn(p):
-            pred_p = adapter.eps_apply(model, p, xt, t, cond)
-            return jnp.sum(pred_p * output_probe) / jnp.sqrt(jnp.asarray(pred_p.size, dtype=jnp.float32))
-
-        grads = jax.grad(scalar_eps_fn)(params)
-        phi = projector(grads)
-        phi = maybe_normalize_phi(phi, normalize_projected_grads, normalize_eps)
-        residual_scalar = (
-            jnp.sum(residual * output_probe)
-            / jnp.sqrt(jnp.asarray(residual.size, dtype=jnp.float32))
-        )
-        return residual_scalar, phi
-
-    return jax.jit(phi_fn)
-
-
-def sample_xt_and_noise_jax(
-    schedule: DiffusionSchedule,
-    x0: jnp.ndarray,
-    *,
-    t: jnp.ndarray,
-    rng,
-) -> Tuple[jnp.ndarray, jnp.ndarray]:
-    noise = jax.random.normal(rng, x0.shape, dtype=x0.dtype)
-    xt = q_sample(schedule, x0, t, noise)
-    return xt, noise
-
-
-def sample_output_probe_jax(shape: Tuple[int, ...], *, rng) -> jnp.ndarray:
-    return jax.random.normal(rng, shape, dtype=jnp.float32)
+    return jax.jit(train_phi)
 
 
 # ============================================================
 # Checkpoint selection
 # ============================================================
 
-def filter_checkpoints(ckpts: List[str], ckpt_stride: int, max_num_ckpts: Optional[int]) -> List[str]:
-    if ckpt_stride <= 0:
-        raise ValueError(f"ckpt_stride must be >= 1, got {ckpt_stride}")
+def select_checkpoints_evenly(ckpt_paths: List[str], num_to_use: int) -> List[str]:
+    if not ckpt_paths:
+        return []
 
-    out = ckpts[::ckpt_stride]
-    if max_num_ckpts is not None:
-        if int(max_num_ckpts) <= 0:
-            raise ValueError(f"max_num_ckpts must be positive or None, got {max_num_ckpts}")
-        out = out[-int(max_num_ckpts):]
+    n = len(ckpt_paths)
 
-    if not out:
-        raise RuntimeError("Checkpoint filtering removed all checkpoints.")
-    return out
+    if num_to_use == -1:
+        return [ckpt_paths[-1]]
+
+    if num_to_use <= 0:
+        raise ValueError(f"num_checkpoints_to_use must be -1 or positive, got {num_to_use}")
+
+    if num_to_use == 1:
+        return [ckpt_paths[-1]]
+
+    if num_to_use >= n:
+        return ckpt_paths
+
+    idxs = np.linspace(0, n - 1, num=num_to_use)
+    idxs = np.round(idxs).astype(int)
+    idxs = sorted(set(int(i) for i in idxs))
+
+    if len(idxs) < num_to_use:
+        chosen = set(idxs)
+        for i in range(n):
+            if i not in chosen:
+                idxs.append(i)
+                chosen.add(i)
+                if len(idxs) == num_to_use:
+                    break
+        idxs = sorted(idxs[:num_to_use])
+
+    return [ckpt_paths[i] for i in idxs]
 
 
 CHECKPOINT_CONFIG_FIELDS = (
-    "model_type", "image_size", "in_channels", "base_channels", "channel_mults",
-    "num_res_blocks", "time_emb_dim", "num_classes", "class_cond", "cond_mode",
-    "dropout", "timesteps", "beta_start", "beta_end", "predict_x0", "use_bfloat16",
+    "model_type",
+    "image_size",
+    "in_channels",
+    "base_channels",
+    "channel_mults",
+    "num_res_blocks",
+    "time_emb_dim",
+    "num_classes",
+    "class_cond",
+    "cond_mode",
+    "dropout",
+    "timesteps",
+    "beta_start",
+    "beta_end",
+    "predict_x0",
+    "use_bfloat16",
 )
 
 
@@ -764,7 +920,7 @@ def load_checkpoint_config(ckpt_path: Optional[str]) -> Dict[str, Any]:
     return dict(cfg_dict) if isinstance(cfg_dict, dict) else {}
 
 
-def apply_checkpoint_config(cfg: "EndpointProjectedDASJAXConfig", ckpt_path: Optional[str]):
+def apply_checkpoint_config(cfg: "EndpointDTrakJAXConfig", ckpt_path: Optional[str]):
     if not cfg.sync_config_from_checkpoint:
         return
     try:
@@ -772,6 +928,9 @@ def apply_checkpoint_config(cfg: "EndpointProjectedDASJAXConfig", ckpt_path: Opt
     except Exception as exc:
         print(f"[setup] could not read checkpoint config from {ckpt_path}: {exc}")
         return
+    if not ckpt_cfg:
+        return
+
     changed = []
     for name in CHECKPOINT_CONFIG_FIELDS:
         if name not in ckpt_cfg:
@@ -779,11 +938,9 @@ def apply_checkpoint_config(cfg: "EndpointProjectedDASJAXConfig", ckpt_path: Opt
         old = getattr(cfg, name, None)
         new = ckpt_cfg[name]
         if old != new:
-            if name == "timesteps":
-                cfg.timesteps_total = int(new)
-            else:
-                setattr(cfg, name, new)
+            setattr(cfg, name, new)
             changed.append(name)
+
     if changed:
         print(
             f"[setup] synced model config from checkpoint {os.path.basename(str(ckpt_path))}: "
@@ -800,13 +957,21 @@ def _load_json_if_exists(path: str) -> Dict[str, Any]:
 
 def _find_attribution_seed_dir(sample_dir: str, seed: Optional[int]) -> str:
     sample_dir = os.path.abspath(os.path.expanduser(sample_dir))
-    if os.path.isfile(os.path.join(sample_dir, "final_state.npy")) or os.path.isfile(os.path.join(sample_dir, "trajectory_xt.npy")):
+    if (
+        os.path.isfile(os.path.join(sample_dir, "final_state.npy"))
+        or os.path.isfile(os.path.join(sample_dir, "trajectory_xt.npy"))
+    ):
         return sample_dir
+
     if seed is not None:
         candidate = os.path.join(sample_dir, f"seed_{int(seed):06d}")
-        if os.path.isfile(os.path.join(candidate, "final_state.npy")) or os.path.isfile(os.path.join(candidate, "trajectory_xt.npy")):
+        if (
+            os.path.isfile(os.path.join(candidate, "final_state.npy"))
+            or os.path.isfile(os.path.join(candidate, "trajectory_xt.npy"))
+        ):
             return candidate
         raise FileNotFoundError(f"No final_state.npy or trajectory_xt.npy found for seed {seed}: {candidate}")
+
     seed_dirs = []
     if os.path.isdir(sample_dir):
         for name in os.listdir(sample_dir):
@@ -818,22 +983,29 @@ def _find_attribution_seed_dir(sample_dir: str, seed: Optional[int]) -> str:
                 seed_dirs.append(path)
     seed_dirs.sort()
     if not seed_dirs:
-        raise FileNotFoundError("Could not find final_state.npy or trajectory_xt.npy.")
+        raise FileNotFoundError(
+            "Could not find final_state.npy or trajectory_xt.npy. "
+            "Pass either a seed_* directory or a sampler run root."
+        )
     return seed_dirs[0]
 
 
-def load_attribution_endpoint(cfg: "EndpointProjectedDASJAXConfig") -> Tuple[jnp.ndarray, Dict[str, Any]]:
+def load_attribution_endpoint(cfg: "EndpointDTrakJAXConfig") -> Tuple[jnp.ndarray, Dict[str, Any]]:
+    if cfg.attribution_sample_dir is None:
+        raise ValueError("attribution_sample_dir is required.")
+
     seed_dir = _find_attribution_seed_dir(cfg.attribution_sample_dir, cfg.attribution_sample_seed)
     final_path = os.path.join(seed_dir, "final_state.npy")
     trajectory_path = os.path.join(seed_dir, "trajectory_xt.npy")
     t_path = os.path.join(seed_dir, "trajectory_t.npy")
+
     source = "final_state.npy"
     if os.path.isfile(final_path):
         final_state = np.load(final_path, allow_pickle=True)
     elif cfg.attribution_use_trajectory_endpoint and os.path.isfile(trajectory_path):
         trajectory = np.load(trajectory_path)
         if trajectory.ndim != 5:
-            raise ValueError(f"Expected trajectory_xt.npy shape (K,B,H,W,C), got {trajectory.shape}")
+            raise ValueError(f"Expected trajectory_xt.npy to have shape (K,B,H,W,C), got {trajectory.shape}")
         if os.path.isfile(t_path):
             t_seq = np.load(t_path)
             matches = np.where(t_seq == 0)[0]
@@ -844,16 +1016,25 @@ def load_attribution_endpoint(cfg: "EndpointProjectedDASJAXConfig") -> Tuple[jnp
         source = f"trajectory_xt.npy[{traj_idx}]"
     else:
         raise FileNotFoundError(f"No final_state.npy found at {final_path}")
+
     if final_state.ndim != 4:
-        raise ValueError(f"Expected endpoint shape (B,H,W,C), got {final_state.shape}")
+        raise ValueError(f"Expected endpoint state to have shape (B,H,W,C), got {final_state.shape}")
+
     sample_idx = int(cfg.attribution_sample_index)
+    if sample_idx < 0 or sample_idx >= final_state.shape[0]:
+        raise IndexError(
+            f"attribution_sample_index={sample_idx} is out of range for batch size {final_state.shape[0]}"
+        )
+
     x0_ref_np = final_state[sample_idx:sample_idx + 1].astype(np.float32)
     seed_info = _load_json_if_exists(os.path.join(seed_dir, "seed_info.json"))
-    manifest = _load_json_if_exists(os.path.join(os.path.dirname(seed_dir), "manifest.json"))
+    run_root = os.path.dirname(seed_dir)
+    manifest = _load_json_if_exists(os.path.join(run_root, "manifest.json"))
     return jnp.asarray(x0_ref_np, dtype=jnp.float32), {
         "seed_dir": seed_dir,
         "source": source,
         "sample_index": sample_idx,
+        "final_state_shape": list(final_state.shape),
         "loaded_x0_ref_shape": list(x0_ref_np.shape),
         "seed_info": seed_info,
         "manifest": manifest,
@@ -865,7 +1046,9 @@ def infer_query_from_attribution_meta(meta: Dict[str, Any]) -> Optional[Any]:
     if seed_info.get("prompt") is not None:
         return seed_info["prompt"]
     manifest = meta.get("manifest") or {}
-    return manifest.get("prompt")
+    if manifest.get("prompt") is not None:
+        return manifest["prompt"]
+    return None
 
 
 def resolve_checkpoint_path_from_manifest(manifest_ckpt: Optional[str]) -> Optional[str]:
@@ -875,11 +1058,20 @@ def resolve_checkpoint_path_from_manifest(manifest_ckpt: Optional[str]) -> Optio
     if os.path.isfile(ckpt_path):
         return ckpt_path
     basename = os.path.basename(str(manifest_ckpt))
-    roots = [os.getcwd(), os.path.join(os.getcwd(), "diffusion model_jax", "models"), os.path.join(os.path.dirname(os.path.abspath(__file__)), "models")]
+    if not basename:
+        return None
+    search_roots = [
+        os.getcwd(),
+        os.path.join(os.getcwd(), "diffusion model_jax", "models"),
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "models"),
+    ]
     matches = []
-    for root in roots:
-        if not os.path.isdir(root):
+    seen = set()
+    for root in search_roots:
+        root = os.path.abspath(root)
+        if root in seen or not os.path.isdir(root):
             continue
+        seen.add(root)
         for dirpath, _, filenames in os.walk(root):
             if basename in filenames:
                 matches.append(os.path.join(dirpath, basename))
@@ -888,6 +1080,8 @@ def resolve_checkpoint_path_from_manifest(manifest_ckpt: Optional[str]) -> Optio
 
 
 def repeat_condition_to_batch(cond, batch_size: int):
+    if cond is None:
+        return None
     if batch_size <= 1 or cond.shape[0] == batch_size:
         return cond
     if cond.shape[0] != 1:
@@ -898,19 +1092,31 @@ def repeat_condition_to_batch(cond, batch_size: int):
 
 def build_candidate_items(cfg, N: int) -> List[int]:
     if cfg.score_index_ranges is not None:
-        offset = int(cfg.score_index_base)
+        if int(cfg.score_index_base) not in (0, 1):
+            raise ValueError("score_index_base must be 0 or 1.")
         picked = []
         seen = set()
+        offset = int(cfg.score_index_base)
         for start, end in cfg.score_index_ranges:
-            start0 = int(start) - offset
-            end0 = int(end) - offset
-            if start0 < 0 or end0 >= N or end0 < start0:
-                raise ValueError(f"Invalid score range ({start}, {end}) for N={N}, base={offset}")
+            start = int(start)
+            end = int(end)
+            if end < start:
+                raise ValueError(f"Invalid score index range ({start}, {end}): end < start.")
+            start0 = start - offset
+            end0 = end - offset
+            if start0 < 0 or end0 >= N:
+                raise ValueError(
+                    f"Score index range ({start}, {end}) with base={offset} is out of dataset bounds. "
+                    f"Valid 0-based indices are [0, {N - 1}]."
+                )
             for idx in range(start0, end0 + 1):
                 if idx not in seen:
                     picked.append(idx)
                     seen.add(idx)
+        if not picked:
+            raise ValueError("score_index_ranges produced no candidate indices.")
         return [int(i) for i in picked]
+
     M = min(int(cfg.max_train_points), N)
     if cfg.random_subset:
         rng = np.random.default_rng(cfg.seed)
@@ -928,7 +1134,8 @@ def score_subset_suffix(cfg) -> str:
 
 def apply_score_subset_suffix_to_out_dir(cfg):
     suffix = score_subset_suffix(cfg)
-    tail = os.path.basename(os.path.normpath(cfg.out_dir))
+    base = os.path.normpath(cfg.out_dir)
+    tail = os.path.basename(base)
     if tail == suffix or tail.endswith("_" + suffix):
         return suffix
     cfg.out_dir = f"{cfg.out_dir}_{suffix}"
@@ -936,72 +1143,76 @@ def apply_score_subset_suffix_to_out_dir(cfg):
 
 
 # ============================================================
-# Main
+# Main run
 # ============================================================
 
-def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
+def run_endpoint_dtrak_jax(cfg: EndpointDTrakJAXConfig):
     out_suffix = apply_score_subset_suffix_to_out_dir(cfg)
     ensure_dir(cfg.out_dir)
     t0 = time.perf_counter()
 
     precomputed_sample_meta = None
     x0_ref = None
-    resolved_manifest_ckpt = None
     manifest_ckpt = None
+    resolved_manifest_ckpt = None
     if cfg.attribution_sample_dir is not None:
         print(f"[setup] loading precomputed attribution sample: {cfg.attribution_sample_dir}")
         x0_ref, precomputed_sample_meta = load_attribution_endpoint(cfg)
         inferred_query = infer_query_from_attribution_meta(precomputed_sample_meta)
         if cfg.query is None:
             if inferred_query is None:
-                raise ValueError("query is None and no prompt found in sample metadata.")
+                raise ValueError(
+                    "query is None and no prompt was found in seed_info.json or manifest.json."
+                )
             cfg.query = inferred_query
             print(f"[setup] inferred query from attribution sample prompt: {cfg.query}")
-        manifest = precomputed_sample_meta.get("manifest") or {}
-        manifest_ckpt = manifest.get("checkpoint")
-        resolved_manifest_ckpt = resolve_checkpoint_path_from_manifest(manifest_ckpt)
         print(
             f"[setup] loaded x0_ref shape={tuple(x0_ref.shape)} "
             f"from {precomputed_sample_meta.get('source')}"
         )
+        manifest = precomputed_sample_meta.get("manifest") or {}
+        manifest_ckpt = manifest.get("checkpoint")
+        resolved_manifest_ckpt = resolve_checkpoint_path_from_manifest(manifest_ckpt)
 
     config_ckpt = cfg.reference_ckpt or resolved_manifest_ckpt
-    if config_ckpt is None and cfg.baseline_dir:
-        ckpts_for_config = list_checkpoints_sorted(cfg.baseline_dir)
-        config_ckpt = ckpts_for_config[-1] if ckpts_for_config else None
+    if config_ckpt is None and cfg.baseline_dir is not None:
+        config_ckpt = latest_checkpoint_in_dir(cfg.baseline_dir)
     apply_checkpoint_config(cfg, config_ckpt)
 
     print("=" * 90)
-    print("Starting endpoint projected DAS JAX run")
-    print(f"task_type               : {cfg.task_type}")
-    print(f"module_name             : {cfg.module_name}")
-    print(f"baseline_dir            : {cfg.baseline_dir}")
-    print(f"reference_ckpt          : {cfg.reference_ckpt}")
-    print(f"config_ckpt             : {config_ckpt}")
-    print(f"attribution_sample      : {cfg.attribution_sample_dir}")
+    print("Starting endpoint D-TRAK JAX run")
+    print(f"task_type                : {cfg.task_type}")
+    print(f"module_name              : {cfg.module_name}")
+    print(f"baseline_dir             : {cfg.baseline_dir}")
+    print(f"reference_ckpt           : {cfg.reference_ckpt}")
+    print(f"config_ckpt              : {config_ckpt}")
+    print(f"attribution_sample       : {cfg.attribution_sample_dir}")
     if precomputed_sample_meta is not None:
-        print(f"sample_source           : {precomputed_sample_meta.get('source')}")
-        print(f"sample_shape            : {precomputed_sample_meta.get('loaded_x0_ref_shape')}")
-    print(f"seed                    : {cfg.seed}")
-    print(f"query                   : {cfg.query}")
-    print(f"timesteps_total         : {cfg.timesteps_total}")
-    print(f"ddim_steps              : {cfg.ddim_steps}")
-    print(f"timesteps               : {cfg.timesteps}")
-    print(f"num_mc_noise            : {cfg.num_mc_noise}")
-    print(f"proj_dim                : {cfg.proj_dim}")
-    print(f"damping                 : {cfg.damping}")
-    print(f"normalize_proj_grads    : {cfg.normalize_projected_grads}")
-    print(f"sherman_morrison_denom  : {cfg.use_sherman_morrison_denominator}")
-    print(f"batch_size              : {cfg.batch_size}")
-    print(f"max_train_points        : {cfg.max_train_points}")
-    print(f"random_subset           : {cfg.random_subset}")
-    print(f"score_index_ranges      : {cfg.score_index_ranges}")
-    print(f"score_index_base        : {cfg.score_index_base}")
-    print(f"progress_every_batches  : {cfg.progress_every_batches}")
-    print(f"use_tqdm                : {cfg.use_tqdm}")
-    print(f"topk                    : {cfg.topk}")
-    print(f"out_dir                 : {cfg.out_dir}")
-    print(f"subset_suffix           : {out_suffix}")
+        print(f"sample_source            : {precomputed_sample_meta.get('source')}")
+        print(f"sample_shape             : {precomputed_sample_meta.get('loaded_x0_ref_shape')}")
+    print(f"seed                     : {cfg.seed}")
+    print(f"query                    : {cfg.query}")
+    print(f"timesteps                : {cfg.timesteps}")
+    print(f"ddim_steps               : {cfg.ddim_steps}")
+    print(f"t_min_end                : {cfg.t_min_end}")
+    print(f"t_max_end_frac           : {cfg.t_max_end_frac}")
+    print(f"num_checkpoints_to_use   : {cfg.num_checkpoints_to_use}")
+    print(f"proj_dim                 : {cfg.proj_dim}")
+    print(f"damping                  : {cfg.damping}")
+    print(f"num_samples              : {cfg.num_samples}")
+    print(f"batch_size               : {cfg.batch_size}")
+    print(f"train_expect_samples     : {cfg.train_expectation_samples}")
+    print(f"query_expect_samples     : {cfg.query_expectation_samples}")
+    print(f"progress_every_batches   : {cfg.progress_every_batches}")
+    print(f"use_tqdm                 : {cfg.use_tqdm}")
+    print(f"use_jax_countsketch      : {cfg.use_jax_countsketch}")
+    print(f"max_train_points         : {cfg.max_train_points}")
+    print(f"random_subset            : {cfg.random_subset}")
+    print(f"score_index_ranges       : {cfg.score_index_ranges}")
+    print(f"score_index_base         : {cfg.score_index_base}")
+    print(f"topk                     : {cfg.topk}")
+    print(f"out_dir                  : {cfg.out_dir}")
+    print(f"subset_suffix            : {out_suffix}")
     print("=" * 90)
 
     adapter = get_adapter(cfg)
@@ -1025,7 +1236,7 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
     print("[setup] state template ready")
 
     print("[setup] building diffusion schedule...")
-    schedule = schedule_to_device(make_diffusion_schedule(cfg.timesteps_total, cfg.beta_start, cfg.beta_end), device)
+    schedule = schedule_to_device(make_diffusion_schedule(cfg.timesteps, cfg.beta_start, cfg.beta_end), device)
     print(f"[setup] schedule ready | T={int(schedule.betas.shape[0])}")
 
     print("[setup] building query conditioning...")
@@ -1042,22 +1253,21 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
         f"schedule_betas={array_device_str(schedule.betas)}"
     )
 
-    baseline_ckpts = list_checkpoints_sorted(cfg.baseline_dir)
-    if not baseline_ckpts:
-        raise FileNotFoundError(f"No baseline checkpoints found in: {cfg.baseline_dir}")
+    all_baseline_ckpts = list_checkpoints_sorted(cfg.baseline_dir)
+    if not all_baseline_ckpts:
+        raise FileNotFoundError(f"No checkpoints found in {cfg.baseline_dir}")
 
-    baseline_ckpts = filter_checkpoints(
-        baseline_ckpts,
-        ckpt_stride=int(cfg.ckpt_stride),
-        max_num_ckpts=cfg.max_num_ckpts,
+    baseline_ckpts = select_checkpoints_evenly(
+        all_baseline_ckpts,
+        int(cfg.num_checkpoints_to_use),
     )
 
     print(f"[checkpoints] selected={len(baseline_ckpts)}")
     for p in baseline_ckpts:
         print("  ", os.path.basename(p))
 
-    ref_ckpt = cfg.reference_ckpt or resolved_manifest_ckpt or baseline_ckpts[-1]
-    print(f"[setup] reference checkpoint: {os.path.basename(ref_ckpt)}")
+    ref_ckpt = cfg.reference_ckpt or resolved_manifest_ckpt or all_baseline_ckpts[-1]
+    print(f"[setup] reference_ckpt={ref_ckpt}")
 
     if x0_ref is None:
         print("[setup] restoring reference checkpoint...")
@@ -1078,7 +1288,6 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
             progress_every=max(1, int(cfg.ddim_steps) // 10),
         )
         x0_ref = array_to_device(x0_ref, device)
-        print("[setup] reference endpoint ready.")
     else:
         print("[setup] using precomputed sampler endpoint as x0_ref")
 
@@ -1098,22 +1307,26 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
 
     scores = np.zeros((M,), dtype=np.float64)
 
-    timesteps = [int(t) for t in cfg.timesteps]
-    num_mc_noise = int(cfg.num_mc_noise)
-    proj_dim = int(cfg.proj_dim)
-    damping = float(cfg.damping)
+    T = int(schedule.betas.shape[0])
+    t_max_end = int(float(cfg.t_max_end_frac) * T)
+    t_max_end = max(0, min(T - 1, t_max_end))
+    t_min_end = int(cfg.t_min_end)
+
+    d = int(cfg.proj_dim)
+    lam = float(cfg.damping)
+    S = int(cfg.num_samples)
     bs = int(cfg.batch_size)
     num_batches = (M + bs - 1) // bs
-    total_terms = 0
 
-    total_mc_terms = len(baseline_ckpts) * len(timesteps) * num_mc_noise
-    processed_mc_terms = 0
+    total_s = 0
+    total_work_units = len(baseline_ckpts) * max(1, S)
+    processed_work_units = 0
 
     for ckpt_i, ckpt_path in enumerate(baseline_ckpts):
         ckpt_t0 = time.perf_counter()
         ckpt_name = os.path.basename(ckpt_path)
 
-        print(f"\n[checkpoint] {ckpt_i+1}/{len(baseline_ckpts)} | {ckpt_name}")
+        print(f"\n[checkpoint] {ckpt_i + 1}/{len(baseline_ckpts)} | {ckpt_name}")
         print(f"[checkpoint] restoring {ckpt_name}...")
 
         state_k, _ = adapter.restore_state(ckpt_path, state_template)
@@ -1122,168 +1335,156 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
         print(f"[checkpoint] restored {ckpt_name}")
         print(f"[device-check] params={first_leaf_device_str(params_k)}")
 
-        for t_idx, t_value in enumerate(timesteps):
-            T = int(schedule.betas.shape[0])
-            if not (0 <= t_value < T):
-                raise ValueError(f"Invalid timestep {t_value}; T={T}")
+        for s_i in range(S):
+            total_s += 1
+            processed_work_units += 1
+            sample_t0 = time.perf_counter()
+
+            global_elapsed = time.perf_counter() - t0
+            global_eta = format_eta(processed_work_units, total_work_units, global_elapsed, warmup_steps=2)
 
             print(
-                f"[timestep] ckpt {ckpt_i+1}/{len(baseline_ckpts)} | "
-                f"timestep {t_idx+1}/{len(timesteps)} | t={t_value}"
+                f"[sample] ckpt {ckpt_i+1}/{len(baseline_ckpts)} | "
+                f"sample {s_i+1}/{S} | "
+                f"global_step={processed_work_units}/{total_work_units} | "
+                f"total_elapsed={format_seconds(global_elapsed)} | "
+                f"total_eta={global_eta} | "
+                f"starting query feature"
             )
 
-            t_tensor = array_to_device(jnp.array([t_value], dtype=jnp.int32), device)
-
-            for mc_i in range(num_mc_noise):
-                total_terms += 1
-                processed_mc_terms += 1
-                term_t0 = time.perf_counter()
-
-                total_elapsed = time.perf_counter() - t0
-                total_eta = format_eta(processed_mc_terms, total_mc_terms, total_elapsed, warmup_steps=2)
-
-                print(
-                    f"[mc] ckpt {ckpt_i+1}/{len(baseline_ckpts)} | "
-                    f"t={t_value} | mc {mc_i+1}/{num_mc_noise} | "
-                    f"global_term={processed_mc_terms}/{total_mc_terms} | "
-                    f"total_elapsed={format_seconds(total_elapsed)} | "
-                    f"total_eta={total_eta} | "
-                    f"building projected query gradient"
-                )
-
-                rng_q = array_to_device(make_jax_key(cfg.seed, "pdas_q", ckpt_i, t_value, mc_i), device)
-                _, noise_q = sample_xt_and_noise_jax(schedule, x0_ref, t=t_tensor, rng=rng_q)
-                rng_probe = array_to_device(make_jax_key(cfg.seed, "pdas_output_probe", ckpt_i, t_value, mc_i), device)
-                output_probe = array_to_device(sample_output_probe_jax(tuple(x0_ref.shape), rng=rng_probe), device)
-
-                print("[mc] preparing shared projected-gradient projector...", flush=True)
+            rng_q = array_to_device(make_jax_key(cfg.seed, "q", ckpt_i, s_i), device)
+            print("[sample] preparing shared CountSketch projector...", flush=True)
+            projector = None
+            if cfg.use_jax_countsketch:
                 projector = build_countsketch_projector_jax(
                     params_k,
-                    proj_dim,
-                    seed_parts=(cfg.seed, "pdas_gradient_projection", ckpt_i, t_value, mc_i),
+                    d,
+                    seed_parts=(cfg.seed, "dtrak_projection", ckpt_i, s_i),
                     device=device,
                 )
-                phi_fn = make_projected_eps_grad_fn(
-                    adapter=adapter,
-                    model=model,
-                    schedule=schedule,
-                    projector=projector,
-                    normalize_projected_grads=bool(cfg.normalize_projected_grads),
-                    normalize_eps=float(cfg.normalize_eps),
-                )
-                print("[mc] shared projector ready; compiling/running query phi...", flush=True)
+                print("[sample] shared JAX CountSketch projector ready", flush=True)
+            if projector is None:
+                raise RuntimeError("D-TRAK GPU path requires use_jax_countsketch=True.")
 
-                query_residual, phi_q = phi_fn(params_k, x0_ref, query_cond, t_tensor, noise_q, output_probe)
-                phi_q.block_until_ready()
-                print(
-                    "[mc] query projected eps-gradient ready | "
-                    f"query_residual_projection={float(query_residual):.6f}"
-                )
+            query_phi_fn = make_query_phi_fn(
+                adapter,
+                model,
+                schedule,
+                projector,
+                t_min=t_min_end,
+                t_max=t_max_end,
+                num_expectation_samples=int(cfg.query_expectation_samples),
+            )
+            train_phi_fn = make_train_phi_fn(
+                adapter,
+                model,
+                schedule,
+                projector,
+                num_expectation_samples=int(cfg.train_expectation_samples),
+            )
 
-                H_proj = np.zeros((proj_dim, proj_dim), dtype=np.float32)
+            print("[sample] compiling/running query feature...", flush=True)
+            Lq, phi_q = query_phi_fn(params_k, x0_ref, query_cond, rng_q)
+            phi_q.block_until_ready()
 
-                pass1_t0 = time.perf_counter()
-                pass1_iter = iter_with_tqdm(
-                    range(num_batches),
-                    total=num_batches,
-                    desc=f"DAS H ckpt {ckpt_i+1}/{len(baseline_ckpts)} t={t_value} mc={mc_i+1}",
-                    enabled=bool(cfg.use_tqdm),
-                )
-                for batch_idx in pass1_iter:
-                    start = batch_idx * bs
-                    batch = picked[start:start + bs]
-                    done_batches = batch_idx + 1
+            print(f"[sample] query feature ready | Lq={float(Lq):.6f}")
 
-                    if should_print_progress(done_batches, num_batches, max(1, int(cfg.progress_every_batches))):
-                        elapsed = time.perf_counter() - pass1_t0
-                        eta = format_eta(done_batches, num_batches, elapsed, warmup_steps=2)
-                        print(
-                            f"    [PASS1/H-build] batch {done_batches}/{num_batches} | "
-                            f"ckpt={ckpt_i+1}/{len(baseline_ckpts)}, t={t_value}, mc={mc_i+1}/{num_mc_noise} | "
-                            f"elapsed={format_seconds(elapsed)} | eta={eta}"
-                        )
+            # PASS 1: Gram
+            G = np.zeros((d, d), dtype=np.float32)
+            pass1_t0 = time.perf_counter()
 
-                    for idx in batch:
-                        x0_i, cond_i = adapter.get_item(ds, idx)
-                        x0_i = array_to_device(x0_i, device)
-                        cond_i = array_to_device(cond_i, device)
-                        rng_i = array_to_device(make_jax_key(cfg.seed, "pdas_tr", ckpt_i, t_value, mc_i, idx), device)
-                        _, noise_i = sample_xt_and_noise_jax(schedule, x0_i, t=t_tensor, rng=rng_i)
+            pass1_iter = iter_with_tqdm(
+                range(num_batches),
+                total=num_batches,
+                desc=f"DTRAK Gram ckpt {ckpt_i + 1}/{len(baseline_ckpts)}",
+                enabled=bool(cfg.use_tqdm),
+            )
+            for batch_idx in pass1_iter:
+                start = batch_idx * bs
+                batch = picked[start:start + bs]
+                done_batches = batch_idx + 1
 
-                        _, phi_i = phi_fn(params_k, x0_i, cond_i, t_tensor, noise_i, output_probe)
-                        phi_i.block_until_ready()
-                        phi_np = np.asarray(phi_i, dtype=np.float32)
-                        H_proj += np.outer(phi_np, phi_np).astype(np.float32)
-                    if hasattr(pass1_iter, "set_postfix"):
-                        pass1_iter.set_postfix(samples=f"{min(start + len(batch), M)}/{M}")
+                if should_print_progress(done_batches, num_batches, max(1, int(cfg.progress_every_batches))):
+                    elapsed = time.perf_counter() - pass1_t0
+                    eta = format_eta(done_batches, num_batches, elapsed, warmup_steps=2)
+                    print(
+                        f"    [PASS1/Gram] batch {done_batches}/{num_batches} | "
+                        f"elapsed={format_seconds(elapsed)} | eta={eta}"
+                    )
 
-                print("[mc] PASS1 complete. Solving projected inverse...")
-                solve_t0 = time.perf_counter()
-                H_proj += damping * np.eye(proj_dim, dtype=np.float32)
-                u = np.linalg.solve(H_proj, np.asarray(phi_q, dtype=np.float32))
-                print(f"[mc] solve complete | elapsed={format_seconds(time.perf_counter() - solve_t0)}")
-                print("[mc] Starting PASS2 scoring...")
+                phis = []
+                for idx in batch:
+                    x0, cond = adapter.get_item(ds, idx)
+                    x0 = array_to_device(x0, device)
+                    cond = array_to_device(cond, device)
+                    rng_i = array_to_device(make_jax_key(cfg.seed, "tr", ckpt_i, s_i, idx), device)
 
-                batch_residuals_dbg = []
-                pass2_t0 = time.perf_counter()
-                pass2_iter = iter_with_tqdm(
-                    range(num_batches),
-                    total=num_batches,
-                    desc=f"DAS Score ckpt {ckpt_i+1}/{len(baseline_ckpts)} t={t_value} mc={mc_i+1}",
-                    enabled=bool(cfg.use_tqdm),
-                )
-                for batch_idx in pass2_iter:
-                    start = batch_idx * bs
-                    batch = picked[start:start + bs]
-                    done_batches = batch_idx + 1
+                    phi_i = train_phi_fn(params_k, x0, cond, rng_i)
+                    phi_i.block_until_ready()
+                    phis.append(np.asarray(phi_i, dtype=np.float32))
 
-                    if should_print_progress(done_batches, num_batches, max(1, int(cfg.progress_every_batches))):
-                        elapsed = time.perf_counter() - pass2_t0
-                        eta = format_eta(done_batches, num_batches, elapsed, warmup_steps=2)
-                        print(
-                            f"    [PASS2/Score] batch {done_batches}/{num_batches} | "
-                            f"ckpt={ckpt_i+1}/{len(baseline_ckpts)}, t={t_value}, mc={mc_i+1}/{num_mc_noise} | "
-                            f"elapsed={format_seconds(elapsed)} | eta={eta}"
-                        )
+                Phi = np.stack(phis, axis=0)
+                G += Phi.T @ Phi
+                if hasattr(pass1_iter, "set_postfix"):
+                    pass1_iter.set_postfix(samples=f"{min(start + len(batch), M)}/{M}")
 
-                    batch_scores = []
-                    for idx in batch:
-                        x0_i, cond_i = adapter.get_item(ds, idx)
-                        x0_i = array_to_device(x0_i, device)
-                        cond_i = array_to_device(cond_i, device)
-                        rng_i = array_to_device(make_jax_key(cfg.seed, "pdas_tr", ckpt_i, t_value, mc_i, idx), device)
-                        _, noise_i = sample_xt_and_noise_jax(schedule, x0_i, t=t_tensor, rng=rng_i)
-                        residual_i, phi_i = phi_fn(params_k, x0_i, cond_i, t_tensor, noise_i, output_probe)
-                        phi_i.block_until_ready()
-                        phi_np = np.asarray(phi_i, dtype=np.float32)
-                        if cfg.use_sherman_morrison_denominator:
-                            leverage_i = float(phi_np @ np.linalg.solve(H_proj, phi_np))
-                            denom_i = 1.0 - leverage_i
-                            if abs(denom_i) < 1e-6:
-                                denom_i = 1e-6 if denom_i >= 0.0 else -1e-6
-                        else:
-                            denom_i = 1.0
-                        raw_i = float(phi_np @ u) * float(residual_i) / denom_i
-                        score_i = raw_i * raw_i
-                        batch_scores.append(score_i)
-                        batch_residuals_dbg.append(float(residual_i))
+            print("[sample] PASS1 complete. Solving linear system...")
 
-                    scores[start:start + len(batch)] += np.asarray(batch_scores, dtype=np.float64)
-                    if hasattr(pass2_iter, "set_postfix"):
-                        pass2_iter.set_postfix(samples=f"{min(start + len(batch), M)}/{M}")
+            G += lam * np.eye(d, dtype=np.float32)
+            solve_t0 = time.perf_counter()
+            u = np.linalg.solve(G, np.asarray(phi_q, dtype=np.float32))
+            print(f"[sample] solve complete | elapsed={format_seconds(time.perf_counter() - solve_t0)}")
 
-                avg_resid = float(np.mean(batch_residuals_dbg)) if batch_residuals_dbg else 0.0
-                term_elapsed = time.perf_counter() - term_t0
-                term_eta = format_eta(processed_mc_terms, total_mc_terms, time.perf_counter() - t0, warmup_steps=2)
+            print("[sample] Starting PASS2 scoring...")
 
-                print(
-                    f"[done] ckpt {ckpt_i+1}/{len(baseline_ckpts)} | "
-                    f"t={t_value} | mc {mc_i+1}/{num_mc_noise} | "
-                    f"query_residual_projection={float(query_residual):.6f} | "
-                    f"avg_train_residual_projection={avg_resid:.6f} | "
-                    f"term_elapsed={format_seconds(term_elapsed)} | "
-                    f"total_eta={term_eta}"
-                )
+            # PASS 2: score
+            pass2_t0 = time.perf_counter()
+            pass2_iter = iter_with_tqdm(
+                range(num_batches),
+                total=num_batches,
+                desc=f"DTRAK Score ckpt {ckpt_i + 1}/{len(baseline_ckpts)}",
+                enabled=bool(cfg.use_tqdm),
+            )
+            for batch_idx in pass2_iter:
+                start = batch_idx * bs
+                batch = picked[start:start + bs]
+                done_batches = batch_idx + 1
+
+                if should_print_progress(done_batches, num_batches, max(1, int(cfg.progress_every_batches))):
+                    elapsed = time.perf_counter() - pass2_t0
+                    eta = format_eta(done_batches, num_batches, elapsed, warmup_steps=2)
+                    print(
+                        f"    [PASS2/Score] batch {done_batches}/{num_batches} | "
+                        f"elapsed={format_seconds(elapsed)} | eta={eta}"
+                    )
+
+                phis = []
+                for idx in batch:
+                    x0, cond = adapter.get_item(ds, idx)
+                    x0 = array_to_device(x0, device)
+                    cond = array_to_device(cond, device)
+                    rng_i = array_to_device(make_jax_key(cfg.seed, "tr", ckpt_i, s_i, idx), device)
+
+                    phi_i = train_phi_fn(params_k, x0, cond, rng_i)
+                    phi_i.block_until_ready()
+                    phis.append(np.asarray(phi_i, dtype=np.float32))
+
+                Phi = np.stack(phis, axis=0)
+                batch_scores = Phi @ u
+                scores[start:start + len(batch)] += batch_scores.astype(np.float64)
+                if hasattr(pass2_iter, "set_postfix"):
+                    pass2_iter.set_postfix(samples=f"{min(start + len(batch), M)}/{M}")
+
+            sample_elapsed = time.perf_counter() - sample_t0
+            total_eta_after = format_eta(processed_work_units, total_work_units, time.perf_counter() - t0, warmup_steps=2)
+
+            print(
+                f"[done] ckpt {ckpt_i+1}/{len(baseline_ckpts)} | "
+                f"sample {s_i+1}/{S} | "
+                f"Lq={float(Lq):.6f} | "
+                f"elapsed={format_seconds(sample_elapsed)} | "
+                f"total_eta={total_eta_after}"
+            )
 
         ckpt_elapsed = time.perf_counter() - ckpt_t0
         ckpt_eta = format_eta(ckpt_i + 1, len(baseline_ckpts), time.perf_counter() - t0, warmup_steps=1)
@@ -1293,8 +1494,8 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
             f"remaining_eta={ckpt_eta}"
         )
 
-    if total_terms > 0:
-        scores /= float(total_terms)
+    if total_s > 0:
+        scores /= float(total_s)
 
     topk = min(int(cfg.topk), M)
     order = np.argsort(-scores)[:topk]
@@ -1312,21 +1513,16 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
     run_info = {
         "ref_ckpt": ref_ckpt,
         "num_ckpts": int(len(baseline_ckpts)),
-        "ckpt_stride": int(cfg.ckpt_stride),
-        "max_num_ckpts": cfg.max_num_ckpts,
-        "used_ckpts": [os.path.basename(p) for p in baseline_ckpts],
-        "T": int(schedule.betas.shape[0]),
+        "T": int(T),
         "ddim_steps": int(cfg.ddim_steps),
         "M_scored": int(M),
         "device": str(device),
         "seed": int(cfg.seed),
-        "timesteps": timesteps,
-        "num_mc_noise": int(num_mc_noise),
-        "damping": float(damping),
-        "proj_dim": int(proj_dim),
-        "normalize_projected_grads": bool(cfg.normalize_projected_grads),
-        "use_sherman_morrison_denominator": bool(cfg.use_sherman_morrison_denominator),
-        "num_terms_total": int(total_terms),
+        "proj_dim": int(d),
+        "damping": float(lam),
+        "num_samples_total": int(total_s),
+        "use_tqdm": bool(cfg.use_tqdm),
+        "use_jax_countsketch": bool(cfg.use_jax_countsketch),
         "attribution_sample_dir": cfg.attribution_sample_dir,
         "attribution_sample_meta": precomputed_sample_meta,
         "manifest_checkpoint": manifest_ckpt,
@@ -1334,9 +1530,7 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
         "score_index_ranges": cfg.score_index_ranges,
         "score_index_base": int(cfg.score_index_base),
         "score_subset_suffix": out_suffix,
-        "use_tqdm": bool(cfg.use_tqdm),
         "elapsed_sec": float(time.perf_counter() - t0),
-        "solver": "projected_eps_jacobian_das_jax",
     }
 
     save_json(os.path.join(cfg.out_dir, "run_config.json"), asdict(cfg))
@@ -1379,88 +1573,86 @@ if __name__ == "__main__":
     mode = "cifar10_sample"
 
     if mode == "x3":
-        cfg = EndpointProjectedDASJAXConfig(
+        cfg = EndpointDTrakJAXConfig(
             task_type="x3",
             module_name="x3_training_jax",
-            baseline_dir="models_checkpoints/r/model_109900/baseline",
+            baseline_dir="models_checkpoints/by/model_109900/baseline",
             query=["background_color_red", "background_color_blue", "background_color_yellow"],
             seed=808,
             csv_path="generated_database/49_100000.csv",
-
-            image_size=3,
-            in_channels=3,
             grid_size=3,
-
             ddim_steps=2000,
             eta=0.0,
-            timesteps=(0, 400, 800, 1200, 1600, 1999),
-            num_mc_noise=8,
+            t_min_end=0,
+            t_max_end_frac=0.2,
+            num_checkpoints_to_use=-1,
+            proj_dim=4096,
             damping=1e-3,
-            proj_dim=4069,
-            ckpt_stride=1,
-            max_num_ckpts=1,
+            num_samples=1,
             batch_size=64,
+            train_expectation_samples=8,
+            query_expectation_samples=8,
+            progress_every_batches=5,
             max_train_points=2000,
             random_subset=True,
-            progress_every_batches=5,
             topk=2000,
-            out_dir="./attribution_results/endpoint_das/model_109900_r_endpoint_das_projected_jax/baseline",
+            out_dir="./attribution_results/endpoint_dtrak/model_109900_by_endpoint_dtrak_jax/baseline",
         )
 
     elif mode == "cifar10_single":
-        cfg = EndpointProjectedDASJAXConfig(
+        cfg = EndpointDTrakJAXConfig(
             task_type="cifar10",
             module_name="cifar10_training_jax",
             baseline_dir="./models/cifar10_checkpoints/baseline",
             query="airplane",
             seed=808,
             data_root="./databases/cifar-10-batches-py",
-
-            image_size=32,
-            in_channels=3,
-
             cond_mode="class_id",
             model_type="unet",
-            timesteps_total=2000,
+            timesteps=2000,
             ddim_steps=2000,
-            timesteps=(0, 400, 800, 1200, 1600, 1999),
-            num_mc_noise=8,
+            t_min_end=0,
+            t_max_end_frac=0.2,
+            num_checkpoints_to_use=-1,
+            proj_dim=4096,
             damping=1e-3,
-            proj_dim=4069,
-            ckpt_stride=1,
-            max_num_ckpts=1,
+            num_samples=1,
             batch_size=64,
+            train_expectation_samples=8,
+            query_expectation_samples=8,
+            progress_every_batches=5,
             max_train_points=1024,
             random_subset=True,
-            progress_every_batches=5,
-            topk=100,
-            out_dir="./attribution_results/endpoint_das/endpoint_das_projected_cifar10_single_jax",
+            topk=2000,
+            out_dir="./attribution_results/endpoint_dtrak/endpoint_dtrak_cifar10_single_jax",
         )
 
     elif mode == "cifar10_multi":
-        cfg = EndpointProjectedDASJAXConfig(
+        cfg = EndpointDTrakJAXConfig(
             task_type="cifar10",
             module_name="DM__training_CIFAR10_pixel",
             baseline_dir="./models/cifar10_checkpoints",
             query=["airplane", "ship"],
-            seed=1,
-            data_root="./databases/cifar-10-batches-py",
+            seed=808,
+            data_root="./attribution_results/endpoint_dtrak/databases/cifar-10-batches-py",
 
             image_size=32,
             in_channels=3,
 
             cond_mode="multi_hot",
             model_type="unet",
-            timesteps_total=1000,
+            timesteps=1000,
             ddim_steps=1000,
-            timesteps=(0,),
-            # timesteps=(0, 111, 222, 333, 444, 555, 666, 777, 888, 999),
-            num_mc_noise=2,
+            t_min_end=0,
+            t_max_end_frac=0.2,
+            num_checkpoints_to_use=-1,
+            proj_dim=4096,
             damping=1e-3,
-            proj_dim=4069,
-            ckpt_stride=1,
-            max_num_ckpts=1,
+            num_samples=1,
             batch_size=64,
+            train_expectation_samples=3,
+            query_expectation_samples=3,
+            progress_every_batches=5,
             max_train_points=10000,
             random_subset=False,
             score_index_ranges=((1, 10000),),
@@ -1469,13 +1661,12 @@ if __name__ == "__main__":
             # score_index_ranges=((30001, 40000),),
             # score_index_ranges=((40001, 50000),),
             score_index_base=1,
-            progress_every_batches=1,
             topk=10000,
-            out_dir="./attribution_results/endpoint_das/endpoint_das_projected_cifar10_multi_jax",
+            out_dir="./attribution_results/endpoint_dtrak/endpoint_dtrak_cifar10_multi_jax",
         )
 
     elif mode == "cifar10_sample":
-        cfg = EndpointProjectedDASJAXConfig(
+        cfg = EndpointDTrakJAXConfig(
             task_type="cifar10",
             module_name="DM__training_CIFAR10_pixel",
             baseline_dir="./models/cifar10_checkpoints",
@@ -1486,22 +1677,25 @@ if __name__ == "__main__":
             attribution_sample_seed=0,
             attribution_sample_index=0,
             query=None,
-            seed=1,
+            seed=808,
             data_root="./databases/cifar-10-batches-py",
             image_size=32,
             in_channels=3,
             cond_mode="multi_hot",
             model_type="unet",
-            timesteps_total=1000,
+            timesteps=1000,
             ddim_steps=1000,
-            timesteps=(0,),
-            num_mc_noise=1,
+            t_min_end=0,
+            t_max_end_frac=0.2,
+            num_checkpoints_to_use=-1,
+            proj_dim=4096,
             damping=1e-3,
-            proj_dim=32768,
-            ckpt_stride=1,
-            max_num_ckpts=1,
-            batch_size=8,
-            max_train_points=10000,
+            num_samples=1,
+            batch_size=64,
+            train_expectation_samples=3,
+            query_expectation_samples=3,
+            progress_every_batches=5,
+            max_train_points=1000,
             random_subset=False,
             score_index_ranges=((1, 10000),),
             # score_index_ranges=((10001, 20000),),
@@ -1509,13 +1703,12 @@ if __name__ == "__main__":
             # score_index_ranges=((30001, 40000),),
             # score_index_ranges=((40001, 50000),),
             score_index_base=1,
-            progress_every_batches=1,
             topk=10000,
-            out_dir="./attribution_results/endpoint_das/endpoint_das_projected_cifar10_from_sample_jax",
+            out_dir="./attribution_results/endpoint_dtrak/endpoint_dtrak_cifar10_from_sample_jax",
         )
 
     elif mode == "artbench_latent_sample":
-        cfg = EndpointProjectedDASJAXConfig(
+        cfg = EndpointDTrakJAXConfig(
             task_type="artbench_latent",
             module_name="DM__training_ARTBENCH_latent",
             baseline_dir="./models/artbench_latent_dm_checkpoints256",
@@ -1526,19 +1719,22 @@ if __name__ == "__main__":
             attribution_sample_seed=0,
             attribution_sample_index=0,
             query=None,
-            seed=1,
+            seed=808,
             latent_npz_path="./latents/artbench256/train_latents.npz",
             cond_mode="multi_hot",
-            timesteps_total=1000,
+            timesteps=1000,
             ddim_steps=1000,
-            timesteps=(0,),
-            num_mc_noise=1,
+            t_min_end=0,
+            t_max_end_frac=0.2,
+            num_checkpoints_to_use=-1,
+            proj_dim=4096,
             damping=1e-3,
-            proj_dim=32768,
-            ckpt_stride=1,
-            max_num_ckpts=1,
-            batch_size=8,
-            max_train_points=10000,
+            num_samples=1,
+            batch_size=64,
+            train_expectation_samples=3,
+            query_expectation_samples=3,
+            progress_every_batches=5,
+            max_train_points=1000,
             random_subset=False,
             score_index_ranges=((1, 10000),),
             # score_index_ranges=((10001, 20000),),
@@ -1546,9 +1742,8 @@ if __name__ == "__main__":
             # score_index_ranges=((30001, 40000),),
             # score_index_ranges=((40001, 50000),),
             score_index_base=1,
-            progress_every_batches=1,
             topk=10000,
-            out_dir="./attribution_results/endpoint_das/endpoint_das_projected_artbench_latent_from_sample_jax",
+            out_dir="./attribution_results/endpoint_dtrak/endpoint_dtrak_artbench_latent_from_sample_jax",
         )
 
     else:
@@ -1558,4 +1753,4 @@ if __name__ == "__main__":
             "'cifar10_sample', 'artbench_latent_sample'."
         )
 
-    run_endpoint_das_projected_jax(cfg)
+    run_endpoint_dtrak_jax(cfg)

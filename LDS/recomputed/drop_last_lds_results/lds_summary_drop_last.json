@@ -1,0 +1,13 @@
+{
+  "source_csv": "/Users/rachelsomething/Downloads/lds_results.csv",
+  "dropped": "last row",
+  "removed_subset_id": "9",
+  "removed_pred_sum_tau": -235157.16940034466,
+  "removed_true_f": 0.04427265748381615,
+  "num_points_original": 10,
+  "num_points_used": 9,
+  "lds_spearman": -0.18333333333333332,
+  "lds_percent": -18.333333333333332,
+  "csv": "/Users/rachelsomething/Desktop/Clear lab/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/LDS/recomputed/drop_last_lds_results/lds_results_drop_last.csv",
+  "plot_svg": "/Users/rachelsomething/Desktop/Clear lab/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/LDS/recomputed/drop_last_lds_results/lds_scatter_drop_last.svg"
+}

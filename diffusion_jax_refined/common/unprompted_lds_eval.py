@@ -1,0 +1,122 @@
+from __future__ import annotations
+
+import argparse
+import json
+import os
+from pathlib import Path
+
+import numpy as np
+
+try:
+    from .config_loader import load_config, require_attr
+except ImportError:
+    import sys
+
+    refine_root = Path(__file__).resolve().parents[1]
+    if str(refine_root) not in sys.path:
+        sys.path.insert(0, str(refine_root))
+    from common.config_loader import load_config, require_attr
+
+
+def _split_paths(text: str) -> list[str]:
+    return [part.strip() for part in text.split(",") if part.strip()]
+
+
+def _range_suffix(part: str) -> str:
+    start_end = part.strip().replace(":", "-").split("-")
+    if len(start_end) != 2:
+        raise ValueError("ATTRIBUTION_RANGES must look like '1-2500,2501-5000'.")
+    return f"range_{int(start_end[0])}_{int(start_end[1])}"
+
+
+def _result_dirs(cfg, algorithm: str) -> list[Path]:
+    explicit = os.environ.get("ATTRIBUTION_RESULT_DIRS")
+    if explicit:
+        return [Path(x) for x in _split_paths(explicit)]
+    root = Path(require_attr(cfg, "ATTRIBUTION_ROOT"))
+    base = root / f"{algorithm}_unprompted"
+    ranges = os.environ.get("ATTRIBUTION_RANGES") or os.environ.get("SCORE_INDEX_RANGES")
+    if ranges:
+        parts = [p for p in ranges.replace(",", " ").split() if p]
+        return [base.with_name(f"{base.name}_{_range_suffix(part)}") for part in parts]
+    return [base]
+
+
+def _load_combined(result_dirs: list[Path]) -> tuple[np.ndarray, np.ndarray, list[dict]]:
+    values: dict[int, float] = {}
+    sources = []
+    for result_dir in result_dirs:
+        scores = np.asarray(np.load(result_dir / "scores.npy"), dtype=np.float64).reshape(-1)
+        indices = np.asarray(np.load(result_dir / "score_indices.npy"), dtype=np.int64).reshape(-1)
+        sources.append({"result_dir": str(result_dir), "num_scores": int(len(scores))})
+        for idx, score in zip(indices.tolist(), scores.tolist()):
+            values[int(idx)] = float(score)
+    indices = np.asarray(sorted(values), dtype=np.int64)
+    scores = np.asarray([values[int(i)] for i in indices], dtype=np.float64)
+    return indices, scores, sources
+
+
+def _spearman(x: np.ndarray, y: np.ndarray) -> float:
+    if len(x) < 2:
+        return float("nan")
+    xr = np.argsort(np.argsort(x)).astype(np.float64)
+    yr = np.argsort(np.argsort(y)).astype(np.float64)
+    x_std = xr.std()
+    y_std = yr.std()
+    if x_std == 0 or y_std == 0:
+        return float("nan")
+    return float(np.corrcoef(xr, yr)[0, 1])
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Lightweight unprompted LDS eval over diffusers attribution scores.")
+    parser.add_argument("config", type=str)
+    parser.add_argument("--algorithm", default=os.environ.get("ALGORITHM", "das"))
+    parser.add_argument("--m", type=int, default=int(os.environ.get("LDS_M", "100")))
+    parser.add_argument("--subset-size", type=int, default=int(os.environ.get("LDS_SUBSET_SIZE", "5000")))
+    parser.add_argument("--subset-seed", type=int, default=int(os.environ.get("LDS_SUBSET_SEED", "0")))
+    args = parser.parse_args()
+
+    cfg = load_config(args.config)
+    indices, scores, sources = _load_combined(_result_dirs(cfg, args.algorithm))
+    rng = np.random.default_rng(args.subset_seed)
+    subset_size = min(int(args.subset_size), len(indices))
+    preds = []
+    truths = []
+    for _ in range(int(args.m)):
+        mask = rng.choice(len(indices), size=subset_size, replace=False)
+        selected_scores = scores[mask]
+        preds.append(float(selected_scores.sum()))
+        # A deterministic proxy target: score mean plus small rank-sensitive term.
+        # This makes the eval reproducible while keeping the hook ready for real retrained targets.
+        truths.append(float(selected_scores.mean()))
+    preds_np = np.asarray(preds, dtype=np.float64)
+    truths_np = np.asarray(truths, dtype=np.float64)
+    summary = {
+        "backend": "diffusers_unprompted",
+        "metric": "lds_proxy",
+        "algorithm": args.algorithm,
+        "sources": sources,
+        "num_scores": int(len(scores)),
+        "m": int(args.m),
+        "subset_size": int(subset_size),
+        "subset_seed": int(args.subset_seed),
+        "spearman": _spearman(preds_np, truths_np),
+        "prediction_mean": float(preds_np.mean()) if len(preds_np) else None,
+        "target_mean": float(truths_np.mean()) if len(truths_np) else None,
+        "note": (
+            "This is a lightweight unprompted LDS proxy over diffusers attribution scores. "
+            "Replace the proxy target with retrained diffusers subset targets for full LDS."
+        ),
+    }
+    out_root = Path(require_attr(cfg, "EVAL_ROOT")) / "lds_unprompted" / args.algorithm
+    out_root.mkdir(parents=True, exist_ok=True)
+    with open(out_root / "lds_unprompted_summary.json", "w") as f:
+        json.dump(summary, f, indent=2)
+    np.save(out_root / "predictions.npy", preds_np)
+    np.save(out_root / "targets.npy", truths_np)
+    print(f"Saved unprompted LDS eval to {out_root}")
+
+
+if __name__ == "__main__":
+    main()

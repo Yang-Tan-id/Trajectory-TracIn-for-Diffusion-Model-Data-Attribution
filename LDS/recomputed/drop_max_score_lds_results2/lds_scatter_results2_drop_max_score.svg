@@ -1,0 +1,131 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="650" viewBox="0 0 900 650">
+<rect width="100%" height="100%" fill="white"/>
+<text x="450.0" y="38" text-anchor="middle" font-family="Arial, sans-serif" font-size="22">LDS=0.0068 (0.68%)</text>
+<line x1="95" y1="580" x2="865" y2="580" stroke="black"/>
+<line x1="95" y1="70" x2="95" y2="580" stroke="black"/>
+<text x="450.0" y="628" text-anchor="middle" font-family="Arial, sans-serif" font-size="16">Predicted sum of attribution scores</text>
+<text x="24" y="325.0" text-anchor="middle" font-family="Arial, sans-serif" font-size="16" transform="rotate(-90 24 325.0)">True f</text>
+<line x1="95.0" y1="580" x2="95.0" y2="586" stroke="black"/>
+<text x="95.0" y="604" text-anchor="middle" font-family="Arial, sans-serif" font-size="11">-265054</text>
+<line x1="249.0" y1="580" x2="249.0" y2="586" stroke="black"/>
+<text x="249.0" y="604" text-anchor="middle" font-family="Arial, sans-serif" font-size="11">-255548</text>
+<line x1="403.0" y1="580" x2="403.0" y2="586" stroke="black"/>
+<text x="403.0" y="604" text-anchor="middle" font-family="Arial, sans-serif" font-size="11">-246042</text>
+<line x1="557.0" y1="580" x2="557.0" y2="586" stroke="black"/>
+<text x="557.0" y="604" text-anchor="middle" font-family="Arial, sans-serif" font-size="11">-236537</text>
+<line x1="711.0" y1="580" x2="711.0" y2="586" stroke="black"/>
+<text x="711.0" y="604" text-anchor="middle" font-family="Arial, sans-serif" font-size="11">-227031</text>
+<line x1="865.0" y1="580" x2="865.0" y2="586" stroke="black"/>
+<text x="865.0" y="604" text-anchor="middle" font-family="Arial, sans-serif" font-size="11">-217525</text>
+<line x1="89" y1="580.0" x2="95" y2="580.0" stroke="black"/>
+<text x="85" y="584.0" text-anchor="end" font-family="Arial, sans-serif" font-size="11">378</text>
+<line x1="89" y1="478.0" x2="95" y2="478.0" stroke="black"/>
+<text x="85" y="482.0" text-anchor="end" font-family="Arial, sans-serif" font-size="11">430</text>
+<line x1="89" y1="376.0" x2="95" y2="376.0" stroke="black"/>
+<text x="85" y="380.0" text-anchor="end" font-family="Arial, sans-serif" font-size="11">482</text>
+<line x1="89" y1="274.0" x2="95" y2="274.0" stroke="black"/>
+<text x="85" y="278.0" text-anchor="end" font-family="Arial, sans-serif" font-size="11">534</text>
+<line x1="89" y1="172.0" x2="95" y2="172.0" stroke="black"/>
+<text x="85" y="176.0" text-anchor="end" font-family="Arial, sans-serif" font-size="11">586</text>
+<line x1="89" y1="70.0" x2="95" y2="70.0" stroke="black"/>
+<text x="85" y="74.0" text-anchor="end" font-family="Arial, sans-serif" font-size="11">638</text>
+<circle cx="691.9" cy="105.2" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=0, pred=-228211, true_f=620</title></circle>
+<circle cx="423.4" cy="438.8" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=1, pred=-244785, true_f=450</title></circle>
+<circle cx="576.0" cy="450.6" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=2, pred=-235364, true_f=444</title></circle>
+<circle cx="531.1" cy="419.2" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=3, pred=-238138, true_f=460</title></circle>
+<circle cx="526.9" cy="215.1" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=4, pred=-238392, true_f=564</title></circle>
+<circle cx="428.6" cy="427.1" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=5, pred=-244463, true_f=456</title></circle>
+<circle cx="334.4" cy="454.5" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=6, pred=-250277, true_f=442</title></circle>
+<circle cx="430.8" cy="380.0" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=7, pred=-244327, true_f=480</title></circle>
+<circle cx="419.4" cy="332.9" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=8, pred=-245032, true_f=504</title></circle>
+<circle cx="579.4" cy="485.9" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=9, pred=-235157, true_f=426</title></circle>
+<circle cx="696.9" cy="285.7" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=10, pred=-227901, true_f=528</title></circle>
+<circle cx="665.6" cy="482.0" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=11, pred=-229834, true_f=428</title></circle>
+<circle cx="485.3" cy="415.3" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=12, pred=-240962, true_f=462</title></circle>
+<circle cx="698.7" cy="419.2" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=13, pred=-227791, true_f=460</title></circle>
+<circle cx="386.6" cy="387.8" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=14, pred=-247055, true_f=476</title></circle>
+<circle cx="803.3" cy="309.3" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=15, pred=-221334, true_f=516</title></circle>
+<circle cx="300.3" cy="372.1" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=17, pred=-252380, true_f=484</title></circle>
+<circle cx="554.6" cy="525.2" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=18, pred=-236683, true_f=406</title></circle>
+<circle cx="326.9" cy="376.0" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=19, pred=-250739, true_f=482</title></circle>
+<circle cx="742.0" cy="434.9" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=20, pred=-225116, true_f=452</title></circle>
+<circle cx="596.2" cy="513.4" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=21, pred=-234117, true_f=412</title></circle>
+<circle cx="437.2" cy="454.5" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=22, pred=-243934, true_f=442</title></circle>
+<circle cx="295.1" cy="246.5" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=23, pred=-252700, true_f=548</title></circle>
+<circle cx="541.2" cy="470.2" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=24, pred=-237514, true_f=434</title></circle>
+<circle cx="516.5" cy="348.6" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=25, pred=-239035, true_f=496</title></circle>
+<circle cx="425.0" cy="462.4" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=26, pred=-244686, true_f=438</title></circle>
+<circle cx="525.4" cy="415.3" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=27, pred=-238487, true_f=462</title></circle>
+<circle cx="478.9" cy="489.9" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=28, pred=-241359, true_f=424</title></circle>
+<circle cx="691.5" cy="411.4" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=29, pred=-228237, true_f=464</title></circle>
+<circle cx="489.6" cy="364.3" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=30, pred=-240697, true_f=488</title></circle>
+<circle cx="414.6" cy="544.8" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=31, pred=-245325, true_f=396</title></circle>
+<circle cx="334.0" cy="517.3" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=32, pred=-250303, true_f=410</title></circle>
+<circle cx="594.7" cy="489.9" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=33, pred=-234210, true_f=424</title></circle>
+<circle cx="511.1" cy="317.1" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=34, pred=-239370, true_f=512</title></circle>
+<circle cx="694.7" cy="391.7" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=35, pred=-228039, true_f=474</title></circle>
+<circle cx="509.2" cy="434.9" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=36, pred=-239489, true_f=452</title></circle>
+<circle cx="317.2" cy="352.5" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=37, pred=-251339, true_f=494</title></circle>
+<circle cx="510.5" cy="293.6" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=38, pred=-239408, true_f=524</title></circle>
+<circle cx="198.6" cy="415.3" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=39, pred=-258660, true_f=462</title></circle>
+<circle cx="123.5" cy="352.5" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=40, pred=-263293, true_f=494</title></circle>
+<circle cx="387.1" cy="368.2" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=41, pred=-247025, true_f=486</title></circle>
+<circle cx="383.1" cy="356.4" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=42, pred=-247272, true_f=492</title></circle>
+<circle cx="401.2" cy="328.9" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=43, pred=-246155, true_f=506</title></circle>
+<circle cx="497.6" cy="509.5" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=44, pred=-240201, true_f=414</title></circle>
+<circle cx="307.1" cy="517.3" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=45, pred=-251964, true_f=410</title></circle>
+<circle cx="457.5" cy="411.4" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=46, pred=-242676, true_f=464</title></circle>
+<circle cx="732.8" cy="478.1" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=47, pred=-225688, true_f=430</title></circle>
+<circle cx="329.6" cy="368.2" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=48, pred=-250571, true_f=486</title></circle>
+<circle cx="489.6" cy="399.6" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=49, pred=-240696, true_f=470</title></circle>
+<circle cx="420.8" cy="207.2" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=50, pred=-244941, true_f=568</title></circle>
+<circle cx="599.1" cy="454.5" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=51, pred=-233940, true_f=442</title></circle>
+<circle cx="463.1" cy="321.1" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=52, pred=-242336, true_f=510</title></circle>
+<circle cx="677.1" cy="438.8" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=53, pred=-229121, true_f=450</title></circle>
+<circle cx="470.7" cy="395.7" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=54, pred=-241862, true_f=472</title></circle>
+<circle cx="433.9" cy="199.4" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=55, pred=-244134, true_f=572</title></circle>
+<circle cx="574.6" cy="376.0" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=56, pred=-235453, true_f=482</title></circle>
+<circle cx="391.6" cy="399.6" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=57, pred=-246748, true_f=470</title></circle>
+<circle cx="602.4" cy="285.7" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=58, pred=-233732, true_f=528</title></circle>
+<circle cx="772.9" cy="399.6" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=59, pred=-223211, true_f=470</title></circle>
+<circle cx="330.5" cy="489.9" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=60, pred=-250520, true_f=424</title></circle>
+<circle cx="554.7" cy="336.8" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=61, pred=-236679, true_f=502</title></circle>
+<circle cx="582.0" cy="419.2" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=62, pred=-234996, true_f=460</title></circle>
+<circle cx="604.1" cy="383.9" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=63, pred=-233632, true_f=478</title></circle>
+<circle cx="668.9" cy="199.4" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=64, pred=-229633, true_f=572</title></circle>
+<circle cx="670.8" cy="513.4" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=65, pred=-229512, true_f=412</title></circle>
+<circle cx="554.9" cy="458.5" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=66, pred=-236668, true_f=440</title></circle>
+<circle cx="645.4" cy="364.3" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=67, pred=-231080, true_f=488</title></circle>
+<circle cx="757.9" cy="462.4" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=68, pred=-224135, true_f=438</title></circle>
+<circle cx="619.2" cy="399.6" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=69, pred=-232699, true_f=470</title></circle>
+<circle cx="490.8" cy="485.9" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=70, pred=-240620, true_f=426</title></circle>
+<circle cx="499.2" cy="336.8" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=71, pred=-240107, true_f=502</title></circle>
+<circle cx="405.0" cy="458.5" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=72, pred=-245917, true_f=440</title></circle>
+<circle cx="569.4" cy="446.7" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=73, pred=-235768, true_f=446</title></circle>
+<circle cx="536.0" cy="356.4" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=74, pred=-237831, true_f=492</title></circle>
+<circle cx="421.7" cy="427.1" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=75, pred=-244891, true_f=456</title></circle>
+<circle cx="495.7" cy="321.1" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=76, pred=-240319, true_f=510</title></circle>
+<circle cx="621.1" cy="387.8" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=77, pred=-232583, true_f=476</title></circle>
+<circle cx="365.3" cy="360.3" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=78, pred=-248371, true_f=490</title></circle>
+<circle cx="547.2" cy="328.9" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=79, pred=-237145, true_f=506</title></circle>
+<circle cx="498.4" cy="458.5" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=80, pred=-240153, true_f=440</title></circle>
+<circle cx="599.0" cy="340.7" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=81, pred=-233944, true_f=500</title></circle>
+<circle cx="536.5" cy="395.7" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=82, pred=-237800, true_f=472</title></circle>
+<circle cx="695.7" cy="376.0" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=83, pred=-227973, true_f=482</title></circle>
+<circle cx="468.9" cy="423.1" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=84, pred=-241974, true_f=458</title></circle>
+<circle cx="543.9" cy="293.6" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=85, pred=-237342, true_f=524</title></circle>
+<circle cx="344.9" cy="446.7" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=86, pred=-249627, true_f=446</title></circle>
+<circle cx="827.8" cy="470.2" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=87, pred=-219820, true_f=434</title></circle>
+<circle cx="693.4" cy="336.8" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=88, pred=-228120, true_f=502</title></circle>
+<circle cx="836.5" cy="470.2" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=89, pred=-219286, true_f=434</title></circle>
+<circle cx="603.6" cy="383.9" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=90, pred=-233658, true_f=478</title></circle>
+<circle cx="563.3" cy="415.3" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=91, pred=-236147, true_f=462</title></circle>
+<circle cx="532.3" cy="411.4" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=92, pred=-238063, true_f=464</title></circle>
+<circle cx="556.5" cy="411.4" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=93, pred=-236570, true_f=464</title></circle>
+<circle cx="486.1" cy="340.7" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=94, pred=-240915, true_f=500</title></circle>
+<circle cx="663.4" cy="415.3" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=95, pred=-229969, true_f=462</title></circle>
+<circle cx="245.6" cy="462.4" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=96, pred=-255756, true_f=438</title></circle>
+<circle cx="338.0" cy="482.0" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=97, pred=-250052, true_f=428</title></circle>
+<circle cx="424.7" cy="450.6" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=98, pred=-244703, true_f=444</title></circle>
+<circle cx="633.0" cy="336.8" r="4" fill="#2563eb" opacity="0.78"><title>subset_id=99, pred=-231844, true_f=502</title></circle>
+</svg>
