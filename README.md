@@ -156,6 +156,10 @@ scatter/CSV/summary outputs under `result/<experiment>/eval/lds/<algorithm>/`.
 LDS_M=100 LDS_SUBSET_SIZE=5000 ALGORITHMS="das" bash scripts/03_metric_lds.sh
 ```
 
+If the loaded attribution contains any negative score, LDS also squares every
+datapoint score and writes only two additional artifacts:
+`lds_results_squared_scores.csv` and `lds_scatter_squared_scores.png`.
+
 The legacy counterfactual and full LDS engines are still CIFAR-centered.
 ArtBench has the same scaffold folders, but full ArtBench
 counterfactual/LDS needs an ArtBench metric engine.

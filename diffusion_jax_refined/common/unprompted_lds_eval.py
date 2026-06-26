@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import os
 from pathlib import Path
@@ -68,6 +69,47 @@ def _spearman(x: np.ndarray, y: np.ndarray) -> float:
     return float(np.corrcoef(xr, yr)[0, 1])
 
 
+def _write_squared_outputs(
+    out_root: Path,
+    squared_predictions: np.ndarray,
+    targets: np.ndarray,
+) -> None:
+    csv_path = out_root / "lds_results_squared_scores.csv"
+    with open(csv_path, "w", newline="") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=("subset_id", "pred_sum_squared_scores", "target"),
+        )
+        writer.writeheader()
+        for subset_id, (prediction, target) in enumerate(
+            zip(squared_predictions.tolist(), targets.tolist())
+        ):
+            writer.writerow(
+                {
+                    "subset_id": subset_id,
+                    "pred_sum_squared_scores": prediction,
+                    "target": target,
+                }
+            )
+
+    try:
+        import matplotlib.pyplot as plt
+    except Exception as exc:
+        print(f"[warning] matplotlib unavailable; skipping squared-score plot ({exc})")
+        return
+
+    lds = _spearman(squared_predictions, targets)
+    fig, ax = plt.subplots(figsize=(7, 5))
+    ax.scatter(squared_predictions, targets, s=34, alpha=0.8)
+    ax.set_xlabel("Predicted sum of squared attribution scores")
+    ax.set_ylabel("Target")
+    ax.set_title(f"Squared-score LDS={lds:.4f}")
+    ax.grid(True, alpha=0.25)
+    fig.tight_layout()
+    fig.savefig(out_root / "lds_scatter_squared_scores.png", dpi=180)
+    plt.close(fig)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Lightweight unprompted LDS eval over diffusers attribution scores.")
     parser.add_argument("config", type=str)
@@ -83,8 +125,10 @@ def main() -> None:
     subset_size = min(int(args.subset_size), len(indices))
     preds = []
     truths = []
+    subset_masks = []
     for _ in range(int(args.m)):
         mask = rng.choice(len(indices), size=subset_size, replace=False)
+        subset_masks.append(mask)
         selected_scores = scores[mask]
         preds.append(float(selected_scores.sum()))
         # A deterministic proxy target: score mean plus small rank-sensitive term.
@@ -115,6 +159,13 @@ def main() -> None:
         json.dump(summary, f, indent=2)
     np.save(out_root / "predictions.npy", preds_np)
     np.save(out_root / "targets.npy", truths_np)
+    if np.any(scores < 0):
+        squared_scores = np.square(scores)
+        squared_predictions = np.asarray(
+            [float(squared_scores[mask].sum()) for mask in subset_masks],
+            dtype=np.float64,
+        )
+        _write_squared_outputs(out_root, squared_predictions, truths_np)
     print(f"Saved unprompted LDS eval to {out_root}")
 
 

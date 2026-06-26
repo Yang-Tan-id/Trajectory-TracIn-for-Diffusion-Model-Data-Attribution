@@ -465,7 +465,13 @@ def sum_scores(indices: Iterable[int], score_map: Dict[int, float], sign: float)
     return float(sign * sum(score_map.get(int(i), 0.0) for i in indices))
 
 
-def plot_scatter(path: str, pred: np.ndarray, true: np.ndarray, title: str) -> None:
+def plot_scatter(
+    path: str,
+    pred: np.ndarray,
+    true: np.ndarray,
+    title: str,
+    xlabel: str = "Predicted sum of attribution scores",
+) -> None:
     try:
         import matplotlib.pyplot as plt
     except Exception as exc:
@@ -474,7 +480,7 @@ def plot_scatter(path: str, pred: np.ndarray, true: np.ndarray, title: str) -> N
     os.makedirs(os.path.dirname(path), exist_ok=True)
     fig, ax = plt.subplots(figsize=(7, 5))
     ax.scatter(pred, true, s=34, alpha=0.8)
-    ax.set_xlabel("Predicted sum of attribution scores")
+    ax.set_xlabel(xlabel)
     ax.set_ylabel("True counterfactual f")
     ax.set_title(title)
     ax.grid(True, alpha=0.25)
@@ -1201,6 +1207,41 @@ def main():
         true,
         title=f"LDS={lds:.4f} ({100.0 * lds:.2f}%)",
     )
+
+    if np.any(all_scores < 0):
+        squared_score_map = build_score_vector(all_indices, np.square(all_scores))
+        squared_rows = []
+        for row, item in zip(rows, subsets):
+            prediction_indices = (
+                item["kept_indices"]
+                if args.prediction_subset == "kept"
+                else item["excluded_indices"]
+            )
+            squared_row = dict(row)
+            squared_row["pred_sum_tau"] = sum_scores(
+                prediction_indices,
+                squared_score_map,
+                sign=float(args.prediction_sign),
+            )
+            squared_rows.append(squared_row)
+
+        squared_pred = np.asarray(
+            [row["pred_sum_tau"] for row in squared_rows],
+            dtype=np.float64,
+        )
+        squared_lds = spearman_corr(squared_pred, true)
+        squared_csv = os.path.join(out_dir, "lds_results_squared_scores.csv")
+        squared_png = os.path.join(out_dir, "lds_scatter_squared_scores.png")
+        write_csv(squared_csv, squared_rows)
+        plot_scatter(
+            squared_png,
+            squared_pred,
+            true,
+            title=f"Squared-score LDS={squared_lds:.4f} ({100.0 * squared_lds:.2f}%)",
+            xlabel="Predicted sum of squared attribution scores",
+        )
+        print(f"squared csv  : {squared_csv}")
+        print(f"squared plot : {squared_png}")
 
     print("=" * 92)
     print("LDS complete")

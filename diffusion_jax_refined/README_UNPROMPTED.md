@@ -62,3 +62,7 @@ The old `common/unprompted_diffusers_attribution.py` proxy is no longer called
 by dataset scripts. It scored each training image with its own denoising MSE
 and therefore was not sample-specific or directly comparable to prompted
 attribution.
+
+If LDS encounters any negative attribution score, it also squares every
+datapoint score and produces only `lds_results_squared_scores.csv` and
+`lds_scatter_squared_scores.png` for the squared variant.

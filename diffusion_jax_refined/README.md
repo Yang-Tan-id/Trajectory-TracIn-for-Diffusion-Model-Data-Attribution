@@ -176,6 +176,10 @@ summary JSON, and scatter plots under `result/<experiment>/eval/lds/<algorithm>/
 Both engines can combine split `traj_tracin` outputs when the same
 `ATTRIBUTION_RANGES` are passed to the metric scripts.
 
+When any loaded attribution score is negative, LDS additionally evaluates the
+same subsets after squaring every datapoint score. That variant writes only
+`lds_results_squared_scores.csv` and `lds_scatter_squared_scores.png`.
+
 ArtBench currently uses the latent model training path. Training calls
 `legacy_jax/DM__training_ARTBENCH_latent.py`, which trains/reuses an autoencoder,
 caches ArtBench image latents, and trains latent diffusion in the same training
