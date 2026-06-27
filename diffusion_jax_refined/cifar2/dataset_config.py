@@ -42,23 +42,37 @@ UNPROMPTED_JAX_MODEL_ROOT = MODEL_ROOT / "unprompted_jax"
 SAMPLING_ROOT = EVAL_ROOT / "sampling"
 
 CLASS_NAMES = ("horse", "automobile")
-QUERY = "horse,automobile"
+
+QUERY = "horse"
+#QUERY = "horse,automobile"
+
 DATA_ROOT = str(DATASET_STORAGE_ROOT / "cifar-10-batches-py")
 HF_DATASET_ROOT = str(DATASET_STORAGE_ROOT / "hf_cifar10")
 LDS_INDEX_ROOT = DATASET_STORAGE_ROOT / "indices" / "lds-val"
 CHECKPOINT_DIR = str(PROMPTED_JAX_MODEL_ROOT)
 REFERENCE_CKPT = str(PROMPTED_JAX_MODEL_ROOT / "seed_42_epoch_0200.ckpt")
+
 ATTRIBUTION_SAMPLE_DIR = (
-    str(SAMPLING_ROOT / "cifar" / "prompt_horse__automobile" / "model_prompted_jax__ckpt_seed_42_epoch_0200")
+    str(SAMPLING_ROOT / "cifar" / "prompt_horse_automobile" / "model_prompted_jax__ckpt_seed_42_epoch_0200")
 )
+
+#ATTRIBUTION_SAMPLE_DIR = (
+#    str(SAMPLING_ROOT / "cifar" / "prompt_horse" / "model_prompted_jax__ckpt_seed_42_epoch_0200")
+#)
+
 UNPROMPTED_TRAIN_SEED = int(os.environ.get("TRAIN_SEED", "42"))
 UNPROMPTED_EPOCHS = int(os.environ.get("JAX_EPOCHS", "200"))
 UNPROMPTED_CKPT_STEM = f"seed_{UNPROMPTED_TRAIN_SEED}_epoch_{UNPROMPTED_EPOCHS:04d}"
 UNPROMPTED_JAX_REFERENCE_CKPT = str(UNPROMPTED_JAX_MODEL_ROOT / f"{UNPROMPTED_CKPT_STEM}.ckpt")
+
+
 UNPROMPTED_ATTRIBUTION_SAMPLE_DIR = str(
     SAMPLING_ROOT / "cifar" / "prompt_unconditional"
     / f"model_unprompted_jax__ckpt_{UNPROMPTED_CKPT_STEM}"
 )
+
+
+
 SCORE_INDEX_RANGES = _parse_score_index_ranges(((1, 10000),))
 
 
@@ -83,6 +97,7 @@ COMMON_CIFAR = {
     "use_tqdm": True,
 }
 
+#change these for multiple samples
 
 ATTRIBUTION_CONFIGS = {
     "das": {
@@ -90,14 +105,15 @@ ATTRIBUTION_CONFIGS = {
         "baseline_dir": CHECKPOINT_DIR,
         "reference_ckpt": REFERENCE_CKPT,
         "attribution_sample_dir": ATTRIBUTION_SAMPLE_DIR,
-        "attribution_sample_seed": 0,
+        "attribution_sample_seed": 1,
         "attribution_sample_index": 0,
         "attribution_use_trajectory_endpoint": True,
         "timesteps_total": 1000,
         "ddim_steps": 1000,
-        "timesteps": (0, 200, 400, 600, 800, 999),
+        "timesteps": (0, 111, 222, 333, 444, 555, 666, 777, 888, 999),
         "num_mc_noise": 8,
-        "proj_dim": 32768,
+        "proj_dim": 4096,
+        # "proj_dim": 32768,
         "damping": 1e-3,
         "batch_size": 64,
         "max_num_ckpts": 1,
@@ -106,7 +122,7 @@ ATTRIBUTION_CONFIGS = {
         **COMMON_CIFAR,
         "checkpoint_dir": CHECKPOINT_DIR,
         "attribution_sample_dir": ATTRIBUTION_SAMPLE_DIR,
-        "attribution_sample_seed": 0,
+        "attribution_sample_seed": 1,
         "attribution_sample_index": 0,
         "use_saved_trajectory": True,
         "sync_config_from_checkpoint": True,
