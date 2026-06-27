@@ -119,9 +119,15 @@ def run_unprompted_algorithm_config(
         accepted_fields = set(getattr(config_class, "__dataclass_fields__", {}))
         for key, value in checkpoint_config.items():
             if key in accepted_fields:
+                # Do not let training config timesteps=1000 overwrite
+                # attribution config timesteps=(0, 200, ..., 999).
+                if key == "timesteps":
+                    continue
                 config_values[key] = value
+
         if "timesteps_total" in accepted_fields and "timesteps" in checkpoint_config:
             config_values["timesteps_total"] = checkpoint_config["timesteps"]
+            
         if checkpoint_config.get("class_cond") is not False:
             raise ValueError(
                 f"Expected an unconditional checkpoint, but class_cond is not False: {reference_ckpt}"
