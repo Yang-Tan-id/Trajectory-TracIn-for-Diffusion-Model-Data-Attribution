@@ -40,7 +40,31 @@ def _result_dirs(cfg, algorithm: str) -> list[Path]:
     if ranges:
         parts = [p for p in ranges.replace(",", " ").split() if p]
         return [base.with_name(f"{base.name}_{_range_suffix(part)}") for part in parts]
+    configured_ranges = getattr(cfg, "SCORE_INDEX_RANGES", None)
+    if configured_ranges:
+        return [
+            base.with_name(f"{base.name}_range_{int(start)}_{int(end)}")
+            for start, end in configured_ranges
+        ]
     return [base]
+
+
+def _load_score_indices(result_dir: Path) -> np.ndarray:
+    npy_path = result_dir / "score_indices.npy"
+    if npy_path.is_file():
+        return np.asarray(np.load(npy_path), dtype=np.int64).reshape(-1)
+
+    json_path = result_dir / "score_indices.json"
+    if json_path.is_file():
+        with open(json_path, "r") as handle:
+            payload = json.load(handle)
+        if "picked_indices" not in payload:
+            raise KeyError(f"Missing 'picked_indices' in {json_path}")
+        return np.asarray(payload["picked_indices"], dtype=np.int64).reshape(-1)
+
+    raise FileNotFoundError(
+        f"No score_indices.npy or score_indices.json found in {result_dir}"
+    )
 
 
 def _load_combined(result_dirs: list[Path]) -> tuple[np.ndarray, np.ndarray, list[dict]]:
@@ -48,7 +72,12 @@ def _load_combined(result_dirs: list[Path]) -> tuple[np.ndarray, np.ndarray, lis
     sources = []
     for result_dir in result_dirs:
         scores = np.asarray(np.load(result_dir / "scores.npy"), dtype=np.float64).reshape(-1)
-        indices = np.asarray(np.load(result_dir / "score_indices.npy"), dtype=np.int64).reshape(-1)
+        indices = _load_score_indices(result_dir)
+        if len(indices) != len(scores):
+            raise ValueError(
+                f"Score/index length mismatch in {result_dir}: "
+                f"{len(scores)} scores versus {len(indices)} indices"
+            )
         sources.append({"result_dir": str(result_dir), "num_scores": int(len(scores))})
         for idx, score in zip(indices.tolist(), scores.tolist()):
             values[int(idx)] = float(score)
