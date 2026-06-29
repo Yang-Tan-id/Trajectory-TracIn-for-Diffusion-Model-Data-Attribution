@@ -152,6 +152,13 @@ subsets of size `LDS_SUBSET_SIZE`, uses attribution scores to predict the subset
 effect, retrains/evaluates subset models through the CIFAR LDS engine, and writes
 scatter/CSV/summary outputs under `result/<experiment>/eval/lds/<algorithm>/`.
 
+Trajectory TracIn and LDS use the same trajectory-noise objective:
+`sum_k w_k ||eps_theta(x_ref_k,k) - eps_theta_ref(x_ref_k,k)||^2`. LDS evaluates
+the subset checkpoint against the same full/reference checkpoint on the same
+saved sample trajectory. Attribution therefore needs training checkpoints other
+than the reference checkpoint; the objective and its gradient are exactly zero
+at `theta == theta_ref`.
+
 ```bash
 LDS_M=100 LDS_SUBSET_SIZE=5000 ALGORITHMS="das" bash scripts/03_metric_lds.sh
 ```

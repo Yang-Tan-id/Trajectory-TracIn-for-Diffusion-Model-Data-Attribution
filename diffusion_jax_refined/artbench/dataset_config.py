@@ -98,6 +98,7 @@ ATTRIBUTION_CONFIGS = {
     "traj_tracin": {
         **COMMON_ARTBENCH,
         "checkpoint_dir": CHECKPOINT_DIR,
+        "reference_ckpt": REFERENCE_CKPT,
         "attribution_sample_dir": ATTRIBUTION_SAMPLE_DIR,
         "attribution_sample_seed": 0,
         "attribution_sample_index": 0,
@@ -105,7 +106,6 @@ ATTRIBUTION_CONFIGS = {
         "ddim_steps": 1000,
         "num_traj_snapshots": 100,
         "train_mc_samples": 2,
-        "m_proj": 2,
         "score_batch_size": 2,
         "progress_every": 512,
     },

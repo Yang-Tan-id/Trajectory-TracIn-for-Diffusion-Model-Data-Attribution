@@ -37,6 +37,7 @@ def _attribution_result_dirs(algorithm: str) -> list[str]:
 
 ALGORITHM = os.environ.get("ALGORITHM", "das")
 RESULT_DIRS = _attribution_result_dirs(ALGORITHM)
+DEFAULT_TRAJECTORY_REDUCTION = "snapshot_mean" if ALGORITHM == "traj_tracin" else "sum"
 COMMAND_CWD = "legacy_jax"
 COMMANDS = {
     "lds": [
@@ -61,7 +62,7 @@ COMMANDS = {
         "--target-function",
         os.environ.get("LDS_TARGET_FUNCTION", "noise_trajectory"),
         "--trajectory-reduction",
-        os.environ.get("LDS_TRAJECTORY_REDUCTION", "sum"),
+        os.environ.get("LDS_TRAJECTORY_REDUCTION", DEFAULT_TRAJECTORY_REDUCTION),
         "--prediction-sign",
         os.environ.get("LDS_PREDICTION_SIGN", "-1"),
         "--out-root",

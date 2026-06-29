@@ -299,6 +299,21 @@ def infer_score_metadata(score_inputs: Sequence[str]) -> Dict[str, object]:
                 if name == "traj_attr_result.json":
                     cfg = payload.get("config", {})
                     meta["score_run_config"] = cfg
+                    meta["query_objective"] = payload.get("query_objective")
+                    if payload.get("query_objective") is None:
+                        saved_projection = payload.get("trajectory_projection", {})
+                        meta["trajectory_projection"] = {
+                            "seed": int(cfg.get("seed", 0)),
+                            "m_proj": int(cfg.get("m_proj", 1)),
+                            "num_checkpoint_projection_sets": max(
+                                1, len(payload.get("used_checkpoints", []))
+                            ),
+                            "snapshot_timesteps": payload.get("snapshot_timesteps_used"),
+                            "projection_seed_formula": (
+                                "seed + 1000 + 100000 * checkpoint_index + snapshot_index"
+                            ),
+                            **saved_projection,
+                        }
                 else:
                     meta[name[:-5]] = payload
     return meta
@@ -614,6 +629,7 @@ class CifarTargetEvaluator:
         sample_index: int,
         max_trajectory_steps: Optional[int],
         trajectory_reduction: str,
+        trajectory_projection: Optional[Dict[str, object]],
         simple_loss_timesteps: Sequence[int],
         simple_loss_noise_seeds: Optional[Sequence[int]],
         simple_loss_num_mc: int,
@@ -630,6 +646,7 @@ class CifarTargetEvaluator:
         self.sample_index = sample_index
         self.max_trajectory_steps = max_trajectory_steps
         self.trajectory_reduction = trajectory_reduction
+        self.trajectory_projection = trajectory_projection
         self.simple_loss_timesteps = [int(t) for t in simple_loss_timesteps]
         self.simple_loss_noise_seeds = None if simple_loss_noise_seeds is None else [int(s) for s in simple_loss_noise_seeds]
         self.simple_loss_num_mc = int(simple_loss_num_mc)
@@ -652,14 +669,14 @@ class CifarTargetEvaluator:
         self.xt_ref = None
         self.t_seq = None
         self.target_meta: Dict[str, object] = {}
-        if target_function in ("noise_trajectory", "simple_loss"):
+        if target_function in ("noise_trajectory", "projected_trajectory", "simple_loss"):
             if sample_root is None:
                 raise ValueError("--attribution-sample-dir is required for target function evaluation.")
             self.xt_ref, self.t_seq, self.target_meta = load_trajectory_target(
                 sample_root=sample_root,
                 sample_seed=sample_seed,
                 sample_index=sample_index,
-                max_steps=max_trajectory_steps if target_function == "noise_trajectory" else None,
+                max_steps=max_trajectory_steps if target_function != "simple_loss" else None,
             )
             if target_function == "simple_loss":
                 self.xt_ref = self.xt_ref[-1:]
@@ -668,7 +685,24 @@ class CifarTargetEvaluator:
             self.t_seq = np.asarray(self.t_seq, dtype=np.int32)
 
         self._noise_fn = jax.jit(self._noise_objective)
+        self._projected_fn = jax.jit(self._projected_trajectory_objective)
         self._simple_loss_fn = jax.jit(self._simple_loss_objective)
+
+        if target_function == "projected_trajectory":
+            if not trajectory_projection:
+                raise ValueError(
+                    "projected_trajectory requires Traj TracIn metadata from "
+                    "traj_attr_result.json in --score-file."
+                )
+            expected_timesteps = trajectory_projection.get("snapshot_timesteps")
+            if expected_timesteps is not None:
+                expected = np.asarray(expected_timesteps, dtype=np.int32)
+                if not np.array_equal(expected, self.t_seq):
+                    raise ValueError(
+                        "Saved LDS trajectory timesteps do not match the Traj TracIn "
+                        f"attribution timesteps: LDS={self.t_seq.tolist()} versus "
+                        f"attribution={expected.tolist()}."
+                    )
 
     def _make_adapter(self, checkpoint: str) -> CIFARAdapter:
         adapter = CIFARAdapter(
@@ -690,13 +724,52 @@ class CifarTargetEvaluator:
             eps_target = self._eps_apply(self._target_adapter_for_jit, target_params, x, t)
             eps_base = self._eps_apply(self.base_adapter, base_params, x, t)
             sq = (eps_target - eps_base) ** 2
-            if self.trajectory_reduction == "sum":
+            if self.trajectory_reduction in ("sum", "snapshot_mean"):
                 return jnp.sum(sq)
             return jnp.mean(sq)
 
         vals = jax.vmap(one_step)(xt_refs, t_seq)
         if self.trajectory_reduction == "sum":
             return jnp.sum(vals)
+        return jnp.mean(vals)
+
+    def _projected_trajectory_objective(self, target_params, base_params, xt_refs, t_seq):
+        """F(target) - F(base), using the exact projections from Traj TracIn."""
+        projection_seed = int(self.trajectory_projection["seed"])
+        m_proj = int(self.trajectory_projection["m_proj"])
+        num_checkpoint_sets = int(
+            self.trajectory_projection["num_checkpoint_projection_sets"]
+        )
+
+        def one_step(snapshot_index, x, t_scalar):
+            t = jnp.full((x.shape[0],), t_scalar, dtype=jnp.int32)
+            eps_target = self._eps_apply(self._target_adapter_for_jit, target_params, x, t)
+            eps_base = self._eps_apply(self.base_adapter, base_params, x, t)
+            delta = eps_target - eps_base
+            projected = jnp.array(0.0, dtype=delta.dtype)
+            for checkpoint_index in range(num_checkpoint_sets):
+                key = jax.random.PRNGKey(
+                    projection_seed
+                    + 1000
+                    + 100000 * checkpoint_index
+                    + snapshot_index
+                )
+                projection_keys = jax.random.split(key, m_proj)
+                checkpoint_projection = jnp.array(0.0, dtype=delta.dtype)
+                for projection_key in projection_keys:
+                    bits = jax.random.randint(
+                        projection_key, delta.shape, 0, 2, dtype=jnp.int32
+                    )
+                    rademacher = (bits * 2 - 1).astype(delta.dtype)
+                    checkpoint_projection = checkpoint_projection + jnp.sum(
+                        delta * rademacher
+                    )
+                projected = projected + checkpoint_projection / float(m_proj)
+            return projected
+
+        snapshot_indices = jnp.arange(xt_refs.shape[0], dtype=jnp.int32)
+        vals = jax.vmap(one_step)(snapshot_indices, xt_refs, t_seq)
+        # Traj TracIn always applies 1/K over snapshots and sums checkpoints.
         return jnp.mean(vals)
 
     def _simple_loss_objective(self, target_params, x0_ref, t_values, rng_keys):
@@ -735,6 +808,20 @@ class CifarTargetEvaluator:
                 "target_function": "noise_trajectory",
                 "num_trajectory_steps": int(len(self.t_seq)),
                 "trajectory_reduction": self.trajectory_reduction,
+            }
+        elif self.target_function == "projected_trajectory":
+            value = self._projected_fn(
+                target_params,
+                base_params,
+                self.xt_ref,
+                jax.device_put(jnp.asarray(self.t_seq, dtype=jnp.int32), self.device),
+            )
+            details = {
+                "target_function": "projected_trajectory",
+                "num_trajectory_steps": int(len(self.t_seq)),
+                "trajectory_reduction": "mean_over_snapshots",
+                "trajectory_projection": self.trajectory_projection,
+                "definition": "F(subset_checkpoint) - F(full_checkpoint)",
             }
         elif self.target_function == "simple_loss":
             rng = np.random.default_rng(self.simple_loss_mc_seed)
@@ -788,14 +875,21 @@ def main():
     parser.add_argument("--prompt", type=str, default=None)
     parser.add_argument("--attribution-sample-dir", type=str, default=None)
     parser.add_argument("--attribution-sample-seed", type=int, default=None)
-    parser.add_argument("--attribution-sample-index", type=int, default=0)
+    parser.add_argument("--attribution-sample-index", type=int, default=None)
     parser.add_argument("--max-trajectory-steps", type=int, default=None)
-    parser.add_argument("--target-function", choices=["noise_trajectory", "simple_loss"], default="noise_trajectory")
+    parser.add_argument(
+        "--target-function",
+        choices=["noise_trajectory", "projected_trajectory", "simple_loss"],
+        default="noise_trajectory",
+    )
     parser.add_argument(
         "--trajectory-reduction",
-        choices=["mean", "sum"],
+        choices=["mean", "sum", "snapshot_mean"],
         default="mean",
-        help="How to reduce f_noise over trajectory steps and pixels. Use sum to match the paper-style formula scale.",
+        help=(
+            "How to reduce f_noise. snapshot_mean computes mean_k sum_pixels, "
+            "matching uniform trajectory weights w_k=1/K."
+        ),
     )
     parser.add_argument("--simple-loss-timestep", type=int, default=0)
     parser.add_argument("--simple-loss-noise-seed", type=int, default=0)
@@ -904,11 +998,20 @@ def main():
 
     score_inputs = resolve_score_inputs(args.score_file)
     score_meta = infer_score_metadata(score_inputs)
+    score_run_config = score_meta.get("score_run_config", {})
+    if args.attribution_sample_seed is None:
+        configured_sample_seed = score_run_config.get("attribution_sample_seed")
+        if configured_sample_seed is not None:
+            args.attribution_sample_seed = int(configured_sample_seed)
+    if args.attribution_sample_index is None:
+        args.attribution_sample_index = int(
+            score_run_config.get("attribution_sample_index", 0)
+        )
     prompt = args.prompt or infer_prompt(score_inputs)
     if prompt is None:
         raise ValueError("--prompt was not provided and could not be inferred from the score file.")
     sample_dir = args.attribution_sample_dir or infer_attribution_sample_dir(score_inputs)
-    if args.target_function in ("noise_trajectory", "simple_loss") and sample_dir is None:
+    if args.target_function in ("noise_trajectory", "projected_trajectory", "simple_loss") and sample_dir is None:
         raise ValueError(
             "--attribution-sample-dir was not provided and could not be inferred from the score file."
         )
@@ -1102,6 +1205,7 @@ def main():
         sample_index=int(args.attribution_sample_index),
         max_trajectory_steps=args.max_trajectory_steps,
         trajectory_reduction=args.trajectory_reduction,
+        trajectory_projection=score_meta.get("trajectory_projection"),
         simple_loss_timesteps=simple_loss_timesteps,
         simple_loss_noise_seeds=simple_loss_noise_seeds,
         simple_loss_num_mc=int(args.simple_loss_num_mc),

@@ -173,6 +173,14 @@ Prompted LDS is implemented by `legacy_jax/LDS/DM_cifar_lds.py`. It builds
 subset influence against the retrained/evaluated subset target, and writes CSV,
 summary JSON, and scatter plots under `result/<experiment>/eval/lds/<algorithm>/`.
 
+Trajectory TracIn and LDS use the matched `noise_trajectory` objective by
+default: `sum_k w_k ||eps_theta(x_ref_k,k) -
+eps_theta_ref(x_ref_k,k)||^2`. The evaluator reuses the attribution sample
+seed/index and trajectory timesteps, and compares every subset checkpoint with
+the same full/reference checkpoint. The reference checkpoint itself contributes
+zero query gradient, so the attribution checkpoint directory must also contain
+earlier training checkpoints.
+
 Both engines can combine split `traj_tracin` outputs when the same
 `ATTRIBUTION_RANGES` are passed to the metric scripts.
 

@@ -829,6 +829,7 @@ class TrajAttributionConfig:
     task_type: str  # 'x3', 'cifar10', or 'artbench_latent'
     module_name: str  # e.g. 'x3_training_jax' or 'cifar10_training_jax'
     checkpoint_dir: str
+    reference_ckpt: Optional[str] = None
     checkpoint_limit: int = -1
 
     # query
@@ -857,7 +858,7 @@ class TrajAttributionConfig:
 
     # scoring
     train_mc_samples: int = 2
-    m_proj: int = 2   # number of random r projections for query scalarization
+    m_proj: int = 2   # retained only for reading historical random-projection runs
     max_train_points: int = 1024
     random_subset: bool = True
     score_index_ranges: Optional[Tuple[Tuple[int, int], ...]] = None
@@ -929,52 +930,41 @@ def get_adapter(cfg: TrajAttributionConfig):
     raise ValueError("task_type must be 'x3', 'cifar10', or 'artbench_latent'")
 
 
-def rand_rademacher_like(rng, x):
-    bits = jax.random.randint(rng, x.shape, 0, 2, dtype=jnp.int32)
-    return (bits * 2 - 1).astype(x.dtype)
-
-
-def query_scalar(adapter, model, params, xt_ref, t, cond, rng, m_proj: int):
+def query_scalar(adapter, model, params, reference_params, xt_ref, t, cond):
+    """Per-snapshot f_noise: squared epsilon deviation from theta_ref."""
     eps = adapter.eps_apply(model, params, xt_ref, t, cond)
-    acc = jnp.array(0.0, dtype=jnp.float32)
-
-    proj_rngs = jax.random.split(rng, m_proj)
-    for rr in proj_rngs:
-        r = rand_rademacher_like(rr, eps)
-        acc = acc + jnp.sum(eps * r)
-
-    return acc / float(m_proj)
+    eps_ref = jax.lax.stop_gradient(
+        adapter.eps_apply(model, reference_params, xt_ref, t, cond)
+    )
+    return jnp.sum((eps - eps_ref) ** 2)
 
 
-def make_query_grad_fn(adapter, model, m_proj: int):
-    def scalar_fn(params, xt_ref, t_scalar, cond, rng):
+def make_query_grad_fn(adapter, model):
+    def scalar_fn(params, reference_params, xt_ref, t_scalar, cond):
         t = jnp.full((xt_ref.shape[0],), t_scalar, dtype=jnp.int32)
         return query_scalar(
             adapter=adapter,
             model=model,
             params=params,
+            reference_params=reference_params,
             xt_ref=xt_ref,
             t=t,
             cond=cond,
-            rng=rng,
-            m_proj=m_proj,
         )
 
     return jax.jit(jax.grad(scalar_fn))
 
 
-def compute_query_grads(adapter, model, params, xt_refs, t_seq, cond, cfg, base_rng, device):
+def compute_query_grads(adapter, model, params, reference_params, xt_refs, t_seq, cond, cfg, base_rng, device):
     out = []
     total = len(t_seq)
     print(f"[query-grad] computing gradients for {total} trajectory snapshots")
     qg_start = time.time()
-    grad_fn = make_query_grad_fn(adapter, model, int(cfg.m_proj))
+    grad_fn = make_query_grad_fn(adapter, model)
 
     for snap_i, (xt_ref, t_int) in enumerate(zip(xt_refs, t_seq)):
-        base_rng, use_rng = jax.random.split(base_rng)
         t_scalar = array_to_device(jnp.asarray(int(t_int), dtype=jnp.int32), device)
-        use_rng = array_to_device(use_rng, device)
-        g = grad_fn(params, xt_ref, t_scalar, cond, use_rng)
+        g = grad_fn(params, reference_params, xt_ref, t_scalar, cond)
         out.append(g)
 
         done = snap_i + 1
@@ -1167,13 +1157,14 @@ def run_attribution(cfg: TrajAttributionConfig):
     print(f"task_type            : {cfg.task_type}")
     print(f"module_name          : {cfg.module_name}")
     print(f"checkpoint_dir       : {cfg.checkpoint_dir}")
+    print(f"reference_ckpt       : {cfg.reference_ckpt}")
+    print("query_objective      : trajectory_noise_squared_deviation")
     print(f"query                : {cfg.query}")
     print(f"seed                 : {cfg.seed}")
     print(f"timesteps            : {cfg.timesteps}")
     print(f"ddim_steps           : {cfg.ddim_steps}")
     print(f"num_traj_snapshots   : {cfg.num_traj_snapshots}")
     print(f"train_mc_samples     : {cfg.train_mc_samples}")
-    print(f"m_proj               : {cfg.m_proj}")
     print(f"max_train_points     : {cfg.max_train_points}")
     print(f"random_subset        : {cfg.random_subset}")
     print(f"score_index_ranges   : {cfg.score_index_ranges}")
@@ -1200,6 +1191,19 @@ def run_attribution(cfg: TrajAttributionConfig):
     print("[setup] building state template...")
     state_template = adapter.build_state_template(cfg, model, device)
     print("[setup] state template ready")
+
+    reference_ckpt = (
+        cfg.reference_ckpt
+        or resolved_manifest_ckpt
+        or ckpts[-1]
+    )
+    if not os.path.isfile(reference_ckpt):
+        raise FileNotFoundError(f"Reference checkpoint not found: {reference_ckpt}")
+    print(f"[setup] restoring f_noise reference checkpoint: {reference_ckpt}")
+    reference_state, _ = adapter.restore_state(reference_ckpt, state_template)
+    reference_params = tree_to_device(reference_state.ema_params, device)
+    cfg.reference_ckpt = reference_ckpt
+    print(f"[device-check] reference_params={first_leaf_device_str(reference_params)}")
 
     example_x, _ = adapter.get_example_batch(ds)
     print(f"[setup] example input shape={tuple(example_x.shape)}")
@@ -1260,6 +1264,12 @@ def run_attribution(cfg: TrajAttributionConfig):
 
         print("\n" + "-" * 90)
         print(f"[checkpoint {ckpt_i + 1}/{len(ckpts)}] starting {ckpt_name}")
+        if os.path.abspath(ckpt_path) == os.path.abspath(reference_ckpt):
+            print(
+                "[warning] this checkpoint is theta_ref, so f_noise=0 and its "
+                "query gradient is exactly zero; nonzero attribution requires "
+                "at least one checkpoint different from reference_ckpt."
+            )
         print(f"[checkpoint {ckpt_i + 1}/{len(ckpts)}] restoring state...")
 
         try:
@@ -1327,7 +1337,7 @@ def run_attribution(cfg: TrajAttributionConfig):
         )
         score_loop_start = time.time()
         print(f"[checkpoint {ckpt_i + 1}/{len(ckpts)}] preparing jitted query-gradient function...")
-        query_grad_fn = make_query_grad_fn(adapter, model, int(cfg.m_proj))
+        query_grad_fn = make_query_grad_fn(adapter, model)
         print(f"[checkpoint {ckpt_i + 1}/{len(ckpts)}] preparing jitted snapshot scorer...")
         score_snapshot_fn = make_score_snapshot_batch_fn(
             adapter=adapter,
@@ -1354,16 +1364,12 @@ def run_attribution(cfg: TrajAttributionConfig):
 
         for snap_id, t_int in enumerate(t_seq):
             t_scalar = array_to_device(jnp.asarray(int(t_int), dtype=jnp.int32), device)
-            q_rng = array_to_device(
-                jax.random.PRNGKey(cfg.seed + 1000 + 100000 * ckpt_i + snap_id),
-                device,
-            )
             query_grad = query_grad_fn(
                 params,
+                reference_params,
                 xt_refs[snap_id],
                 t_scalar,
                 query_cond,
-                q_rng,
             )
             if snap_id == 0:
                 query_grad = tree_to_device(query_grad, device)
@@ -1472,6 +1478,13 @@ def run_attribution(cfg: TrajAttributionConfig):
         "num_snapshots_used": 0 if timestep_values_used is None else len(timestep_values_used),
         "snapshot_positions_used": snapshot_positions_used,
         "snapshot_timesteps_used": timestep_values_used,
+        "query_objective": {
+            "name": "trajectory_noise_squared_deviation",
+            "formula": "sum_k w_k ||eps_theta(x_ref_k,k)-eps_theta_ref(x_ref_k,k)||_2^2",
+            "reference_ckpt": reference_ckpt,
+            "snapshot_reduction": "mean",
+            "checkpoint_reduction": "sum",
+        },
         "used_checkpoints": used_ckpts,
         "skipped_checkpoints": skipped_ckpts,
         "precomputed_sample_meta": precomputed_sample_meta,
