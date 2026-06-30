@@ -46,6 +46,21 @@ Attribution outputs retain the existing evaluation contract:
 result/<experiment>/attribution_score/<algorithm>_unprompted/
 ```
 
+Full LDS uses independently trained, reusable unconditional subset models:
+
+```bash
+cd diffusion_jax_refined/cifar10
+LDS_M=100 LDS_K=5000 LDS_SAMPLE_RANDOM_SEED=0 \
+bash scripts/03_lds_training_unprompted.sh
+
+LDS_MODEL_DIRS="result/experiment1/lds_model/unprompted/m_100_k_5000_seed_0" \
+ALGORITHMS="das traj_tracin" bash scripts/04_lds_eval_unprompted.sh
+```
+
+Separate multiple runs with commas in `LDS_MODEL_DIRS`. Training inherits the
+unconditional checkpoint config; evaluation only reads the saved subset
+checkpoints and never restarts training.
+
 The following engines are supported:
 
 - `das`

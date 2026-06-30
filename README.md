@@ -33,7 +33,10 @@ EXPERIMENT_TAG=experiment1 TRAIN_SEED=42 CUDA_VISIBLE_DEVICES=0 bash scripts/00_
 EXPERIMENT_TAG=experiment1 SAMPLE_SEEDS=0,1,2 CUDA_VISIBLE_DEVICES=0 bash scripts/00_sample.sh
 EXPERIMENT_TAG=experiment1 ALGORITHMS="das traj_tracin" CUDA_VISIBLE_DEVICES=0 bash scripts/01_data_attribution.sh
 EXPERIMENT_TAG=experiment1 ALGORITHMS="das traj_tracin" TOPK=5000 bash scripts/02_metric_counterfactual.sh
-EXPERIMENT_TAG=experiment1 ALGORITHMS="das traj_tracin" LDS_M=100 LDS_SUBSET_SIZE=5000 bash scripts/03_metric_lds.sh
+EXPERIMENT_TAG=experiment1 LDS_M=100 LDS_K=5000 LDS_SAMPLE_RANDOM_SEED=0 bash scripts/03_lds_training.sh
+EXPERIMENT_TAG=experiment1 ALGORITHMS="das traj_tracin" \
+LDS_MODEL_DIRS="result/experiment1/lds_model/m_100_k_5000_seed_0" \
+bash scripts/04_lds_eval.sh
 ```
 
 Important convention: one `EXPERIMENT_TAG` should normally have one
@@ -96,7 +99,10 @@ trajectory. Evaluation remains separate:
 
 ```bash
 EXPERIMENT_TAG=experiment1 ALGORITHMS="das" TOPK=5000 bash scripts/02_metric_counterfactual_unprompted.sh
-EXPERIMENT_TAG=experiment1 ALGORITHMS="das" LDS_M=100 bash scripts/03_metric_lds_unprompted.sh
+EXPERIMENT_TAG=experiment1 LDS_M=100 LDS_K=5000 LDS_SAMPLE_RANDOM_SEED=0 bash scripts/03_lds_training_unprompted.sh
+EXPERIMENT_TAG=experiment1 ALGORITHMS="das" \
+LDS_MODEL_DIRS="result/experiment1/lds_model/unprompted/m_100_k_5000_seed_0" \
+bash scripts/04_lds_eval_unprompted.sh
 ```
 
 See `diffusion_jax_refined/README_UNPROMPTED.md` for the unprompted details.
@@ -127,7 +133,10 @@ Counterfactual and LDS can then combine those range outputs by passing the same
 
 ```bash
 ALGORITHMS="traj_tracin" ATTRIBUTION_RANGES="1-2500,2501-5000,5001-7500,7501-10000" TOPK=5000 bash scripts/02_metric_counterfactual.sh
-ALGORITHMS="traj_tracin" ATTRIBUTION_RANGES="1-2500,2501-5000,5001-7500,7501-10000" LDS_M=100 LDS_SUBSET_SIZE=5000 bash scripts/03_metric_lds.sh
+LDS_M=100 LDS_K=5000 LDS_SAMPLE_RANDOM_SEED=0 bash scripts/03_lds_training.sh
+ALGORITHMS="traj_tracin" ATTRIBUTION_RANGES="1-2500,2501-5000,5001-7500,7501-10000" \
+LDS_MODEL_DIRS="result/experiment1/lds_model/m_100_k_5000_seed_0" \
+bash scripts/04_lds_eval.sh
 ```
 
 If you already know the score folders exactly, use:
@@ -147,10 +156,42 @@ checkpoint for the selected query/prompt. The prompted entrypoint is:
 TOPK=5000 ALGORITHMS="das" bash scripts/02_metric_counterfactual.sh
 ```
 
-LDS analysis currently computes subset-score agreement. It samples `LDS_M`
-subsets of size `LDS_SUBSET_SIZE`, uses attribution scores to predict the subset
-effect, retrains/evaluates subset models through the CIFAR LDS engine, and writes
-scatter/CSV/summary outputs under `result/<experiment>/eval/lds/<algorithm>/`.
+LDS training and evaluation can be run independently. For a CIFAR dataset,
+training inherits the normal model checkpoint config and only needs `m`, `k`,
+and the subset sampling seed:
+
+```bash
+cd diffusion_jax_refined/cifar10
+LDS_M=100 LDS_K=5000 LDS_SAMPLE_RANDOM_SEED=0 bash scripts/03_lds_training.sh
+```
+
+Reusable subset models are stored under
+`result/<experiment>/lds_model/m_<m>_k_<k>_seed_<seed>/`. Evaluation accepts
+one or more comma-separated model folders and never retrains them:
+
+```bash
+LDS_MODEL_DIRS="\
+  result/experiment1/lds_model/m_50_k_5000_seed_0,
+  result/experiment1/lds_model/m_50_k_5000_seed_1" \
+ALGORITHMS="das traj_tracin" bash scripts/04_lds_eval.sh
+```
+
+The combined scatter/CSV/summary outputs are written below
+`result/<experiment>/eval/lds/<algorithm>/`.
+
+Unprompted LDS follows the same split workflow and inherits the
+`class_cond=False` checkpoint config:
+
+```bash
+LDS_M=100 LDS_K=5000 LDS_SAMPLE_RANDOM_SEED=0 \
+bash scripts/03_lds_training_unprompted.sh
+
+LDS_MODEL_DIRS="result/experiment1/lds_model/unprompted/m_100_k_5000_seed_0" \
+ALGORITHMS="das traj_tracin" bash scripts/04_lds_eval_unprompted.sh
+```
+
+Unprompted models live under `result/<experiment>/lds_model/unprompted/`;
+their results are written under `result/<experiment>/eval/lds_unprompted/`.
 
 Trajectory TracIn and LDS use the same trajectory-noise objective:
 `sum_k w_k ||eps_theta(x_ref_k,k) - eps_theta_ref(x_ref_k,k)||^2`. LDS evaluates
@@ -158,10 +199,6 @@ the subset checkpoint against the same full/reference checkpoint on the same
 saved sample trajectory. Attribution therefore needs training checkpoints other
 than the reference checkpoint; the objective and its gradient are exactly zero
 at `theta == theta_ref`.
-
-```bash
-LDS_M=100 LDS_SUBSET_SIZE=5000 ALGORITHMS="das" bash scripts/03_metric_lds.sh
-```
 
 If the loaded attribution contains any negative score, LDS also squares every
 datapoint score and writes only two additional artifacts:

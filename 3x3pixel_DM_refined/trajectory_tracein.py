@@ -238,36 +238,21 @@ def set_active_params_lora(model: nn.Module) -> List[nn.Parameter]:
 
 
 # ============================================================
-# Trajectory query objective: scalarize epsilon prediction via random projection
-# Monte Carlo version
+# Trajectory query objective: squared epsilon deviation from theta_ref
 # ============================================================
-def rand_rademacher_like(x: torch.Tensor) -> torch.Tensor:
-    return (torch.randint(0, 2, x.shape, device=x.device, dtype=torch.int8) * 2 - 1).to(x.dtype)
-
-
-def trajectory_query_scalar_mc(
+def trajectory_noise_deviation(
     model: nn.Module,
     xt_ref: torch.Tensor,   # [1,3,H,W]
     t: torch.Tensor,        # [1] long
     cond_q: torch.Tensor,   # [1,cond_dim]
-    *,
-    m_proj: int = 4,
-    num_mc_samples: int = 8,
+    eps_ref: torch.Tensor,  # detached eps prediction from theta_ref
 ) -> torch.Tensor:
     """
-    Monte Carlo estimate of:
-        E_r [ < eps_theta(xt_ref,t,cond_q), r > ]
-    averaged over num_mc_samples independent random projections.
+    Per-snapshot objective:
+        || eps_theta(xt_ref,t,cond_q) - eps_theta_ref(xt_ref,t,cond_q) ||_2^2
     """
-    vals = []
-    for _ in range(int(num_mc_samples)):
-        eps_pred = model(xt_ref, t, cond_q)
-        acc = 0.0
-        for _ in range(int(m_proj)):
-            r = rand_rademacher_like(eps_pred)
-            acc = acc + (eps_pred * r).sum()
-        vals.append(acc / float(m_proj))
-    return torch.stack(vals).mean()
+    eps_pred = model(xt_ref, t, cond_q)
+    return (eps_pred - eps_ref.detach()).pow(2).sum()
 
 
 def grad_dot(g1, g2) -> torch.Tensor:
@@ -375,6 +360,25 @@ def build_xtref_dict_by_snapid(traj_use: List[torch.Tensor], snap_ids: List[int]
     return out
 
 
+@torch.no_grad()
+def compute_reference_eps_by_snapid(
+    ref_model: nn.Module,
+    xt_ref_dict: Dict[int, torch.Tensor],
+    query_cond: torch.Tensor,
+    snap_ids: List[int],
+    t_seq: np.ndarray,
+) -> Dict[int, torch.Tensor]:
+    """Cache eps_theta_ref once; it is shared by every baseline/LoRA checkpoint."""
+    ref_model.eval()
+    out: Dict[int, torch.Tensor] = {}
+    for sid in snap_ids:
+        sid = int(sid)
+        xt_ref = xt_ref_dict[sid]
+        t = torch.tensor([int(t_seq[sid])], device=xt_ref.device, dtype=torch.long)
+        out[sid] = ref_model(xt_ref, t, query_cond).detach()
+    return out
+
+
 # ============================================================
 # Compute query gradients for all snapshots (per checkpoint)
 # ============================================================
@@ -382,17 +386,15 @@ def compute_g_traj(
     model: nn.Module,
     active_params: List[nn.Parameter],
     xt_ref_dict: Dict[int, torch.Tensor],   # key=snap_id
+    eps_ref_dict: Dict[int, torch.Tensor],  # theta_ref prediction per snap_id
     query_cond: torch.Tensor,
     snap_ids: List[int],                    # list of snap_id
     t_seq: np.ndarray,                      # diffusion timestep per snap_id
-    *,
-    m_proj: int = 4,
-    query_mc_samples: int = 8,
 ) -> Dict[int, Tuple[torch.Tensor, ...]]:
     """
     g_q[snap_id] = grad_theta f(theta; x_ref(snap_id), t_seq[snap_id], cond_q)
     """
-    model.train()
+    model.eval()
     gq: Dict[int, Tuple[torch.Tensor, ...]] = {}
 
     total = len(snap_ids)
@@ -405,13 +407,12 @@ def compute_g_traj(
         t_int = int(t_seq[sid])
         t = torch.tensor([t_int], device=xt_ref.device, dtype=torch.long)
 
-        f = trajectory_query_scalar_mc(
+        f = trajectory_noise_deviation(
             model=model,
             xt_ref=xt_ref,
             t=t,
             cond_q=query_cond,
-            m_proj=int(m_proj),
-            num_mc_samples=int(query_mc_samples),
+            eps_ref=eps_ref_dict[sid],
         )
         g = torch.autograd.grad(f, active_params, retain_graph=False, create_graph=False, allow_unused=True)
         gq[sid] = g
@@ -543,10 +544,8 @@ def main():
 
         # trajectory subset
         num_traj_t=50,
-        m_proj=3,
 
         # Monte Carlo expectation controls
-        query_mc_samples=8,
         train_mc_samples=8,
 
         # scoring
@@ -629,6 +628,13 @@ def main():
     K = len(traj_use)
     snap_ids = pick_snapshot_ids(K, num_pick=int(CONFIG["num_traj_t"]))
     xt_ref_dict = build_xtref_dict_by_snapid(traj_use, snap_ids)
+    eps_ref_dict = compute_reference_eps_by_snapid(
+        ref_model=ref_model,
+        xt_ref_dict=xt_ref_dict,
+        query_cond=query_cond,
+        snap_ids=snap_ids,
+        t_seq=t_seq,
+    )
     print(f"[setup] Reference trajectory ready: K={K} | selected_snapshots={len(snap_ids)}", flush=True)
 
     # ---- collect checkpoints ----
@@ -786,8 +792,13 @@ def main():
         "device": str(device),
         "seed": int(CONFIG["seed"]),
         "time_started": float(t0),
-        "m_proj": int(CONFIG["m_proj"]),
-        "query_mc_samples": int(CONFIG["query_mc_samples"]),
+        "query_objective": {
+            "name": "trajectory_noise_squared_deviation",
+            "formula": "mean_k ||eps_theta(x_ref_k,k)-eps_theta_ref(x_ref_k,k)||_2^2",
+            "reference_ckpt": ref_ckpt,
+            "snapshot_reduction": "mean",
+            "checkpoint_reduction": "sum",
+        },
         "train_mc_samples": int(CONFIG["train_mc_samples"]),
     }
 
@@ -802,16 +813,21 @@ def main():
         active = set_active_params_baseline(model_k)
         eta_k = 1.0
 
-        print("[baseline] computing trajectory query gradients (Monte Carlo)...", flush=True)
+        if os.path.abspath(ckpt_path) == os.path.abspath(ref_ckpt):
+            print(
+                "[warning] checkpoint equals theta_ref; f_noise and its query "
+                "gradient are exactly zero for this checkpoint.",
+                flush=True,
+            )
+        print("[baseline] computing f_noise trajectory query gradients...", flush=True)
         gq = compute_g_traj(
             model=model_k,
             active_params=active,
             xt_ref_dict=xt_ref_dict,
+            eps_ref_dict=eps_ref_dict,
             query_cond=query_cond,
             snap_ids=snap_ids,
             t_seq=t_seq,
-            m_proj=int(CONFIG["m_proj"]),
-            query_mc_samples=int(CONFIG["query_mc_samples"]),
         )
 
         for j, (src, idx) in enumerate(score_items):
@@ -840,7 +856,7 @@ def main():
 
         print(
             f"[baseline] done: {os.path.basename(ckpt_path)} |snap|={len(snap_ids)} "
-            f"m_proj={CONFIG['m_proj']} | elapsed={format_seconds(time.perf_counter() - ckpt_t0)}",
+            f"| elapsed={format_seconds(time.perf_counter() - ckpt_t0)}",
             flush=True,
         )
 
@@ -855,16 +871,15 @@ def main():
         active = set_active_params_lora(model_k)
         eta_k = 1.0
 
-        print("[lora] computing trajectory query gradients (Monte Carlo)...", flush=True)
+        print("[lora] computing f_noise trajectory query gradients...", flush=True)
         gq = compute_g_traj(
             model=model_k,
             active_params=active,
             xt_ref_dict=xt_ref_dict,
+            eps_ref_dict=eps_ref_dict,
             query_cond=query_cond,
             snap_ids=snap_ids,
             t_seq=t_seq,
-            m_proj=int(CONFIG["m_proj"]),
-            query_mc_samples=int(CONFIG["query_mc_samples"]),
         )
 
         for j, (src, idx) in enumerate(score_items):
@@ -893,7 +908,7 @@ def main():
 
         print(
             f"[lora] done: {os.path.basename(ckpt_path)} |snap|={len(snap_ids)} "
-            f"m_proj={CONFIG['m_proj']} | elapsed={format_seconds(time.perf_counter() - ckpt_t0)}",
+            f"| elapsed={format_seconds(time.perf_counter() - ckpt_t0)}",
             flush=True,
         )
 
