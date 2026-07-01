@@ -36,9 +36,11 @@ result/<experiment>/model/unprompted_jax/
 ```
 
 `00_sample_unprompted.sh` generates the unconditional sample and saved
-trajectory with the same JAX sampler used by the prompted path.
+trajectory with the same JAX sampler used by the prompted path. For `das`,
+`traj_tracin`, `dtrak`, and `end_tracin`,
 `01_data_attribution_unprompted.sh` only reads that saved query; it never
-starts sampling implicitly.
+starts sampling implicitly. `journey_trak` constructs its unconditional query
+trajectory inside the attribution engine.
 
 Attribution outputs retain the existing evaluation contract:
 
