@@ -7,7 +7,9 @@ Default setup:
 - Default training seed: `TRAIN_SEED=42`
 - Default experiment: `EXPERIMENT_TAG=experiment1`
 
-Change dataset-level defaults in `dataset_config.py`.
+Set `QUERY` once (or change its default in `dataset_config.py`). The sampling
+prompt and attribution sample folder are derived from it automatically; do not
+edit `ATTRIBUTION_SAMPLE_DIR` separately.
 
 ## Prompted JAX Latent Flow
 

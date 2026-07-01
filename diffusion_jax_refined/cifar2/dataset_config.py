@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from copy import deepcopy
 from pathlib import Path
 
@@ -20,6 +21,12 @@ def _parse_score_index_ranges(default: tuple[tuple[int, int], ...]) -> tuple[tup
             )
         ranges.append((int(start_end[0]), int(start_end[1])))
     return tuple(ranges)
+
+
+def _prompt_path_tag(prompt: str) -> str:
+    text = str(prompt).strip().replace(",", "__")
+    text = re.sub(r"[^A-Za-z0-9._-]+", "_", text)
+    return re.sub(r"_+", "_", text).strip("_")[:80] or "empty_prompt"
 
 
 DATASET_NAME = "cifar2"
@@ -44,8 +51,7 @@ SAMPLING_ROOT = EVAL_ROOT / "sampling"
 
 CLASS_NAMES = ("horse", "automobile")
 
-QUERY = "horse"
-#QUERY = "horse,automobile"
+QUERY = os.environ.get("QUERY", "horse")
 
 DATA_ROOT = str(DATASET_STORAGE_ROOT / "cifar-10-batches-py")
 HF_DATASET_ROOT = str(DATASET_STORAGE_ROOT / "hf_cifar10")
@@ -53,13 +59,13 @@ LDS_INDEX_ROOT = DATASET_STORAGE_ROOT / "indices" / "lds-val"
 CHECKPOINT_DIR = str(PROMPTED_JAX_MODEL_ROOT)
 REFERENCE_CKPT = str(PROMPTED_JAX_MODEL_ROOT / "seed_42_epoch_0200.ckpt")
 
-ATTRIBUTION_SAMPLE_DIR = (
-    str(SAMPLING_ROOT / "cifar" / "prompt_horse_automobile" / "model_prompted_jax__ckpt_seed_42_epoch_0200")
+ATTRIBUTION_SAMPLE_DIR = os.environ.get(
+    "ATTRIBUTION_SAMPLE_DIR",
+    str(
+        SAMPLING_ROOT / "cifar" / f"prompt_{_prompt_path_tag(QUERY)}"
+        / f"model_prompted_jax__ckpt_{Path(REFERENCE_CKPT).stem}"
+    ),
 )
-
-#ATTRIBUTION_SAMPLE_DIR = (
-#    str(SAMPLING_ROOT / "cifar" / "prompt_horse" / "model_prompted_jax__ckpt_seed_42_epoch_0200")
-#)
 
 UNPROMPTED_TRAIN_SEED = int(os.environ.get("TRAIN_SEED", "42"))
 UNPROMPTED_EPOCHS = int(os.environ.get("JAX_EPOCHS", "200"))

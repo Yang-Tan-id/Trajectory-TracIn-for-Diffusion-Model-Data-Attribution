@@ -960,11 +960,19 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
         print(f"[setup] loading precomputed attribution sample: {cfg.attribution_sample_dir}")
         x0_ref, precomputed_sample_meta = load_attribution_endpoint(cfg)
         inferred_query = infer_query_from_attribution_meta(precomputed_sample_meta)
-        if cfg.query is None:
-            if inferred_query is None:
+        if inferred_query is None:
+            if cfg.query is None:
                 raise ValueError("query is None and no prompt found in sample metadata.")
+        else:
+            if cfg.query is not None and sorted(normalize_query_tokens(cfg.query)) != sorted(
+                normalize_query_tokens(inferred_query)
+            ):
+                print(
+                    "[setup] configured query differs from saved sample prompt; "
+                    f"using sample prompt: configured={cfg.query!r}, sample={inferred_query!r}"
+                )
             cfg.query = inferred_query
-            print(f"[setup] inferred query from attribution sample prompt: {cfg.query}")
+            print(f"[setup] query loaded from attribution sample: {cfg.query}")
         manifest = precomputed_sample_meta.get("manifest") or {}
         manifest_ckpt = manifest.get("checkpoint")
         resolved_manifest_ckpt = resolve_checkpoint_path_from_manifest(manifest_ckpt)

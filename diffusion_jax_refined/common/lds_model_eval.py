@@ -121,6 +121,19 @@ def main() -> None:
         simple_loss_num_mc=int(os.environ.get("LDS_SIMPLE_LOSS_NUM_MC", "16")),
         simple_loss_mc_seed=int(os.environ.get("LDS_SIMPLE_LOSS_MC_SEED", "0")),
     )
+    saved_prompt = (
+        evaluator.target_meta.get("seed_info", {}).get("prompt")
+        or evaluator.target_meta.get("manifest", {}).get("prompt")
+    )
+    if saved_prompt is not None:
+        expected_tokens = sorted(part.strip() for part in str(prompt).split(",") if part.strip())
+        saved_tokens = sorted(part.strip() for part in str(saved_prompt).split(",") if part.strip())
+        if expected_tokens != saved_tokens:
+            raise ValueError(
+                "LDS query and saved trajectory prompt do not match: "
+                f"query={prompt!r}, trajectory_prompt={saved_prompt!r}, "
+                f"trajectory={evaluator.target_meta.get('trajectory_xt_path')}"
+            )
 
     if args.out_dir:
         out_dir = Path(args.out_dir).resolve()

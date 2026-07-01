@@ -1,0 +1,371 @@
+{
+  "format_version": 1,
+  "dataset": "cifar2",
+  "experiment": "experiment1_42",
+  "mode": "prompted",
+  "m": 50,
+  "k": 5000,
+  "sample_random_seed": 42,
+  "base_checkpoint": "/home/yt7447/diffusion model/diffusion_jax_refined/cifar2/result/experiment1_42/model/prompted_jax/seed_42_epoch_0200.ckpt",
+  "train_config_template": {
+    "data_root": "/home/yt7447/diffusion model/diffusion_jax_refined/dataset/cifar2/cifar-10-batches-py",
+    "batch_names": null,
+    "class_names": [
+      "horse",
+      "automobile"
+    ],
+    "use_test": false,
+    "exclude_ranges": null,
+    "exclude_indices": null,
+    "model_type": "unet",
+    "image_size": 32,
+    "in_channels": 3,
+    "base_channels": 160,
+    "channel_mults": [
+      1,
+      2,
+      2
+    ],
+    "num_res_blocks": 2,
+    "time_emb_dim": 128,
+    "num_classes": 10,
+    "class_cond": true,
+    "cond_mode": "multi_hot",
+    "dropout": 0.1,
+    "seed": 42,
+    "epochs": 200,
+    "batch_size": 128,
+    "learning_rate": 0.0002,
+    "weight_decay": 0.0001,
+    "adam_b1": 0.9,
+    "adam_b2": 0.999,
+    "adam_eps": 1e-08,
+    "grad_clip_norm": 1.0,
+    "ema_decay": 0.999,
+    "log_every": 100,
+    "timesteps": 1000,
+    "beta_start": 0.0001,
+    "beta_end": 0.02,
+    "predict_x0": false,
+    "prefer_device": "gpu",
+    "use_bfloat16": true,
+    "use_data_parallel": true,
+    "num_devices": null,
+    "checkpoint_dir": "/home/yt7447/diffusion model/diffusion_jax_refined/cifar2/result/experiment1_42/model/prompted_jax",
+    "save_every_epochs": 200,
+    "keep_last_k": 1,
+    "resume_from": null,
+    "num_workers": 0,
+    "use_tqdm": true,
+    "prefetch_size": 4,
+    "use_wandb": false,
+    "wandb_project": "DA-unet-cifar10-pixel-training",
+    "wandb_entity": "clearoboticslab",
+    "wandb_run_name": "cifar2-experiment1_42-shared-prompted-jax-seed42",
+    "wandb_mode": "offline",
+    "wandb_log_step_metrics": false
+  },
+  "subsets": [
+    {
+      "subset_id": 0,
+      "subset_seed": 191664963,
+      "subset_size": 5000,
+      "subset_dir": "/home/yt7447/diffusion model/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_42/models/subset_0000"
+    },
+    {
+      "subset_id": 1,
+      "subset_seed": 1662057957,
+      "subset_size": 5000,
+      "subset_dir": "/home/yt7447/diffusion model/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_42/models/subset_0001"
+    },
+    {
+      "subset_id": 2,
+      "subset_seed": 1405681631,
+      "subset_size": 5000,
+      "subset_dir": "/home/yt7447/diffusion model/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_42/models/subset_0002"
+    },
+    {
+      "subset_id": 3,
+      "subset_seed": 942484272,
+      "subset_size": 5000,
+      "subset_dir": "/home/yt7447/diffusion model/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_42/models/subset_0003"
+    },
+    {
+      "subset_id": 4,
+      "subset_seed": 929893137,
+      "subset_size": 5000,
+      "subset_dir": "/home/yt7447/diffusion model/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_42/models/subset_0004"
+    },
+    {
+      "subset_id": 5,
+      "subset_seed": 1843824992,
+      "subset_size": 5000,
+      "subset_dir": "/home/yt7447/diffusion model/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_42/models/subset_0005"
+    },
+    {
+      "subset_id": 6,
+      "subset_seed": 184566854,
+      "subset_size": 5000,
+      "subset_dir": "/home/yt7447/diffusion model/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_42/models/subset_0006"
+    },
+    {
+      "subset_id": 7,
+      "subset_seed": 1497586438,
+      "subset_size": 5000,
+      "subset_dir": "/home/yt7447/diffusion model/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_42/models/subset_0007"
+    },
+    {
+      "subset_id": 8,
+      "subset_seed": 432652533,
+      "subset_size": 5000,
+      "subset_dir": "/home/yt7447/diffusion model/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_42/models/subset_0008"
+    },
+    {
+      "subset_id": 9,
+      "subset_seed": 202244314,
+      "subset_size": 5000,
+      "subset_dir": "/home/yt7447/diffusion model/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_42/models/subset_0009"
+    },
+    {
+      "subset_id": 10,
+      "subset_seed": 1130604997,
+      "subset_size": 5000,
+      "subset_dir": "/home/yt7447/diffusion model/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_42/models/subset_0010"
+    },
+    {
+      "subset_id": 11,
+      "subset_seed": 2095133045,
+      "subset_size": 5000,
+      "subset_dir": "/home/yt7447/diffusion model/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_42/models/subset_0011"
+    },
+    {
+      "subset_id": 12,
+      "subset_seed": 1580016183,
+      "subset_size": 5000,
+      "subset_dir": "/home/yt7447/diffusion model/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_42/models/subset_0012"
+    },
+    {
+      "subset_id": 13,
+      "subset_seed": 1634535062,
+      "subset_size": 5000,
+      "subset_dir": "/home/yt7447/diffusion model/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_42/models/subset_0013"
+    },
+    {
+      "subset_id": 14,
+      "subset_seed": 1540770719,
+      "subset_size": 5000,
+      "subset_dir": "/home/yt7447/diffusion model/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_42/models/subset_0014"
+    },
+    {
+      "subset_id": 15,
+      "subset_seed": 1688060240,
+      "subset_size": 5000,
+      "subset_dir": "/home/yt7447/diffusion model/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_42/models/subset_0015"
+    },
+    {
+      "subset_id": 16,
+      "subset_seed": 1102145672,
+      "subset_size": 5000,
+      "subset_dir": "/home/yt7447/diffusion model/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_42/models/subset_0016"
+    },
+    {
+      "subset_id": 17,
+      "subset_seed": 275121930,
+      "subset_size": 5000,
+      "subset_dir": "/home/yt7447/diffusion model/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_42/models/subset_0017"
+    },
+    {
+      "subset_id": 18,
+      "subset_seed": 1803345590,
+      "subset_size": 5000,
+      "subset_dir": "/home/yt7447/diffusion model/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_42/models/subset_0018"
+    },
+    {
+      "subset_id": 19,
+      "subset_seed": 967196436,
+      "subset_size": 5000,
+      "subset_dir": "/home/yt7447/diffusion model/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_42/models/subset_0019"
+    },
+    {
+      "subset_id": 20,
+      "subset_seed": 1074497555,
+      "subset_size": 5000,
+      "subset_dir": "/home/yt7447/diffusion model/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_42/models/subset_0020"
+    },
+    {
+      "subset_id": 21,
+      "subset_seed": 796282693,
+      "subset_size": 5000,
+      "subset_dir": "/home/yt7447/diffusion model/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_42/models/subset_0021"
+    },
+    {
+      "subset_id": 22,
+      "subset_seed": 392022359,
+      "subset_size": 5000,
+      "subset_dir": "/home/yt7447/diffusion model/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_42/models/subset_0022"
+    },
+    {
+      "subset_id": 23,
+      "subset_seed": 1990212658,
+      "subset_size": 5000,
+      "subset_dir": "/home/yt7447/diffusion model/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_42/models/subset_0023"
+    },
+    {
+      "subset_id": 24,
+      "subset_seed": 1678403330,
+      "subset_size": 5000,
+      "subset_dir": "/home/yt7447/diffusion model/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_42/models/subset_0024"
+    },
+    {
+      "subset_id": 25,
+      "subset_seed": 1382689815,
+      "subset_size": 5000,
+      "subset_dir": "/home/yt7447/diffusion model/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_42/models/subset_0025"
+    },
+    {
+      "subset_id": 26,
+      "subset_seed": 864178266,
+      "subset_size": 5000,
+      "subset_dir": "/home/yt7447/diffusion model/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_42/models/subset_0026"
+    },
+    {
+      "subset_id": 27,
+      "subset_seed": 1766867109,
+      "subset_size": 5000,
+      "subset_dir": "/home/yt7447/diffusion model/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_42/models/subset_0027"
+    },
+    {
+      "subset_id": 28,
+      "subset_seed": 1171300112,
+      "subset_size": 5000,
+      "subset_dir": "/home/yt7447/diffusion model/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_42/models/subset_0028"
+    },
+    {
+      "subset_id": 29,
+      "subset_seed": 952224740,
+      "subset_size": 5000,
+      "subset_dir": "/home/yt7447/diffusion model/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_42/models/subset_0029"
+    },
+    {
+      "subset_id": 30,
+      "subset_seed": 967354524,
+      "subset_size": 5000,
+      "subset_dir": "/home/yt7447/diffusion model/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_42/models/subset_0030"
+    },
+    {
+      "subset_id": 31,
+      "subset_seed": 487991438,
+      "subset_size": 5000,
+      "subset_dir": "/home/yt7447/diffusion model/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_42/models/subset_0031"
+    },
+    {
+      "subset_id": 32,
+      "subset_seed": 197860368,
+      "subset_size": 5000,
+      "subset_dir": "/home/yt7447/diffusion model/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_42/models/subset_0032"
+    },
+    {
+      "subset_id": 33,
+      "subset_seed": 1190961760,
+      "subset_size": 5000,
+      "subset_dir": "/home/yt7447/diffusion model/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_42/models/subset_0033"
+    },
+    {
+      "subset_id": 34,
+      "subset_seed": 1906728918,
+      "subset_size": 5000,
+      "subset_dir": "/home/yt7447/diffusion model/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_42/models/subset_0034"
+    },
+    {
+      "subset_id": 35,
+      "subset_seed": 137046513,
+      "subset_size": 5000,
+      "subset_dir": "/home/yt7447/diffusion model/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_42/models/subset_0035"
+    },
+    {
+      "subset_id": 36,
+      "subset_seed": 1843166518,
+      "subset_size": 5000,
+      "subset_dir": "/home/yt7447/diffusion model/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_42/models/subset_0036"
+    },
+    {
+      "subset_id": 37,
+      "subset_seed": 1777324407,
+      "subset_size": 5000,
+      "subset_dir": "/home/yt7447/diffusion model/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_42/models/subset_0037"
+    },
+    {
+      "subset_id": 38,
+      "subset_seed": 594336917,
+      "subset_size": 5000,
+      "subset_dir": "/home/yt7447/diffusion model/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_42/models/subset_0038"
+    },
+    {
+      "subset_id": 39,
+      "subset_seed": 1356488967,
+      "subset_size": 5000,
+      "subset_dir": "/home/yt7447/diffusion model/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_42/models/subset_0039"
+    },
+    {
+      "subset_id": 40,
+      "subset_seed": 354826746,
+      "subset_size": 5000,
+      "subset_dir": "/home/yt7447/diffusion model/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_42/models/subset_0040"
+    },
+    {
+      "subset_id": 41,
+      "subset_seed": 1627981024,
+      "subset_size": 5000,
+      "subset_dir": "/home/yt7447/diffusion model/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_42/models/subset_0041"
+    },
+    {
+      "subset_id": 42,
+      "subset_seed": 1504361614,
+      "subset_size": 5000,
+      "subset_dir": "/home/yt7447/diffusion model/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_42/models/subset_0042"
+    },
+    {
+      "subset_id": 43,
+      "subset_seed": 761338718,
+      "subset_size": 5000,
+      "subset_dir": "/home/yt7447/diffusion model/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_42/models/subset_0043"
+    },
+    {
+      "subset_id": 44,
+      "subset_seed": 145857092,
+      "subset_size": 5000,
+      "subset_dir": "/home/yt7447/diffusion model/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_42/models/subset_0044"
+    },
+    {
+      "subset_id": 45,
+      "subset_seed": 2084558133,
+      "subset_size": 5000,
+      "subset_dir": "/home/yt7447/diffusion model/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_42/models/subset_0045"
+    },
+    {
+      "subset_id": 46,
+      "subset_seed": 957106589,
+      "subset_size": 5000,
+      "subset_dir": "/home/yt7447/diffusion model/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_42/models/subset_0046"
+    },
+    {
+      "subset_id": 47,
+      "subset_seed": 1917963002,
+      "subset_size": 5000,
+      "subset_dir": "/home/yt7447/diffusion model/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_42/models/subset_0047"
+    },
+    {
+      "subset_id": 48,
+      "subset_seed": 1455819991,
+      "subset_size": 5000,
+      "subset_dir": "/home/yt7447/diffusion model/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_42/models/subset_0048"
+    },
+    {
+      "subset_id": 49,
+      "subset_seed": 1671565830,
+      "subset_size": 5000,
+      "subset_dir": "/home/yt7447/diffusion model/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_42/models/subset_0049"
+    }
+  ],
+  "complete": true
+}

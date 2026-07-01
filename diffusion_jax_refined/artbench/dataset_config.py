@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from copy import deepcopy
 from pathlib import Path
 
@@ -20,6 +21,12 @@ def _parse_score_index_ranges(default: tuple[tuple[int, int], ...]) -> tuple[tup
             )
         ranges.append((int(start_end[0]), int(start_end[1])))
     return tuple(ranges)
+
+
+def _prompt_path_tag(prompt: str) -> str:
+    text = str(prompt).strip().replace(",", "__")
+    text = re.sub(r"[^A-Za-z0-9._-]+", "_", text)
+    return re.sub(r"_+", "_", text).strip("_")[:80] or "empty_prompt"
 
 
 DATASET_NAME = "artbench"
@@ -42,10 +49,16 @@ PROMPTED_JAX_MODEL_ROOT = MODEL_ROOT / "prompted_jax"
 UNPROMPTED_JAX_MODEL_ROOT = MODEL_ROOT / "unprompted_jax"
 SAMPLING_ROOT = EVAL_ROOT / "sampling"
 
-QUERY = "baroque"
+QUERY = os.environ.get("QUERY", "baroque")
 CHECKPOINT_DIR = str(PROMPTED_JAX_MODEL_ROOT)
 REFERENCE_CKPT = str(PROMPTED_JAX_MODEL_ROOT / "seed_42_epoch_0100.ckpt")
-ATTRIBUTION_SAMPLE_DIR = str(SAMPLING_ROOT / "artbench_latent" / "prompt_baroque" / "model_prompted_jax__ckpt_seed_42_epoch_0100")
+ATTRIBUTION_SAMPLE_DIR = os.environ.get(
+    "ATTRIBUTION_SAMPLE_DIR",
+    str(
+        SAMPLING_ROOT / "artbench_latent" / f"prompt_{_prompt_path_tag(QUERY)}"
+        / f"model_prompted_jax__ckpt_{Path(REFERENCE_CKPT).stem}"
+    ),
+)
 UNPROMPTED_TRAIN_SEED = int(os.environ.get("TRAIN_SEED", "42"))
 UNPROMPTED_EPOCHS = int(os.environ.get("JAX_EPOCHS", "100"))
 UNPROMPTED_CKPT_STEM = f"seed_{UNPROMPTED_TRAIN_SEED}_epoch_{UNPROMPTED_EPOCHS:04d}"

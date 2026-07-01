@@ -1167,13 +1167,21 @@ def run_endpoint_dtrak_jax(cfg: EndpointDTrakJAXConfig):
         print(f"[setup] loading precomputed attribution sample: {cfg.attribution_sample_dir}")
         x0_ref, precomputed_sample_meta = load_attribution_endpoint(cfg)
         inferred_query = infer_query_from_attribution_meta(precomputed_sample_meta)
-        if cfg.query is None:
-            if inferred_query is None:
+        if inferred_query is None:
+            if cfg.query is None:
                 raise ValueError(
                     "query is None and no prompt was found in seed_info.json or manifest.json."
                 )
+        else:
+            if cfg.query is not None and sorted(normalize_query_tokens(cfg.query)) != sorted(
+                normalize_query_tokens(inferred_query)
+            ):
+                print(
+                    "[setup] configured query differs from saved sample prompt; "
+                    f"using sample prompt: configured={cfg.query!r}, sample={inferred_query!r}"
+                )
             cfg.query = inferred_query
-            print(f"[setup] inferred query from attribution sample prompt: {cfg.query}")
+            print(f"[setup] query loaded from attribution sample: {cfg.query}")
         print(
             f"[setup] loaded x0_ref shape={tuple(x0_ref.shape)} "
             f"from {precomputed_sample_meta.get('source')}"

@@ -721,7 +721,6 @@ def load_attribution_trajectory(cfg: "TrajAttributionConfig") -> Tuple[List[jnp.
     seed_info = _load_json_if_exists(os.path.join(seed_dir, "seed_info.json"))
     run_root = os.path.dirname(seed_dir)
     manifest = _load_json_if_exists(os.path.join(run_root, "manifest.json"))
-
     meta = {
         "seed_dir": seed_dir,
         "trajectory_xt_path": trajectory_path,
@@ -1125,13 +1124,21 @@ def run_attribution(cfg: TrajAttributionConfig):
         precomputed_traj = load_attribution_trajectory(cfg)
         _, t_preview, _, precomputed_sample_meta = precomputed_traj
         inferred_query = infer_query_from_attribution_meta(precomputed_sample_meta)
-        if cfg.query is None:
-            if inferred_query is None:
+        if inferred_query is None:
+            if cfg.query is None:
                 raise ValueError(
                     "query is None and no prompt was found in seed_info.json or manifest.json."
                 )
+        else:
+            if cfg.query is not None and sorted(normalize_query_tokens(cfg.query)) != sorted(
+                normalize_query_tokens(inferred_query)
+            ):
+                print(
+                    "[setup] configured query differs from saved sample prompt; "
+                    f"using sample prompt: configured={cfg.query!r}, sample={inferred_query!r}"
+                )
             cfg.query = inferred_query
-            print(f"[setup] inferred query from attribution sample prompt: {cfg.query}")
+            print(f"[setup] query loaded from attribution sample: {cfg.query}")
         manifest = precomputed_sample_meta.get("manifest") or {}
         manifest_ckpt = manifest.get("checkpoint")
         resolved_manifest_ckpt = resolve_checkpoint_path_from_manifest(manifest_ckpt)
