@@ -1,0 +1,6 @@
+{
+  "subset_id": 45,
+  "subset_seed": 1537179176,
+  "subset_size": 5000,
+  "subset_dir": "/home/yt7447/diffusion model/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_24/models/subset_0045"
+}

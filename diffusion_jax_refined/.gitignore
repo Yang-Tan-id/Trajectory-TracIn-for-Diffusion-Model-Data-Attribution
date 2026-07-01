@@ -14,9 +14,9 @@ dataset/**
 !dataset/**/
 !dataset/**/README.md
 !dataset/**/.gitkeep
-*/result/*/model/**
-*/result/*/attribution_score/**
-*/result/*/eval/**
-!*/result/*/model/.gitkeep
-!*/result/*/attribution_score/.gitkeep
-!*/result/*/eval/.gitkeep
+# Keep all experiment results in Git/LFS except model checkpoint payloads.
+# This intentionally leaves attribution scores, sampling trajectories, eval
+# outputs, LDS indices/configs/logs, and model-side metadata visible to Git.
+*/result/**/*.ckpt
+*/result/**/*.pt
+*/result/**/*.pth

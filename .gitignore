@@ -1,5 +1,9 @@
-# Model checkpoints and training outputs
-models/
+# Legacy top-level model outputs. Dataset result checkpoints are handled by
+# diffusion_jax_refined/.gitignore without hiding neighboring metadata.
+/models/
+
+# macOS filesystem metadata
+.DS_Store
 
 # Generated samples / local experiment outputs
 samples/
