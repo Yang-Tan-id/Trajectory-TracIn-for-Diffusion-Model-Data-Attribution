@@ -37,7 +37,7 @@ def _attribution_result_dirs(algorithm: str) -> list[str]:
 
 ALGORITHM = os.environ.get("ALGORITHM", "das")
 RESULT_DIRS = _attribution_result_dirs(ALGORITHM)
-DEFAULT_TRAJECTORY_REDUCTION = "snapshot_mean" if ALGORITHM == "traj_tracin" else "sum"
+DEFAULT_TRAJECTORY_REDUCTION = "snapshot_mean"
 COMMAND_CWD = "legacy_jax"
 COMMANDS = {
     "lds": [

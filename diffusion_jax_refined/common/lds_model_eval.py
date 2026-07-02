@@ -101,7 +101,7 @@ def main() -> None:
     sample_dir = infer_attribution_sample_dir(score_inputs) or require_attr(dataset_cfg, sample_attr)
     sample_seed = score_run_config.get("attribution_sample_seed", 0)
     sample_index = int(score_run_config.get("attribution_sample_index", 0))
-    reduction = args.trajectory_reduction or ("snapshot_mean" if args.algorithm == "traj_tracin" else "sum")
+    reduction = args.trajectory_reduction or "snapshot_mean"
 
     evaluator = CifarTargetEvaluator(
         code_file=str(legacy_root / "DM__training_CIFAR10_pixel.py"),
