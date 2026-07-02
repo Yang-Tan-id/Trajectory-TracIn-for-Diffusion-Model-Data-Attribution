@@ -140,7 +140,13 @@ def main() -> None:
     else:
         names = "__".join(path.name for path in model_dirs)
         eval_kind = "lds_unprompted" if args.unprompted else "lds"
-        out_dir = Path(require_attr(dataset_cfg, "EVAL_ROOT")) / eval_kind / args.algorithm / names
+        out_dir = (
+            Path(require_attr(dataset_cfg, "EVAL_ROOT"))
+            / eval_kind
+            / args.algorithm
+            / args.target_function
+            / names
+        )
     out_dir.mkdir(parents=True, exist_ok=True)
 
     rows = []
