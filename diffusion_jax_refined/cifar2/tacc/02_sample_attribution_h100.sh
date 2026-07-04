@@ -31,9 +31,15 @@ QUERIES=("horse" "automobile" "horse,automobile")
 TRAJ_RANGES=("1-2000" "2001-4000" "4001-6000" "6001-8000" "8001-10000")
 ENDPOINT_ALGORITHMS=("das" "dtrak" "end_tracin")
 
+unset PYTHONPATH
 if [[ -n "${ENV_SETUP:-}" ]]; then
   # shellcheck disable=SC1090
   source "${ENV_SETUP}"
+else
+  CONDA_ENV_PATH="${CONDA_ENV_PATH:-${SCRATCH}/conda-envs/trajectory-tracin}"
+  # shellcheck disable=SC1090
+  source "${SCRATCH}/miniforge3/etc/profile.d/conda.sh"
+  conda activate "${CONDA_ENV_PATH}"
 fi
 [[ -d "${CIFAR2_ROOT}" ]] || {
   echo "CIFAR2 root not found: ${CIFAR2_ROOT}" >&2

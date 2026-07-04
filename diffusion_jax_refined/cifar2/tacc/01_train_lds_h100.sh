@@ -26,9 +26,15 @@ LDS_EPOCHS="${LDS_EPOCHS:-200}"
 ALLOW_OVERWRITE="${ALLOW_OVERWRITE:-0}"
 LOG_ROOT="${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/tacc_logs/lds_${SLURM_JOB_ID}"
 
+unset PYTHONPATH
 if [[ -n "${ENV_SETUP:-}" ]]; then
   # shellcheck disable=SC1090
   source "${ENV_SETUP}"
+else
+  CONDA_ENV_PATH="${CONDA_ENV_PATH:-${SCRATCH}/conda-envs/trajectory-tracin}"
+  # shellcheck disable=SC1090
+  source "${SCRATCH}/miniforge3/etc/profile.d/conda.sh"
+  conda activate "${CONDA_ENV_PATH}"
 fi
 [[ -d "${CIFAR2_ROOT}" ]] || {
   echo "CIFAR2 root not found: ${CIFAR2_ROOT}" >&2
