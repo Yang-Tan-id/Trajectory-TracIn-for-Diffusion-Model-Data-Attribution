@@ -3,7 +3,6 @@
 #SBATCH --partition=h100
 #SBATCH --nodes=4
 #SBATCH --ntasks-per-node=4
-#SBATCH --gpus-per-node=4
 #SBATCH --cpus-per-task=16
 #SBATCH --time=48:00:00
 #SBATCH --output=cifar2-lds-%j.out
@@ -58,9 +57,9 @@ pids=()
 for seed in $(seq 1 16); do
   log="${LOG_ROOT}/seed_${seed}.log"
   echo "Launching LDS seed ${seed} -> ${log}"
-  srun --exclusive --exact \
-    --nodes=1 --ntasks=1 --gpus=1 --cpus-per-task="${SLURM_CPUS_PER_TASK:-16}" \
-    env \
+  slot=$((seed - 1))
+  ibrun -n 1 -o "${slot}" \
+    env CUDA_VISIBLE_DEVICES="$((slot % 4))" \
       EXPERIMENT_TAG="${EXPERIMENT_TAG}" \
       LDS_M="${LDS_M}" \
       LDS_K="${LDS_K}" \

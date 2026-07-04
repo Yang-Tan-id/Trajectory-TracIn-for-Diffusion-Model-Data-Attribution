@@ -3,7 +3,6 @@
 #SBATCH --partition=h100
 #SBATCH --nodes=4
 #SBATCH --ntasks-per-node=4
-#SBATCH --gpus-per-node=4
 #SBATCH --cpus-per-task=16
 #SBATCH --time=48:00:00
 #SBATCH --output=cifar2-lds-eval-%j.out
@@ -77,9 +76,10 @@ for query in "${QUERIES[@]}"; do
     for input in "${inputs[@]}"; do
       [[ -f "${input}/scores.npy" ]] || { echo "Missing ${input}/scores.npy" >&2; exit 1; }
     done
-    srun --exclusive --exact \
-      --nodes=1 --ntasks=1 --gpus=1 --cpus-per-task="${SLURM_CPUS_PER_TASK:-16}" \
-      env EXPERIMENT_TAG="${EXPERIMENT_TAG}" QUERY="${query}" \
+    slot="${#pids[@]}"
+    ibrun -n 1 -o "${slot}" \
+      env CUDA_VISIBLE_DEVICES="$((slot % 4))" \
+        EXPERIMENT_TAG="${EXPERIMENT_TAG}" QUERY="${query}" \
         INITIAL_SEED="${INITIAL_SEED}" ALGORITHMS="${algorithm}" \
         ATTRIBUTION_RESULT_DIRS="${dirs}" LDS_MODEL_DIRS="${LDS_MODEL_DIRS}" \
         LDS_DEVICE=gpu LDS_NUM_DEVICES=1 \

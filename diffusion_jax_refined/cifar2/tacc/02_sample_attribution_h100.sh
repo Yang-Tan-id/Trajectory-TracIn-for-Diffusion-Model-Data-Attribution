@@ -3,7 +3,6 @@
 #SBATCH --partition=h100
 #SBATCH --nodes=4
 #SBATCH --ntasks-per-node=4
-#SBATCH --gpus-per-node=4
 #SBATCH --cpus-per-task=16
 #SBATCH --time=48:00:00
 #SBATCH --output=cifar2-sample-attr-%j.out
@@ -99,12 +98,12 @@ wait_batch() {
 
 launch_sample() {
   local query="$1"
+  local slot="$2"
   local tag
   tag="$(query_tag "${query}")"
   echo "Sampling query=${query}, initial_seed=${INITIAL_SEED}"
-  srun --exclusive --exact \
-    --nodes=1 --ntasks=1 --gpus=1 --cpus-per-task="${SLURM_CPUS_PER_TASK:-16}" \
-    env \
+  ibrun -n 1 -o "${slot}" \
+    env CUDA_VISIBLE_DEVICES="$((slot % 4))" \
       EXPERIMENT_TAG="${EXPERIMENT_TAG}" \
       QUERY="${query}" \
       SAMPLE_SEEDS="${INITIAL_SEED}" \
@@ -115,6 +114,7 @@ launch_attribution() {
   local query="$1"
   local algorithm="$2"
   local range="${3:-}"
+  local slot="$4"
   local tag suffix
   tag="$(query_tag "${query}")"
   suffix="${algorithm}"
@@ -122,9 +122,8 @@ launch_attribution() {
     suffix="${suffix}_${range//-/_}"
   fi
   echo "Attribution query=${query}, algorithm=${algorithm}, range=${range:-all}"
-  srun --exclusive --exact \
-    --nodes=1 --ntasks=1 --gpus=1 --cpus-per-task="${SLURM_CPUS_PER_TASK:-16}" \
-    env \
+  ibrun -n 1 -o "${slot}" \
+    env CUDA_VISIBLE_DEVICES="$((slot % 4))" \
       EXPERIMENT_TAG="${EXPERIMENT_TAG}" \
       QUERY="${query}" \
       INITIAL_SEED="${INITIAL_SEED}" \
@@ -147,9 +146,11 @@ fi
 if [[ "${ATTR_SHARD}" == "1" ]]; then
   echo "Phase 1/2: sampling three queries"
   pids=()
+  sample_slot=0
   for query in "${QUERIES[@]}"; do
-    launch_sample "${query}"
+    launch_sample "${query}" "${sample_slot}"
     pids+=("$!")
+    sample_slot=$((sample_slot + 1))
   done
   wait_batch "${pids[@]}"
 else
@@ -171,7 +172,8 @@ for query in "${QUERIES[@]}"; do
       echo "Refusing to overwrite ${output_dir}" >&2
       exit 1
     fi
-    launch_attribution "${query}" traj_tracin "${range}"
+    slot="${#pids[@]}"
+    launch_attribution "${query}" traj_tracin "${range}" "${slot}"
     pids+=("$!")
   done
   for algorithm in "${ENDPOINT_ALGORITHMS[@]}"; do
@@ -185,7 +187,8 @@ for query in "${QUERIES[@]}"; do
       echo "Refusing to overwrite ${output_dir}" >&2
       exit 1
     fi
-    launch_attribution "${query}" "${algorithm}"
+    slot="${#pids[@]}"
+    launch_attribution "${query}" "${algorithm}" "" "${slot}"
     pids+=("$!")
   done
 done
