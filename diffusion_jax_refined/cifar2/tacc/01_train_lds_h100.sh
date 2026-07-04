@@ -17,7 +17,7 @@ set -euo pipefail
 # file that activates it:
 #   ENV_SETUP=$HOME/envs/trajectory-tracin.sh sbatch -A <allocation> ...
 
-REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)}"
+REPO_ROOT="${REPO_ROOT:-${SLURM_SUBMIT_DIR:-$(pwd)}}"
 CIFAR2_ROOT="${REPO_ROOT}/diffusion_jax_refined/cifar2"
 EXPERIMENT_TAG="${EXPERIMENT_TAG:-experiment1_42}"
 LDS_M="${LDS_M:-50}"
@@ -30,6 +30,11 @@ if [[ -n "${ENV_SETUP:-}" ]]; then
   # shellcheck disable=SC1090
   source "${ENV_SETUP}"
 fi
+[[ -d "${CIFAR2_ROOT}" ]] || {
+  echo "CIFAR2 root not found: ${CIFAR2_ROOT}" >&2
+  echo "Submit this job from the repository root or set REPO_ROOT explicitly." >&2
+  exit 1
+}
 command -v python >/dev/null || {
   echo "python is not available; activate the project environment or set ENV_SETUP." >&2
   exit 1
