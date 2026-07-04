@@ -1,34 +1,30 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=cifar2-attr-eval
+#SBATCH --job-name=cifar2-sample-attr
 #SBATCH --partition=h100
 #SBATCH --nodes=4
 #SBATCH --ntasks-per-node=4
 #SBATCH --gpus-per-node=4
 #SBATCH --cpus-per-task=16
 #SBATCH --time=48:00:00
-#SBATCH --output=cifar2-attr-eval-%j.out
-#SBATCH --error=cifar2-attr-eval-%j.err
+#SBATCH --output=cifar2-sample-attr-%j.out
+#SBATCH --error=cifar2-sample-attr-%j.err
 
 set -euo pipefail
 
-# This job must run after 01_train_lds_h100.sh because its final phase reads
-# all 16 LDS model folders. Recommended submission:
-#
-#   lds_job=$(sbatch --parsable -A <allocation> \
-#     diffusion_jax_refined/cifar2/tacc/01_train_lds_h100.sh)
-#   sbatch -A <allocation> --dependency=afterok:${lds_job} \
-#     diffusion_jax_refined/cifar2/tacc/02_sample_attribution_eval_h100.sh
+# Part 1 samples and runs the first 16 attribution tasks. Part 2 runs the
+# remaining 8 tasks and then launches LDS evaluation in the same allocation.
 
 REPO_ROOT="${REPO_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)}"
 CIFAR2_ROOT="${REPO_ROOT}/diffusion_jax_refined/cifar2"
 EXPERIMENT_TAG="${EXPERIMENT_TAG:-experiment1_42}"
 INITIAL_SEED="${INITIAL_SEED:-42}"
-LDS_M="${LDS_M:-50}"
-LDS_K="${LDS_K:-5000}"
-LDS_TARGET_FUNCTION="${LDS_TARGET_FUNCTION:-noise_trajectory}"
+ATTR_SHARD="${ATTR_SHARD:?Set ATTR_SHARD=1 for the first 16 tasks or ATTR_SHARD=2 for the remaining 8}"
 ALLOW_OVERWRITE="${ALLOW_OVERWRITE:-0}"
-LOG_ROOT="${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/tacc_logs/attr_eval_${SLURM_JOB_ID}"
-MAX_PARALLEL=16
+LOG_ROOT="${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/tacc_logs/sample_attr_part${ATTR_SHARD}_${SLURM_JOB_ID}"
+[[ "${ATTR_SHARD}" == "1" || "${ATTR_SHARD}" == "2" ]] || {
+  echo "ATTR_SHARD must be 1 or 2" >&2
+  exit 1
+}
 
 # CIFAR multi-label queries are comma-separated. This represents the requested
 # "horse + automobile" query in the format accepted by the model.
@@ -137,114 +133,68 @@ launch_attribution() {
     bash scripts/01_data_attribution.sh >"${LOG_ROOT}/attr_${tag}_${suffix}.log" 2>&1 &
 }
 
-launch_eval() {
-  local query="$1"
-  local algorithm="$2"
-  local tag score_dirs
-  tag="$(query_tag "${query}")"
-  score_dirs="$(score_dirs_for_algorithm "${query}" "${algorithm}")"
-  echo "LDS eval query=${query}, algorithm=${algorithm}"
-  srun --exclusive --exact \
-    --nodes=1 --ntasks=1 --gpus=1 --cpus-per-task="${SLURM_CPUS_PER_TASK:-16}" \
-    env \
-      EXPERIMENT_TAG="${EXPERIMENT_TAG}" \
-      QUERY="${query}" \
-      INITIAL_SEED="${INITIAL_SEED}" \
-      ALGORITHMS="${algorithm}" \
-      ATTRIBUTION_RESULT_DIRS="${score_dirs}" \
-      LDS_MODEL_DIRS="${LDS_MODEL_DIRS}" \
-      LDS_TARGET_FUNCTION="${LDS_TARGET_FUNCTION}" \
-      LDS_DEVICE=gpu \
-      LDS_NUM_DEVICES=1 \
-    bash scripts/04_lds_eval.sh \
-      --target-function "${LDS_TARGET_FUNCTION}" \
-      >"${LOG_ROOT}/eval_${tag}_${algorithm}.log" 2>&1 &
-}
-
-if [[ "${ALLOW_OVERWRITE}" != "1" ]]; then
+if [[ "${ATTR_SHARD}" == "1" && "${ALLOW_OVERWRITE}" != "1" ]]; then
   for query in "${QUERIES[@]}"; do
     tag="$(path_tag "${query}")"
     sample_dir="${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/eval/sampling/cifar/prompt_${tag}/model_prompted_jax__ckpt_seed_42_epoch_0200/seed_$(printf '%06d' "${INITIAL_SEED}")"
-    attribution_dir="$(attribution_root_for_query "${query}")"
-    eval_dir="${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/eval/query_${tag}/initial_seed_${INITIAL_SEED}"
-    for existing in "${sample_dir}" "${attribution_dir}" "${eval_dir}"; do
-      if [[ -e "${existing}" ]]; then
-        echo "Refusing to overwrite existing output: ${existing}" >&2
-        echo "Use a new experiment/seed, archive the old output, or set ALLOW_OVERWRITE=1." >&2
-        exit 1
-      fi
-    done
+    if [[ -e "${sample_dir}" ]]; then
+      echo "Refusing to overwrite existing sample: ${sample_dir}" >&2
+      exit 1
+    fi
   done
 fi
 
-echo "Phase 1/3: sampling three queries"
-pids=()
-for query in "${QUERIES[@]}"; do
-  launch_sample "${query}"
-  pids+=("$!")
-done
-wait_batch "${pids[@]}"
+if [[ "${ATTR_SHARD}" == "1" ]]; then
+  echo "Phase 1/2: sampling three queries"
+  pids=()
+  for query in "${QUERIES[@]}"; do
+    launch_sample "${query}"
+    pids+=("$!")
+  done
+  wait_batch "${pids[@]}"
+else
+  echo "Part 2: reusing samples created by attribution part 1"
+fi
 
-echo "Phase 2/3: attribution (24 GPU tasks in batches of at most ${MAX_PARALLEL})"
+echo "Attribution part ${ATTR_SHARD}/2"
 pids=()
+task_index=0
 for query in "${QUERIES[@]}"; do
   for range in "${TRAJ_RANGES[@]}"; do
+    task_index=$((task_index + 1))
+    if [[ "${ATTR_SHARD}" == "1" && "${task_index}" -gt 16 ]] ||
+       [[ "${ATTR_SHARD}" == "2" && "${task_index}" -le 16 ]]; then
+      continue
+    fi
+    output_dir="$(attribution_root_for_query "${query}")/traj_tracin_range_${range//-/_}"
+    if [[ "${ALLOW_OVERWRITE}" != "1" && -e "${output_dir}" ]]; then
+      echo "Refusing to overwrite ${output_dir}" >&2
+      exit 1
+    fi
     launch_attribution "${query}" traj_tracin "${range}"
     pids+=("$!")
-    if (( ${#pids[@]} == MAX_PARALLEL )); then
-      wait_batch "${pids[@]}"
-      pids=()
-    fi
   done
   for algorithm in "${ENDPOINT_ALGORITHMS[@]}"; do
-    launch_attribution "${query}" "${algorithm}"
-    pids+=("$!")
-    if (( ${#pids[@]} == MAX_PARALLEL )); then
-      wait_batch "${pids[@]}"
-      pids=()
+    task_index=$((task_index + 1))
+    if [[ "${ATTR_SHARD}" == "1" && "${task_index}" -gt 16 ]] ||
+       [[ "${ATTR_SHARD}" == "2" && "${task_index}" -le 16 ]]; then
+      continue
     fi
-  done
-done
-if (( ${#pids[@]} )); then
-  wait_batch "${pids[@]}"
-fi
-
-LDS_MODEL_DIRS=""
-for seed in $(seq 1 16); do
-  model_dir="${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/lds_model/m_${LDS_M}_k_${LDS_K}_seed_${seed}"
-  if [[ ! -f "${model_dir}/lds_model_config.json" ]]; then
-    echo "Missing LDS model folder or config: ${model_dir}" >&2
-    exit 1
-  fi
-  if ! grep -q '"complete": true' "${model_dir}/lds_model_config.json"; then
-    echo "LDS model run is incomplete: ${model_dir}" >&2
-    exit 1
-  fi
-  LDS_MODEL_DIRS+="${LDS_MODEL_DIRS:+,}${model_dir}"
-done
-export LDS_MODEL_DIRS
-
-for query in "${QUERIES[@]}"; do
-  for algorithm in traj_tracin "${ENDPOINT_ALGORITHMS[@]}"; do
-    IFS=',' read -r -a expected_score_dirs <<<"$(score_dirs_for_algorithm "${query}" "${algorithm}")"
-    for score_dir in "${expected_score_dirs[@]}"; do
-      if [[ ! -f "${score_dir}/scores.npy" ]]; then
-        echo "Missing expected attribution score file: ${score_dir}/scores.npy" >&2
-        exit 1
-      fi
-    done
-  done
-done
-
-echo "Phase 3/3: evaluating four algorithms for all three queries"
-pids=()
-for query in "${QUERIES[@]}"; do
-  for algorithm in traj_tracin "${ENDPOINT_ALGORITHMS[@]}"; do
-    launch_eval "${query}" "${algorithm}"
+    output_dir="$(attribution_root_for_query "${query}")/${algorithm}_range_1_10000"
+    if [[ "${ALLOW_OVERWRITE}" != "1" && -e "${output_dir}" ]]; then
+      echo "Refusing to overwrite ${output_dir}" >&2
+      exit 1
+    fi
+    launch_attribution "${query}" "${algorithm}"
     pids+=("$!")
   done
 done
 wait_batch "${pids[@]}"
 
-echo "Sampling, attribution, and LDS evaluation completed successfully."
+echo "Attribution part ${ATTR_SHARD}/2 completed successfully (${#pids[@]} tasks)."
 echo "Logs: ${LOG_ROOT}"
+
+if [[ "${ATTR_SHARD}" == "2" ]]; then
+  echo "Starting LDS evaluation after attribution part 2"
+  bash "${CIFAR2_ROOT}/tacc/03_lds_eval_h100.sh"
+fi
