@@ -34,7 +34,7 @@ def _result_dirs(cfg, algorithm: str) -> list[Path]:
     explicit = os.environ.get("ATTRIBUTION_RESULT_DIRS")
     if explicit:
         return [Path(x) for x in _split_paths(explicit)]
-    root = Path(require_attr(cfg, "ATTRIBUTION_ROOT"))
+    root = Path(require_attr(cfg, "UNPROMPTED_ATTRIBUTION_RUN_ROOT"))
     base = root / f"{algorithm}_unprompted"
     ranges = os.environ.get("ATTRIBUTION_RANGES") or os.environ.get("SCORE_INDEX_RANGES")
     if ranges:

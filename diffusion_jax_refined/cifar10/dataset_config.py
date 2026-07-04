@@ -50,6 +50,14 @@ UNPROMPTED_JAX_MODEL_ROOT = MODEL_ROOT / "unprompted_jax"
 SAMPLING_ROOT = EVAL_ROOT / "sampling"
 
 QUERY = os.environ.get("QUERY", "truck")
+INITIAL_SEED = int(os.environ.get("INITIAL_SEED", os.environ.get("SAMPLE_SEED", "0")))
+ATTRIBUTION_RUN_ROOT = (
+    ATTRIBUTION_ROOT / f"query_{_prompt_path_tag(QUERY)}" / f"initial_seed_{INITIAL_SEED}"
+)
+EVAL_RUN_ROOT = EVAL_ROOT / f"query_{_prompt_path_tag(QUERY)}" / f"initial_seed_{INITIAL_SEED}"
+UNPROMPTED_ATTRIBUTION_RUN_ROOT = (
+    ATTRIBUTION_ROOT / "query_unconditional" / f"initial_seed_{INITIAL_SEED}"
+)
 DATA_ROOT = str(DATASET_STORAGE_ROOT / "cifar-10-batches-py")
 HF_DATASET_ROOT = str(DATASET_STORAGE_ROOT / "hf_cifar10")
 LDS_INDEX_ROOT = DATASET_STORAGE_ROOT / "indices" / "lds-val"
@@ -101,7 +109,7 @@ ATTRIBUTION_CONFIGS = {
         "baseline_dir": CHECKPOINT_DIR,
         "reference_ckpt": REFERENCE_CKPT,
         "attribution_sample_dir": ATTRIBUTION_SAMPLE_DIR,
-        "attribution_sample_seed": 0,
+        "attribution_sample_seed": INITIAL_SEED,
         "attribution_sample_index": 0,
         "timesteps_total": 1000,
         "ddim_steps": 1000,
@@ -117,7 +125,7 @@ ATTRIBUTION_CONFIGS = {
         "checkpoint_dir": CHECKPOINT_DIR,
         "reference_ckpt": REFERENCE_CKPT,
         "attribution_sample_dir": ATTRIBUTION_SAMPLE_DIR,
-        "attribution_sample_seed": 0,
+        "attribution_sample_seed": INITIAL_SEED,
         "attribution_sample_index": 0,
         "use_saved_trajectory": True,
         "ddim_steps": 1000,
@@ -131,7 +139,7 @@ ATTRIBUTION_CONFIGS = {
         "baseline_dir": CHECKPOINT_DIR,
         "reference_ckpt": REFERENCE_CKPT,
         "attribution_sample_dir": ATTRIBUTION_SAMPLE_DIR,
-        "attribution_sample_seed": 0,
+        "attribution_sample_seed": INITIAL_SEED,
         "attribution_sample_index": 0,
         "timesteps": 1000,
         "ddim_steps": 1000,
@@ -149,7 +157,7 @@ ATTRIBUTION_CONFIGS = {
         "use_baseline_ckpts": True,
         "checkpoint_limit": -1,
         "attribution_sample_dir": ATTRIBUTION_SAMPLE_DIR,
-        "attribution_sample_seed": 0,
+        "attribution_sample_seed": INITIAL_SEED,
         "attribution_sample_index": 0,
         "timesteps": 1000,
         "ddim_steps": 1000,

@@ -14,7 +14,7 @@ bash scripts/00_train.sh
 EXPERIMENT_TAG=experiment1 QUERY=truck SAMPLE_SEEDS=0,1,2 \
 CUDA_VISIBLE_DEVICES=0 bash scripts/00_sample.sh
 
-EXPERIMENT_TAG=experiment1 QUERY=truck ALGORITHMS="das traj_tracin" \
+EXPERIMENT_TAG=experiment1 QUERY=truck INITIAL_SEED=0 ALGORITHMS="das traj_tracin" \
 CUDA_VISIBLE_DEVICES=0 bash scripts/01_data_attribution.sh
 ```
 
@@ -65,7 +65,7 @@ ALGORITHMS="das traj_tracin" \
 LDS_MODEL_DIRS="\
   result/experiment1/lds_model/m_50_k_5000_seed_0,
   result/experiment1/lds_model/m_50_k_5000_seed_1" \
-bash scripts/04_lds_eval.sh
+QUERY=truck INITIAL_SEED=0 bash scripts/04_lds_eval.sh
 ```
 
 Prompted paths:
@@ -110,7 +110,7 @@ See `diffusion_jax_refined/README_UNPROMPTED.md` for details.
 ```text
 diffusion_jax_refined/<dataset>/result/<experiment>/
 ├── model/
-├── attribution_score/
+├── attribution_score/query_<query>/initial_seed_<seed>/
 ├── lds_model/
 └── eval/
 ```

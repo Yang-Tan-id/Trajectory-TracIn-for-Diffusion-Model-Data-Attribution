@@ -33,13 +33,14 @@ def _result_dirs(cfg, algorithm: str) -> list[Path]:
     explicit = os.environ.get("ATTRIBUTION_RESULT_DIRS")
     if explicit:
         return [Path(x) for x in _split_paths(explicit)]
-    root = Path(require_attr(cfg, "ATTRIBUTION_ROOT"))
+    root = Path(require_attr(cfg, "UNPROMPTED_ATTRIBUTION_RUN_ROOT"))
     base = root / f"{algorithm}_unprompted"
     ranges = os.environ.get("ATTRIBUTION_RANGES") or os.environ.get("SCORE_INDEX_RANGES")
     if ranges:
         parts = [p for p in ranges.replace(",", " ").split() if p]
         return [base.with_name(f"{base.name}_{_range_suffix(part)}") for part in parts]
-    return [base]
+    matches = sorted(path for path in root.glob(f"{algorithm}_unprompted*") if path.is_dir())
+    return matches or [base]
 
 
 def _load_scores(result_dir: Path) -> tuple[np.ndarray, np.ndarray]:

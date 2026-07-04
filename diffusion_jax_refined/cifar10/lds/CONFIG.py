@@ -6,7 +6,7 @@ DATASET_DIR = Path(__file__).resolve().parents[1]
 if str(DATASET_DIR) not in sys.path:
     sys.path.insert(0, str(DATASET_DIR))
 
-from dataset_config import ATTRIBUTION_ROOT, DATASET_NAME, DATA_ROOT, EVAL_ROOT, EXPERIMENT_TAG, QUERY, REFERENCE_CKPT
+from dataset_config import ATTRIBUTION_RUN_ROOT, DATASET_NAME, DATA_ROOT, EVAL_RUN_ROOT, EXPERIMENT_TAG, QUERY, REFERENCE_CKPT
 
 
 def _range_suffix(part: str) -> str:
@@ -30,9 +30,10 @@ def _attribution_result_dirs(algorithm: str) -> list[str]:
         return _split_paths(explicit)
     ranges = os.environ.get("ATTRIBUTION_RANGES") or os.environ.get("SCORE_INDEX_RANGES")
     if algorithm == "traj_tracin" and ranges:
-        base = str(ATTRIBUTION_ROOT / algorithm)
+        base = str(ATTRIBUTION_RUN_ROOT / algorithm)
         return [f"{base}_{_range_suffix(part)}" for part in _split_list(ranges)]
-    return [str(ATTRIBUTION_ROOT / algorithm)]
+    matches = sorted(path for path in ATTRIBUTION_RUN_ROOT.glob(f"{algorithm}*") if path.is_dir())
+    return [str(path) for path in matches] or [str(ATTRIBUTION_RUN_ROOT / algorithm)]
 
 
 ALGORITHM = os.environ.get("ALGORITHM", "das")
@@ -64,7 +65,7 @@ COMMANDS = {
         "--prediction-sign",
         os.environ.get("LDS_PREDICTION_SIGN", "-1"),
         "--out-root",
-        str(EVAL_ROOT / "lds" / ALGORITHM),
+        str(EVAL_RUN_ROOT / "lds" / ALGORITHM),
         "--run-name",
         f"{EXPERIMENT_TAG}_{DATASET_NAME}_{ALGORITHM}",
         "--epochs",

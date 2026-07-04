@@ -81,7 +81,10 @@ def main() -> None:
 
     score_file = args.score_file or os.environ.get("ATTRIBUTION_RESULT_DIRS")
     if score_file is None:
-        attribution_root = Path(require_attr(dataset_cfg, "ATTRIBUTION_ROOT"))
+        root_attr = (
+            "UNPROMPTED_ATTRIBUTION_RUN_ROOT" if args.unprompted else "ATTRIBUTION_RUN_ROOT"
+        )
+        attribution_root = Path(require_attr(dataset_cfg, root_attr))
         ranges = os.environ.get("ATTRIBUTION_RANGES") or os.environ.get("SCORE_INDEX_RANGES")
         algorithm_dir = f"{args.algorithm}_unprompted" if args.unprompted else args.algorithm
         if args.algorithm == "traj_tracin" and ranges:
@@ -90,7 +93,12 @@ def main() -> None:
                 for part in ranges.replace(",", " ").split()
             )
         else:
-            score_file = str(attribution_root / algorithm_dir)
+            matches = sorted(
+                path for path in attribution_root.glob(f"{algorithm_dir}*") if path.is_dir()
+            )
+            score_file = ",".join(str(path) for path in matches) or str(
+                attribution_root / algorithm_dir
+            )
     score_inputs = resolve_score_inputs(score_file)
     indices, scores, sources = combine_attribution_scores(score_inputs, duplicate_policy=args.duplicate_policy)
     score_map = build_score_vector(indices, scores)
@@ -141,7 +149,7 @@ def main() -> None:
         names = "__".join(path.name for path in model_dirs)
         eval_kind = "lds_unprompted" if args.unprompted else "lds"
         out_dir = (
-            Path(require_attr(dataset_cfg, "EVAL_ROOT"))
+            Path(require_attr(dataset_cfg, "EVAL_RUN_ROOT"))
             / eval_kind
             / args.algorithm
             / args.target_function

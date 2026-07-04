@@ -7,7 +7,7 @@ if str(DATASET_DIR) not in sys.path:
     sys.path.insert(0, str(DATASET_DIR))
 
 from dataset_config import (
-    ATTRIBUTION_ROOT,
+    UNPROMPTED_ATTRIBUTION_RUN_ROOT,
     CLASS_NAMES,
     DATASET_NAME,
     DATA_ROOT,
@@ -47,7 +47,7 @@ def _attribution_result_dirs(algorithm: str) -> list[str]:
         "SCORE_INDEX_RANGES"
     )
     ranges = _parse_ranges(ranges_text) if ranges_text else list(SCORE_INDEX_RANGES)
-    base = ATTRIBUTION_ROOT / f"{algorithm}_unprompted"
+    base = UNPROMPTED_ATTRIBUTION_RUN_ROOT / f"{algorithm}_unprompted"
     if not ranges:
         return [str(base)]
     return [

@@ -77,8 +77,8 @@ CUDA_VISIBLE_DEVICES=0 SAMPLE_SEEDS=0,1,2 SAMPLE_TRAJECTORY_STEPS=100 bash scrip
 # Or run from an individual attribution folder.
 (cd data_attribution/traj_tracin && CUDA_VISIBLE_DEVICES=0 bash script.sh train)
 
-# Run attribution for all algorithms.
-CUDA_VISIBLE_DEVICES=0 bash scripts/01_data_attribution.sh
+# Run attribution for one saved query/initial-seed pair.
+QUERY=horse INITIAL_SEED=0 CUDA_VISIBLE_DEVICES=0 bash scripts/01_data_attribution.sh
 
 # Run only DAS and trajectory TracIn.
 CUDA_VISIBLE_DEVICES=1 ALGORITHMS="das traj_tracin" bash scripts/01_data_attribution.sh
@@ -87,13 +87,13 @@ CUDA_VISIBLE_DEVICES=1 ALGORITHMS="das traj_tracin" bash scripts/01_data_attribu
 CUDA_VISIBLE_DEVICES=0 ALGORITHMS="traj_tracin" ATTRIBUTION_RANGES="1-2500,2501-5000,5001-7500,7501-10000" bash scripts/01_data_attribution.sh
 
 # Run counterfactual metric for DAS.
-CUDA_VISIBLE_DEVICES=0 ALGORITHMS="das" TOPK=5000 bash scripts/02_metric_counterfactual.sh
+QUERY=horse INITIAL_SEED=0 CUDA_VISIBLE_DEVICES=0 ALGORITHMS="das" TOPK=5000 bash scripts/02_metric_counterfactual.sh
 
 # Counterfactual automatically combines trajectory TracIn range outputs when ATTRIBUTION_RANGES is set.
 CUDA_VISIBLE_DEVICES=0 ALGORITHMS="traj_tracin" ATTRIBUTION_RANGES="1-2500,2501-5000,5001-7500,7501-10000" TOPK=5000 bash scripts/02_metric_counterfactual.sh
 
 # Run LDS for DAS.
-CUDA_VISIBLE_DEVICES=0 ALGORITHMS="das" LDS_M=100 LDS_SUBSET_SIZE=5000 bash scripts/03_metric_lds.sh
+QUERY=horse INITIAL_SEED=0 CUDA_VISIBLE_DEVICES=0 ALGORITHMS="das" LDS_M=100 LDS_SUBSET_SIZE=5000 bash scripts/03_metric_lds.sh
 
 # LDS also combines trajectory TracIn range outputs with the same ATTRIBUTION_RANGES value.
 CUDA_VISIBLE_DEVICES=0 ALGORITHMS="traj_tracin" ATTRIBUTION_RANGES="1-2500,2501-5000,5001-7500,7501-10000" LDS_M=100 LDS_SUBSET_SIZE=5000 bash scripts/03_metric_lds.sh

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -34,6 +35,27 @@ def model_root(dataset_name: str, experiment_tag: str) -> Path:
 
 def attribution_root(dataset_name: str, experiment_tag: str, algorithm: str) -> Path:
     return experiment_root(dataset_name, experiment_tag) / "attribution_score" / algorithm
+
+
+def path_tag(value: object) -> str:
+    text = str(value).strip().replace(",", "__")
+    text = re.sub(r"[^A-Za-z0-9._-]+", "_", text)
+    return re.sub(r"_+", "_", text).strip("_")[:80] or "empty"
+
+
+def attribution_run_root(
+    dataset_name: str,
+    experiment_tag: str,
+    query: object,
+    initial_seed: int,
+) -> Path:
+    """Folder containing every algorithm/range output for one saved query sample."""
+    return (
+        experiment_root(dataset_name, experiment_tag)
+        / "attribution_score"
+        / f"query_{path_tag(query)}"
+        / f"initial_seed_{int(initial_seed)}"
+    )
 
 
 def eval_root(dataset_name: str, experiment_tag: str, metric_name: str) -> Path:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict
+import os
 import pickle
 from pathlib import Path
 from typing import Any, Callable
@@ -8,7 +9,7 @@ from typing import Any, Callable
 from .config_loader import load_config, require_attr
 from .paths import (
     add_legacy_jax_to_path,
-    attribution_root,
+    attribution_run_root,
     chdir_legacy_jax_root,
     ensure_experiment_dirs,
 )
@@ -43,8 +44,16 @@ ENGINE_MAP: dict[str, tuple[str, str, str]] = {
 }
 
 
-def build_output_dir(dataset_name: str, experiment_tag: str, algorithm: str) -> str:
-    return str(attribution_root(dataset_name, experiment_tag, algorithm).resolve())
+def build_output_dir(
+    dataset_name: str,
+    experiment_tag: str,
+    algorithm: str,
+    query: object,
+    initial_seed: int,
+) -> str:
+    return str(
+        (attribution_run_root(dataset_name, experiment_tag, query, initial_seed) / algorithm).resolve()
+    )
 
 
 def run_algorithm_config(config_path: str | Path) -> Any:
@@ -58,7 +67,14 @@ def run_algorithm_config(config_path: str | Path) -> Any:
         raise ValueError(f"Unsupported algorithm {algorithm!r}; expected one of {sorted(ENGINE_MAP)}")
 
     ensure_experiment_dirs(dataset_name, experiment_tag)
-    config_values.setdefault("out_dir", build_output_dir(dataset_name, experiment_tag, algorithm))
+    query = config_values.get("query", os.environ.get("QUERY", "unconditional"))
+    initial_seed = int(
+        config_values.get("attribution_sample_seed", os.environ.get("INITIAL_SEED", "0"))
+    )
+    config_values.setdefault(
+        "out_dir",
+        build_output_dir(dataset_name, experiment_tag, algorithm, query, initial_seed),
+    )
 
     add_legacy_jax_to_path()
     chdir_legacy_jax_root()
@@ -101,7 +117,13 @@ def run_unprompted_algorithm_config(
     ensure_experiment_dirs(dataset_name, experiment_tag)
     config_values.setdefault(
         "out_dir",
-        build_output_dir(dataset_name, experiment_tag, f"{algorithm}_unprompted"),
+        build_output_dir(
+            dataset_name,
+            experiment_tag,
+            f"{algorithm}_unprompted",
+            config_values.get("query", "unconditional"),
+            int(config_values.get("attribution_sample_seed", os.environ.get("INITIAL_SEED", "0"))),
+        ),
     )
 
     add_legacy_jax_to_path()
