@@ -26,6 +26,7 @@ INITIAL_SEED="${INITIAL_SEED:-42}"
 LDS_M="${LDS_M:-50}"
 LDS_K="${LDS_K:-5000}"
 LDS_TARGET_FUNCTION="${LDS_TARGET_FUNCTION:-noise_trajectory}"
+ALLOW_OVERWRITE="${ALLOW_OVERWRITE:-0}"
 LOG_ROOT="${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/tacc_logs/attr_eval_${SLURM_JOB_ID}"
 MAX_PARALLEL=16
 
@@ -52,6 +53,38 @@ query_tag() {
   value="${value//,/__}"
   value="${value//[^A-Za-z0-9._-]/_}"
   printf '%s' "${value}"
+}
+
+path_tag() {
+  local value="$1"
+  value="${value//,/_}"
+  value="${value//[^A-Za-z0-9._-]/_}"
+  while [[ "${value}" == *"__"* ]]; do
+    value="${value//__/_}"
+  done
+  value="${value#_}"
+  value="${value%_}"
+  printf '%s' "${value}"
+}
+
+attribution_root_for_query() {
+  printf '%s/result/%s/attribution_score/query_%s/initial_seed_%s' \
+    "${CIFAR2_ROOT}" "${EXPERIMENT_TAG}" "$(path_tag "$1")" "${INITIAL_SEED}"
+}
+
+score_dirs_for_algorithm() {
+  local query="$1"
+  local algorithm="$2"
+  local root range output=""
+  root="$(attribution_root_for_query "${query}")"
+  if [[ "${algorithm}" == "traj_tracin" ]]; then
+    for range in "${TRAJ_RANGES[@]}"; do
+      output+="${output:+,}${root}/traj_tracin_range_${range//-/_}"
+    done
+  else
+    output="${root}/${algorithm}_range_1_10000"
+  fi
+  printf '%s' "${output}"
 }
 
 wait_batch() {
@@ -107,8 +140,9 @@ launch_attribution() {
 launch_eval() {
   local query="$1"
   local algorithm="$2"
-  local tag
+  local tag score_dirs
   tag="$(query_tag "${query}")"
+  score_dirs="$(score_dirs_for_algorithm "${query}" "${algorithm}")"
   echo "LDS eval query=${query}, algorithm=${algorithm}"
   srun --exclusive --exact \
     --nodes=1 --ntasks=1 --gpus=1 --cpus-per-task="${SLURM_CPUS_PER_TASK:-16}" \
@@ -117,6 +151,7 @@ launch_eval() {
       QUERY="${query}" \
       INITIAL_SEED="${INITIAL_SEED}" \
       ALGORITHMS="${algorithm}" \
+      ATTRIBUTION_RESULT_DIRS="${score_dirs}" \
       LDS_MODEL_DIRS="${LDS_MODEL_DIRS}" \
       LDS_TARGET_FUNCTION="${LDS_TARGET_FUNCTION}" \
       LDS_DEVICE=gpu \
@@ -125,6 +160,22 @@ launch_eval() {
       --target-function "${LDS_TARGET_FUNCTION}" \
       >"${LOG_ROOT}/eval_${tag}_${algorithm}.log" 2>&1 &
 }
+
+if [[ "${ALLOW_OVERWRITE}" != "1" ]]; then
+  for query in "${QUERIES[@]}"; do
+    tag="$(path_tag "${query}")"
+    sample_dir="${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/eval/sampling/cifar/prompt_${tag}/model_prompted_jax__ckpt_seed_42_epoch_0200/seed_$(printf '%06d' "${INITIAL_SEED}")"
+    attribution_dir="$(attribution_root_for_query "${query}")"
+    eval_dir="${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/eval/query_${tag}/initial_seed_${INITIAL_SEED}"
+    for existing in "${sample_dir}" "${attribution_dir}" "${eval_dir}"; do
+      if [[ -e "${existing}" ]]; then
+        echo "Refusing to overwrite existing output: ${existing}" >&2
+        echo "Use a new experiment/seed, archive the old output, or set ALLOW_OVERWRITE=1." >&2
+        exit 1
+      fi
+    done
+  done
+fi
 
 echo "Phase 1/3: sampling three queries"
 pids=()
@@ -165,9 +216,25 @@ for seed in $(seq 1 16); do
     echo "Missing LDS model folder or config: ${model_dir}" >&2
     exit 1
   fi
+  if ! grep -q '"complete": true' "${model_dir}/lds_model_config.json"; then
+    echo "LDS model run is incomplete: ${model_dir}" >&2
+    exit 1
+  fi
   LDS_MODEL_DIRS+="${LDS_MODEL_DIRS:+,}${model_dir}"
 done
 export LDS_MODEL_DIRS
+
+for query in "${QUERIES[@]}"; do
+  for algorithm in traj_tracin "${ENDPOINT_ALGORITHMS[@]}"; do
+    IFS=',' read -r -a expected_score_dirs <<<"$(score_dirs_for_algorithm "${query}" "${algorithm}")"
+    for score_dir in "${expected_score_dirs[@]}"; do
+      if [[ ! -f "${score_dir}/scores.npy" ]]; then
+        echo "Missing expected attribution score file: ${score_dir}/scores.npy" >&2
+        exit 1
+      fi
+    done
+  done
+done
 
 echo "Phase 3/3: evaluating four algorithms for all three queries"
 pids=()

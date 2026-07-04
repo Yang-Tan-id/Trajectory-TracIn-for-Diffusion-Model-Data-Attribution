@@ -29,6 +29,10 @@ environment before submission, or pass an activation file:
 ENV_SETUP=$HOME/envs/trajectory-tracin.sh sbatch -A <allocation> ...
 ```
 
+Both scripts refuse to overwrite an existing LDS, sample, attribution, or eval
+output by default. Prefer a new experiment tag or archive old outputs. Set
+`ALLOW_OVERWRITE=1` only when replacing an existing run is intentional.
+
 Run `qlimits` before submission because TACC may adjust queue limits. These
 scripts currently match the documented Stampede3 `h100` limits: four nodes per
 job, 48 hours, four nodes running per user, and two running jobs per user.

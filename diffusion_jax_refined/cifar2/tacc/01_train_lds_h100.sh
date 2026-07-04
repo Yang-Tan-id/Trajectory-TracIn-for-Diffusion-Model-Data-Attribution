@@ -24,6 +24,7 @@ EXPERIMENT_TAG="${EXPERIMENT_TAG:-experiment1_42}"
 LDS_M="${LDS_M:-50}"
 LDS_K="${LDS_K:-5000}"
 LDS_EPOCHS="${LDS_EPOCHS:-200}"
+ALLOW_OVERWRITE="${ALLOW_OVERWRITE:-0}"
 LOG_ROOT="${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/tacc_logs/lds_${SLURM_JOB_ID}"
 
 if [[ -n "${ENV_SETUP:-}" ]]; then
@@ -41,6 +42,17 @@ cd "${CIFAR2_ROOT}"
 echo "Training LDS seeds 1-16 with ${LDS_M} subsets/seed and k=${LDS_K}"
 echo "Experiment: ${EXPERIMENT_TAG}"
 echo "Logs: ${LOG_ROOT}"
+
+if [[ "${ALLOW_OVERWRITE}" != "1" ]]; then
+  for seed in $(seq 1 16); do
+    model_dir="${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/lds_model/m_${LDS_M}_k_${LDS_K}_seed_${seed}"
+    if [[ -e "${model_dir}" ]]; then
+      echo "Refusing to overwrite existing LDS output: ${model_dir}" >&2
+      echo "Use a new experiment tag, remove/archive the old output, or set ALLOW_OVERWRITE=1." >&2
+      exit 1
+    fi
+  done
+fi
 
 pids=()
 for seed in $(seq 1 16); do
