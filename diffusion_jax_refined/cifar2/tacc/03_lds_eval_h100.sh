@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #SBATCH --job-name=cifar2-lds-eval
 #SBATCH --partition=h100
-#SBATCH --nodes=4
+#SBATCH --nodes=1
 #SBATCH --ntasks-per-node=4
 #SBATCH --cpus-per-task=16
 #SBATCH --time=48:00:00
@@ -19,6 +19,7 @@ LDS_K="${LDS_K:-5000}"
 LDS_TARGET_FUNCTION="${LDS_TARGET_FUNCTION:-noise_trajectory}"
 ALLOW_OVERWRITE="${ALLOW_OVERWRITE:-0}"
 LOG_ROOT="${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/tacc_logs/lds_eval_${SLURM_JOB_ID}"
+MAX_PARALLEL_EVAL_TASKS="${MAX_PARALLEL_EVAL_TASKS:-${SLURM_NTASKS:-4}}"
 
 QUERIES=("horse" "automobile" "horse,automobile")
 TRAJ_RANGES=("1-2000" "2001-4000" "4001-6000" "6001-8000" "8001-10000")
@@ -63,6 +64,14 @@ score_dirs() {
   printf '%s' "${output}"
 }
 
+wait_eval_batch() {
+  local failed=0 pid
+  for pid in "$@"; do
+    wait "${pid}" || failed=1
+  done
+  (( failed == 0 )) || { echo "At least one eval failed; see ${LOG_ROOT}" >&2; exit 1; }
+}
+
 LDS_MODEL_DIRS=""
 for seed in $(seq 1 16); do
   model_dir="${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/lds_model/m_${LDS_M}_k_${LDS_K}_seed_${seed}"
@@ -74,6 +83,7 @@ for seed in $(seq 1 16); do
 done
 
 pids=()
+total_launched=0
 for query in "${QUERIES[@]}"; do
   tag="$(path_tag "${query}")"
   eval_dir="${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/eval/query_${tag}/initial_seed_${INITIAL_SEED}"
@@ -97,10 +107,15 @@ for query in "${QUERIES[@]}"; do
       bash scripts/04_lds_eval.sh --target-function "${LDS_TARGET_FUNCTION}" \
       >"${LOG_ROOT}/eval_${tag}_${algorithm}.log" 2>&1 &
     pids+=("$!")
+    total_launched=$((total_launched + 1))
+    if (( ${#pids[@]} >= MAX_PARALLEL_EVAL_TASKS )); then
+      wait_eval_batch "${pids[@]}"
+      pids=()
+    fi
   done
 done
 
-failed=0
-for pid in "${pids[@]}"; do wait "${pid}" || failed=1; done
-(( failed == 0 )) || { echo "At least one eval failed; see ${LOG_ROOT}" >&2; exit 1; }
-echo "All 12 LDS evaluations completed. Logs: ${LOG_ROOT}"
+if (( ${#pids[@]} > 0 )); then
+  wait_eval_batch "${pids[@]}"
+fi
+echo "All ${total_launched} LDS evaluations completed. Logs: ${LOG_ROOT}"
