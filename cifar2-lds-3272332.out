@@ -1,0 +1,20 @@
+Training LDS seeds 1-16 with 50 subsets/seed and k=5000
+Experiment: experiment1_42
+Logs: /work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/tacc_logs/lds_3272332
+Launching LDS seed 1 -> /work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/tacc_logs/lds_3272332/seed_1.log
+Launching LDS seed 2 -> /work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/tacc_logs/lds_3272332/seed_2.log
+Launching LDS seed 3 -> /work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/tacc_logs/lds_3272332/seed_3.log
+Launching LDS seed 4 -> /work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/tacc_logs/lds_3272332/seed_4.log
+Launching LDS seed 5 -> /work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/tacc_logs/lds_3272332/seed_5.log
+Launching LDS seed 6 -> /work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/tacc_logs/lds_3272332/seed_6.log
+Launching LDS seed 7 -> /work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/tacc_logs/lds_3272332/seed_7.log
+Launching LDS seed 8 -> /work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/tacc_logs/lds_3272332/seed_8.log
+Launching LDS seed 9 -> /work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/tacc_logs/lds_3272332/seed_9.log
+Launching LDS seed 10 -> /work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/tacc_logs/lds_3272332/seed_10.log
+Launching LDS seed 11 -> /work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/tacc_logs/lds_3272332/seed_11.log
+Launching LDS seed 12 -> /work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/tacc_logs/lds_3272332/seed_12.log
+Launching LDS seed 13 -> /work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/tacc_logs/lds_3272332/seed_13.log
+Launching LDS seed 14 -> /work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/tacc_logs/lds_3272332/seed_14.log
+Launching LDS seed 15 -> /work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/tacc_logs/lds_3272332/seed_15.log
+Launching LDS seed 16 -> /work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/tacc_logs/lds_3272332/seed_16.log
+All LDS seeds completed successfully.

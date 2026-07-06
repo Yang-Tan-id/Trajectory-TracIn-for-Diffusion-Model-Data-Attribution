@@ -1,0 +1,13 @@
+Part 2: reusing samples created by attribution part 1
+Attribution part 2/2
+Attribution query=horse,automobile, algorithm=traj_tracin, range=1-2000
+Attribution query=horse,automobile, algorithm=traj_tracin, range=2001-4000
+Attribution query=horse,automobile, algorithm=traj_tracin, range=4001-6000
+Attribution query=horse,automobile, algorithm=traj_tracin, range=6001-8000
+Attribution query=horse,automobile, algorithm=traj_tracin, range=8001-10000
+Attribution query=horse,automobile, algorithm=das, range=all
+Attribution query=horse,automobile, algorithm=dtrak, range=all
+Attribution query=horse,automobile, algorithm=end_tracin, range=all
+Attribution part 2/2 completed successfully (8 tasks).
+Logs: /work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/tacc_logs/sample_attr_part2_3272691
+Starting LDS evaluation after attribution part 2
