@@ -511,6 +511,8 @@ class EndpointProjectedDASJAXConfig:
     max_num_ckpts: Optional[int] = 1
 
     batch_size: int = 64
+    use_batched_per_example_grads: bool = False
+    per_example_grad_batch_size: int = 4
     max_train_points: int = 1024
     random_subset: bool = True
     score_index_ranges: Optional[Tuple[Tuple[int, int], ...]] = None
@@ -943,6 +945,127 @@ def apply_score_subset_suffix_to_out_dir(cfg):
     return suffix
 
 
+def compute_batched_das_term(
+    *,
+    adapter,
+    ds,
+    picked,
+    params,
+    phi_fn,
+    t_tensor,
+    output_probe,
+    cfg,
+    ckpt_i: int,
+    t_value: int,
+    mc_i: int,
+    device,
+    phi_q,
+    description: str,
+):
+    """Compute one DAS term with exact per-example grads evaluated via vmap."""
+    batch_size = max(1, int(cfg.per_example_grad_batch_size))
+    num_points = len(picked)
+    num_batches = (num_points + batch_size - 1) // batch_size
+    proj_dim = int(cfg.proj_dim)
+
+    batched_phi_fn = jax.jit(
+        jax.vmap(phi_fn, in_axes=(None, 0, 0, None, 0, None))
+    )
+
+    # Keeping projected features avoids the legacy second gradient pass.
+    phi_cache = np.empty((num_points, proj_dim), dtype=np.float32)
+    residual_cache = np.empty((num_points,), dtype=np.float32)
+    H_device = array_to_device(jnp.zeros((proj_dim, proj_dim), dtype=jnp.float32), device)
+
+    started = time.perf_counter()
+    iterator = iter_with_tqdm(
+        range(num_batches),
+        total=num_batches,
+        desc=description,
+        enabled=bool(cfg.use_tqdm),
+    )
+    for batch_idx in iterator:
+        start = batch_idx * batch_size
+        batch_indices = picked[start:start + batch_size]
+        done_batches = batch_idx + 1
+
+        x_items = []
+        cond_items = []
+        keys = []
+        for idx in batch_indices:
+            x0_i, cond_i = adapter.get_item(ds, idx)
+            x_items.append(x0_i)
+            cond_items.append(cond_i)
+            keys.append(make_jax_key(cfg.seed, "pdas_tr", ckpt_i, t_value, mc_i, idx))
+
+        # get_item includes the model batch dimension (1); vmap maps the new
+        # leading dimension and preserves the exact legacy per-example shapes.
+        x_batch = array_to_device(jnp.stack(x_items, axis=0), device)
+        cond_batch = array_to_device(jnp.stack(cond_items, axis=0), device)
+        key_batch = array_to_device(jnp.stack(keys, axis=0), device)
+        noise_batch = jax.vmap(
+            lambda key, x: jax.random.normal(key, x.shape, dtype=x.dtype)
+        )(key_batch, x_batch)
+
+        residual_batch, phi_batch = batched_phi_fn(
+            params,
+            x_batch,
+            cond_batch,
+            t_tensor,
+            noise_batch,
+            output_probe,
+        )
+        H_device = H_device + phi_batch.T @ phi_batch
+
+        # One transfer/synchronization per microbatch instead of per example.
+        phi_np = np.asarray(phi_batch, dtype=np.float32)
+        residual_np = np.asarray(residual_batch, dtype=np.float32).reshape(-1)
+        end = start + len(batch_indices)
+        phi_cache[start:end] = phi_np
+        residual_cache[start:end] = residual_np
+
+        if should_print_progress(
+            done_batches,
+            num_batches,
+            max(1, int(cfg.progress_every_batches)),
+        ):
+            elapsed = time.perf_counter() - started
+            print(
+                f"    [BATCHED/H+features] batch {done_batches}/{num_batches} | "
+                f"samples={end}/{num_points} | elapsed={format_seconds(elapsed)} | "
+                f"eta={format_eta(done_batches, num_batches, elapsed, warmup_steps=2)}"
+            )
+        if hasattr(iterator, "set_postfix"):
+            iterator.set_postfix(samples=f"{end}/{num_points}")
+
+    H_proj = np.asarray(H_device, dtype=np.float32)
+    H_proj += float(cfg.damping) * np.eye(proj_dim, dtype=np.float32)
+    phi_q_np = np.asarray(phi_q, dtype=np.float32)
+    u = np.linalg.solve(H_proj, phi_q_np)
+
+    raw = (phi_cache @ u).astype(np.float64) * residual_cache.astype(np.float64)
+    if cfg.use_sherman_morrison_denominator:
+        # Solve several right-hand sides together while preserving one
+        # leverage/denominator per example.
+        denominator = np.empty((num_points,), dtype=np.float64)
+        solve_batch_size = max(1, batch_size)
+        for start in range(0, num_points, solve_batch_size):
+            end = min(start + solve_batch_size, num_points)
+            phi_chunk = phi_cache[start:end]
+            solved = np.linalg.solve(H_proj, phi_chunk.T).T
+            leverage = np.einsum("bi,bi->b", phi_chunk, solved, dtype=np.float64)
+            denom = 1.0 - leverage
+            denom = np.where(
+                np.abs(denom) < 1e-6,
+                np.where(denom >= 0.0, 1e-6, -1e-6),
+                denom,
+            )
+            denominator[start:end] = denom
+        raw /= denominator
+
+    return np.square(raw), float(np.mean(residual_cache))
+
+
 # ============================================================
 # Main
 # ============================================================
@@ -1009,6 +1132,8 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
     print(f"normalize_proj_grads    : {cfg.normalize_projected_grads}")
     print(f"sherman_morrison_denom  : {cfg.use_sherman_morrison_denominator}")
     print(f"batch_size              : {cfg.batch_size}")
+    print(f"batched_per_example     : {cfg.use_batched_per_example_grads}")
+    print(f"per_example_grad_batch  : {cfg.per_example_grad_batch_size}")
     print(f"max_train_points        : {cfg.max_train_points}")
     print(f"random_subset           : {cfg.random_subset}")
     print(f"score_index_ranges      : {cfg.score_index_ranges}")
@@ -1196,6 +1321,48 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
                     f"query_residual_projection={float(query_residual):.6f}"
                 )
 
+                if cfg.use_batched_per_example_grads:
+                    print(
+                        "[mc] using batched exact per-example gradients | "
+                        f"microbatch={int(cfg.per_example_grad_batch_size)}"
+                    )
+                    term_scores, avg_resid = compute_batched_das_term(
+                        adapter=adapter,
+                        ds=ds,
+                        picked=picked,
+                        params=params_k,
+                        phi_fn=phi_fn,
+                        t_tensor=t_tensor,
+                        output_probe=output_probe,
+                        cfg=cfg,
+                        ckpt_i=ckpt_i,
+                        t_value=t_value,
+                        mc_i=mc_i,
+                        device=device,
+                        phi_q=phi_q,
+                        description=(
+                            f"DAS batched ckpt {ckpt_i+1}/{len(baseline_ckpts)} "
+                            f"t={t_value} mc={mc_i+1}"
+                        ),
+                    )
+                    scores += term_scores
+                    term_elapsed = time.perf_counter() - term_t0
+                    term_eta = format_eta(
+                        processed_mc_terms,
+                        total_mc_terms,
+                        time.perf_counter() - t0,
+                        warmup_steps=2,
+                    )
+                    print(
+                        f"[done] ckpt {ckpt_i+1}/{len(baseline_ckpts)} | "
+                        f"t={t_value} | mc {mc_i+1}/{num_mc_noise} | "
+                        f"query_residual_projection={float(query_residual):.6f} | "
+                        f"avg_train_residual_projection={avg_resid:.6f} | "
+                        f"term_elapsed={format_seconds(term_elapsed)} | "
+                        f"total_eta={term_eta}"
+                    )
+                    continue
+
                 H_proj = np.zeros((proj_dim, proj_dim), dtype=np.float32)
 
                 pass1_t0 = time.perf_counter()
@@ -1341,6 +1508,8 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
         "damping": float(damping),
         "proj_dim": int(proj_dim),
         "normalize_projected_grads": bool(cfg.normalize_projected_grads),
+        "use_batched_per_example_grads": bool(cfg.use_batched_per_example_grads),
+        "per_example_grad_batch_size": int(cfg.per_example_grad_batch_size),
         "use_sherman_morrison_denominator": bool(cfg.use_sherman_morrison_denominator),
         "num_terms_total": int(total_terms),
         "attribution_sample_dir": cfg.attribution_sample_dir,
@@ -1352,7 +1521,11 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
         "score_subset_suffix": out_suffix,
         "use_tqdm": bool(cfg.use_tqdm),
         "elapsed_sec": float(time.perf_counter() - t0),
-        "solver": "projected_eps_jacobian_das_jax",
+        "solver": (
+            "projected_eps_jacobian_das_jax_batched"
+            if cfg.use_batched_per_example_grads
+            else "projected_eps_jacobian_das_jax"
+        ),
     }
 
     save_json(os.path.join(cfg.out_dir, "run_config.json"), asdict(cfg))

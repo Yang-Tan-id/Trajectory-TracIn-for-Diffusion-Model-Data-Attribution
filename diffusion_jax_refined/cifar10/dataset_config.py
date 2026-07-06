@@ -118,6 +118,8 @@ ATTRIBUTION_CONFIGS = {
         "proj_dim": 4096,
         "damping": 1e-3,
         "batch_size": 64,
+        "use_batched_per_example_grads": os.environ.get("DAS_BATCHED", "1") not in ("0", "false", "False"),
+        "per_example_grad_batch_size": int(os.environ.get("DAS_GRAD_BATCH_SIZE", "4")),
         "max_num_ckpts": 1,
     },
     "traj_tracin": {

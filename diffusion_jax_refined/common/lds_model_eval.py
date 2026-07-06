@@ -3,6 +3,7 @@ from __future__ import annotations
 """Evaluate attribution scores against one or more reusable LDS model folders."""
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -17,6 +18,26 @@ from common.config_loader import load_config, require_attr
 
 def _paths(text: str) -> list[Path]:
     return [Path(part.strip()).expanduser().resolve() for part in text.split(",") if part.strip()]
+
+
+def _compact_model_group_name(model_dirs: list[Path], *, max_len: int = 96) -> str:
+    names = [path.name for path in model_dirs]
+    joined = "__".join(names)
+    if len(joined) <= max_len:
+        return joined
+    digest = hashlib.sha1(joined.encode("utf-8")).hexdigest()[:12]
+    seeds = []
+    for name in names:
+        if "_seed_" in name:
+            try:
+                seeds.append(int(name.rsplit("_seed_", 1)[1].split("_", 1)[0]))
+            except ValueError:
+                pass
+    if seeds:
+        seed_tag = f"seeds_{min(seeds)}_{max(seeds)}"
+    else:
+        seed_tag = f"{len(names)}_models"
+    return f"{len(names)}_lds_models_{seed_tag}_{digest}"
 
 
 def main() -> None:
@@ -107,7 +128,10 @@ def main() -> None:
     prompt = infer_prompt(score_inputs) or ("unconditional" if args.unprompted else require_attr(dataset_cfg, "QUERY"))
     sample_attr = "UNPROMPTED_ATTRIBUTION_SAMPLE_DIR" if args.unprompted else "ATTRIBUTION_SAMPLE_DIR"
     sample_dir = infer_attribution_sample_dir(score_inputs) or require_attr(dataset_cfg, sample_attr)
-    sample_seed = score_run_config.get("attribution_sample_seed", 0)
+    sample_seed = score_run_config.get(
+        "attribution_sample_seed",
+        getattr(dataset_cfg, "INITIAL_SEED", os.environ.get("INITIAL_SEED", 0)),
+    )
     sample_index = int(score_run_config.get("attribution_sample_index", 0))
     reduction = args.trajectory_reduction or "snapshot_mean"
 
@@ -146,7 +170,7 @@ def main() -> None:
     if args.out_dir:
         out_dir = Path(args.out_dir).resolve()
     else:
-        names = "__".join(path.name for path in model_dirs)
+        names = _compact_model_group_name(model_dirs)
         eval_kind = "lds_unprompted" if args.unprompted else "lds"
         out_dir = (
             Path(require_attr(dataset_cfg, "EVAL_RUN_ROOT"))

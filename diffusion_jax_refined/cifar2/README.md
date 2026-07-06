@@ -91,6 +91,20 @@ bash scripts/04_lds_eval.sh --target-function simple_loss
 When `ATTRIBUTION_RESULT_DIRS` is omitted, LDS automatically combines every
 matching algorithm/range folder for the selected `QUERY` and `INITIAL_SEED`.
 
+## Batched DAS
+
+DAS uses exact per-example gradients evaluated in JAX microbatches. The
+mathematical score is unchanged; projected features remain per-example and are
+cached to avoid the former second gradient pass. The default microbatch is 4:
+
+```bash
+DAS_GRAD_BATCH_SIZE=4 QUERY=horse INITIAL_SEED=42 \
+ALGORITHMS=das bash scripts/01_data_attribution.sh
+```
+
+Increase gradually if GPU memory allows. Use `DAS_BATCHED=0` to run the legacy
+one-example-at-a-time implementation for equivalence checks.
+
 ## Unprompted
 
 ```bash
