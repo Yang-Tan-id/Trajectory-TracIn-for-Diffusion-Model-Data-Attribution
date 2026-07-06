@@ -18,3 +18,4 @@ databases/
 __pycache__/
 *.py[cod]
 *$py.class
+diffusion_jax_refined/cifar2/result/*/tacc_logs/

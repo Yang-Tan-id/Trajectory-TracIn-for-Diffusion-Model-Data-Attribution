@@ -1,0 +1,371 @@
+{
+  "format_version": 1,
+  "dataset": "cifar2",
+  "experiment": "experiment1_42",
+  "mode": "prompted",
+  "m": 50,
+  "k": 5000,
+  "sample_random_seed": 13,
+  "base_checkpoint": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/model/prompted_jax/seed_42_epoch_0200.ckpt",
+  "train_config_template": {
+    "data_root": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/dataset/cifar2/cifar-10-batches-py",
+    "batch_names": null,
+    "class_names": [
+      "horse",
+      "automobile"
+    ],
+    "use_test": false,
+    "exclude_ranges": null,
+    "exclude_indices": null,
+    "model_type": "unet",
+    "image_size": 32,
+    "in_channels": 3,
+    "base_channels": 160,
+    "channel_mults": [
+      1,
+      2,
+      2
+    ],
+    "num_res_blocks": 2,
+    "time_emb_dim": 128,
+    "num_classes": 10,
+    "class_cond": true,
+    "cond_mode": "multi_hot",
+    "dropout": 0.1,
+    "seed": 42,
+    "epochs": 200,
+    "batch_size": 128,
+    "learning_rate": 0.0002,
+    "weight_decay": 0.0001,
+    "adam_b1": 0.9,
+    "adam_b2": 0.999,
+    "adam_eps": 1e-08,
+    "grad_clip_norm": 1.0,
+    "ema_decay": 0.999,
+    "log_every": 100,
+    "timesteps": 1000,
+    "beta_start": 0.0001,
+    "beta_end": 0.02,
+    "predict_x0": false,
+    "prefer_device": "gpu",
+    "use_bfloat16": true,
+    "use_data_parallel": true,
+    "num_devices": 1,
+    "checkpoint_dir": "/home/yt7447/diffusion model/diffusion_jax_refined/cifar2/result/experiment1_42/model/prompted_jax",
+    "save_every_epochs": 200,
+    "keep_last_k": 1,
+    "resume_from": null,
+    "num_workers": 0,
+    "use_tqdm": true,
+    "prefetch_size": 4,
+    "use_wandb": false,
+    "wandb_project": "DA-unet-cifar10-pixel-training",
+    "wandb_entity": "clearoboticslab",
+    "wandb_run_name": "cifar2-experiment1_42-shared-prompted-jax-seed42",
+    "wandb_mode": "offline",
+    "wandb_log_step_metrics": false
+  },
+  "subsets": [
+    {
+      "subset_id": 0,
+      "subset_seed": 1924045405,
+      "subset_size": 5000,
+      "subset_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_13/models/subset_0000"
+    },
+    {
+      "subset_id": 1,
+      "subset_seed": 1857138675,
+      "subset_size": 5000,
+      "subset_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_13/models/subset_0001"
+    },
+    {
+      "subset_id": 2,
+      "subset_seed": 1760389630,
+      "subset_size": 5000,
+      "subset_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_13/models/subset_0002"
+    },
+    {
+      "subset_id": 3,
+      "subset_seed": 1836748163,
+      "subset_size": 5000,
+      "subset_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_13/models/subset_0003"
+    },
+    {
+      "subset_id": 4,
+      "subset_seed": 149284444,
+      "subset_size": 5000,
+      "subset_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_13/models/subset_0004"
+    },
+    {
+      "subset_id": 5,
+      "subset_seed": 1741659486,
+      "subset_size": 5000,
+      "subset_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_13/models/subset_0005"
+    },
+    {
+      "subset_id": 6,
+      "subset_seed": 2022850572,
+      "subset_size": 5000,
+      "subset_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_13/models/subset_0006"
+    },
+    {
+      "subset_id": 7,
+      "subset_seed": 561451785,
+      "subset_size": 5000,
+      "subset_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_13/models/subset_0007"
+    },
+    {
+      "subset_id": 8,
+      "subset_seed": 364116581,
+      "subset_size": 5000,
+      "subset_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_13/models/subset_0008"
+    },
+    {
+      "subset_id": 9,
+      "subset_seed": 165784572,
+      "subset_size": 5000,
+      "subset_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_13/models/subset_0009"
+    },
+    {
+      "subset_id": 10,
+      "subset_seed": 1715750152,
+      "subset_size": 5000,
+      "subset_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_13/models/subset_0010"
+    },
+    {
+      "subset_id": 11,
+      "subset_seed": 2032519785,
+      "subset_size": 5000,
+      "subset_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_13/models/subset_0011"
+    },
+    {
+      "subset_id": 12,
+      "subset_seed": 1296733790,
+      "subset_size": 5000,
+      "subset_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_13/models/subset_0012"
+    },
+    {
+      "subset_id": 13,
+      "subset_seed": 1318107618,
+      "subset_size": 5000,
+      "subset_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_13/models/subset_0013"
+    },
+    {
+      "subset_id": 14,
+      "subset_seed": 1693915709,
+      "subset_size": 5000,
+      "subset_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_13/models/subset_0014"
+    },
+    {
+      "subset_id": 15,
+      "subset_seed": 5649499,
+      "subset_size": 5000,
+      "subset_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_13/models/subset_0015"
+    },
+    {
+      "subset_id": 16,
+      "subset_seed": 1796202707,
+      "subset_size": 5000,
+      "subset_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_13/models/subset_0016"
+    },
+    {
+      "subset_id": 17,
+      "subset_seed": 1955084526,
+      "subset_size": 5000,
+      "subset_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_13/models/subset_0017"
+    },
+    {
+      "subset_id": 18,
+      "subset_seed": 284426760,
+      "subset_size": 5000,
+      "subset_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_13/models/subset_0018"
+    },
+    {
+      "subset_id": 19,
+      "subset_seed": 2114849358,
+      "subset_size": 5000,
+      "subset_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_13/models/subset_0019"
+    },
+    {
+      "subset_id": 20,
+      "subset_seed": 1824415291,
+      "subset_size": 5000,
+      "subset_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_13/models/subset_0020"
+    },
+    {
+      "subset_id": 21,
+      "subset_seed": 614817275,
+      "subset_size": 5000,
+      "subset_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_13/models/subset_0021"
+    },
+    {
+      "subset_id": 22,
+      "subset_seed": 1028750986,
+      "subset_size": 5000,
+      "subset_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_13/models/subset_0022"
+    },
+    {
+      "subset_id": 23,
+      "subset_seed": 1747323955,
+      "subset_size": 5000,
+      "subset_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_13/models/subset_0023"
+    },
+    {
+      "subset_id": 24,
+      "subset_seed": 1934500993,
+      "subset_size": 5000,
+      "subset_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_13/models/subset_0024"
+    },
+    {
+      "subset_id": 25,
+      "subset_seed": 176969711,
+      "subset_size": 5000,
+      "subset_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_13/models/subset_0025"
+    },
+    {
+      "subset_id": 26,
+      "subset_seed": 1412031030,
+      "subset_size": 5000,
+      "subset_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_13/models/subset_0026"
+    },
+    {
+      "subset_id": 27,
+      "subset_seed": 941199234,
+      "subset_size": 5000,
+      "subset_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_13/models/subset_0027"
+    },
+    {
+      "subset_id": 28,
+      "subset_seed": 740235310,
+      "subset_size": 5000,
+      "subset_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_13/models/subset_0028"
+    },
+    {
+      "subset_id": 29,
+      "subset_seed": 1756005484,
+      "subset_size": 5000,
+      "subset_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_13/models/subset_0029"
+    },
+    {
+      "subset_id": 30,
+      "subset_seed": 1476750803,
+      "subset_size": 5000,
+      "subset_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_13/models/subset_0030"
+    },
+    {
+      "subset_id": 31,
+      "subset_seed": 877748147,
+      "subset_size": 5000,
+      "subset_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_13/models/subset_0031"
+    },
+    {
+      "subset_id": 32,
+      "subset_seed": 1893314292,
+      "subset_size": 5000,
+      "subset_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_13/models/subset_0032"
+    },
+    {
+      "subset_id": 33,
+      "subset_seed": 1111859028,
+      "subset_size": 5000,
+      "subset_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_13/models/subset_0033"
+    },
+    {
+      "subset_id": 34,
+      "subset_seed": 1831934464,
+      "subset_size": 5000,
+      "subset_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_13/models/subset_0034"
+    },
+    {
+      "subset_id": 35,
+      "subset_seed": 251341235,
+      "subset_size": 5000,
+      "subset_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_13/models/subset_0035"
+    },
+    {
+      "subset_id": 36,
+      "subset_seed": 1954263998,
+      "subset_size": 5000,
+      "subset_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_13/models/subset_0036"
+    },
+    {
+      "subset_id": 37,
+      "subset_seed": 1748065688,
+      "subset_size": 5000,
+      "subset_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_13/models/subset_0037"
+    },
+    {
+      "subset_id": 38,
+      "subset_seed": 1143358676,
+      "subset_size": 5000,
+      "subset_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_13/models/subset_0038"
+    },
+    {
+      "subset_id": 39,
+      "subset_seed": 1069162117,
+      "subset_size": 5000,
+      "subset_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_13/models/subset_0039"
+    },
+    {
+      "subset_id": 40,
+      "subset_seed": 677459531,
+      "subset_size": 5000,
+      "subset_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_13/models/subset_0040"
+    },
+    {
+      "subset_id": 41,
+      "subset_seed": 533175510,
+      "subset_size": 5000,
+      "subset_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_13/models/subset_0041"
+    },
+    {
+      "subset_id": 42,
+      "subset_seed": 600617372,
+      "subset_size": 5000,
+      "subset_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_13/models/subset_0042"
+    },
+    {
+      "subset_id": 43,
+      "subset_seed": 1667920818,
+      "subset_size": 5000,
+      "subset_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_13/models/subset_0043"
+    },
+    {
+      "subset_id": 44,
+      "subset_seed": 831509572,
+      "subset_size": 5000,
+      "subset_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_13/models/subset_0044"
+    },
+    {
+      "subset_id": 45,
+      "subset_seed": 2102876737,
+      "subset_size": 5000,
+      "subset_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_13/models/subset_0045"
+    },
+    {
+      "subset_id": 46,
+      "subset_seed": 817200178,
+      "subset_size": 5000,
+      "subset_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_13/models/subset_0046"
+    },
+    {
+      "subset_id": 47,
+      "subset_seed": 1156083291,
+      "subset_size": 5000,
+      "subset_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_13/models/subset_0047"
+    },
+    {
+      "subset_id": 48,
+      "subset_seed": 849082726,
+      "subset_size": 5000,
+      "subset_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_13/models/subset_0048"
+    },
+    {
+      "subset_id": 49,
+      "subset_seed": 1583018048,
+      "subset_size": 5000,
+      "subset_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_5000_seed_13/models/subset_0049"
+    }
+  ],
+  "complete": true
+}
