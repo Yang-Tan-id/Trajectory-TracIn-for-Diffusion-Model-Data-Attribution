@@ -136,6 +136,9 @@ Test files
    - scripts unset PYTHONPATH and activate the conda environment;
    - scripts use set -euo pipefail;
    - scripts contain overwrite protection;
+   - combined LDS eval overwrite protection is target-specific, so an existing
+     eval/query_<query>/initial_seed_<seed> folder does not block reruns for a
+     different LDS target such as simple_loss;
    - attribution part1/part2 sharding is explicit;
    - sample validation exists in the attribution script.
 

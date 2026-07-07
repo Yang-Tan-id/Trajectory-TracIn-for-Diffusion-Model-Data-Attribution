@@ -56,6 +56,12 @@ class TestTaccScriptsStatic(unittest.TestCase):
         self.assertIn('if [[ "${ATTR_SHARD}" == "2" ]]; then', text)
         self.assertIn('validate_sample', text)
 
+    def test_combined_eval_overwrite_guard_is_target_specific(self):
+        text = self.read("03_lds_eval_h100.sh")
+        self.assertIn('/lds/${algorithm}/${LDS_TARGET_FUNCTION}', text)
+        self.assertIn('Refusing to overwrite ${out_dir}', text)
+        self.assertNotIn('Refusing to overwrite ${eval_dir}', text)
+
 
 if __name__ == "__main__":
     unittest.main()

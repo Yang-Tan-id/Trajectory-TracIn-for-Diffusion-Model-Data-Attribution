@@ -4,7 +4,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=4
 #SBATCH --cpus-per-task=16
-#SBATCH --time=48:00:00
+#SBATCH --time=02:00:00
 #SBATCH --output=cifar2-lds-eval-%j.out
 #SBATCH --error=cifar2-lds-eval-%j.err
 
@@ -86,17 +86,17 @@ pids=()
 total_launched=0
 for query in "${QUERIES[@]}"; do
   tag="$(path_tag "${query}")"
-  eval_dir="${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/eval/query_${tag}/initial_seed_${INITIAL_SEED}"
-  if [[ "${ALLOW_OVERWRITE}" != "1" && -e "${eval_dir}" ]]; then
-    echo "Refusing to overwrite ${eval_dir}" >&2
-    exit 1
-  fi
   for algorithm in traj_tracin "${ENDPOINT_ALGORITHMS[@]}"; do
     dirs="$(score_dirs "${query}" "${algorithm}")"
     IFS=',' read -r -a inputs <<<"${dirs}"
     for input in "${inputs[@]}"; do
       [[ -f "${input}/scores.npy" ]] || { echo "Missing ${input}/scores.npy" >&2; exit 1; }
     done
+    out_dir="${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/eval/query_${tag}/initial_seed_${INITIAL_SEED}/lds/${algorithm}/${LDS_TARGET_FUNCTION}"
+    if [[ "${ALLOW_OVERWRITE}" != "1" && -e "${out_dir}" ]]; then
+      echo "Refusing to overwrite ${out_dir}" >&2
+      exit 1
+    fi
     slot="${#pids[@]}"
     ibrun -n 1 -o "${slot}" \
       env CUDA_VISIBLE_DEVICES="$((slot % 4))" \

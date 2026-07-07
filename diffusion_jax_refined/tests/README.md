@@ -38,4 +38,5 @@ Current coverage focuses on:
 - sample prompt/seed/shape validation;
 - LDS subset metadata invariants;
 - TACC Slurm script static safety checks;
+- target-specific LDS eval overwrite protection;
 - attribution-code contracts such as DAS squared scores and EndTracIn MC sample counts.

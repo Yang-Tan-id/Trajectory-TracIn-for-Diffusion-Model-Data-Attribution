@@ -4,7 +4,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=4
 #SBATCH --cpus-per-task=16
-#SBATCH --time=48:00:00
+#SBATCH --time=02:00:00
 #SBATCH --output=cifar2-eval-k8000-%j.out
 #SBATCH --error=cifar2-eval-k8000-%j.err
 

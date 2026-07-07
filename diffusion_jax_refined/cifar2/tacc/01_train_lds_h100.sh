@@ -4,7 +4,7 @@
 #SBATCH --nodes=4
 #SBATCH --ntasks-per-node=4
 #SBATCH --cpus-per-task=16
-#SBATCH --time=48:00:00
+#SBATCH --time=15:00:00
 #SBATCH --output=cifar2-lds-%j.out
 #SBATCH --error=cifar2-lds-%j.err
 
