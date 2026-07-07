@@ -40,6 +40,15 @@ def _compact_model_group_name(model_dirs: list[Path], *, max_len: int = 96) -> s
     return f"{len(names)}_lds_models_{seed_tag}_{digest}"
 
 
+def _prediction_tag(subset: str, sign: float) -> str:
+    if float(sign).is_integer():
+        sign_text = str(int(sign))
+    else:
+        sign_text = f"{sign:g}"
+    sign_text = sign_text.replace("-", "m").replace("+", "p").replace(".", "p")
+    return f"pred_{subset}_sign_{sign_text}"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate one or more reusable LDS model folders.")
     parser.add_argument("config", help="Dataset dataset_config.py")
@@ -47,8 +56,16 @@ def main() -> None:
     parser.add_argument("--score-file", default=None, help="One or more comma-separated attribution result folders. Defaults to this dataset/algorithm's attribution output.")
     parser.add_argument("--algorithm", default=os.environ.get("ALGORITHM", "das"))
     parser.add_argument("--unprompted", action="store_true", help="Evaluate unconditional attribution scores/models.")
-    parser.add_argument("--prediction-subset", choices=["kept", "removed"], default="kept")
-    parser.add_argument("--prediction-sign", type=float, default=-1.0)
+    parser.add_argument(
+        "--prediction-subset",
+        choices=["kept", "removed"],
+        default=os.environ.get("LDS_PREDICTION_SUBSET", "kept"),
+    )
+    parser.add_argument(
+        "--prediction-sign",
+        type=float,
+        default=float(os.environ.get("LDS_PREDICTION_SIGN", "-1")),
+    )
     parser.add_argument("--duplicate-policy", choices=["max", "sum", "mean"], default="max")
     parser.add_argument("--target-function", choices=["noise_trajectory", "projected_trajectory", "simple_loss"], default="noise_trajectory")
     parser.add_argument("--trajectory-reduction", choices=["mean", "sum", "snapshot_mean"], default=None)
@@ -177,6 +194,7 @@ def main() -> None:
             / eval_kind
             / args.algorithm
             / args.target_function
+            / _prediction_tag(args.prediction_subset, args.prediction_sign)
             / names
         )
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -223,6 +241,8 @@ def main() -> None:
         "lds_percent": 100.0 * lds if not math.isnan(lds) else float("nan"),
         "target_function": args.target_function,
         "trajectory_reduction": reduction,
+        "prediction_subset": args.prediction_subset,
+        "prediction_sign": args.prediction_sign,
         "elapsed_sec": time.time() - started,
     }
     (out_dir / "lds_summary.json").write_text(json.dumps(summary, indent=2))

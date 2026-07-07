@@ -93,6 +93,67 @@ score_dirs_for_algorithm() {
   printf '%s' "${output}"
 }
 
+sample_dir_for_query() {
+  local query="$1"
+  local tag
+  tag="$(path_tag "${query}")"
+  printf '%s/result/%s/eval/sampling/cifar/prompt_%s/model_prompted_jax__ckpt_seed_42_epoch_0200/seed_%06d' \
+    "${CIFAR2_ROOT}" "${EXPERIMENT_TAG}" "${tag}" "${INITIAL_SEED}"
+}
+
+validate_sample() {
+  local query="$1"
+  local sample_dir
+  sample_dir="$(sample_dir_for_query "${query}")"
+  python - "${sample_dir}" "${query}" "${INITIAL_SEED}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+import numpy as np
+
+sample_dir = Path(sys.argv[1])
+expected_prompt = sys.argv[2]
+expected_seed = int(sys.argv[3])
+required = [
+    "trajectory_xt.npy",
+    "trajectory_t.npy",
+    "final_state.npy",
+    "seed_info.json",
+]
+missing = [name for name in required if not (sample_dir / name).is_file()]
+manifest = sample_dir.parent / "manifest.json"
+if not manifest.is_file():
+    missing.append(str(manifest))
+if missing:
+    raise FileNotFoundError(f"Invalid/incomplete sample {sample_dir}; missing {missing}")
+
+seed_info = json.loads((sample_dir / "seed_info.json").read_text())
+manifest_payload = json.loads(manifest.read_text())
+if int(seed_info.get("seed", -1)) != expected_seed:
+    raise ValueError(f"{sample_dir}: seed_info seed={seed_info.get('seed')} expected={expected_seed}")
+if expected_prompt != str(seed_info.get("prompt")):
+    raise ValueError(f"{sample_dir}: seed_info prompt={seed_info.get('prompt')!r} expected={expected_prompt!r}")
+if expected_prompt != str(manifest_payload.get("prompt")):
+    raise ValueError(f"{manifest}: manifest prompt={manifest_payload.get('prompt')!r} expected={expected_prompt!r}")
+if expected_seed not in [int(x) for x in manifest_payload.get("seeds", [])]:
+    raise ValueError(f"{manifest}: expected seed {expected_seed} not in manifest seeds={manifest_payload.get('seeds')}")
+
+trajectory = np.load(sample_dir / "trajectory_xt.npy", mmap_mode="r")
+times = np.load(sample_dir / "trajectory_t.npy", mmap_mode="r")
+final_state = np.load(sample_dir / "final_state.npy", mmap_mode="r")
+if trajectory.ndim != 5:
+    raise ValueError(f"{sample_dir}: trajectory_xt.npy shape should be (K,B,H,W,C), got {trajectory.shape}")
+if final_state.ndim != 4:
+    raise ValueError(f"{sample_dir}: final_state.npy shape should be (B,H,W,C), got {final_state.shape}")
+if int(trajectory.shape[0]) != int(times.shape[0]):
+    raise ValueError(f"{sample_dir}: trajectory length {trajectory.shape[0]} != trajectory_t length {times.shape[0]}")
+if int(trajectory.shape[1]) != int(final_state.shape[0]):
+    raise ValueError(f"{sample_dir}: trajectory batch {trajectory.shape[1]} != final_state batch {final_state.shape[0]}")
+print(f"Validated sample: {sample_dir} | trajectory={tuple(trajectory.shape)} | final={tuple(final_state.shape)}")
+PY
+}
+
 wait_batch() {
   local failed=0
   local pid
@@ -145,8 +206,7 @@ launch_attribution() {
 
 if [[ "${ATTR_SHARD}" == "1" && "${ALLOW_OVERWRITE}" != "1" ]]; then
   for query in "${QUERIES[@]}"; do
-    tag="$(path_tag "${query}")"
-    sample_dir="${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/eval/sampling/cifar/prompt_${tag}/model_prompted_jax__ckpt_seed_42_epoch_0200/seed_$(printf '%06d' "${INITIAL_SEED}")"
+    sample_dir="$(sample_dir_for_query "${query}")"
     if [[ -e "${sample_dir}" ]]; then
       echo "Refusing to overwrite existing sample: ${sample_dir}" >&2
       exit 1
@@ -167,6 +227,11 @@ if [[ "${ATTR_SHARD}" == "1" ]]; then
 else
   echo "Part 2: reusing samples created by attribution part 1"
 fi
+
+echo "Validating attribution samples"
+for query in "${QUERIES[@]}"; do
+  validate_sample "${query}"
+done
 
 echo "Attribution part ${ATTR_SHARD}/2"
 pids=()
