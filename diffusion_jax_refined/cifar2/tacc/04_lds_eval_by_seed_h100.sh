@@ -120,3 +120,15 @@ if (( ${#pids[@]} > 0 )); then
   wait_eval_batch "${pids[@]}"
 fi
 echo "All ${total_launched} per-seed LDS evaluations completed. Logs: ${LOG_ROOT}"
+
+echo "Aggregating per-seed LDS evaluations"
+python "${REPO_ROOT}/diffusion_jax_refined/common/aggregate_lds_by_seed.py" \
+  --eval-root "${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/eval" \
+  --target-function "${LDS_TARGET_FUNCTION}" \
+  --lds-m "${LDS_M}" \
+  --lds-k "${LDS_K}" \
+  --initial-seed "${INITIAL_SEED}" \
+  --algorithms traj_tracin "${ENDPOINT_ALGORITHMS[@]}" \
+  --output-name "aggregate_m_${LDS_M}_k_${LDS_K}_seeds_${LDS_SEEDS// /_}" \
+  >"${LOG_ROOT}/aggregate.log" 2>&1
+echo "Aggregate log: ${LOG_ROOT}/aggregate.log"

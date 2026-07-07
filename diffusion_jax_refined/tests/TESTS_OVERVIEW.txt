@@ -139,13 +139,31 @@ Test files
    - combined LDS eval overwrite protection is target-specific, so an existing
      eval/query_<query>/initial_seed_<seed> folder does not block reruns for a
      different LDS target such as simple_loss;
+   - per-seed eval runs aggregate_lds_by_seed.py after successful separate evals,
+     producing mean/std summaries and combined scatter grids;
    - attribution part1/part2 sharding is explicit;
    - sample validation exists in the attribution script.
 
    Purpose: catch TACC submission/script mistakes before burning queue time.
 
 
-8. test_attribution_code_contracts.py
+8. test_aggregate_lds_by_seed.py
+
+   These tests run the per-seed aggregation logic on fake LDS result CSV files.
+
+   They cover:
+
+   - per_seed_summary.csv is written;
+   - per_seed_summary.json is written with num_seeds, num_points, and LDS mean;
+   - all_seed_points.csv is written;
+   - per_seed_scatter_grid.svg is written;
+   - all_points_scatter.svg is written.
+
+   Purpose: make sure separate per-seed evals can be summarized into mean ± std
+   tables and combined scatter overview figures without rerunning GPU eval.
+
+
+9. test_attribution_code_contracts.py
 
    These tests protect high-level attribution-code contracts by checking the
    implementation source.

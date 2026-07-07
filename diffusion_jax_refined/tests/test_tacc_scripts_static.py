@@ -62,6 +62,14 @@ class TestTaccScriptsStatic(unittest.TestCase):
         self.assertIn('Refusing to overwrite ${out_dir}', text)
         self.assertNotIn('Refusing to overwrite ${eval_dir}', text)
 
+    def test_per_seed_eval_runs_aggregate_after_success(self):
+        text = self.read("04_lds_eval_by_seed_h100.sh")
+        self.assertIn("aggregate_lds_by_seed.py", text)
+        self.assertIn("--target-function", text)
+        self.assertIn("--lds-k", text)
+        self.assertIn("per-seed LDS evaluations completed", text)
+        self.assertIn("aggregate.log", text)
+
 
 if __name__ == "__main__":
     unittest.main()
