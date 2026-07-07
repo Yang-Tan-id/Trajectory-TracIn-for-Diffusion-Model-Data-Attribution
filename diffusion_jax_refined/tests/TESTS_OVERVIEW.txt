@@ -1,0 +1,171 @@
+diffusion_jax_refined test overview
+===================================
+
+Run command
+-----------
+
+From the repository root:
+
+  bash diffusion_jax_refined/tests/run_all_tests.sh
+
+The runner prints a compact terminal summary and writes a detailed timestamped
+log to:
+
+  diffusion_jax_refined/tests/logs/test_YYYYmmdd_HHMMSS.log
+
+The tests are intentionally lightweight: CPU-only, no GPU, no real checkpoint
+loading, and no large CIFAR2 data. They should finish well under 15 minutes
+(currently around a fraction of a second locally).
+
+
+Test files
+----------
+
+1. test_algorithm_logic.py
+
+   These are toy mathematical logic tests, not just config checks.
+
+   They cover:
+
+   - toy TracIn/influence scores should predict one-step LDS/query-loss
+     improvement direction;
+   - flipping the prediction sign should flip LDS correlation negative;
+   - trajectory shards should merge to the same prediction as full scores;
+   - DAS batched scoring should match unbatched scoring exactly;
+   - endpoint MC objective batching should match explicit MC averaging;
+   - duplicate score policies (max/sum/mean) should change predictions in the
+     expected way.
+
+   Purpose: catch future changes that silently break attribution/LDS math while
+   still being fast enough for every commit.
+
+
+2. test_paths_config.py
+
+   These tests protect result-folder conventions.
+
+   They cover:
+
+   - attribution scores go under query_<query>/initial_seed_<seed>;
+   - eval outputs go under query_<query>/initial_seed_<seed>;
+   - different CIFAR2 queries map to distinct folders;
+   - user-facing one-based ranges like 1-2000 map to zero-based internal indices
+     like 0-1999.
+
+   Purpose: prevent query/seed mixing and accidental overwrites.
+
+
+3. test_score_indices.py
+
+   These tests protect score-index bookkeeping.
+
+   They cover:
+
+   - one-based range parsing;
+   - the five traj_tracin shards cover exactly 10,000 unique datapoints;
+   - both score_indices.npy-style and score_indices.json-style metadata are
+     accepted by the lightweight loader;
+   - duplicate policies max/sum/mean are deterministic;
+   - LDS kept indices are covered by the full score universe.
+
+   Purpose: prevent off-by-one errors, missing datapoints, duplicate instability,
+   and shard coverage bugs.
+
+
+4. test_lds_eval_math.py
+
+   These tests protect LDS evaluation math and output naming.
+
+   They cover:
+
+   - Spearman correlation sanity checks;
+   - kept vs removed prediction subsets;
+   - prediction sign handling;
+   - prediction tags include subset/sign so output folders do not overwrite each
+     other;
+   - compact LDS model group names keep seed-range information without creating
+     huge paths;
+   - a fake LDS regression with aligned predicted/true values gives high
+     correlation;
+   - summary metadata records target_function, prediction_subset, and
+     prediction_sign.
+
+   Purpose: prevent LDS eval regressions and output-path collisions.
+
+
+5. test_sample_validation.py
+
+   These tests protect sampling input validation.
+
+   They cover:
+
+   - valid sample metadata passes;
+   - prompt mismatch fails;
+   - seed mismatch fails;
+   - trajectory/time/final-state shape mismatch fails.
+
+   Purpose: catch the common failure mode where attribution accidentally reads a
+   sample from the wrong query or initial seed.
+
+
+6. test_lds_model_config.py
+
+   These tests protect reusable LDS model subset metadata.
+
+   They cover:
+
+   - k=5000 creates 5000 kept and 5000 excluded indices;
+   - kept/excluded are disjoint and cover the 10,000-point universe;
+   - k=8000 creates 8000 kept and 2000 excluded indices;
+   - the folder LDS seed is separate from the model training seed;
+   - model training seed remains seed 42 and checkpoint naming reflects that.
+
+   Purpose: prevent confusing LDS subset seed with actual diffusion model train
+   seed, and protect k=5000/k=8000 experiments.
+
+
+7. test_tacc_scripts_static.py
+
+   These tests statically inspect TACC Slurm scripts.
+
+   They cover:
+
+   - H100 scripts do not use --gres;
+   - k=8000 LDS training requests 4 nodes x 4 tasks;
+   - eval scripts request 1 node x 4 tasks;
+   - scripts unset PYTHONPATH and activate the conda environment;
+   - scripts use set -euo pipefail;
+   - scripts contain overwrite protection;
+   - attribution part1/part2 sharding is explicit;
+   - sample validation exists in the attribution script.
+
+   Purpose: catch TACC submission/script mistakes before burning queue time.
+
+
+8. test_attribution_code_contracts.py
+
+   These tests protect high-level attribution-code contracts by checking the
+   implementation source.
+
+   They cover:
+
+   - DAS currently saves squared-magnitude scores;
+   - traj_tracin uses the trajectory_noise_squared_deviation objective;
+   - EndTracIn uses endpoint-anchored loss with MC samples;
+   - CIFAR2 attribution/eval sample-count settings are pinned.
+
+   Purpose: make intentional algorithm-definition changes visible. If one of
+   these fails after an intentional method change, update both the code and this
+   test/overview together.
+
+
+What this suite does not do
+---------------------------
+
+- It does not train diffusion models.
+- It does not load real H100 checkpoints.
+- It does not run JAX/GPU kernels.
+- It does not verify final CIFAR2 scientific quality.
+
+Instead, it is a fast regression suite for logic, path conventions, metadata,
+score indexing, sharding, LDS math, and TACC-script safety.
