@@ -18,13 +18,30 @@ LDS_M="${LDS_M:-50}"
 LDS_K="${LDS_K:-5000}"
 LDS_SEEDS="${LDS_SEEDS:-$(seq -s ' ' 1 16)}"
 LDS_TARGET_FUNCTION="${LDS_TARGET_FUNCTION:-noise_trajectory}"
+LDS_PREDICTION_SUBSET="${LDS_PREDICTION_SUBSET:-kept}"
+LDS_PREDICTION_SIGN="${LDS_PREDICTION_SIGN:--1}"
 ALLOW_OVERWRITE="${ALLOW_OVERWRITE:-0}"
-LOG_ROOT="${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/tacc_logs/lds_eval_by_seed_${SLURM_JOB_ID}"
 MAX_PARALLEL_EVAL_TASKS="${MAX_PARALLEL_EVAL_TASKS:-${SLURM_NTASKS:-4}}"
 
 QUERIES=("horse" "automobile" "horse,automobile")
 TRAJ_RANGES=("1-2000" "2001-4000" "4001-6000" "6001-8000" "8001-10000")
 ENDPOINT_ALGORITHMS=("das" "dtrak" "end_tracin")
+
+prediction_tag() {
+  local subset="$1"
+  local sign="$2"
+  local sign_text="${sign}"
+  if [[ "${sign_text}" == *.0 ]]; then
+    sign_text="${sign_text%.0}"
+  fi
+  sign_text="${sign_text//-/m}"
+  sign_text="${sign_text//+/p}"
+  sign_text="${sign_text//./p}"
+  printf 'pred_%s_sign_%s' "${subset}" "${sign_text}"
+}
+
+PREDICTION_TAG="$(prediction_tag "${LDS_PREDICTION_SUBSET}" "${LDS_PREDICTION_SIGN}")"
+LOG_ROOT="${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/tacc_logs/lds_eval_by_seed_${PREDICTION_TAG}_${SLURM_JOB_ID}"
 
 unset PYTHONPATH
 if [[ -n "${ENV_SETUP:-}" ]]; then
@@ -90,14 +107,14 @@ for seed in ${LDS_SEEDS}; do
       for input in "${inputs[@]}"; do
         [[ -f "${input}/scores.npy" ]] || { echo "Missing ${input}/scores.npy" >&2; exit 1; }
       done
-      out_dir="${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/eval/query_${tag}/initial_seed_${INITIAL_SEED}/lds/${algorithm}/${LDS_TARGET_FUNCTION}/$(basename "${model_dir}")"
+      out_dir="${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/eval/query_${tag}/initial_seed_${INITIAL_SEED}/lds/${algorithm}/${LDS_TARGET_FUNCTION}/${PREDICTION_TAG}/$(basename "${model_dir}")"
       if [[ "${ALLOW_OVERWRITE}" != "1" && -e "${out_dir}" ]]; then
         echo "Refusing to overwrite ${out_dir}" >&2
         exit 1
       fi
 
       slot="${#pids[@]}"
-      echo "Launching per-seed LDS eval seed=${seed}, query=${query}, algorithm=${algorithm}"
+      echo "Launching per-seed LDS eval seed=${seed}, query=${query}, algorithm=${algorithm}, prediction=${PREDICTION_TAG}"
       ibrun -n 1 -o "${slot}" \
         env CUDA_VISIBLE_DEVICES="$((slot % 4))" \
           EXPERIMENT_TAG="${EXPERIMENT_TAG}" QUERY="${query}" \
@@ -105,6 +122,8 @@ for seed in ${LDS_SEEDS}; do
           ATTRIBUTION_RESULT_DIRS="${dirs}" LDS_MODEL_DIRS="${model_dir}" \
           LDS_DEVICE=gpu LDS_NUM_DEVICES=1 \
         bash scripts/04_lds_eval.sh --target-function "${LDS_TARGET_FUNCTION}" \
+        --prediction-subset "${LDS_PREDICTION_SUBSET}" \
+        --prediction-sign "${LDS_PREDICTION_SIGN}" \
         >"${LOG_ROOT}/eval_${tag}_${algorithm}_lds_seed_${seed}.log" 2>&1 &
       pids+=("$!")
       total_launched=$((total_launched + 1))
@@ -129,6 +148,6 @@ python "${REPO_ROOT}/diffusion_jax_refined/common/aggregate_lds_by_seed.py" \
   --lds-k "${LDS_K}" \
   --initial-seed "${INITIAL_SEED}" \
   --algorithms traj_tracin "${ENDPOINT_ALGORITHMS[@]}" \
-  --output-name "aggregate_m_${LDS_M}_k_${LDS_K}_seeds_${LDS_SEEDS// /_}" \
+  --output-name "aggregate_m_${LDS_M}_k_${LDS_K}_${PREDICTION_TAG}_seeds_${LDS_SEEDS// /_}" \
   >"${LOG_ROOT}/aggregate.log" 2>&1
 echo "Aggregate log: ${LOG_ROOT}/aggregate.log"

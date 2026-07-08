@@ -70,6 +70,16 @@ class TestTaccScriptsStatic(unittest.TestCase):
         self.assertIn("per-seed LDS evaluations completed", text)
         self.assertIn("aggregate.log", text)
 
+    def test_per_seed_eval_supports_removed_prediction_subset(self):
+        text = self.read("04_lds_eval_by_seed_h100.sh")
+        self.assertIn('LDS_PREDICTION_SUBSET="${LDS_PREDICTION_SUBSET:-kept}"', text)
+        self.assertIn('LDS_PREDICTION_SIGN="${LDS_PREDICTION_SIGN:--1}"', text)
+        self.assertIn("prediction_tag()", text)
+        self.assertIn('${PREDICTION_TAG}/$(basename "${model_dir}")', text)
+        self.assertIn('--prediction-subset "${LDS_PREDICTION_SUBSET}"', text)
+        self.assertIn('--prediction-sign "${LDS_PREDICTION_SIGN}"', text)
+        self.assertIn('aggregate_m_${LDS_M}_k_${LDS_K}_${PREDICTION_TAG}', text)
+
 
 if __name__ == "__main__":
     unittest.main()
