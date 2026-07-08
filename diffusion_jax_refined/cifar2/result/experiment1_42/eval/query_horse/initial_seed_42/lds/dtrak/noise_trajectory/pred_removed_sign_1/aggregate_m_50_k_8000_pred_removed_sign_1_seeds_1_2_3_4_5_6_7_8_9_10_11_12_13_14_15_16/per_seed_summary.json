@@ -1,0 +1,189 @@
+{
+  "source_group_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/query_horse/initial_seed_42/lds/dtrak/noise_trajectory/pred_removed_sign_1",
+  "num_seeds": 16,
+  "num_points": 800,
+  "lds_percent_mean": -0.5052267011024567,
+  "lds_percent_std": 15.970983207136804,
+  "pred_mean_mean": 0.20337707685404893,
+  "true_mean_mean": 3.0010156250000004,
+  "summary_csv": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/query_horse/initial_seed_42/lds/dtrak/noise_trajectory/pred_removed_sign_1/aggregate_m_50_k_8000_pred_removed_sign_1_seeds_1_2_3_4_5_6_7_8_9_10_11_12_13_14_15_16/per_seed_summary.csv",
+  "all_seed_points_csv": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/query_horse/initial_seed_42/lds/dtrak/noise_trajectory/pred_removed_sign_1/aggregate_m_50_k_8000_pred_removed_sign_1_seeds_1_2_3_4_5_6_7_8_9_10_11_12_13_14_15_16/all_seed_points.csv",
+  "per_seed": [
+    {
+      "seed": 1,
+      "n": 50,
+      "lds_spearman": -0.2738634228525585,
+      "lds_percent": -27.38634228525585,
+      "pred_mean": 0.20700245008763887,
+      "pred_std": 0.023671529663233944,
+      "true_mean": 3.0209375,
+      "true_std": 0.1467289832693255,
+      "source_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/query_horse/initial_seed_42/lds/dtrak/noise_trajectory/pred_removed_sign_1/m_50_k_8000_seed_1"
+    },
+    {
+      "seed": 2,
+      "n": 50,
+      "lds_spearman": -0.09199336334314057,
+      "lds_percent": -9.199336334314056,
+      "pred_mean": 0.21231464704925201,
+      "pred_std": 0.02474394057136257,
+      "true_mean": 2.9840625,
+      "true_std": 0.13787201096034685,
+      "source_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/query_horse/initial_seed_42/lds/dtrak/noise_trajectory/pred_removed_sign_1/m_50_k_8000_seed_2"
+    },
+    {
+      "seed": 3,
+      "n": 50,
+      "lds_spearman": 0.11159257004478199,
+      "lds_percent": 11.1592570044782,
+      "pred_mean": 0.21008597475090937,
+      "pred_std": 0.02325860133887837,
+      "true_mean": 3.01875,
+      "true_std": 0.12659143187830685,
+      "source_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/query_horse/initial_seed_42/lds/dtrak/noise_trajectory/pred_removed_sign_1/m_50_k_8000_seed_3"
+    },
+    {
+      "seed": 4,
+      "n": 50,
+      "lds_spearman": 0.027800527770132633,
+      "lds_percent": 2.7800527770132635,
+      "pred_mean": 0.2054858885455269,
+      "pred_std": 0.02699355402373748,
+      "true_mean": 3.006875,
+      "true_std": 0.13181278153123088,
+      "source_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/query_horse/initial_seed_42/lds/dtrak/noise_trajectory/pred_removed_sign_1/m_50_k_8000_seed_4"
+    },
+    {
+      "seed": 5,
+      "n": 50,
+      "lds_spearman": -0.18801710914367742,
+      "lds_percent": -18.801710914367742,
+      "pred_mean": 0.20010673130938814,
+      "pred_std": 0.02581696808022097,
+      "true_mean": 2.963125,
+      "true_std": 0.1197229875587809,
+      "source_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/query_horse/initial_seed_42/lds/dtrak/noise_trajectory/pred_removed_sign_1/m_50_k_8000_seed_5"
+    },
+    {
+      "seed": 6,
+      "n": 50,
+      "lds_spearman": -0.2840523398276,
+      "lds_percent": -28.40523398276,
+      "pred_mean": 0.19515208028366943,
+      "pred_std": 0.028025739555327986,
+      "true_mean": 3.0096875,
+      "true_std": 0.15135746440545966,
+      "source_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/query_horse/initial_seed_42/lds/dtrak/noise_trajectory/pred_removed_sign_1/m_50_k_8000_seed_6"
+    },
+    {
+      "seed": 7,
+      "n": 50,
+      "lds_spearman": 0.28565970885609854,
+      "lds_percent": 28.565970885609854,
+      "pred_mean": 0.2005666725325318,
+      "pred_std": 0.031124651787833534,
+      "true_mean": 3.0034375,
+      "true_std": 0.14122407118211117,
+      "source_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/query_horse/initial_seed_42/lds/dtrak/noise_trajectory/pred_removed_sign_1/m_50_k_8000_seed_7"
+    },
+    {
+      "seed": 8,
+      "n": 50,
+      "lds_spearman": 0.13880617149845365,
+      "lds_percent": 13.880617149845364,
+      "pred_mean": 0.19670761603670145,
+      "pred_std": 0.025692699444438857,
+      "true_mean": 3.0215625,
+      "true_std": 0.15786323441906927,
+      "source_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/query_horse/initial_seed_42/lds/dtrak/noise_trajectory/pred_removed_sign_1/m_50_k_8000_seed_8"
+    },
+    {
+      "seed": 9,
+      "n": 50,
+      "lds_spearman": 0.20240823111919307,
+      "lds_percent": 20.24082311191931,
+      "pred_mean": 0.19975040467757935,
+      "pred_std": 0.024831418157927884,
+      "true_mean": 3.0003125,
+      "true_std": 0.14991827200594995,
+      "source_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/query_horse/initial_seed_42/lds/dtrak/noise_trajectory/pred_removed_sign_1/m_50_k_8000_seed_9"
+    },
+    {
+      "seed": 10,
+      "n": 50,
+      "lds_spearman": 0.03542674999822566,
+      "lds_percent": 3.5426749998225664,
+      "pred_mean": 0.20844759005083688,
+      "pred_std": 0.025661237652609952,
+      "true_mean": 3.0175,
+      "true_std": 0.16602663566428122,
+      "source_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/query_horse/initial_seed_42/lds/dtrak/noise_trajectory/pred_removed_sign_1/m_50_k_8000_seed_10"
+    },
+    {
+      "seed": 11,
+      "n": 50,
+      "lds_spearman": -0.17174896584058044,
+      "lds_percent": -17.174896584058043,
+      "pred_mean": 0.2049636918575561,
+      "pred_std": 0.026677583671002595,
+      "true_mean": 3.0040625,
+      "true_std": 0.16177150407673782,
+      "source_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/query_horse/initial_seed_42/lds/dtrak/noise_trajectory/pred_removed_sign_1/m_50_k_8000_seed_11"
+    },
+    {
+      "seed": 12,
+      "n": 50,
+      "lds_spearman": 0.03912896761064157,
+      "lds_percent": 3.9128967610641574,
+      "pred_mean": 0.20411672730470853,
+      "pred_std": 0.026399427091376975,
+      "true_mean": 2.98375,
+      "true_std": 0.12507653906708488,
+      "source_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/query_horse/initial_seed_42/lds/dtrak/noise_trajectory/pred_removed_sign_1/m_50_k_8000_seed_12"
+    },
+    {
+      "seed": 13,
+      "n": 50,
+      "lds_spearman": 0.07207256373035946,
+      "lds_percent": 7.207256373035946,
+      "pred_mean": 0.20348179860600793,
+      "pred_std": 0.019690967248681763,
+      "true_mean": 2.9825,
+      "true_std": 0.14663011500029588,
+      "source_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/query_horse/initial_seed_42/lds/dtrak/noise_trajectory/pred_removed_sign_1/m_50_k_8000_seed_13"
+    },
+    {
+      "seed": 14,
+      "n": 50,
+      "lds_spearman": -0.09523593593788097,
+      "lds_percent": -9.523593593788098,
+      "pred_mean": 0.20363709857199866,
+      "pred_std": 0.03147418276075932,
+      "true_mean": 3.015,
+      "true_std": 0.1343735465037669,
+      "source_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/query_horse/initial_seed_42/lds/dtrak/noise_trajectory/pred_removed_sign_1/m_50_k_8000_seed_14"
+    },
+    {
+      "seed": 15,
+      "n": 50,
+      "lds_spearman": 0.08040789929964381,
+      "lds_percent": 8.040789929964381,
+      "pred_mean": 0.19902574525549427,
+      "pred_std": 0.025597051014420776,
+      "true_mean": 2.9784375,
+      "true_std": 0.14600440115369814,
+      "source_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/query_horse/initial_seed_42/lds/dtrak/noise_trajectory/pred_removed_sign_1/m_50_k_8000_seed_15"
+    },
+    {
+      "seed": 16,
+      "n": 50,
+      "lds_spearman": 0.03077147484151438,
+      "lds_percent": 3.077147484151438,
+      "pred_mean": 0.2031881127449833,
+      "pred_std": 0.025659803425861126,
+      "true_mean": 3.00625,
+      "true_std": 0.14197270864500683,
+      "source_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/query_horse/initial_seed_42/lds/dtrak/noise_trajectory/pred_removed_sign_1/m_50_k_8000_seed_16"
+    }
+  ]
+}

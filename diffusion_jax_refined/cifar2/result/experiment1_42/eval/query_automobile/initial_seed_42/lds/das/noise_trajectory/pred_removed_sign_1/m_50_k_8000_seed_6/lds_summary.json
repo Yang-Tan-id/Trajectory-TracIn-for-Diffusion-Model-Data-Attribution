@@ -1,0 +1,22 @@
+{
+  "algorithm": "das",
+  "mode": "prompted",
+  "lds_model_dirs": [
+    "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_8000_seed_6"
+  ],
+  "score_sources": [
+    {
+      "result_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/attribution_score/query_automobile/initial_seed_42/das_range_1_10000",
+      "source_kind": "score_indices.json",
+      "num_scores": 10000
+    }
+  ],
+  "num_models": 50,
+  "lds_spearman": 0.18309468260737363,
+  "lds_percent": 18.309468260737365,
+  "target_function": "noise_trajectory",
+  "trajectory_reduction": "snapshot_mean",
+  "prediction_subset": "removed",
+  "prediction_sign": 1.0,
+  "elapsed_sec": 12.242982149124146
+}

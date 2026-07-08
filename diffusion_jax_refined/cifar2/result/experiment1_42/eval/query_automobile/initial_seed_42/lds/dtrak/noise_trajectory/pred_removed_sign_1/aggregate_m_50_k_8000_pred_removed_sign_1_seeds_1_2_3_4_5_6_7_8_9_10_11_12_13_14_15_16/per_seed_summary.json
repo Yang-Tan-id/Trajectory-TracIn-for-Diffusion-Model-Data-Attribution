@@ -1,0 +1,189 @@
+{
+  "source_group_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/query_automobile/initial_seed_42/lds/dtrak/noise_trajectory/pred_removed_sign_1",
+  "num_seeds": 16,
+  "num_points": 800,
+  "lds_percent_mean": 0.46126752478656785,
+  "lds_percent_std": 15.369368964781216,
+  "pred_mean_mean": 0.20046233022751267,
+  "true_mean_mean": 3.4343359374999998,
+  "summary_csv": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/query_automobile/initial_seed_42/lds/dtrak/noise_trajectory/pred_removed_sign_1/aggregate_m_50_k_8000_pred_removed_sign_1_seeds_1_2_3_4_5_6_7_8_9_10_11_12_13_14_15_16/per_seed_summary.csv",
+  "all_seed_points_csv": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/query_automobile/initial_seed_42/lds/dtrak/noise_trajectory/pred_removed_sign_1/aggregate_m_50_k_8000_pred_removed_sign_1_seeds_1_2_3_4_5_6_7_8_9_10_11_12_13_14_15_16/all_seed_points.csv",
+  "per_seed": [
+    {
+      "seed": 1,
+      "n": 50,
+      "lds_spearman": -0.09539373929147482,
+      "lds_percent": -9.539373929147482,
+      "pred_mean": 0.2031642772843952,
+      "pred_std": 0.019575708204331323,
+      "true_mean": 3.4215625,
+      "true_std": 0.15230937112091955,
+      "source_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/query_automobile/initial_seed_42/lds/dtrak/noise_trajectory/pred_removed_sign_1/m_50_k_8000_seed_1"
+    },
+    {
+      "seed": 2,
+      "n": 50,
+      "lds_spearman": 0.0828104475837215,
+      "lds_percent": 8.28104475837215,
+      "pred_mean": 0.20855812405290636,
+      "pred_std": 0.020333755857611394,
+      "true_mean": 3.39625,
+      "true_std": 0.1285344068722457,
+      "source_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/query_automobile/initial_seed_42/lds/dtrak/noise_trajectory/pred_removed_sign_1/m_50_k_8000_seed_2"
+    },
+    {
+      "seed": 3,
+      "n": 50,
+      "lds_spearman": -0.02486356761659198,
+      "lds_percent": -2.4863567616591977,
+      "pred_mean": 0.20492709530377395,
+      "pred_std": 0.01874518731714776,
+      "true_mean": 3.43625,
+      "true_std": 0.11344395642783268,
+      "source_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/query_automobile/initial_seed_42/lds/dtrak/noise_trajectory/pred_removed_sign_1/m_50_k_8000_seed_3"
+    },
+    {
+      "seed": 4,
+      "n": 50,
+      "lds_spearman": -0.06770702395721888,
+      "lds_percent": -6.770702395721888,
+      "pred_mean": 0.20314141796279728,
+      "pred_std": 0.023964033965325492,
+      "true_mean": 3.4528125,
+      "true_std": 0.12399951171778864,
+      "source_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/query_automobile/initial_seed_42/lds/dtrak/noise_trajectory/pred_removed_sign_1/m_50_k_8000_seed_4"
+    },
+    {
+      "seed": 5,
+      "n": 50,
+      "lds_spearman": -0.19138400107652118,
+      "lds_percent": -19.138400107652117,
+      "pred_mean": 0.19944634232098907,
+      "pred_std": 0.021410785338563814,
+      "true_mean": 3.375,
+      "true_std": 0.1310638560969423,
+      "source_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/query_automobile/initial_seed_42/lds/dtrak/noise_trajectory/pred_removed_sign_1/m_50_k_8000_seed_5"
+    },
+    {
+      "seed": 6,
+      "n": 50,
+      "lds_spearman": -0.08707575372950464,
+      "lds_percent": -8.707575372950464,
+      "pred_mean": 0.19220957489073043,
+      "pred_std": 0.022670372840904143,
+      "true_mean": 3.4584375,
+      "true_std": 0.1323469782664115,
+      "source_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/query_automobile/initial_seed_42/lds/dtrak/noise_trajectory/pred_removed_sign_1/m_50_k_8000_seed_6"
+    },
+    {
+      "seed": 7,
+      "n": 50,
+      "lds_spearman": 0.22386705161693965,
+      "lds_percent": 22.386705161693964,
+      "pred_mean": 0.19839870271463952,
+      "pred_std": 0.02404304895006599,
+      "true_mean": 3.4365625,
+      "true_std": 0.13259762028878946,
+      "source_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/query_automobile/initial_seed_42/lds/dtrak/noise_trajectory/pred_removed_sign_1/m_50_k_8000_seed_7"
+    },
+    {
+      "seed": 8,
+      "n": 50,
+      "lds_spearman": -0.0944575829841596,
+      "lds_percent": -9.44575829841596,
+      "pred_mean": 0.19589908938742157,
+      "pred_std": 0.022125456616687394,
+      "true_mean": 3.4671875,
+      "true_std": 0.13514495978855448,
+      "source_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/query_automobile/initial_seed_42/lds/dtrak/noise_trajectory/pred_removed_sign_1/m_50_k_8000_seed_8"
+    },
+    {
+      "seed": 9,
+      "n": 50,
+      "lds_spearman": 0.03910445248358446,
+      "lds_percent": 3.910445248358446,
+      "pred_mean": 0.1980951546608776,
+      "pred_std": 0.020995687794557013,
+      "true_mean": 3.400625,
+      "true_std": 0.13781072844666345,
+      "source_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/query_automobile/initial_seed_42/lds/dtrak/noise_trajectory/pred_removed_sign_1/m_50_k_8000_seed_9"
+    },
+    {
+      "seed": 10,
+      "n": 50,
+      "lds_spearman": -0.14137946131589887,
+      "lds_percent": -14.137946131589887,
+      "pred_mean": 0.20353464886442452,
+      "pred_std": 0.02112626199708069,
+      "true_mean": 3.444375,
+      "true_std": 0.14577915660340474,
+      "source_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/query_automobile/initial_seed_42/lds/dtrak/noise_trajectory/pred_removed_sign_1/m_50_k_8000_seed_10"
+    },
+    {
+      "seed": 11,
+      "n": 50,
+      "lds_spearman": -0.26625019231512376,
+      "lds_percent": -26.625019231512375,
+      "pred_mean": 0.2018848675933623,
+      "pred_std": 0.02263604122136064,
+      "true_mean": 3.455,
+      "true_std": 0.13562788015375007,
+      "source_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/query_automobile/initial_seed_42/lds/dtrak/noise_trajectory/pred_removed_sign_1/m_50_k_8000_seed_11"
+    },
+    {
+      "seed": 12,
+      "n": 50,
+      "lds_spearman": 0.23634321358657617,
+      "lds_percent": 23.634321358657616,
+      "pred_mean": 0.20103507556446856,
+      "pred_std": 0.019852510536164564,
+      "true_mean": 3.4503125,
+      "true_std": 0.1350885849405863,
+      "source_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/query_automobile/initial_seed_42/lds/dtrak/noise_trajectory/pred_removed_sign_1/m_50_k_8000_seed_12"
+    },
+    {
+      "seed": 13,
+      "n": 50,
+      "lds_spearman": 0.18790452195441174,
+      "lds_percent": 18.790452195441173,
+      "pred_mean": 0.20040978313238156,
+      "pred_std": 0.015785460776252553,
+      "true_mean": 3.44125,
+      "true_std": 0.10300940491042557,
+      "source_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/query_automobile/initial_seed_42/lds/dtrak/noise_trajectory/pred_removed_sign_1/m_50_k_8000_seed_13"
+    },
+    {
+      "seed": 14,
+      "n": 50,
+      "lds_spearman": -0.04899307212546886,
+      "lds_percent": -4.899307212546886,
+      "pred_mean": 0.20010839419961485,
+      "pred_std": 0.025684111183577968,
+      "true_mean": 3.4390625,
+      "true_std": 0.14225616473900174,
+      "source_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/query_automobile/initial_seed_42/lds/dtrak/noise_trajectory/pred_removed_sign_1/m_50_k_8000_seed_14"
+    },
+    {
+      "seed": 15,
+      "n": 50,
+      "lds_spearman": 0.25090808575279394,
+      "lds_percent": 25.090808575279393,
+      "pred_mean": 0.19689551853123702,
+      "pred_std": 0.019519403991503752,
+      "true_mean": 3.418125,
+      "true_std": 0.13186463229387937,
+      "source_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/query_automobile/initial_seed_42/lds/dtrak/noise_trajectory/pred_removed_sign_1/m_50_k_8000_seed_15"
+    },
+    {
+      "seed": 16,
+      "n": 50,
+      "lds_spearman": 0.07036942539978595,
+      "lds_percent": 7.036942539978595,
+      "pred_mean": 0.19968921717618288,
+      "pred_std": 0.02164195500088687,
+      "true_mean": 3.4565625,
+      "true_std": 0.1400784517913087,
+      "source_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/query_automobile/initial_seed_42/lds/dtrak/noise_trajectory/pred_removed_sign_1/m_50_k_8000_seed_16"
+    }
+  ]
+}

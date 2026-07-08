@@ -1,0 +1,69 @@
+Output directory: diffusion_jax_refined/cifar2/result/experiment1_42/analysis/lds_seed_subset_m_50_k_8000
+Subset rows: 800
+Seed/query/algorithm rows: 96
+
+horse das
+  best seeds: 8 (33.99%), 11 (21.66%), 3 (20.38%)
+  worst seeds: 13 (-10.46%), 14 (-10.58%), 12 (-17.69%)
+  top feature correlations:
+    num_subsets: Spearman=+nan, Pearson=+nan
+    k: Spearman=+nan, Pearson=+nan
+    horse_frac_min: Spearman=-0.664, Pearson=-0.714
+    horse_frac_mean: Spearman=-0.432, Pearson=-0.497
+    horse_frac_std: Spearman=+0.347, Pearson=+0.505
+    kept_score_mean_mean: Spearman=-0.229, Pearson=-0.238
+
+horse traj_tracin
+  best seeds: 8 (36.22%), 10 (19.10%), 5 (15.73%)
+  worst seeds: 1 (-13.36%), 12 (-16.28%), 15 (-24.31%)
+  top feature correlations:
+    num_subsets: Spearman=+nan, Pearson=+nan
+    k: Spearman=+nan, Pearson=+nan
+    horse_frac_min: Spearman=-0.633, Pearson=-0.667
+    horse_frac_mean: Spearman=-0.503, Pearson=-0.465
+    horse_frac_std: Spearman=+0.450, Pearson=+0.685
+    kept_top10_score_frac_std: Spearman=+0.324, Pearson=+0.357
+
+automobile das
+  best seeds: 2 (26.41%), 1 (18.40%), 6 (18.18%)
+  worst seeds: 4 (-11.65%), 5 (-15.49%), 12 (-26.38%)
+  top feature correlations:
+    num_subsets: Spearman=+nan, Pearson=+nan
+    k: Spearman=+nan, Pearson=+nan
+    kept_top20_score_frac_std: Spearman=+0.544, Pearson=+0.453
+    index_bin_l1_std: Spearman=-0.509, Pearson=-0.499
+    index_mean_std: Spearman=-0.415, Pearson=-0.439
+    index_bin_l1_mean: Spearman=-0.350, Pearson=-0.407
+
+automobile traj_tracin
+  best seeds: 8 (36.68%), 10 (32.49%), 7 (12.43%)
+  worst seeds: 14 (-10.17%), 11 (-12.87%), 12 (-14.33%)
+  top feature correlations:
+    num_subsets: Spearman=+nan, Pearson=+nan
+    k: Spearman=+nan, Pearson=+nan
+    horse_frac_min: Spearman=-0.458, Pearson=-0.651
+    horse_frac_std: Spearman=+0.397, Pearson=+0.681
+    pairwise_jaccard_std: Spearman=-0.306, Pearson=-0.061
+    horse_frac_max: Spearman=+0.283, Pearson=+0.595
+
+horse_automobile das
+  best seeds: 15 (21.85%), 2 (18.51%), 13 (15.77%)
+  worst seeds: 4 (-14.03%), 11 (-21.64%), 5 (-23.49%)
+  top feature correlations:
+    num_subsets: Spearman=+nan, Pearson=+nan
+    k: Spearman=+nan, Pearson=+nan
+    kept_score_mean_std: Spearman=+0.650, Pearson=+0.662
+    kept_score_sum_std: Spearman=+0.650, Pearson=+0.662
+    pairwise_jaccard_std: Spearman=-0.341, Pearson=-0.303
+    pairwise_jaccard_mean: Spearman=+0.321, Pearson=+0.242
+
+horse_automobile traj_tracin
+  best seeds: 11 (25.32%), 2 (13.71%), 1 (12.93%)
+  worst seeds: 16 (-16.45%), 12 (-19.46%), 9 (-24.35%)
+  top feature correlations:
+    num_subsets: Spearman=+nan, Pearson=+nan
+    k: Spearman=+nan, Pearson=+nan
+    pairwise_jaccard_mean: Spearman=+0.462, Pearson=+0.464
+    kept_top10_score_frac_std: Spearman=+0.362, Pearson=+0.388
+    horse_frac_min: Spearman=-0.319, Pearson=-0.224
+    kept_top10_score_frac_mean: Spearman=-0.303, Pearson=-0.473

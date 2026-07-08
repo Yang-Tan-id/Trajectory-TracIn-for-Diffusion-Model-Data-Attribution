@@ -1,0 +1,189 @@
+{
+  "source_group_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/query_horse_automobile/initial_seed_42/lds/traj_tracin/noise_trajectory/pred_kept_sign_m1",
+  "num_seeds": 16,
+  "num_points": 800,
+  "lds_percent_mean": 0.24433870593941304,
+  "lds_percent_std": 12.42255005496293,
+  "pred_mean_mean": -901443038.8185248,
+  "true_mean_mean": 3.3975195312499995,
+  "summary_csv": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/query_horse_automobile/initial_seed_42/lds/traj_tracin/noise_trajectory/pred_kept_sign_m1/aggregate_m_50_k_8000_pred_removed_sign_1_seeds_1_2_3_4_5_6_7_8_9_10_11_12_13_14_15_16/per_seed_summary.csv",
+  "all_seed_points_csv": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/query_horse_automobile/initial_seed_42/lds/traj_tracin/noise_trajectory/pred_kept_sign_m1/aggregate_m_50_k_8000_pred_removed_sign_1_seeds_1_2_3_4_5_6_7_8_9_10_11_12_13_14_15_16/all_seed_points.csv",
+  "per_seed": [
+    {
+      "seed": 1,
+      "n": 50,
+      "lds_spearman": 0.1293422595225864,
+      "lds_percent": 12.934225952258641,
+      "pred_mean": -901442997.5805049,
+      "pred_std": 184759.10858010664,
+      "true_mean": 3.449375,
+      "true_std": 0.26223126124663315,
+      "source_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/query_horse_automobile/initial_seed_42/lds/traj_tracin/noise_trajectory/pred_kept_sign_m1/m_50_k_8000_seed_1"
+    },
+    {
+      "seed": 2,
+      "n": 50,
+      "lds_spearman": 0.13713574708507814,
+      "lds_percent": 13.713574708507814,
+      "pred_mean": -901439243.8348442,
+      "pred_std": 221142.47420917102,
+      "true_mean": 3.33375,
+      "true_std": 0.2402952285731034,
+      "source_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/query_horse_automobile/initial_seed_42/lds/traj_tracin/noise_trajectory/pred_kept_sign_m1/m_50_k_8000_seed_2"
+    },
+    {
+      "seed": 3,
+      "n": 50,
+      "lds_spearman": 0.10722779815303038,
+      "lds_percent": 10.722779815303038,
+      "pred_mean": -901407328.674691,
+      "pred_std": 195445.2914528195,
+      "true_mean": 3.4546875,
+      "true_std": 0.25635001859030554,
+      "source_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/query_horse_automobile/initial_seed_42/lds/traj_tracin/noise_trajectory/pred_kept_sign_m1/m_50_k_8000_seed_3"
+    },
+    {
+      "seed": 4,
+      "n": 50,
+      "lds_spearman": -0.012442951231774553,
+      "lds_percent": -1.2442951231774553,
+      "pred_mean": -901491567.3348955,
+      "pred_std": 234859.20945959105,
+      "true_mean": 3.44125,
+      "true_std": 0.28558396860643276,
+      "source_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/query_horse_automobile/initial_seed_42/lds/traj_tracin/noise_trajectory/pred_kept_sign_m1/m_50_k_8000_seed_4"
+    },
+    {
+      "seed": 5,
+      "n": 50,
+      "lds_spearman": 0.05293623497145542,
+      "lds_percent": 5.293623497145542,
+      "pred_mean": -901524543.5310986,
+      "pred_std": 245954.5943073813,
+      "true_mean": 3.36125,
+      "true_std": 0.29713212549302037,
+      "source_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/query_horse_automobile/initial_seed_42/lds/traj_tracin/noise_trajectory/pred_kept_sign_m1/m_50_k_8000_seed_5"
+    },
+    {
+      "seed": 6,
+      "n": 50,
+      "lds_spearman": -0.04526235747512602,
+      "lds_percent": -4.526235747512602,
+      "pred_mean": -901416914.193301,
+      "pred_std": 196240.37283355347,
+      "true_mean": 3.4790625,
+      "true_std": 0.2590851166243442,
+      "source_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/query_horse_automobile/initial_seed_42/lds/traj_tracin/noise_trajectory/pred_kept_sign_m1/m_50_k_8000_seed_6"
+    },
+    {
+      "seed": 7,
+      "n": 50,
+      "lds_spearman": -0.019173940300515495,
+      "lds_percent": -1.9173940300515495,
+      "pred_mean": -901381178.2084688,
+      "pred_std": 241769.46696443734,
+      "true_mean": 3.373125,
+      "true_std": 0.27776732619226474,
+      "source_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/query_horse_automobile/initial_seed_42/lds/traj_tracin/noise_trajectory/pred_kept_sign_m1/m_50_k_8000_seed_7"
+    },
+    {
+      "seed": 8,
+      "n": 50,
+      "lds_spearman": 0.05012014757098984,
+      "lds_percent": 5.012014757098984,
+      "pred_mean": -901460015.1340405,
+      "pred_std": 271154.3890970645,
+      "true_mean": 3.405,
+      "true_std": 0.2408448670825268,
+      "source_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/query_horse_automobile/initial_seed_42/lds/traj_tracin/noise_trajectory/pred_kept_sign_m1/m_50_k_8000_seed_8"
+    },
+    {
+      "seed": 9,
+      "n": 50,
+      "lds_spearman": -0.2435121919962116,
+      "lds_percent": -24.35121919962116,
+      "pred_mean": -901431937.6350417,
+      "pred_std": 207735.2440997488,
+      "true_mean": 3.3659375,
+      "true_std": 0.25009939430404465,
+      "source_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/query_horse_automobile/initial_seed_42/lds/traj_tracin/noise_trajectory/pred_kept_sign_m1/m_50_k_8000_seed_9"
+    },
+    {
+      "seed": 10,
+      "n": 50,
+      "lds_spearman": -0.012206847595626158,
+      "lds_percent": -1.2206847595626158,
+      "pred_mean": -901460320.1063151,
+      "pred_std": 191268.3436471562,
+      "true_mean": 3.3784375,
+      "true_std": 0.270222889771111,
+      "source_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/query_horse_automobile/initial_seed_42/lds/traj_tracin/noise_trajectory/pred_kept_sign_m1/m_50_k_8000_seed_10"
+    },
+    {
+      "seed": 11,
+      "n": 50,
+      "lds_spearman": 0.2531780301895557,
+      "lds_percent": 25.31780301895557,
+      "pred_mean": -901425115.383753,
+      "pred_std": 238420.1262406791,
+      "true_mean": 3.3665625,
+      "true_std": 0.30831906287359195,
+      "source_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/query_horse_automobile/initial_seed_42/lds/traj_tracin/noise_trajectory/pred_kept_sign_m1/m_50_k_8000_seed_11"
+    },
+    {
+      "seed": 12,
+      "n": 50,
+      "lds_spearman": -0.19455593551068023,
+      "lds_percent": -19.455593551068024,
+      "pred_mean": -901437475.1211727,
+      "pred_std": 198437.93096214705,
+      "true_mean": 3.3690625,
+      "true_std": 0.28337547557304604,
+      "source_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/query_horse_automobile/initial_seed_42/lds/traj_tracin/noise_trajectory/pred_kept_sign_m1/m_50_k_8000_seed_12"
+    },
+    {
+      "seed": 13,
+      "n": 50,
+      "lds_spearman": 0.02974103218591418,
+      "lds_percent": 2.9741032185914182,
+      "pred_mean": -901452816.6646736,
+      "pred_std": 213546.82856571444,
+      "true_mean": 3.451875,
+      "true_std": 0.2980214704933187,
+      "source_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/query_horse_automobile/initial_seed_42/lds/traj_tracin/noise_trajectory/pred_kept_sign_m1/m_50_k_8000_seed_13"
+    },
+    {
+      "seed": 14,
+      "n": 50,
+      "lds_spearman": 0.0196492936439992,
+      "lds_percent": 1.96492936439992,
+      "pred_mean": -901432310.1492488,
+      "pred_std": 238797.64894068468,
+      "true_mean": 3.38625,
+      "true_std": 0.30269041011403053,
+      "source_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/query_horse_automobile/initial_seed_42/lds/traj_tracin/noise_trajectory/pred_kept_sign_m1/m_50_k_8000_seed_14"
+    },
+    {
+      "seed": 15,
+      "n": 50,
+      "lds_spearman": -0.04858709810700018,
+      "lds_percent": -4.858709810700018,
+      "pred_mean": -901440247.2538681,
+      "pred_std": 213028.52081345045,
+      "true_mean": 3.3678125,
+      "true_std": 0.21581083477492505,
+      "source_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/query_horse_automobile/initial_seed_42/lds/traj_tracin/noise_trajectory/pred_kept_sign_m1/m_50_k_8000_seed_15"
+    },
+    {
+      "seed": 16,
+      "n": 50,
+      "lds_spearman": -0.16449502815536887,
+      "lds_percent": -16.44950281553689,
+      "pred_mean": -901444610.2904819,
+      "pred_std": 237644.84856846934,
+      "true_mean": 3.376875,
+      "true_std": 0.2726039079415407,
+      "source_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/query_horse_automobile/initial_seed_42/lds/traj_tracin/noise_trajectory/pred_kept_sign_m1/m_50_k_8000_seed_16"
+    }
+  ]
+}
