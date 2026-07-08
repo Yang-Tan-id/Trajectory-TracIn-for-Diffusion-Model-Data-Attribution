@@ -117,6 +117,7 @@ class TestTaccScriptsStatic(unittest.TestCase):
         self.assertIn('bash scripts/00_sample.sh', text)
         self.assertIn('MAX_PARALLEL_SAMPLE_TASKS', text)
         self.assertIn('sample_complete()', text)
+        self.assertIn('TRAJ_RANGES_TEXT="${TRAJ_RANGES_TEXT:-1-2500 2501-5000 5001-7500 7501-10000}"', text)
         self.assertIn('ALGORITHMS="traj_tracin"', text)
         self.assertIn('bash scripts/01_data_attribution.sh', text)
         self.assertIn('bash scripts/04_lds_eval.sh', text)
