@@ -293,10 +293,18 @@ def main() -> None:
             target_dir = alg_dir / args.target_function
             if not target_dir.is_dir():
                 continue
-            out = aggregate_group(target_dir, model_glob=model_glob, output_name=output_name)
-            if out is not None:
-                created.append(str(out))
-                print(f"Saved per-seed aggregate to {out}")
+            group_dirs = []
+            if any(target_dir.glob(model_glob)):
+                group_dirs.append(target_dir)
+            group_dirs.extend(
+                child for child in sorted(target_dir.iterdir())
+                if child.is_dir() and any(child.glob(model_glob))
+            )
+            for group_dir in group_dirs:
+                out = aggregate_group(group_dir, model_glob=model_glob, output_name=output_name)
+                if out is not None:
+                    created.append(str(out))
+                    print(f"Saved per-seed aggregate to {out}")
     if not created:
         raise SystemExit("No per-seed LDS result folders matched the requested filters.")
 
