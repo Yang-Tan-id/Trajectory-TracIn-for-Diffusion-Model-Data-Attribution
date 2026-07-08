@@ -3,7 +3,7 @@
 #SBATCH --partition=rtx-small
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=2
-#SBATCH --cpus-per-task=16
+#SBATCH --cpus-per-task=14
 #SBATCH --time=48:00:00
 #SBATCH --output=cifar2-attr-rtx-%j.out
 #SBATCH --error=cifar2-attr-rtx-%j.err
