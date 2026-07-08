@@ -66,11 +66,40 @@ class TestTaccScriptsStatic(unittest.TestCase):
         self.assertIn('if (( ${#pids[@]} >= MAX_PARALLEL_ATTR_TASKS )); then', text)
         self.assertIn('ENDPOINT_ALGORITHMS_TEXT="${ENDPOINT_ALGORITHMS_TEXT:-das dtrak end_tracin}"', text)
 
+    def test_attribution_only_wrappers_reuse_samples_and_split_h100_rtx(self):
+        h100 = self.read("08_attribution_only_h100.sh")
+        rtx = self.read("09_attribution_only_rtx_remaining.sh")
+        common = self.read("attribution_only_common.sh")
+
+        self.assertRegex(h100, r"#SBATCH\s+--partition=h100")
+        self.assertRegex(h100, r"#SBATCH\s+--nodes=4")
+        self.assertRegex(h100, r"#SBATCH\s+--ntasks-per-node=4")
+        self.assertIn('ATTR_TASK_START="${ATTR_TASK_START:-1}"', h100)
+        self.assertIn('ATTR_TASK_END="${ATTR_TASK_END:-16}"', h100)
+        self.assertIn('source "${SCRIPT_DIR}/attribution_only_common.sh"', h100)
+
+        self.assertRegex(rtx, r"#SBATCH\s+--partition=rtx-small")
+        self.assertRegex(rtx, r"#SBATCH\s+--nodes=1")
+        self.assertRegex(rtx, r"#SBATCH\s+--ntasks-per-node=2")
+        self.assertIn('ATTR_TASK_START="${ATTR_TASK_START:-17}"', rtx)
+        self.assertIn('ATTR_TASK_END="${ATTR_TASK_END:-18}"', rtx)
+        self.assertIn('GPU_PER_NODE="${GPU_PER_NODE:-2}"', rtx)
+        self.assertIn('source "${SCRIPT_DIR}/attribution_only_common.sh"', rtx)
+
+        self.assertIn("validate_sample", common)
+        self.assertIn("launch_attribution", common)
+        self.assertIn('ATTR_ALGORITHMS="${ATTR_ALGORITHMS:-traj_tracin das}"', common)
+        self.assertIn('read -r -a ATTR_ALGORITHM_LIST <<<"${ATTR_ALGORITHMS}"', common)
+        self.assertNotIn("scripts/00_sample.sh", common)
+        self.assertNotIn("04_lds_eval", common)
+        self.assertNotIn("RUN_ENDPOINTS", common)
+        self.assertNotIn("ENDPOINT_ALGORITHMS", common)
+
     def test_cifar2_das_uses_batched_gpu_path_by_default_without_large_result_io(self):
         text = (ROOT / "cifar2" / "dataset_config.py").read_text()
         self.assertIn('"use_batched_per_example_grads": os.environ.get("DAS_BATCHED", "1")', text)
-        self.assertIn('"per_example_grad_batch_size": int(os.environ.get("DAS_GRAD_BATCH_SIZE", "4"))', text)
-        self.assertIn('"DAS_SHERMAN_MORRISON_DENOMINATOR", "0"', text)
+        self.assertIn('"per_example_grad_batch_size": int(os.environ.get("DAS_GRAD_BATCH_SIZE", "8"))', text)
+        self.assertIn('"DAS_SHERMAN_MORRISON_DENOMINATOR", "1"', text)
         das_text = (ROOT / "legacy_jax" / "DM_dataAttribution_algo_end_das.py").read_text()
         self.assertIn("compute_batched_das_term", das_text)
         self.assertIn("jax.vmap(phi_fn", das_text)

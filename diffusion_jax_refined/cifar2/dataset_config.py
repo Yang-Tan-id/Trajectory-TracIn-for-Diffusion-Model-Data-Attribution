@@ -136,9 +136,9 @@ ATTRIBUTION_CONFIGS = {
         "damping": 1e-3,
         "batch_size": 64,
         "use_batched_per_example_grads": os.environ.get("DAS_BATCHED", "1") not in ("0", "false", "False"),
-        "per_example_grad_batch_size": int(os.environ.get("DAS_GRAD_BATCH_SIZE", "4")),
+        "per_example_grad_batch_size": int(os.environ.get("DAS_GRAD_BATCH_SIZE", "8")),
         "use_sherman_morrison_denominator": os.environ.get(
-            "DAS_SHERMAN_MORRISON_DENOMINATOR", "0"
+            "DAS_SHERMAN_MORRISON_DENOMINATOR", "1"
         ) not in ("0", "false", "False"),
         "max_num_ckpts": 1,
     },
