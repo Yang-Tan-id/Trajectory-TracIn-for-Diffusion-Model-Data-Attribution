@@ -1038,7 +1038,9 @@ def compute_batched_das_term(
         if hasattr(iterator, "set_postfix"):
             iterator.set_postfix(samples=f"{end}/{num_points}")
 
-    H_proj = np.asarray(H_device, dtype=np.float32)
+    # np.asarray(jax_array) may return a read-only host view. Make a writable
+    # copy before adding damping in-place.
+    H_proj = np.asarray(H_device, dtype=np.float32).copy()
     H_proj += float(cfg.damping) * np.eye(proj_dim, dtype=np.float32)
     phi_q_np = np.asarray(phi_q, dtype=np.float32)
     u = np.linalg.solve(H_proj, phi_q_np)
