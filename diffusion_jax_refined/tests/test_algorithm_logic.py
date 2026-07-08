@@ -73,6 +73,77 @@ def das_batched_squared_scores(query_phi: list[float], train_phi: list[list[floa
     return out
 
 
+def invert_2x2(matrix: list[list[float]]) -> list[list[float]]:
+    [[a, b], [c, d]] = matrix
+    det = a * d - b * c
+    if abs(det) < 1e-12:
+        raise ValueError("singular matrix")
+    return [[d / det, -b / det], [-c / det, a / det]]
+
+
+def mat_vec(matrix: list[list[float]], vector: list[float]) -> list[float]:
+    return [dot(row, vector) for row in matrix]
+
+
+def projected_das_scores(
+    query_phi: list[float],
+    train_phi: list[list[float]],
+    residuals: list[float],
+    *,
+    damping: float,
+    use_denominator: bool,
+) -> list[float]:
+    h = [[damping, 0.0], [0.0, damping]]
+    for phi in train_phi:
+        h[0][0] += phi[0] * phi[0]
+        h[0][1] += phi[0] * phi[1]
+        h[1][0] += phi[1] * phi[0]
+        h[1][1] += phi[1] * phi[1]
+    h_inv = invert_2x2(h)
+    u = mat_vec(h_inv, query_phi)
+    scores = []
+    for phi, residual in zip(train_phi, residuals):
+        raw = dot(phi, u) * residual
+        if use_denominator:
+            h_inv_phi = mat_vec(h_inv, phi)
+            raw /= 1.0 - dot(phi, h_inv_phi)
+        scores.append(raw * raw)
+    return scores
+
+
+def projected_das_scores_batched(
+    query_phi: list[float],
+    train_phi: list[list[float]],
+    residuals: list[float],
+    *,
+    damping: float,
+    batch_size: int,
+    use_denominator: bool,
+) -> list[float]:
+    cached_phi = []
+    cached_residuals = []
+    h = [[damping, 0.0], [0.0, damping]]
+    for start in range(0, len(train_phi), batch_size):
+        for phi, residual in zip(train_phi[start : start + batch_size], residuals[start : start + batch_size]):
+            cached_phi.append(phi)
+            cached_residuals.append(residual)
+            h[0][0] += phi[0] * phi[0]
+            h[0][1] += phi[0] * phi[1]
+            h[1][0] += phi[1] * phi[0]
+            h[1][1] += phi[1] * phi[1]
+    h_inv = invert_2x2(h)
+    u = mat_vec(h_inv, query_phi)
+    scores = []
+    for start in range(0, len(cached_phi), batch_size):
+        for phi, residual in zip(cached_phi[start : start + batch_size], cached_residuals[start : start + batch_size]):
+            raw = dot(phi, u) * residual
+            if use_denominator:
+                h_inv_phi = mat_vec(h_inv, phi)
+                raw /= 1.0 - dot(phi, h_inv_phi)
+            scores.append(raw * raw)
+    return scores
+
+
 def mc_endpoint_objective(theta: list[float], eps_predictions: list[list[float]], eps_targets: list[list[float]]) -> float:
     losses = []
     for pred, target in zip(eps_predictions, eps_targets):
@@ -158,6 +229,59 @@ class TestAlgorithmLogic(unittest.TestCase):
         self.assertEqual(len(batched), len(unbatched))
         for a, b in zip(batched, unbatched):
             self.assertAlmostEqual(a, b)
+
+    def test_projected_das_batched_path_matches_unbatched_without_result_io(self):
+        query_phi = [0.6, -0.4]
+        train_phi = [
+            [1.0, 0.2],
+            [0.1, -0.7],
+            [0.3, 0.8],
+            [-0.5, 0.4],
+            [0.9, -0.1],
+        ]
+        residuals = [0.8, -0.3, 1.1, -0.6, 0.2]
+
+        for use_denominator in (False, True):
+            with self.subTest(use_denominator=use_denominator):
+                unbatched = projected_das_scores(
+                    query_phi,
+                    train_phi,
+                    residuals,
+                    damping=0.25,
+                    use_denominator=use_denominator,
+                )
+                batched = projected_das_scores_batched(
+                    query_phi,
+                    train_phi,
+                    residuals,
+                    damping=0.25,
+                    batch_size=2,
+                    use_denominator=use_denominator,
+                )
+                self.assertEqual(len(batched), len(unbatched))
+                for a, b in zip(batched, unbatched):
+                    self.assertAlmostEqual(a, b)
+
+    def test_projected_das_sherman_morrison_denominator_changes_scores(self):
+        query_phi = [0.6, -0.4]
+        train_phi = [[1.0, 0.2], [0.1, -0.7], [0.3, 0.8], [-0.5, 0.4]]
+        residuals = [0.8, -0.3, 1.1, -0.6]
+        without = projected_das_scores(
+            query_phi,
+            train_phi,
+            residuals,
+            damping=0.25,
+            use_denominator=False,
+        )
+        with_denom = projected_das_scores(
+            query_phi,
+            train_phi,
+            residuals,
+            damping=0.25,
+            use_denominator=True,
+        )
+        self.assertEqual(len(with_denom), len(without))
+        self.assertTrue(any(abs(a - b) > 1e-8 for a, b in zip(with_denom, without)))
 
     def test_endpoint_mc_average_matches_batched_average(self):
         theta = [1.25]

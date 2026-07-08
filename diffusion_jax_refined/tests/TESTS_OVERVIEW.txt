@@ -143,6 +143,9 @@ Test files
      producing mean/std summaries and combined scatter grids;
    - attribution part1/part2 sharding is explicit;
    - sample validation exists in the attribution script.
+   - sample/attribution H100 jobs can fill the 4-node allocation with up to
+     16 independent one-GPU tasks, and the DAS config defaults to the batched
+     GPU path without requiring any real result files.
 
    Purpose: catch TACC submission/script mistakes before burning queue time.
 
@@ -171,7 +174,12 @@ Test files
    They cover:
 
    - DAS currently saves squared-magnitude scores;
-   - traj_tracin uses the trajectory_noise_squared_deviation objective;
+   - traj_tracin keeps trajectory_noise_squared_deviation as the default
+     objective and also exposes normalized eps-deviation L1 / L2-squared
+     query objectives for method probes;
+   - non-default traj_tracin objectives write to distinct attribution folders;
+   - DAS saves squared-magnitude scores while the Sherman-Morrison denominator
+     remains an explicit opt-in option;
    - EndTracIn uses endpoint-anchored loss with MC samples;
    - CIFAR2 attribution/eval sample-count settings are pinned.
 

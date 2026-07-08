@@ -56,9 +56,31 @@ class TestTaccScriptsStatic(unittest.TestCase):
         self.assertIn('if [[ "${ATTR_SHARD}" == "2" ]]; then', text)
         self.assertIn('validate_sample', text)
 
+    def test_sample_attribution_can_fill_h100_allocation_with_independent_tasks(self):
+        text = self.read("02_sample_attribution_h100.sh")
+        self.assertRegex(text, r"#SBATCH\s+--nodes=4")
+        self.assertRegex(text, r"#SBATCH\s+--ntasks-per-node=4")
+        self.assertIn('MAX_PARALLEL_ATTR_TASKS="${MAX_PARALLEL_ATTR_TASKS:-${SLURM_NTASKS:-16}}"', text)
+        self.assertIn('CUDA_VISIBLE_DEVICES="$((slot % 4))"', text)
+        self.assertIn('ibrun -n 1 -o "${slot}"', text)
+        self.assertIn('if (( ${#pids[@]} >= MAX_PARALLEL_ATTR_TASKS )); then', text)
+        self.assertIn('ENDPOINT_ALGORITHMS_TEXT="${ENDPOINT_ALGORITHMS_TEXT:-das dtrak end_tracin}"', text)
+
+    def test_cifar2_das_uses_batched_gpu_path_by_default_without_large_result_io(self):
+        text = (ROOT / "cifar2" / "dataset_config.py").read_text()
+        self.assertIn('"use_batched_per_example_grads": os.environ.get("DAS_BATCHED", "1")', text)
+        self.assertIn('"per_example_grad_batch_size": int(os.environ.get("DAS_GRAD_BATCH_SIZE", "4"))', text)
+        self.assertIn('"DAS_SHERMAN_MORRISON_DENOMINATOR", "0"', text)
+        das_text = (ROOT / "legacy_jax" / "DM_dataAttribution_algo_end_das.py").read_text()
+        self.assertIn("compute_batched_das_term", das_text)
+        self.assertIn("jax.vmap(phi_fn", das_text)
+        self.assertIn("H_device = H_device + phi_batch.T @ phi_batch", das_text)
+        self.assertIn("return np.square(raw)", das_text)
+
     def test_combined_eval_overwrite_guard_is_target_specific(self):
         text = self.read("03_lds_eval_h100.sh")
-        self.assertIn('/lds/${algorithm}/${LDS_TARGET_FUNCTION}', text)
+        self.assertIn('/lds/${eval_algorithm}/${LDS_TARGET_FUNCTION}', text)
+        self.assertIn('eval_algorithm="$(traj_algorithm_tag)"', text)
         self.assertIn('Refusing to overwrite ${out_dir}', text)
         self.assertNotIn('Refusing to overwrite ${eval_dir}', text)
 

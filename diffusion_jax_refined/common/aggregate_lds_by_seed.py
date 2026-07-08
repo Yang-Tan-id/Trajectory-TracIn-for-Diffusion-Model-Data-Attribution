@@ -276,6 +276,11 @@ def main() -> None:
     parser.add_argument("--initial-seed", default="42")
     parser.add_argument("--queries", nargs="*", default=None, help="Optional query folder names, e.g. query_horse")
     parser.add_argument("--algorithms", nargs="*", default=None)
+    parser.add_argument(
+        "--prediction-dir",
+        default=None,
+        help="Optional prediction directory under target-function, e.g. pred_kept_sign_m1 or pred_removed_sign_1.",
+    )
     parser.add_argument("--output-name", default=None)
     args = parser.parse_args()
 
@@ -293,13 +298,17 @@ def main() -> None:
             target_dir = alg_dir / args.target_function
             if not target_dir.is_dir():
                 continue
-            group_dirs = []
-            if any(target_dir.glob(model_glob)):
-                group_dirs.append(target_dir)
-            group_dirs.extend(
-                child for child in sorted(target_dir.iterdir())
-                if child.is_dir() and any(child.glob(model_glob))
-            )
+            if args.prediction_dir:
+                candidate = target_dir / args.prediction_dir
+                group_dirs = [candidate] if candidate.is_dir() and any(candidate.glob(model_glob)) else []
+            else:
+                group_dirs = []
+                if any(target_dir.glob(model_glob)):
+                    group_dirs.append(target_dir)
+                group_dirs.extend(
+                    child for child in sorted(target_dir.iterdir())
+                    if child.is_dir() and any(child.glob(model_glob))
+                )
             for group_dir in group_dirs:
                 out = aggregate_group(group_dir, model_glob=model_glob, output_name=output_name)
                 if out is not None:

@@ -25,7 +25,13 @@ MAX_PARALLEL_EVAL_TASKS="${MAX_PARALLEL_EVAL_TASKS:-${SLURM_NTASKS:-4}}"
 
 QUERIES=("horse" "automobile" "horse,automobile")
 TRAJ_RANGES=("1-2000" "2001-4000" "4001-6000" "6001-8000" "8001-10000")
-ENDPOINT_ALGORITHMS=("das" "dtrak" "end_tracin")
+ENDPOINT_ALGORITHMS_TEXT="${ENDPOINT_ALGORITHMS_TEXT:-das dtrak end_tracin}"
+if [[ "${RUN_ENDPOINTS:-1}" == "0" ]]; then
+  ENDPOINT_ALGORITHMS=()
+else
+  read -r -a ENDPOINT_ALGORITHMS <<<"${ENDPOINT_ALGORITHMS_TEXT}"
+fi
+TRAJ_QUERY_OBJECTIVE="${TRAJ_QUERY_OBJECTIVE:-${QUERY_OBJECTIVE:-trajectory_noise_squared_deviation}}"
 
 prediction_tag() {
   local subset="$1"
@@ -69,12 +75,27 @@ path_tag() {
   printf '%s' "${value#_}" | sed 's/_$//'
 }
 
+traj_algorithm_tag() {
+  if [[ "${TRAJ_QUERY_OBJECTIVE}" == "trajectory_noise_squared_deviation" ]]; then
+    printf '%s' "traj_tracin"
+  else
+    local value="${TRAJ_QUERY_OBJECTIVE}"
+    value="${value//[^A-Za-z0-9._-]/_}"
+    while [[ "${value}" == *"__"* ]]; do
+      value="${value//__/_}"
+    done
+    value="${value#_}"
+    value="${value%_}"
+    printf 'traj_tracin_%s' "${value}"
+  fi
+}
+
 score_dirs() {
   local query="$1" algorithm="$2" range output=""
   local root="${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/attribution_score/query_$(path_tag "${query}")/initial_seed_${INITIAL_SEED}"
   if [[ "${algorithm}" == "traj_tracin" ]]; then
     for range in "${TRAJ_RANGES[@]}"; do
-      output+="${output:+,}${root}/traj_tracin_range_${range//-/_}"
+      output+="${output:+,}${root}/$(traj_algorithm_tag)_range_${range//-/_}"
     done
   else
     output="${root}/${algorithm}_range_1_10000"
@@ -102,29 +123,33 @@ for seed in ${LDS_SEEDS}; do
   for query in "${QUERIES[@]}"; do
     tag="$(path_tag "${query}")"
     for algorithm in traj_tracin "${ENDPOINT_ALGORITHMS[@]}"; do
+      eval_algorithm="${algorithm}"
+      if [[ "${algorithm}" == "traj_tracin" ]]; then
+        eval_algorithm="$(traj_algorithm_tag)"
+      fi
       dirs="$(score_dirs "${query}" "${algorithm}")"
       IFS=',' read -r -a inputs <<<"${dirs}"
       for input in "${inputs[@]}"; do
         [[ -f "${input}/scores.npy" ]] || { echo "Missing ${input}/scores.npy" >&2; exit 1; }
       done
-      out_dir="${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/eval/query_${tag}/initial_seed_${INITIAL_SEED}/lds/${algorithm}/${LDS_TARGET_FUNCTION}/${PREDICTION_TAG}/$(basename "${model_dir}")"
+      out_dir="${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/eval/query_${tag}/initial_seed_${INITIAL_SEED}/lds/${eval_algorithm}/${LDS_TARGET_FUNCTION}/${PREDICTION_TAG}/$(basename "${model_dir}")"
       if [[ "${ALLOW_OVERWRITE}" != "1" && -e "${out_dir}" ]]; then
         echo "Refusing to overwrite ${out_dir}" >&2
         exit 1
       fi
 
       slot="${#pids[@]}"
-      echo "Launching per-seed LDS eval seed=${seed}, query=${query}, algorithm=${algorithm}, prediction=${PREDICTION_TAG}"
+      echo "Launching per-seed LDS eval seed=${seed}, query=${query}, algorithm=${eval_algorithm}, prediction=${PREDICTION_TAG}"
       ibrun -n 1 -o "${slot}" \
         env CUDA_VISIBLE_DEVICES="$((slot % 4))" \
           EXPERIMENT_TAG="${EXPERIMENT_TAG}" QUERY="${query}" \
-          INITIAL_SEED="${INITIAL_SEED}" ALGORITHMS="${algorithm}" \
+          INITIAL_SEED="${INITIAL_SEED}" ALGORITHMS="${eval_algorithm}" \
           ATTRIBUTION_RESULT_DIRS="${dirs}" LDS_MODEL_DIRS="${model_dir}" \
           LDS_DEVICE=gpu LDS_NUM_DEVICES=1 \
         bash scripts/04_lds_eval.sh --target-function "${LDS_TARGET_FUNCTION}" \
         --prediction-subset "${LDS_PREDICTION_SUBSET}" \
         --prediction-sign "${LDS_PREDICTION_SIGN}" \
-        >"${LOG_ROOT}/eval_${tag}_${algorithm}_lds_seed_${seed}.log" 2>&1 &
+        >"${LOG_ROOT}/eval_${tag}_${eval_algorithm}_lds_seed_${seed}.log" 2>&1 &
       pids+=("$!")
       total_launched=$((total_launched + 1))
       if (( ${#pids[@]} >= MAX_PARALLEL_EVAL_TASKS )); then
@@ -147,7 +172,8 @@ python "${REPO_ROOT}/diffusion_jax_refined/common/aggregate_lds_by_seed.py" \
   --lds-m "${LDS_M}" \
   --lds-k "${LDS_K}" \
   --initial-seed "${INITIAL_SEED}" \
-  --algorithms traj_tracin "${ENDPOINT_ALGORITHMS[@]}" \
+  --algorithms "$(traj_algorithm_tag)" "${ENDPOINT_ALGORITHMS[@]}" \
+  --prediction-dir "${PREDICTION_TAG}" \
   --output-name "aggregate_m_${LDS_M}_k_${LDS_K}_${PREDICTION_TAG}_seeds_${LDS_SEEDS// /_}" \
   >"${LOG_ROOT}/aggregate.log" 2>&1
 echo "Aggregate log: ${LOG_ROOT}/aggregate.log"

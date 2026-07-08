@@ -30,6 +30,10 @@ def _prompt_path_tag(prompt: str) -> str:
 
 
 DATASET_NAME = "cifar2"
+TRAJ_QUERY_OBJECTIVE = os.environ.get(
+    "TRAJ_QUERY_OBJECTIVE",
+    os.environ.get("QUERY_OBJECTIVE", "trajectory_noise_squared_deviation"),
+)
 DATASET_DISPLAY_NAME = "CIFAR2 horse/automobile"
 EXPERIMENTS = ("experiment1", "experiment2", "experiment3")
 EXPERIMENT_TAG = os.environ.get("EXPERIMENT_TAG", "experiment1")
@@ -133,12 +137,16 @@ ATTRIBUTION_CONFIGS = {
         "batch_size": 64,
         "use_batched_per_example_grads": os.environ.get("DAS_BATCHED", "1") not in ("0", "false", "False"),
         "per_example_grad_batch_size": int(os.environ.get("DAS_GRAD_BATCH_SIZE", "4")),
+        "use_sherman_morrison_denominator": os.environ.get(
+            "DAS_SHERMAN_MORRISON_DENOMINATOR", "0"
+        ) not in ("0", "false", "False"),
         "max_num_ckpts": 1,
     },
     "traj_tracin": {
         **COMMON_CIFAR,
         "checkpoint_dir": CHECKPOINT_DIR,
         "reference_ckpt": REFERENCE_CKPT,
+        "query_objective": TRAJ_QUERY_OBJECTIVE,
         "attribution_sample_dir": ATTRIBUTION_SAMPLE_DIR,
         "attribution_sample_seed": INITIAL_SEED,
         "attribution_sample_index": 0,

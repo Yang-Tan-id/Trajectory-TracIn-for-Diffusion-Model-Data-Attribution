@@ -834,6 +834,7 @@ class TrajAttributionConfig:
     # query
     query: Any = None
     seed: int = 0
+    query_objective: str = "trajectory_noise_squared_deviation"
 
     # optional precomputed sampler trajectory
     # Accepts either:
@@ -929,16 +930,59 @@ def get_adapter(cfg: TrajAttributionConfig):
     raise ValueError("task_type must be 'x3', 'cifar10', or 'artbench_latent'")
 
 
-def query_scalar(adapter, model, params, reference_params, xt_ref, t, cond):
-    """Per-snapshot f_noise: squared epsilon deviation from theta_ref."""
+def normalize_query_objective_name(name: str) -> str:
+    aliases = {
+        "trajectory_noise_squared_deviation": "trajectory_noise_squared_deviation",
+        "noise_squared_deviation": "trajectory_noise_squared_deviation",
+        "sum_l2_sq": "trajectory_noise_squared_deviation",
+        "eps_deviation_l1_mean": "eps_deviation_l1_mean",
+        "l1_mean": "eps_deviation_l1_mean",
+        "mean_abs": "eps_deviation_l1_mean",
+        "eps_deviation_l2_sq_mean": "eps_deviation_l2_sq_mean",
+        "l2_sq_mean": "eps_deviation_l2_sq_mean",
+        "mean_squared": "eps_deviation_l2_sq_mean",
+    }
+    try:
+        return aliases[str(name)]
+    except KeyError as exc:
+        raise ValueError(
+            "query_objective must be one of "
+            "trajectory_noise_squared_deviation, eps_deviation_l1_mean, "
+            "eps_deviation_l2_sq_mean"
+        ) from exc
+
+
+def query_objective_formula(name: str) -> str:
+    name = normalize_query_objective_name(name)
+    if name == "trajectory_noise_squared_deviation":
+        return "sum_k w_k ||eps_theta(x_ref_k,k)-eps_theta_ref(x_ref_k,k)||_2^2"
+    if name == "eps_deviation_l1_mean":
+        return "sum_k w_k mean(|eps_theta(x_ref_k,k)-eps_theta_ref(x_ref_k,k)|)"
+    if name == "eps_deviation_l2_sq_mean":
+        return "sum_k w_k mean((eps_theta(x_ref_k,k)-eps_theta_ref(x_ref_k,k))^2)"
+    raise AssertionError(name)
+
+
+def query_scalar(adapter, model, params, reference_params, xt_ref, t, cond, objective: str):
+    """Per-snapshot target scalar f(theta) comparing theta to theta_ref on the reference trajectory."""
+    objective = normalize_query_objective_name(objective)
     eps = adapter.eps_apply(model, params, xt_ref, t, cond)
     eps_ref = jax.lax.stop_gradient(
         adapter.eps_apply(model, reference_params, xt_ref, t, cond)
     )
-    return jnp.sum((eps - eps_ref) ** 2)
+    diff = eps - eps_ref
+    if objective == "trajectory_noise_squared_deviation":
+        return jnp.sum(diff ** 2)
+    if objective == "eps_deviation_l1_mean":
+        return jnp.mean(jnp.abs(diff))
+    if objective == "eps_deviation_l2_sq_mean":
+        return jnp.mean(diff ** 2)
+    raise AssertionError(objective)
 
 
-def make_query_grad_fn(adapter, model):
+def make_query_grad_fn(adapter, model, objective: str):
+    objective = normalize_query_objective_name(objective)
+
     def scalar_fn(params, reference_params, xt_ref, t_scalar, cond):
         t = jnp.full((xt_ref.shape[0],), t_scalar, dtype=jnp.int32)
         return query_scalar(
@@ -949,6 +993,7 @@ def make_query_grad_fn(adapter, model):
             xt_ref=xt_ref,
             t=t,
             cond=cond,
+            objective=objective,
         )
 
     return jax.jit(jax.grad(scalar_fn))
@@ -959,7 +1004,7 @@ def compute_query_grads(adapter, model, params, reference_params, xt_refs, t_seq
     total = len(t_seq)
     print(f"[query-grad] computing gradients for {total} trajectory snapshots")
     qg_start = time.time()
-    grad_fn = make_query_grad_fn(adapter, model)
+    grad_fn = make_query_grad_fn(adapter, model, cfg.query_objective)
 
     for snap_i, (xt_ref, t_int) in enumerate(zip(xt_refs, t_seq)):
         t_scalar = array_to_device(jnp.asarray(int(t_int), dtype=jnp.int32), device)
@@ -1110,6 +1155,7 @@ def make_score_snapshot_batch_fn(
 
 
 def run_attribution(cfg: TrajAttributionConfig):
+    cfg.query_objective = normalize_query_objective_name(cfg.query_objective)
     subset_suffix = apply_score_subset_suffix_to_out_dir(cfg)
     os.makedirs(cfg.out_dir, exist_ok=True)
     t_start = time.time()
@@ -1165,7 +1211,7 @@ def run_attribution(cfg: TrajAttributionConfig):
     print(f"module_name          : {cfg.module_name}")
     print(f"checkpoint_dir       : {cfg.checkpoint_dir}")
     print(f"reference_ckpt       : {cfg.reference_ckpt}")
-    print("query_objective      : trajectory_noise_squared_deviation")
+    print(f"query_objective      : {cfg.query_objective}")
     print(f"query                : {cfg.query}")
     print(f"seed                 : {cfg.seed}")
     print(f"timesteps            : {cfg.timesteps}")
@@ -1344,7 +1390,7 @@ def run_attribution(cfg: TrajAttributionConfig):
         )
         score_loop_start = time.time()
         print(f"[checkpoint {ckpt_i + 1}/{len(ckpts)}] preparing jitted query-gradient function...")
-        query_grad_fn = make_query_grad_fn(adapter, model)
+        query_grad_fn = make_query_grad_fn(adapter, model, cfg.query_objective)
         print(f"[checkpoint {ckpt_i + 1}/{len(ckpts)}] preparing jitted snapshot scorer...")
         score_snapshot_fn = make_score_snapshot_batch_fn(
             adapter=adapter,
@@ -1486,8 +1532,8 @@ def run_attribution(cfg: TrajAttributionConfig):
         "snapshot_positions_used": snapshot_positions_used,
         "snapshot_timesteps_used": timestep_values_used,
         "query_objective": {
-            "name": "trajectory_noise_squared_deviation",
-            "formula": "sum_k w_k ||eps_theta(x_ref_k,k)-eps_theta_ref(x_ref_k,k)||_2^2",
+            "name": cfg.query_objective,
+            "formula": query_objective_formula(cfg.query_objective),
             "reference_ckpt": reference_ckpt,
             "snapshot_reduction": "mean",
             "checkpoint_reduction": "sum",

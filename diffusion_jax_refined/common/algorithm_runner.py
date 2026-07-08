@@ -56,6 +56,17 @@ def build_output_dir(
     )
 
 
+def _safe_tag(value: object) -> str:
+    text = str(value)
+    out = []
+    for ch in text:
+        out.append(ch if ch.isalnum() or ch in "._-" else "_")
+    tag = "".join(out).strip("_")
+    while "__" in tag:
+        tag = tag.replace("__", "_")
+    return tag
+
+
 def run_algorithm_config(config_path: str | Path) -> Any:
     cfg_module = load_config(config_path)
     dataset_name = require_attr(cfg_module, "DATASET_NAME")
@@ -71,9 +82,14 @@ def run_algorithm_config(config_path: str | Path) -> Any:
     initial_seed = int(
         config_values.get("attribution_sample_seed", os.environ.get("INITIAL_SEED", "0"))
     )
+    output_algorithm = algorithm
+    if algorithm == "traj_tracin":
+        objective = config_values.get("query_objective", "trajectory_noise_squared_deviation")
+        if objective != "trajectory_noise_squared_deviation":
+            output_algorithm = f"{algorithm}_{_safe_tag(objective)}"
     config_values.setdefault(
         "out_dir",
-        build_output_dir(dataset_name, experiment_tag, algorithm, query, initial_seed),
+        build_output_dir(dataset_name, experiment_tag, output_algorithm, query, initial_seed),
     )
 
     add_legacy_jax_to_path()
