@@ -20,6 +20,7 @@ MAX_PARALLEL_ATTR_TASKS="${MAX_PARALLEL_ATTR_TASKS:-${SLURM_NTASKS:-16}}"
 GPU_PER_NODE="${GPU_PER_NODE:-4}"
 ATTR_ONLY_LABEL="${ATTR_ONLY_LABEL:-h100}"
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="${REPO_ROOT:-${SLURM_SUBMIT_DIR:-$(pwd)}}"
+SCRIPT_DIR="${REPO_ROOT}/diffusion_jax_refined/cifar2/tacc"
 # shellcheck source=attribution_only_common.sh
 source "${SCRIPT_DIR}/attribution_only_common.sh"
