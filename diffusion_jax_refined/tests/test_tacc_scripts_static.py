@@ -7,6 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 TACC = ROOT / "cifar2" / "tacc"
+SCRIPTS = ROOT / "cifar2" / "scripts"
 
 
 class TestTaccScriptsStatic(unittest.TestCase):
@@ -105,6 +106,26 @@ class TestTaccScriptsStatic(unittest.TestCase):
         self.assertIn("jax.vmap(phi_fn", das_text)
         self.assertIn("H_device = H_device + phi_batch.T @ phi_batch", das_text)
         self.assertIn("return np.square(raw)", das_text)
+
+    def test_local_traj_l1_k8000_workflow_script_defaults(self):
+        text = (SCRIPTS / "05_traj_l1_attribution_k8000_lds_eval.sh").read_text()
+        self.assertIn('TRAJ_QUERY_OBJECTIVE="${TRAJ_QUERY_OBJECTIVE:-eps_deviation_l1_mean}"', text)
+        self.assertIn('LDS_K="${LDS_K:-8000}"', text)
+        self.assertIn('LDS_M="${LDS_M:-50}"', text)
+        self.assertIn('RUN_SAMPLE="${RUN_SAMPLE:-1}"', text)
+        self.assertIn('SAMPLE_SEEDS="${INITIAL_SEED}"', text)
+        self.assertIn('bash scripts/00_sample.sh', text)
+        self.assertIn('MAX_PARALLEL_SAMPLE_TASKS', text)
+        self.assertIn('sample_complete()', text)
+        self.assertIn('ALGORITHMS="traj_tracin"', text)
+        self.assertIn('bash scripts/01_data_attribution.sh', text)
+        self.assertIn('bash scripts/04_lds_eval.sh', text)
+        self.assertIn('aggregate_lds_by_seed.py', text)
+        self.assertIn('MAX_PARALLEL_ATTR_TASKS', text)
+        self.assertIn('MAX_PARALLEL_EVAL_TASKS', text)
+        self.assertNotIn('sbatch', text)
+        self.assertNotIn('ibrun', text)
+        self.assertNotIn('ALGORITHMS="das"', text)
 
     def test_combined_eval_overwrite_guard_is_target_specific(self):
         text = self.read("03_lds_eval_h100.sh")
