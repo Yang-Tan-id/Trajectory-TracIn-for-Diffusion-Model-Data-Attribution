@@ -28,6 +28,7 @@ class TestAttributionCodeContracts(unittest.TestCase):
         self.assertIn("jnp.mean(jnp.abs(diff))", text)
         self.assertIn('"eps_deviation_l2_sq_mean"', text)
         self.assertIn("jnp.mean(diff ** 2)", text)
+        self.assertIn('"trajectory_noise_squared_deviation_normalized"', text)
 
     def test_nondefault_traj_objective_gets_distinct_score_folder(self):
         text = (ROOT / "common" / "algorithm_runner.py").read_text()

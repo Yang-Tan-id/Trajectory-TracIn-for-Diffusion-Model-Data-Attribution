@@ -936,6 +936,8 @@ def normalize_query_objective_name(name: str) -> str:
         "trajectory_noise_squared_deviation": "trajectory_noise_squared_deviation",
         "noise_squared_deviation": "trajectory_noise_squared_deviation",
         "sum_l2_sq": "trajectory_noise_squared_deviation",
+        "trajectory_noise_squared_deviation_normalized": "eps_deviation_l2_sq_mean",
+        "normalized_trajectory_noise_squared_deviation": "eps_deviation_l2_sq_mean",
         "eps_deviation_l1_mean": "eps_deviation_l1_mean",
         "l1_mean": "eps_deviation_l1_mean",
         "mean_abs": "eps_deviation_l1_mean",
@@ -949,7 +951,8 @@ def normalize_query_objective_name(name: str) -> str:
         raise ValueError(
             "query_objective must be one of "
             "trajectory_noise_squared_deviation, eps_deviation_l1_mean, "
-            "eps_deviation_l2_sq_mean"
+            "eps_deviation_l2_sq_mean, "
+            "trajectory_noise_squared_deviation_normalized"
         ) from exc
 
 

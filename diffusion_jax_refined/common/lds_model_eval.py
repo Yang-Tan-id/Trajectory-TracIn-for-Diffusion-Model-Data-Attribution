@@ -167,7 +167,7 @@ def main() -> None:
         trajectory_projection=score_meta.get("trajectory_projection"),
         simple_loss_timesteps=list(range(diffusion_timesteps)),
         simple_loss_noise_seeds=None,
-        simple_loss_num_mc=int(os.environ.get("LDS_SIMPLE_LOSS_NUM_MC", "16")),
+        simple_loss_num_mc=int(os.environ.get("LDS_SIMPLE_LOSS_NUM_MC", "10")),
         simple_loss_mc_seed=int(os.environ.get("LDS_SIMPLE_LOSS_MC_SEED", "0")),
     )
     saved_prompt = (
