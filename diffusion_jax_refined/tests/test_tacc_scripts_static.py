@@ -100,6 +100,7 @@ class TestTaccScriptsStatic(unittest.TestCase):
         text = (ROOT / "cifar2" / "dataset_config.py").read_text()
         self.assertIn('"use_batched_per_example_grads": os.environ.get("DAS_BATCHED", "1")', text)
         self.assertIn('"per_example_grad_batch_size": int(os.environ.get("DAS_GRAD_BATCH_SIZE", "8"))', text)
+        self.assertIn('"score_batch_size": int(os.environ.get("TRAJ_SCORE_BATCH_SIZE", "32"))', text)
         self.assertIn('"DAS_SHERMAN_MORRISON_DENOMINATOR", "1"', text)
         das_text = (ROOT / "legacy_jax" / "DM_dataAttribution_algo_end_das.py").read_text()
         self.assertIn("compute_batched_das_term", das_text)

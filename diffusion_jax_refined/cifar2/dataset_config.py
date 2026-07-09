@@ -155,7 +155,7 @@ ATTRIBUTION_CONFIGS = {
         "ddim_steps": 1000,
         "num_traj_snapshots": 100,
         "train_mc_samples": 2,
-        "score_batch_size": 2,
+        "score_batch_size": int(os.environ.get("TRAJ_SCORE_BATCH_SIZE", "32")),
         "progress_every": 512,
     },
     "dtrak": {
