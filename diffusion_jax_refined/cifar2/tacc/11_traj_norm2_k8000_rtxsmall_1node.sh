@@ -4,7 +4,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=2
 #SBATCH --cpus-per-task=14
-#SBATCH --time=20:00:00
+#SBATCH --time=48:00:00
 #SBATCH --output=cifar2-traj-n2-rtx-%j.out
 #SBATCH --error=cifar2-traj-n2-rtx-%j.err
 
