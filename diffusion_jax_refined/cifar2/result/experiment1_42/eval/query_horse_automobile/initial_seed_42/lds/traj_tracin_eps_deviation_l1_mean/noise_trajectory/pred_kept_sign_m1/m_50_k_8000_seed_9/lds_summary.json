@@ -1,0 +1,42 @@
+{
+  "algorithm": "traj_tracin_eps_deviation_l1_mean",
+  "mode": "prompted",
+  "lds_model_dirs": [
+    "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_8000_seed_9"
+  ],
+  "score_sources": [
+    {
+      "result_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/attribution_score/query_horse_automobile/initial_seed_42/traj_tracin_eps_deviation_l1_mean_range_1_2000",
+      "source_kind": "score_indices.npy",
+      "num_scores": 2000
+    },
+    {
+      "result_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/attribution_score/query_horse_automobile/initial_seed_42/traj_tracin_eps_deviation_l1_mean_range_2001_4000",
+      "source_kind": "score_indices.npy",
+      "num_scores": 2000
+    },
+    {
+      "result_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/attribution_score/query_horse_automobile/initial_seed_42/traj_tracin_eps_deviation_l1_mean_range_4001_6000",
+      "source_kind": "score_indices.npy",
+      "num_scores": 2000
+    },
+    {
+      "result_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/attribution_score/query_horse_automobile/initial_seed_42/traj_tracin_eps_deviation_l1_mean_range_6001_8000",
+      "source_kind": "score_indices.npy",
+      "num_scores": 2000
+    },
+    {
+      "result_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/attribution_score/query_horse_automobile/initial_seed_42/traj_tracin_eps_deviation_l1_mean_range_8001_10000",
+      "source_kind": "score_indices.npy",
+      "num_scores": 2000
+    }
+  ],
+  "num_models": 50,
+  "lds_spearman": -0.12412603457702133,
+  "lds_percent": -12.412603457702133,
+  "target_function": "noise_trajectory",
+  "trajectory_reduction": "snapshot_mean",
+  "prediction_subset": "kept",
+  "prediction_sign": -1.0,
+  "elapsed_sec": 12.333353042602539
+}

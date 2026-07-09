@@ -1,0 +1,26 @@
+Validating existing attribution samples
+Validated sample: /work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/sampling/cifar/prompt_horse/model_prompted_jax__ckpt_seed_42_epoch_0200/seed_000042 | trajectory=(100, 1, 32, 32, 3) | final=(1, 32, 32, 3)
+Validated sample: /work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/sampling/cifar/prompt_automobile/model_prompted_jax__ckpt_seed_42_epoch_0200/seed_000042 | trajectory=(100, 1, 32, 32, 3) | final=(1, 32, 32, 3)
+Validated sample: /work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/eval/sampling/cifar/prompt_horse_automobile/model_prompted_jax__ckpt_seed_42_epoch_0200/seed_000042 | trajectory=(100, 1, 32, 32, 3) | final=(1, 32, 32, 3)
+Attribution-only task range 1-16
+TRAJ_QUERY_OBJECTIVE=eps_deviation_l1_mean; ATTR_ALGORITHMS=traj_tracin das
+MAX_PARALLEL_ATTR_TASKS=16; GPU_PER_NODE=4
+Logs: /work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/tacc_logs/attr_only_h100_1_16_3285989
+Task 1: query=horse, algorithm=traj_tracin, range=1-2000, slot=0
+Task 2: query=horse, algorithm=traj_tracin, range=2001-4000, slot=1
+Task 3: query=horse, algorithm=traj_tracin, range=4001-6000, slot=2
+Task 4: query=horse, algorithm=traj_tracin, range=6001-8000, slot=3
+Task 5: query=horse, algorithm=traj_tracin, range=8001-10000, slot=4
+Task 6: query=horse, algorithm=das, range=all, slot=5
+Task 7: query=automobile, algorithm=traj_tracin, range=1-2000, slot=6
+Task 8: query=automobile, algorithm=traj_tracin, range=2001-4000, slot=7
+Task 9: query=automobile, algorithm=traj_tracin, range=4001-6000, slot=8
+Task 10: query=automobile, algorithm=traj_tracin, range=6001-8000, slot=9
+Task 11: query=automobile, algorithm=traj_tracin, range=8001-10000, slot=10
+Task 12: query=automobile, algorithm=das, range=all, slot=11
+Task 13: query=horse,automobile, algorithm=traj_tracin, range=1-2000, slot=12
+Task 14: query=horse,automobile, algorithm=traj_tracin, range=2001-4000, slot=13
+Task 15: query=horse,automobile, algorithm=traj_tracin, range=4001-6000, slot=14
+Task 16: query=horse,automobile, algorithm=traj_tracin, range=6001-8000, slot=15
+Completed 16 attribution task(s) from range 1-16.
+Logs: /work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/tacc_logs/attr_only_h100_1_16_3285989

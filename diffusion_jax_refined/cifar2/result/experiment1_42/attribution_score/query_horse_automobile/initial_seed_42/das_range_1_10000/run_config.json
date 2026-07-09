@@ -36,6 +36,8 @@
   "ckpt_stride": 1,
   "max_num_ckpts": 1,
   "batch_size": 64,
+  "use_batched_per_example_grads": true,
+  "per_example_grad_batch_size": 8,
   "max_train_points": 10000,
   "random_subset": false,
   "score_index_ranges": [

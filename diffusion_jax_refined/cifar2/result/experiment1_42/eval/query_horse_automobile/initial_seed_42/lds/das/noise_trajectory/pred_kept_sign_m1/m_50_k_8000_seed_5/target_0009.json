@@ -1,0 +1,16 @@
+{
+  "subset_id": 9,
+  "subset_seed": 115815300,
+  "subset_size": 8000,
+  "prediction_subset": "kept",
+  "prediction_sign": -1.0,
+  "pred_sum_tau": -0.049369288319374975,
+  "true_f": 3.171875,
+  "checkpoint": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_8000_seed_5/models/subset_0009/seed_42_epoch_0200.ckpt",
+  "subset_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_8000_seed_5/models/subset_0009",
+  "target_details": {
+    "target_function": "noise_trajectory",
+    "num_trajectory_steps": 100,
+    "trajectory_reduction": "snapshot_mean"
+  }
+}
