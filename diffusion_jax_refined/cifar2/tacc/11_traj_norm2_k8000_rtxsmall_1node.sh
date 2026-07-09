@@ -3,7 +3,7 @@
 #SBATCH --partition=rtx-small
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=4
-#SBATCH --cpus-per-task=16
+#SBATCH --cpus-per-task=8
 #SBATCH --time=20:00:00
 #SBATCH --output=cifar2-traj-n2-rtx-%j.out
 #SBATCH --error=cifar2-traj-n2-rtx-%j.err
