@@ -852,12 +852,13 @@ class TrajAttributionConfig:
     beta_end: float = 0.02
     ddim_steps: int = 1000
     num_traj_snapshots: int = 100
+    snapshot_chunk_size: int = 3
     traj_snapshot_positions: Optional[Tuple[int, ...]] = None
     # if provided, this overrides num_traj_snapshots selection on DDIM positions
     # positions are in [0, ddim_steps-1], not raw diffusion t
 
     # scoring
-    train_mc_samples: int = 2
+    train_mc_samples: int = 10
     m_proj: int = 2   # retained only for reading historical random-projection runs
     max_train_points: int = 1024
     random_subset: bool = True
@@ -997,6 +998,21 @@ def make_query_grad_fn(adapter, model, objective: str):
         )
 
     return jax.jit(jax.grad(scalar_fn))
+
+
+def make_query_grad_chunk_fn(adapter, model, objective: str):
+    grad_fn = make_query_grad_fn(adapter, model, objective)
+
+    def grad_chunk(params, reference_params, xt_refs_chunk, t_scalars, cond):
+        return jax.vmap(grad_fn, in_axes=(None, None, 0, 0, None))(
+            params,
+            reference_params,
+            xt_refs_chunk,
+            t_scalars,
+            cond,
+        )
+
+    return jax.jit(grad_chunk)
 
 
 def compute_query_grads(adapter, model, params, reference_params, xt_refs, t_seq, cond, cfg, base_rng, device):
@@ -1154,6 +1170,43 @@ def make_score_snapshot_batch_fn(
     return jax.jit(score_snapshot)
 
 
+def make_score_snapshot_chunk_batch_fn(
+    adapter,
+    model,
+    schedule,
+    *,
+    train_mc_samples: int,
+):
+    def score_one_snapshot(params, query_grad, x0_batch, cond_batch, rng, t_scalar):
+        def losses_fn(p):
+            return train_losses_at_dynamic_t_mc_vectorized(
+                adapter=adapter,
+                model=model,
+                params=p,
+                schedule=schedule,
+                x0_batch=x0_batch,
+                cond_batch=cond_batch,
+                t_scalar=t_scalar,
+                num_mc_samples=train_mc_samples,
+                rng=rng,
+            )
+
+        _, directional_scores = jax.jvp(losses_fn, (params,), (query_grad,))
+        return directional_scores
+
+    def score_chunk(params, query_grads, x0_batch, cond_batch, rngs, t_scalars):
+        return jax.vmap(score_one_snapshot, in_axes=(None, 0, None, None, 0, 0))(
+            params,
+            query_grads,
+            x0_batch,
+            cond_batch,
+            rngs,
+            t_scalars,
+        )
+
+    return jax.jit(score_chunk)
+
+
 def run_attribution(cfg: TrajAttributionConfig):
     cfg.query_objective = normalize_query_objective_name(cfg.query_objective)
     subset_suffix = apply_score_subset_suffix_to_out_dir(cfg)
@@ -1217,6 +1270,7 @@ def run_attribution(cfg: TrajAttributionConfig):
     print(f"timesteps            : {cfg.timesteps}")
     print(f"ddim_steps           : {cfg.ddim_steps}")
     print(f"num_traj_snapshots   : {cfg.num_traj_snapshots}")
+    print(f"snapshot_chunk_size  : {cfg.snapshot_chunk_size}")
     print(f"train_mc_samples     : {cfg.train_mc_samples}")
     print(f"max_train_points     : {cfg.max_train_points}")
     print(f"random_subset        : {cfg.random_subset}")
@@ -1389,10 +1443,10 @@ def run_attribution(cfg: TrajAttributionConfig):
             f"{len(picked)} training points..."
         )
         score_loop_start = time.time()
-        print(f"[checkpoint {ckpt_i + 1}/{len(ckpts)}] preparing jitted query-gradient function...")
-        query_grad_fn = make_query_grad_fn(adapter, model, cfg.query_objective)
-        print(f"[checkpoint {ckpt_i + 1}/{len(ckpts)}] preparing jitted snapshot scorer...")
-        score_snapshot_fn = make_score_snapshot_batch_fn(
+        print(f"[checkpoint {ckpt_i + 1}/{len(ckpts)}] preparing jitted query-gradient chunk function...")
+        query_grad_chunk_fn = make_query_grad_chunk_fn(adapter, model, cfg.query_objective)
+        print(f"[checkpoint {ckpt_i + 1}/{len(ckpts)}] preparing jitted snapshot chunk scorer...")
+        score_snapshot_chunk_fn = make_score_snapshot_chunk_batch_fn(
             adapter=adapter,
             model=model,
             schedule=schedule,
@@ -1414,49 +1468,64 @@ def run_attribution(cfg: TrajAttributionConfig):
         done_units = 0
         snap_weight = 1.0 / float(max(1, len(t_seq)))
         report_every_batches = max(1, int(math.ceil(cfg.progress_every / batch_size)))
+        snapshot_chunk_size = max(1, int(cfg.snapshot_chunk_size))
 
-        for snap_id, t_int in enumerate(t_seq):
-            t_scalar = array_to_device(jnp.asarray(int(t_int), dtype=jnp.int32), device)
-            query_grad = query_grad_fn(
+        for chunk_start in range(0, len(t_seq), snapshot_chunk_size):
+            chunk_end = min(chunk_start + snapshot_chunk_size, len(t_seq))
+            chunk_ids = list(range(chunk_start, chunk_end))
+            xt_chunk = array_to_device(jnp.stack([xt_refs[i] for i in chunk_ids], axis=0), device)
+            t_chunk = array_to_device(
+                jnp.asarray([int(t_seq[i]) for i in chunk_ids], dtype=jnp.int32),
+                device,
+            )
+            query_grads = query_grad_chunk_fn(
                 params,
                 reference_params,
-                xt_refs[snap_id],
-                t_scalar,
+                xt_chunk,
+                t_chunk,
                 query_cond,
             )
-            if snap_id == 0:
-                query_grad = tree_to_device(query_grad, device)
-                print(f"[device-check] query_grad[0]={first_leaf_device_str(query_grad)}")
-            query_grad = tree_to_device(query_grad, device)
+            if chunk_start == 0:
+                query_grads = tree_to_device(query_grads, device)
+                print(f"[device-check] query_grad_chunk[0]={first_leaf_device_str(query_grads)}")
+            query_grads = tree_to_device(query_grads, device)
 
             for batch_no, start in enumerate(batch_starts, start=1):
                 end = min(start + batch_size, len(picked))
                 real_indices = picked[start:end]
                 padded_indices = pad_indices_to_batch(real_indices, batch_size)
                 x_batch, cond_batch = make_train_batch(adapter, ds, padded_indices, device)
-                if snap_id == 0 and batch_no == 1:
+                if chunk_start == 0 and batch_no == 1:
                     print(
                         "[device-check] "
                         f"x_batch={array_device_str(x_batch)} | "
                         f"cond_batch={array_device_str(cond_batch)}"
                     )
                 rng = array_to_device(
-                    jax.random.PRNGKey(cfg.seed + 100000 * ckpt_i + 1000 * batch_no + snap_id),
+                    jnp.stack(
+                        [
+                            jax.random.PRNGKey(
+                                cfg.seed + 100000 * ckpt_i + 1000 * batch_no + snap_id
+                            )
+                            for snap_id in chunk_ids
+                        ],
+                        axis=0,
+                    ),
                     device,
                 )
-                snap_scores = score_snapshot_fn(
+                chunk_scores = score_snapshot_chunk_fn(
                     params,
-                    query_grad,
+                    query_grads,
                     x_batch,
                     cond_batch,
                     rng,
-                    t_scalar,
+                    t_chunk,
                 )
-                snap_scores.block_until_ready()
-                batch_scores = np.asarray(jax.device_get(snap_scores))[: len(real_indices)]
-                scores[start:end] += snap_weight * batch_scores.astype(np.float64)
+                chunk_scores.block_until_ready()
+                batch_scores = np.asarray(jax.device_get(chunk_scores))[:, : len(real_indices)]
+                scores[start:end] += snap_weight * batch_scores.sum(axis=0).astype(np.float64)
 
-                if snap_id == len(t_seq) - 1:
+                if chunk_end == len(t_seq):
                     running_sum += float(scores[start:end].sum())
                     batch_min = float(scores[start:end].min()) if len(real_indices) else 0.0
                     batch_max = float(scores[start:end].max()) if len(real_indices) else 0.0
@@ -1464,17 +1533,17 @@ def run_attribution(cfg: TrajAttributionConfig):
                     running_max = batch_max if running_max is None else max(running_max, batch_max)
                     processed_points_all_ckpts += len(real_indices)
 
-                done_units += 1
+                done_units += len(chunk_ids)
                 if hasattr(score_iter, "update"):
-                    score_iter.update(1)
+                    score_iter.update(len(chunk_ids))
                     score_iter.set_postfix(
-                        snapshot=f"{snap_id + 1}/{len(t_seq)}",
+                        snapshot=f"{chunk_start + 1}-{chunk_end}/{len(t_seq)}",
                         samples=f"{end}/{len(picked)}",
                     )
 
                 if (
-                    (snap_id == 0 and batch_no == 1)
-                    or (snap_id == len(t_seq) - 1 and (end == len(picked) or batch_no % report_every_batches == 0))
+                    (chunk_start == 0 and batch_no == 1)
+                    or (chunk_end == len(t_seq) and (end == len(picked) or batch_no % report_every_batches == 0))
                 ):
                     elapsed_ckpt = time.time() - score_loop_start
                     avg_unit = elapsed_ckpt / max(1, done_units)
@@ -1483,7 +1552,7 @@ def run_attribution(cfg: TrajAttributionConfig):
                     elapsed_total = time.time() - t_start
                     print(
                         f"[checkpoint {ckpt_i + 1}/{len(ckpts)}] "
-                        f"snapshot {snap_id + 1}/{len(t_seq)} | "
+                        f"snapshot {chunk_start + 1}-{chunk_end}/{len(t_seq)} | "
                         f"samples {end}/{len(picked)} | "
                         f"last_idx={real_indices[-1]} | "
                         f"ckpt_elapsed={format_seconds(elapsed_ckpt)} | "
@@ -1491,7 +1560,7 @@ def run_attribution(cfg: TrajAttributionConfig):
                         f"total_elapsed={format_seconds(elapsed_total)}"
                     )
 
-            del query_grad
+            del query_grads
 
         if hasattr(score_iter, "close"):
             score_iter.close()
@@ -1589,7 +1658,7 @@ if __name__ == "__main__":
             # traj_snapshot_positions=(0, 50, 100, 200, 400, 600, 800, 999),
 
             # Monte Carlo approximation controls
-            train_mc_samples=2,
+            train_mc_samples=10,
             m_proj=2,   # number of random r projections for query scalarization
 
             # how many training points to score
@@ -1620,7 +1689,7 @@ if __name__ == "__main__":
             ddim_steps=1000,
             num_traj_snapshots=100,
 
-            train_mc_samples=2,
+            train_mc_samples=10,
             m_proj=2,
 
             # how many training points to score
@@ -1651,7 +1720,7 @@ if __name__ == "__main__":
             ddim_steps=1000,
             num_traj_snapshots=100,
 
-            train_mc_samples=2,
+            train_mc_samples=10,
             m_proj=2,
 
             max_train_points=1000,
@@ -1695,7 +1764,7 @@ if __name__ == "__main__":
             ddim_steps=1000,
             num_traj_snapshots=100,
 
-            train_mc_samples=2,
+            train_mc_samples=10,
             m_proj=2,
 
             max_train_points=1000,
@@ -1735,7 +1804,7 @@ if __name__ == "__main__":
             ddim_steps=1000,
             num_traj_snapshots=100,
 
-            train_mc_samples=2,
+            train_mc_samples=10,
             m_proj=2,
 
             max_train_points=1000,
