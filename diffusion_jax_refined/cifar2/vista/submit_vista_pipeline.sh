@@ -6,16 +6,17 @@ set -euo pipefail
 #   bash diffusion_jax_refined/cifar2/vista/submit_vista_pipeline.sh
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "${SCRIPT_DIR}"
 
 train_job="$(
-  sbatch "${SCRIPT_DIR}/00_train_lds_50pct_vista.sh" | awk '{print $4}'
+  sbatch ./00_train_lds_50pct_vista.sh | awk '{print $4}'
 )"
 attr_job="$(
-  sbatch "${SCRIPT_DIR}/01_sample_and_attribute_vista.sh" | awk '{print $4}'
+  sbatch ./01_sample_and_attribute_vista.sh | awk '{print $4}'
 )"
 eval_job="$(
   sbatch --dependency=afterok:${train_job}:${attr_job} \
-    "${SCRIPT_DIR}/02_eval_and_aggregate_vista.sh" | awk '{print $4}'
+    ./02_eval_and_aggregate_vista.sh | awk '{print $4}'
 )"
 
 echo "Submitted Vista CIFAR2 pipeline"
