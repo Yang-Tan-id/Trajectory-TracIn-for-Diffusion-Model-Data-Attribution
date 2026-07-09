@@ -25,12 +25,15 @@ MAX_PARALLEL_EVAL_TASKS="${MAX_PARALLEL_EVAL_TASKS:-${SLURM_NTASKS:-4}}"
 
 QUERIES=("horse" "automobile" "horse,automobile")
 TRAJ_RANGES=("1-2000" "2001-4000" "4001-6000" "6001-8000" "8001-10000")
-ENDPOINT_ALGORITHMS_TEXT="${ENDPOINT_ALGORITHMS_TEXT:-das dtrak end_tracin}"
-if [[ "${RUN_ENDPOINTS:-1}" == "0" ]]; then
-  ENDPOINT_ALGORITHMS=()
+if [[ -n "${EVAL_ALGORITHMS:-}" ]]; then
+  :
+elif [[ "${RUN_ENDPOINTS:-1}" == "0" ]]; then
+  EVAL_ALGORITHMS="traj_tracin"
 else
-  read -r -a ENDPOINT_ALGORITHMS <<<"${ENDPOINT_ALGORITHMS_TEXT}"
+  # Backward-compatible alias for older submit commands. Prefer EVAL_ALGORITHMS.
+  EVAL_ALGORITHMS="traj_tracin ${ENDPOINT_ALGORITHMS_TEXT:-das dtrak end_tracin}"
 fi
+read -r -a EVAL_ALGORITHM_LIST <<<"${EVAL_ALGORITHMS}"
 TRAJ_QUERY_OBJECTIVE="${TRAJ_QUERY_OBJECTIVE:-${QUERY_OBJECTIVE:-trajectory_noise_squared_deviation}}"
 
 prediction_tag() {
@@ -122,7 +125,7 @@ for seed in ${LDS_SEEDS}; do
 
   for query in "${QUERIES[@]}"; do
     tag="$(path_tag "${query}")"
-    for algorithm in traj_tracin "${ENDPOINT_ALGORITHMS[@]}"; do
+    for algorithm in "${EVAL_ALGORITHM_LIST[@]}"; do
       eval_algorithm="${algorithm}"
       if [[ "${algorithm}" == "traj_tracin" ]]; then
         eval_algorithm="$(traj_algorithm_tag)"
@@ -166,13 +169,21 @@ fi
 echo "All ${total_launched} per-seed LDS evaluations completed. Logs: ${LOG_ROOT}"
 
 echo "Aggregating per-seed LDS evaluations"
+AGGREGATE_ALGORITHMS=()
+for algorithm in "${EVAL_ALGORITHM_LIST[@]}"; do
+  if [[ "${algorithm}" == "traj_tracin" ]]; then
+    AGGREGATE_ALGORITHMS+=("$(traj_algorithm_tag)")
+  else
+    AGGREGATE_ALGORITHMS+=("${algorithm}")
+  fi
+done
 python "${REPO_ROOT}/diffusion_jax_refined/common/aggregate_lds_by_seed.py" \
   --eval-root "${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/eval" \
   --target-function "${LDS_TARGET_FUNCTION}" \
   --lds-m "${LDS_M}" \
   --lds-k "${LDS_K}" \
   --initial-seed "${INITIAL_SEED}" \
-  --algorithms "$(traj_algorithm_tag)" "${ENDPOINT_ALGORITHMS[@]}" \
+  --algorithms "${AGGREGATE_ALGORITHMS[@]}" \
   --prediction-dir "${PREDICTION_TAG}" \
   --output-name "aggregate_m_${LDS_M}_k_${LDS_K}_${PREDICTION_TAG}_seeds_${LDS_SEEDS// /_}" \
   >"${LOG_ROOT}/aggregate.log" 2>&1

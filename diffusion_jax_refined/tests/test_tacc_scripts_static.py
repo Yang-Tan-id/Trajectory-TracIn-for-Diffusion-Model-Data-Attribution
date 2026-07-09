@@ -143,6 +143,11 @@ class TestTaccScriptsStatic(unittest.TestCase):
         self.assertIn("--lds-k", text)
         self.assertIn("per-seed LDS evaluations completed", text)
         self.assertIn("aggregate.log", text)
+        self.assertIn('EVAL_ALGORITHMS="traj_tracin ${ENDPOINT_ALGORITHMS_TEXT:-das dtrak end_tracin}"', text)
+        self.assertIn('read -r -a EVAL_ALGORITHM_LIST <<<"${EVAL_ALGORITHMS}"', text)
+        self.assertIn('for algorithm in "${EVAL_ALGORITHM_LIST[@]}"; do', text)
+        self.assertIn("AGGREGATE_ALGORITHMS=()", text)
+        self.assertIn('--algorithms "${AGGREGATE_ALGORITHMS[@]}"', text)
 
     def test_per_seed_eval_supports_removed_prediction_subset(self):
         text = self.read("04_lds_eval_by_seed_h100.sh")
