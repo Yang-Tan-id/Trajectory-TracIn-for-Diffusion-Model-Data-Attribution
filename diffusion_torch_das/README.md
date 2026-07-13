@@ -19,6 +19,13 @@ code without downloading anything.
 From this folder:
 
 ```bash
+conda env create -f environment.yml
+conda activate torchdas
+```
+
+Or with venv:
+
+```bash
 python3 -m venv .venv
 source .venv/bin/activate
 python3 -m pip install -r requirements-torch.txt

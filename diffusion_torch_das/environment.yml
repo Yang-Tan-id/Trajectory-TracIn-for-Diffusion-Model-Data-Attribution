@@ -1,0 +1,17 @@
+name: torchdas
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - pip:
+      - torch==2.5.0
+      - torchvision==0.20.0
+      - diffusers==0.23.1
+      - accelerate==0.25.0
+      - datasets==2.16.1
+      - transformers==4.35.2
+      - scipy==1.16.1
+      - tqdm
+      - Pillow
+      - numpy
