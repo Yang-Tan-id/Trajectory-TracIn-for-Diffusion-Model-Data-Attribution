@@ -11,6 +11,7 @@ dependencies:
       - accelerate==0.25.0
       - datasets==2.16.1
       - transformers==4.35.2
+      - huggingface_hub==0.19.4
       - scipy==1.16.1
       - tqdm
       - Pillow
