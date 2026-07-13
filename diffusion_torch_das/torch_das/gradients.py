@@ -27,6 +27,7 @@ def parse_args():
     parser.add_argument("--batch-size", type=int, default=1, help="Kept for DataLoader; gradients are per-example.")
     parser.add_argument("--num-timesteps", type=int, default=2)
     parser.add_argument("--projection-dim", type=int, default=128)
+    parser.add_argument("--projector-chunk-size", type=int, default=2048, help="Rows of the random projector generated at a time")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", default="auto")
     return parser.parse_args()
@@ -38,6 +39,18 @@ def flat_grad(model):
         if param.requires_grad and param.grad is not None:
             parts.append(param.grad.detach().flatten())
     return torch.cat(parts)
+
+
+def project_vector(vector, projection_dim, chunk_size, seed=0):
+    out = torch.zeros(projection_dim, dtype=torch.float32)
+    generator = torch.Generator(device="cpu").manual_seed(seed)
+    scale = 1.0 / np.sqrt(projection_dim)
+    vector = vector.cpu().float()
+    for start in range(0, vector.numel(), chunk_size):
+        end = min(start + chunk_size, vector.numel())
+        block = torch.randn(end - start, projection_dim, generator=generator, dtype=torch.float32)
+        out += vector[start:end] @ block
+    return out * scale
 
 
 def main():
@@ -54,8 +67,6 @@ def main():
     selected = np.linspace(0, scheduler.config.num_train_timesteps - 1, args.num_timesteps, dtype=int)
 
     param_count = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    generator = torch.Generator(device="cpu").manual_seed(0)
-    projector = torch.randn(param_count, args.projection_dim, generator=generator, dtype=torch.float32) / np.sqrt(args.projection_dim)
     projected = np.memmap(args.output, dtype=np.float32, mode="w+", shape=(len(dataset), args.projection_dim))
 
     for row, batch in enumerate(tqdm(dataloader, desc="grad")):
@@ -72,8 +83,8 @@ def main():
             loss.backward()
             grad = flat_grad(model)
             emb += grad / (torch.linalg.norm(grad) + 1e-8)
-        emb = (emb / len(selected)).cpu()
-        projected[row] = (emb @ projector).numpy()
+        emb = emb / len(selected)
+        projected[row] = project_vector(emb, args.projection_dim, args.projector_chunk_size).numpy()
     projected.flush()
     print(f"saved projected gradients {(len(dataset), args.projection_dim)} to {args.output}")
 
