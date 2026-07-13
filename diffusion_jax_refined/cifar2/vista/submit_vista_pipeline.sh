@@ -8,16 +8,21 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "${SCRIPT_DIR}"
 
-train_job="$(
-  sbatch ./00_train_lds_50pct_vista.sh | awk '{print $4}'
-)"
-attr_job="$(
-  sbatch ./01_sample_and_attribute_vista.sh | awk '{print $4}'
-)"
-eval_job="$(
-  sbatch --dependency=afterok:${train_job}:${attr_job} \
-    ./02_eval_and_aggregate_vista.sh | awk '{print $4}'
-)"
+submit_job() {
+  local output job_id
+  output="$("$@")"
+  printf '%s\n' "${output}" >&2
+  job_id="$(printf '%s\n' "${output}" | grep -Eo '^[0-9]+(;[0-9]+)?$' | tail -n 1)"
+  if [[ -z "${job_id}" ]]; then
+    echo "Could not parse job id from sbatch output above." >&2
+    exit 1
+  fi
+  printf '%s' "${job_id%%;*}"
+}
+
+train_job="$(submit_job sbatch --parsable ./00_train_lds_50pct_vista.sh)"
+attr_job="$(submit_job sbatch --parsable ./01_sample_and_attribute_vista.sh)"
+eval_job="$(submit_job sbatch --parsable --dependency=afterok:${train_job}:${attr_job} ./02_eval_and_aggregate_vista.sh)"
 
 echo "Submitted Vista CIFAR2 pipeline"
 echo "  LDS train        : ${train_job}"
