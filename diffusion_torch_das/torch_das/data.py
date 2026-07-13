@@ -8,7 +8,19 @@ from torch.utils.data import Dataset, Subset
 from torchvision import transforms
 
 
-CIFAR2_LABELS = {"automobile": 1, "horse": 7}
+CIFAR10_LABELS = {
+    "airplane": 0,
+    "automobile": 1,
+    "bird": 2,
+    "cat": 3,
+    "deer": 4,
+    "dog": 5,
+    "frog": 6,
+    "horse": 7,
+    "ship": 8,
+    "truck": 9,
+}
+CIFAR2_CLASS_NAMES = ("automobile", "horse")
 
 
 class ImageTensorDataset(Dataset):
@@ -61,7 +73,7 @@ def _load_cifar_batch(path: Path):
     return data, labels
 
 
-def local_cifar2_dataset(cifar_dir, split="train", classes=("automobile", "horse"), **kwargs):
+def local_cifar_dataset(cifar_dir, split="train", classes=None, **kwargs):
     cifar_dir = Path(cifar_dir)
     if split == "train":
         batch_paths = [cifar_dir / f"data_batch_{i}" for i in range(1, 6)]
@@ -70,28 +82,29 @@ def local_cifar2_dataset(cifar_dir, split="train", classes=("automobile", "horse
     else:
         raise ValueError(f"Unsupported split: {split}")
 
-    wanted = {CIFAR2_LABELS[name] for name in classes}
+    wanted = None if classes is None else {CIFAR10_LABELS[name] for name in classes}
     images, labels = [], []
     for batch_path in batch_paths:
         if not batch_path.exists():
             raise FileNotFoundError(f"Missing CIFAR batch: {batch_path}")
         data, batch_labels = _load_cifar_batch(batch_path)
         for image, label in zip(data, batch_labels):
-            if int(label) in wanted:
+            if wanted is None or int(label) in wanted:
                 images.append(image)
                 labels.append(int(label))
     return ImageTensorDataset(images, labels, **kwargs)
 
 
-def hf_dataset(name_or_path, split="train", classes=("automobile", "horse"), **kwargs):
+def hf_dataset(name_or_path, split="train", classes=None, **kwargs):
     from datasets import load_dataset, load_from_disk
 
     path = Path(name_or_path)
     ds = load_from_disk(str(path / split)) if path.exists() else load_dataset(name_or_path, split=split)
-    wanted = {CIFAR2_LABELS[name] for name in classes}
     label_col = "label"
     image_col = "img" if "img" in ds.column_names else "image"
-    ds = ds.filter(lambda x: int(x[label_col]) in wanted)
+    if classes is not None:
+        wanted = {CIFAR10_LABELS[name] for name in classes}
+        ds = ds.filter(lambda x: int(x[label_col]) in wanted)
     return ImageTensorDataset([row[image_col] for row in ds], [int(row[label_col]) for row in ds], **kwargs)
 
 
@@ -119,12 +132,13 @@ def build_dataset(args, split="train", random_flip=False):
         "center_crop": args.center_crop,
         "random_flip": random_flip,
     }
-    if args.dataset == "synthetic":
-        return synthetic_dataset(num_samples=args.synthetic_samples, **common)
+    dataset_kind = getattr(args, "dataset_kind", "synthetic")
     dataset_path = Path(args.dataset)
-    if dataset_path.exists() and (dataset_path / "data_batch_1").exists():
-        return local_cifar2_dataset(dataset_path, split=split, **common)
-    if dataset_path.exists() and dataset_path.is_dir() and split == "gen":
+    if split == "gen" and dataset_path.exists() and dataset_path.is_dir():
         return load_image_folder(dataset_path, **common)
-    return hf_dataset(args.dataset, split=split, **common)
-
+    if args.dataset == "synthetic" or dataset_kind == "synthetic":
+        return synthetic_dataset(num_samples=args.synthetic_samples, **common)
+    classes = CIFAR2_CLASS_NAMES if dataset_kind == "cifar2" else None
+    if dataset_path.exists() and (dataset_path / "data_batch_1").exists():
+        return local_cifar_dataset(dataset_path, split=split, classes=classes, **common)
+    return hf_dataset(args.dataset, split=split, classes=classes, **common)

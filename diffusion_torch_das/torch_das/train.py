@@ -16,6 +16,7 @@ from .utils import default_device, load_unet_from_config, save_args, set_seed
 def parse_args():
     parser = argparse.ArgumentParser(description="Train a torch diffusers DDPM on CIFAR2 or synthetic data.")
     parser.add_argument("--dataset", default="synthetic", help="synthetic, HF dataset name, HF disk path, or raw cifar-10-batches-py dir")
+    parser.add_argument("--dataset-kind", default="synthetic", choices=["synthetic", "cifar2", "cifar10"], help="Controls class filtering")
     parser.add_argument("--index-path", default=None, help="Optional pickle indices into the selected dataset")
     parser.add_argument("--config", default="configs/tiny_unet.json")
     parser.add_argument("--output-dir", default="runs/smoke/ddpm")

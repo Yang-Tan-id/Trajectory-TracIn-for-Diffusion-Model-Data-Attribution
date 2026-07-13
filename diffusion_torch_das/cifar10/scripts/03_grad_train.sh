@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+DATASET="${DATASET:-../diffusion_jax_refined/dataset/cifar10/cifar-10-batches-py}"
+MODEL_DIR="${MODEL_DIR:-runs/cifar10/ddpm}"
+OUTPUT="${OUTPUT:-runs/cifar10/train_grads.npy}"
+DEVICE="${DEVICE:-cuda}"
+MAX_SAMPLES="${MAX_SAMPLES:-}"
+
+args=()
+if [[ -n "$MAX_SAMPLES" ]]; then
+  args+=(--max-samples "$MAX_SAMPLES")
+fi
+
+python3 -m torch_das.gradients \
+  --model-dir "$MODEL_DIR" \
+  --dataset "$DATASET" \
+  --dataset-kind cifar10 \
+  --dataset-type train \
+  --center-crop \
+  --num-timesteps "${TIMESTEPS:-10}" \
+  --projection-dim "${PROJECTION_DIM:-4096}" \
+  --output "$OUTPUT" \
+  --device "$DEVICE" \
+  "${args[@]}"

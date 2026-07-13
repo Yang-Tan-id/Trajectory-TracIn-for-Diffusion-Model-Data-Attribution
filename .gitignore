@@ -22,3 +22,8 @@ diffusion_jax_refined/cifar2/result/*/tacc_logs/
 
 # Archive folders and all contents
 **/archive/
+
+# Local report/export artifacts
+reports/
+archive_query*_scatter*/
+lds_scatter_exports*/

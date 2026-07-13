@@ -91,6 +91,16 @@ python3 -m torch_das.score \
   --output runs/smoke/scores.npy
 ```
 
+## Dataset Folders
+
+This torch version now mirrors the repo's dataset-first layout:
+
+- `cifar2/`: CIFAR-10 filtered to automobile + horse.
+- `cifar10/`: full CIFAR-10, all 10 classes.
+
+The shared implementation lives in `torch_das/`; the dataset folders contain
+the runnable scripts and short dataset-specific notes.
+
 ## Real CIFAR2 Run
 
 You do not need to download CIFAR-10 if the repository already contains:
@@ -106,6 +116,7 @@ DATA="../diffusion_jax_refined/dataset/cifar2/cifar-10-batches-py"
 
 python3 -m torch_das.train \
   --dataset "$DATA" \
+  --dataset-kind cifar2 \
   --config configs/cifar2_unet_das.json \
   --output-dir runs/cifar2/ddpm \
   --center-crop \
@@ -119,6 +130,38 @@ python3 -m torch_das.train \
 If you pass `--dataset cifar10`, HuggingFace `datasets` will download CIFAR-10
 to its cache. If you pass the local raw CIFAR batch folder above, no download is
 needed.
+
+You can also use the dataset folder script:
+
+```bash
+bash cifar2/scripts/01_train.sh
+```
+
+## Real CIFAR10 Run
+
+Use the local full CIFAR-10 folder:
+
+```bash
+DATA="../diffusion_jax_refined/dataset/cifar10/cifar-10-batches-py"
+
+python3 -m torch_das.train \
+  --dataset "$DATA" \
+  --dataset-kind cifar10 \
+  --config configs/cifar10_unet_das.json \
+  --output-dir runs/cifar10/ddpm \
+  --center-crop \
+  --random-flip \
+  --batch-size 128 \
+  --num-epochs 200 \
+  --checkpointing-steps 500 \
+  --device cuda
+```
+
+Or:
+
+```bash
+bash cifar10/scripts/01_train.sh
+```
 
 ## Outputs
 

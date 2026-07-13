@@ -17,6 +17,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description="Compute DDPM denoising losses for a saved torch model.")
     parser.add_argument("--model-dir", default="runs/smoke/ddpm")
     parser.add_argument("--dataset", default="synthetic")
+    parser.add_argument("--dataset-kind", default="synthetic", choices=["synthetic", "cifar2", "cifar10"])
     parser.add_argument("--dataset-type", default="train", choices=["train", "val", "test", "gen"])
     parser.add_argument("--index-path", default=None)
     parser.add_argument("--output", default="runs/smoke/losses.pkl")
