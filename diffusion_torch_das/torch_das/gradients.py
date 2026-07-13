@@ -62,7 +62,7 @@ def project_vector(vector, projection_dim, chunk_size, seed=0):
     return out * scale
 
 
-def build_projector(param_count, projection_dim, device):
+def build_projector(param_count, projection_dim, device, max_batch_size):
     if device.type != "cuda":
         return None
     try:
@@ -75,6 +75,7 @@ def build_projector(param_count, projection_dim, device):
         seed=0,
         proj_type=ProjectionType.normal,
         device=str(device),
+        max_batch_size=max_batch_size,
     )
 
 
@@ -92,7 +93,7 @@ def main():
     selected = np.linspace(0, scheduler.config.num_train_timesteps - 1, args.num_timesteps, dtype=int)
 
     param_count = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    projector = build_projector(param_count, args.projection_dim, device)
+    projector = build_projector(param_count, args.projection_dim, device, args.batch_size)
     projected = np.memmap(args.output, dtype=np.float32, mode="w+", shape=(len(dataset), args.projection_dim))
 
     params = {k: v.detach() for k, v in model.named_parameters() if v.requires_grad}

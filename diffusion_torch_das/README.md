@@ -186,6 +186,13 @@ The score matrix step is separate because LDS needs query-specific scores
 (`query x train`), while the regular `05_score.sh` averages queries and writes
 one train-score vector.
 
+For faster projected gradients, install the optional CUDA projector dependency
+after torch is installed:
+
+```bash
+python -m pip install --no-build-isolation fast-jl==0.1.3
+```
+
 ## Outputs
 
 - `runs/.../ddpm/`: diffusers DDPM pipeline with `unet/` and `scheduler/`.
