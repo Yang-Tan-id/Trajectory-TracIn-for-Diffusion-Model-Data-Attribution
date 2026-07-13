@@ -170,6 +170,22 @@ Or:
 bash cifar10/scripts/01_train.sh
 ```
 
+## CIFAR2 LDS Eval
+
+CIFAR2 includes a cleaned-up LDS path based on the original DAS clone:
+
+```bash
+NUM_SUBSETS=64 SUBSET_SIZE=5000 bash cifar2/scripts/06_lds_make_subsets.sh
+START=0 END=63 SEEDS=0,1,2 DEVICE=cuda EPOCHS=200 BATCH_SIZE=128 bash cifar2/scripts/07_lds_train.sh
+START=0 END=63 SEEDS=0,1,2 EVAL_SEEDS=0 DEVICE=cuda bash cifar2/scripts/08_lds_eval.sh
+TRAIN_SHAPE=10000,4096 QUERY_SHAPE=1000,4096 bash cifar2/scripts/09_lds_score_matrix.sh
+NUM_SUBSETS=64 SEEDS=0,1,2 EVAL_SEEDS=0 bash cifar2/scripts/10_lds_score.sh
+```
+
+The score matrix step is separate because LDS needs query-specific scores
+(`query x train`), while the regular `05_score.sh` averages queries and writes
+one train-score vector.
+
 ## Outputs
 
 - `runs/.../ddpm/`: diffusers DDPM pipeline with `unet/` and `scheduler/`.
