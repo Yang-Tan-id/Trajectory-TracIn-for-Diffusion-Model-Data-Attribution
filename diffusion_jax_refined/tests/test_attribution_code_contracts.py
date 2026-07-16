@@ -41,6 +41,7 @@ class TestAttributionCodeContracts(unittest.TestCase):
         self.assertIn('"query_gradient"', text)
         self.assertIn('"score"', text)
         self.assertIn('f"seed_{train_seed}_train_gradient"', text)
+        self.assertIn('f"seed_{sample_seed:06d}_query_gradient"', text)
         self.assertNotIn("run_algorithm_config", text)
         self.assertNotIn("run_attribution", text)
 

@@ -31,6 +31,22 @@ def _stage_root(cfg_module: Any, algorithm: str, stage: str) -> Path:
         mode = os.environ.get("DATAPOINT_MODEL_MODE", os.environ.get("TRAIN_MODE", "prompted_solo"))
         return model_root.parent / "model" / mode / f"seed_{train_seed}_train_gradient" / algorithm
 
+    config_values = dict(require_attr(cfg_module, "ATTRIBUTION_CONFIG"))
+    if stage == "query_gradient":
+        sample_dir = Path(
+            os.environ.get(
+                "ATTRIBUTION_SAMPLE_DIR",
+                str(config_values.get("attribution_sample_dir")),
+            )
+        )
+        sample_seed = int(
+            os.environ.get(
+                "INITIAL_SEED",
+                config_values.get("attribution_sample_seed", getattr(cfg_module, "INITIAL_SEED", 0)),
+            )
+        )
+        return sample_dir / f"seed_{sample_seed:06d}_query_gradient" / algorithm
+
     query = os.environ.get("QUERY", getattr(cfg_module, "QUERY", "unconditional"))
     initial_seed = int(os.environ.get("INITIAL_SEED", getattr(cfg_module, "INITIAL_SEED", 0)))
     safe_query = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in str(query)).strip("_")

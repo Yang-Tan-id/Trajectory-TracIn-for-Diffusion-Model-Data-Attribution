@@ -19,11 +19,73 @@ def _save_json(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, indent=2))
 
 
+def _env_int(*names: str) -> int | None:
+    for name in names:
+        value = os.environ.get(name)
+        if value not in (None, ""):
+            return int(value)
+    return None
+
+
+def _env_float(*names: str) -> float | None:
+    for name in names:
+        value = os.environ.get(name)
+        if value not in (None, ""):
+            return float(value)
+    return None
+
+
+def _normalize_sample_model_mode(value: str) -> str:
+    aliases = {
+        "prompt": "prompted_solo",
+        "prompted": "prompted_solo",
+        "prompted_solo": "prompted_solo",
+        "multi": "prompted_multi",
+        "prompted_multi": "prompted_multi",
+        "unprompted": "unprompted_solo",
+        "unprompted_solo": "unprompted_solo",
+        "unprompted_multi": "unprompted_multi",
+    }
+    try:
+        return aliases[value]
+    except KeyError as exc:
+        raise ValueError(
+            f"Unknown SAMPLE_MODEL_MODE={value!r}; expected one of {', '.join(sorted(aliases))}"
+        ) from exc
+
+
+def _dataset_percentage_to_k(value: float, universe_size: int) -> int:
+    if value <= 0:
+        raise ValueError("--dataset-percentage must be positive")
+    fraction = value if value <= 1 else value / 100.0
+    if fraction > 1:
+        raise ValueError("--dataset-percentage cannot exceed 100")
+    return max(1, min(universe_size, int(round(universe_size * fraction))))
+
+
+def _percentage_tag(value: float | None) -> str | None:
+    if value is None:
+        return None
+    return f"pct_{value:g}".replace(".", "p")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train reusable LDS subset models.")
     parser.add_argument("config", help="Dataset dataset_config.py")
-    parser.add_argument("--m", type=int, default=int(os.environ.get("LDS_M", "100")))
-    parser.add_argument("--k", type=int, default=int(os.environ.get("LDS_K", os.environ.get("LDS_SUBSET_SIZE", "5000"))))
+    parser.add_argument("--m", type=int, default=int(os.environ.get("LDS_M", os.environ.get("LDS_NUM_SUBSETS", "100"))))
+    parser.add_argument("--k", type=int, default=_env_int("LDS_K", "LDS_SUBSET_SIZE"))
+    parser.add_argument("--dataset-percentage", type=float, default=_env_float("LDS_DATASET_PERCENTAGE", "LDS_DATASET_PERCENT"))
+    parser.add_argument(
+        "--model-train-seed",
+        type=int,
+        default=_env_int("LDS_MODEL_TRAIN_SEED", "LDS_TRAIN_SEED", "TRAIN_SEED"),
+        help="Seed used by each retrained LDS model.",
+    )
+    parser.add_argument(
+        "--sample-model-mode",
+        default=os.environ.get("SAMPLE_MODEL_MODE", "prompted_solo"),
+        help="Model family to train LDS subsets for: prompted_solo/prompted_multi/unprompted_solo/unprompted_multi.",
+    )
     parser.add_argument(
         "--sample-random-seed",
         type=int,
@@ -32,8 +94,20 @@ def main() -> None:
     parser.add_argument("--unprompted", action="store_true", help="Use the unconditional JAX reference model/config.")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
-    if args.m <= 0 or args.k <= 0:
-        parser.error("--m and --k must be positive")
+    if args.m <= 0:
+        parser.error("--m must be positive")
+    if args.k is not None and args.k <= 0:
+        parser.error("--k must be positive")
+    if args.k is not None and args.dataset_percentage is not None:
+        parser.error("Use either --k or --dataset-percentage, not both")
+
+    try:
+        sample_model_mode = _normalize_sample_model_mode(args.sample_model_mode)
+    except ValueError as exc:
+        parser.error(str(exc))
+    if args.unprompted and not sample_model_mode.startswith("unprompted_"):
+        parser.error("--unprompted requires SAMPLE_MODEL_MODE to be unprompted_solo or unprompted_multi")
+    use_unprompted = args.unprompted or sample_model_mode.startswith("unprompted_")
 
     dataset_cfg = load_config(args.config)
     legacy_root = Path(require_attr(dataset_cfg, "LEGACY_JAX_ROOT"))
@@ -48,12 +122,14 @@ def main() -> None:
     )
     from LDS.DM_cifar_lds import run_train_with_optional_logging
 
-    checkpoint_attr = "UNPROMPTED_JAX_REFERENCE_CKPT" if args.unprompted else "REFERENCE_CKPT"
+    checkpoint_attr = "UNPROMPTED_JAX_REFERENCE_CKPT" if use_unprompted else "REFERENCE_CKPT"
     base_checkpoint = Path(require_attr(dataset_cfg, checkpoint_attr)).resolve()
     train_cfg = load_base_config(str(base_checkpoint))
     train_cfg.resume_from = None
     train_cfg.exclude_ranges = None
     train_cfg.data_root = str(Path(require_attr(dataset_cfg, "DATA_ROOT")).resolve())
+    model_train_seed = args.model_train_seed if args.model_train_seed is not None else int(train_cfg.seed)
+    train_cfg.seed = model_train_seed
 
     # LDS training inherits the normal model's saved TrainConfig. Environment
     # overrides are deliberately limited to operational settings.
@@ -72,12 +148,23 @@ def main() -> None:
         class_names=train_cfg.class_names,
     )
     universe = np.arange(len(row_map), dtype=np.int64)
-    if args.k > len(universe):
-        parser.error(f"--k {args.k} exceeds dataset size {len(universe)}")
+    try:
+        k = _dataset_percentage_to_k(args.dataset_percentage, len(universe)) if args.dataset_percentage is not None else args.k
+    except ValueError as exc:
+        parser.error(str(exc))
+    if k is None:
+        k = 5000
+    if k > len(universe):
+        parser.error(f"subset size {k} exceeds dataset size {len(universe)}")
 
-    run_name = f"m_{args.m}_k_{args.k}_seed_{args.sample_random_seed}"
+    run_parts = [f"m_{args.m}", f"k_{k}"]
+    pct_tag = _percentage_tag(args.dataset_percentage)
+    if pct_tag is not None:
+        run_parts.append(pct_tag)
+    run_parts.append(f"subset_seed_{args.sample_random_seed}")
+    run_name = "_".join(run_parts)
     model_root = Path(require_attr(dataset_cfg, "LDS_MODEL_ROOT"))
-    out_dir = model_root / "unprompted" / run_name if args.unprompted else model_root / run_name
+    out_dir = model_root / sample_model_mode / f"train_seed_{model_train_seed}" / run_name
     models_dir = out_dir / "models"
     models_dir.mkdir(parents=True, exist_ok=True)
 
@@ -86,7 +173,7 @@ def main() -> None:
     universe_set = set(universe.tolist())
     for subset_id in range(args.m):
         subset_seed = int(rng.integers(0, np.iinfo(np.int32).max))
-        kept = np.sort(np.random.default_rng(subset_seed).choice(universe, args.k, replace=False))
+        kept = np.sort(np.random.default_rng(subset_seed).choice(universe, k, replace=False))
         excluded = np.asarray(sorted(universe_set - set(kept.tolist())), dtype=np.int64)
         subset_dir = models_dir / f"subset_{subset_id:04d}"
         subset_dir.mkdir(parents=True, exist_ok=True)
@@ -95,7 +182,8 @@ def main() -> None:
         metadata = {
             "subset_id": subset_id,
             "subset_seed": subset_seed,
-            "subset_size": args.k,
+            "subset_size": k,
+            "dataset_percentage": args.dataset_percentage,
             "subset_dir": str(subset_dir.resolve()),
         }
         _save_json(subset_dir / "subset_metadata.json", metadata)
@@ -105,9 +193,13 @@ def main() -> None:
         "format_version": 1,
         "dataset": require_attr(dataset_cfg, "DATASET_NAME"),
         "experiment": require_attr(dataset_cfg, "EXPERIMENT_TAG"),
-        "mode": "unprompted" if args.unprompted else "prompted",
+        "mode": "unprompted" if use_unprompted else "prompted",
+        "sample_model_mode": sample_model_mode,
+        "model_train_seed": model_train_seed,
         "m": args.m,
-        "k": args.k,
+        "k": k,
+        "dataset_percentage": args.dataset_percentage,
+        "dataset_universe_size": len(universe),
         "sample_random_seed": args.sample_random_seed,
         "base_checkpoint": str(base_checkpoint),
         "train_config_template": asdict(train_cfg),

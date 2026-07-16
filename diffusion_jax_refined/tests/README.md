@@ -37,12 +37,19 @@ Current coverage focuses on:
 - LDS Spearman/prediction sign/subset math;
 - sample prompt/seed/shape validation;
 - LDS subset metadata invariants;
-- script-layout static checks that keep old TACC scripts removed and ensure
+- script-layout static checks that keep TACC launchers dataset-local and ensure
   algorithm-local scripts call dataset-local refined scripts, while training
   remains independent of sampling/query prompts;
 - datapoint-gradient script checks for optional `TRAIN_MODES`,
   `DATAPOINT_GRADIENT_MODES`, comma/space-separated algorithm selection, and
   model-seed-rooted output folders;
+- data-attribution sample script checks for `SAMPLE_MODEL_MODE`,
+  `EXPERIMENT_TAG`, and the result-level `sample` output root;
+- sample+query-gradient job checks that sampling and `02_query_gradient.py`
+  run together, keyed by `SAMPLE_MODEL_MODE`, `SAMPLE_SEEDS`, and algorithm;
+- LDS model-training checks for selectable `SAMPLE_MODEL_MODE`,
+  `LDS_MODEL_TRAIN_SEED`, `LDS_M`/`LDS_NUM_SUBSETS`, and either
+  `LDS_DATASET_PERCENTAGE` or `LDS_K` subset sizing;
 - script-layout checks that old algorithm-local `run_attribution.py`,
   `run_training.py`, `run_eval.py`, and `script.sh` entrypoints are removed;
 - target-specific LDS eval overwrite protection;

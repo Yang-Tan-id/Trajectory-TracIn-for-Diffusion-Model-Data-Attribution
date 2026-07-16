@@ -82,10 +82,34 @@ EXPERIMENT_TAG=experiment1 TRAIN_SEED=43 CUDA_VISIBLE_DEVICES=0,1 \
 CUDA_VISIBLE_DEVICES=0,1 bash scripts/00_train.sh
 CUDA_VISIBLE_DEVICES=0,1 bash scripts/00_train_prompted_jax.sh
 
-# Generate attribution sample trajectories from result/<experiment>/model/prompted_jax.
-# One model can produce many samples; attribution_sample_seed/index in dataset_config.py
-# selects which sample a given attribution run reads.
-CUDA_VISIBLE_DEVICES=0 SAMPLE_SEEDS=0,1,2 SAMPLE_TRAJECTORY_STEPS=100 bash scripts/00_sample.sh
+# Generate data-attribution trajectory samples into result/<experiment>/sample.
+# SAMPLE_MODEL_MODE chooses which trained model family the sample belongs to.
+EXPERIMENT_TAG=experiment1 \
+SAMPLE_MODEL_MODE=prompted_solo \
+QUERY=horse \
+SAMPLE_SEEDS=0,1,2 \
+SAMPLE_TRAJECTORY_STEPS=100 \
+CUDA_VISIBLE_DEVICES=0 bash scripts/00_sample_for_attribution.sh
+
+The sample root is:
+
+```text
+<dataset>/result/<experiment>/sample/<adapter>/prompt_<query>/model_<SAMPLE_MODEL_MODE>__ckpt_<checkpoint>/seed_<sample_seed>/
+```
+
+# Generate/reuse samples and compute query gradients as one job.
+EXPERIMENT_TAG=experiment1 \
+SAMPLE_MODEL_MODE=prompted_solo \
+QUERY=horse \
+SAMPLE_SEEDS=0,1,2 \
+ALGORITHMS="das,dtrak" \
+CUDA_VISIBLE_DEVICES=0 bash scripts/02_sample_query_gradient.sh
+
+The query-gradient stage is stored next to the sample seed:
+
+```text
+<dataset>/result/<experiment>/sample/<adapter>/prompt_<query>/model_<SAMPLE_MODEL_MODE>__ckpt_<checkpoint>/seed_<sample_seed>_query_gradient/<algorithm>/
+```
 
 # Run attribution for one saved query/initial-seed pair.
 QUERY=horse INITIAL_SEED=0 CUDA_VISIBLE_DEVICES=0 bash scripts/01_data_attribution.sh
@@ -158,17 +182,18 @@ defined by the dataset config, and checkpoint files are distinguished by
 <dataset>/result/<experiment>/model/unprompted_jax/seed_<TRAIN_SEED>_epoch_<epoch>.ckpt
 ```
 
-Machine-family launch wrappers live under:
+Machine-family launch wrappers live inside each dataset folder. From
+`diffusion_jax_refined/cifar2`, for example:
 
 ```bash
-DATASET=cifar2 TRAIN_MODE=prompted_solo TRAIN_SEED=42 GPU_IDS=0 \
-  bash ../tacc/h100/script_0.sh
+TRAIN_MODE=prompted_solo TRAIN_SEED=42 GPU_IDS=0 \
+  bash tacc/h100/script_0.sh
 
-DATASET=cifar2 TRAIN_MODES="prompted_solo unprompted_solo" TRAIN_SEED=42 GPU_IDS=0 \
-  bash ../tacc/h100/script_0.sh
+TRAIN_MODES="prompted_solo unprompted_solo" TRAIN_SEED=42 GPU_IDS=0 \
+  bash tacc/h100/script_0.sh
 
-DATASET=cifar10 TRAIN_MODE=prompted_multi TRAIN_SEED=42 GPU_IDS=0,1,2,3 \
-  bash ../tacc/vista/script_0.sh
+TRAIN_MODE=prompted_multi TRAIN_SEED=42 GPU_IDS=0,1,2,3 \
+  bash tacc/vista/script_0.sh
 ```
 
 Sampling is deliberately separate. `01_data_attribution_unprompted.sh` never

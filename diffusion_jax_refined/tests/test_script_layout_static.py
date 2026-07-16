@@ -11,9 +11,17 @@ ALGORITHMS = ("das", "dtrak", "end_tracin", "journey_trak", "traj_tracin")
 
 class TestScriptLayoutStatic(unittest.TestCase):
     def test_legacy_tacc_scripts_are_removed(self):
-        self.assertFalse((ROOT / "cifar2" / "tacc").exists())
-        self.assertTrue((ROOT / "tacc" / "h100" / "script_0.sh").is_file())
-        self.assertTrue((ROOT / "tacc" / "vista" / "script_0.sh").is_file())
+        self.assertFalse((ROOT / "tacc").exists())
+        for dataset in DATASETS:
+            with self.subTest(dataset=dataset):
+                self.assertTrue((ROOT / dataset / "tacc" / "h100" / "script_0.sh").is_file())
+                self.assertTrue((ROOT / dataset / "tacc" / "vista" / "script_0.sh").is_file())
+                self.assertTrue((ROOT / dataset / "tacc" / "h100" / "sample_for_attribution.sh").is_file())
+                self.assertTrue((ROOT / dataset / "tacc" / "vista" / "sample_for_attribution.sh").is_file())
+                self.assertTrue((ROOT / dataset / "tacc" / "h100" / "sample_query_gradient.sh").is_file())
+                self.assertTrue((ROOT / dataset / "tacc" / "vista" / "sample_query_gradient.sh").is_file())
+                self.assertTrue((ROOT / dataset / "tacc" / "h100" / "datapoint_gradients.sh").is_file())
+                self.assertTrue((ROOT / dataset / "tacc" / "vista" / "datapoint_gradients.sh").is_file())
 
     def test_dataset_train_framework_has_four_modes_and_selector(self):
         expected = (
@@ -73,15 +81,18 @@ class TestScriptLayoutStatic(unittest.TestCase):
             self.assertNotIn('PROMPTED_JAX_MODEL_ROOT / "seed_42_epoch', config_text)
 
     def test_tacc_script_0_selects_dataset_mode_and_gpu_count(self):
-        for system in ("h100", "vista"):
-            with self.subTest(system=system):
-                text = (ROOT / "tacc" / system / "script_0.sh").read_text()
-                self.assertIn('DATASET="${DATASET:-cifar2}"', text)
-                self.assertIn('TRAIN_MODE="${TRAIN_MODE:-prompted_multi}"', text)
-                self.assertIn('TRAIN_MODES="${TRAIN_MODES:-${TRAIN_MODE}}"', text)
-                self.assertIn('GPU_IDS="${GPU_IDS:-0,1,2,3}"', text)
-                self.assertIn('JAX_NUM_DEVICES', text)
-                self.assertIn('${REFINE_ROOT}/${DATASET}/scripts/script_0.sh', text)
+        for dataset in DATASETS:
+            for system in ("h100", "vista"):
+                with self.subTest(dataset=dataset, system=system):
+                    text = (ROOT / dataset / "tacc" / system / "script_0.sh").read_text()
+                    self.assertIn('DATASET_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"', text)
+                    self.assertIn('TRAIN_MODE="${TRAIN_MODE:-prompted_multi}"', text)
+                    self.assertIn('TRAIN_MODES="${TRAIN_MODES:-${TRAIN_MODE}}"', text)
+                    self.assertIn('GPU_IDS="${GPU_IDS:-0,1,2,3}"', text)
+                    self.assertIn('JAX_NUM_DEVICES', text)
+                    self.assertIn('${DATASET_ROOT}/scripts/script_0.sh', text)
+                    self.assertNotIn("DATASET=", text)
+                    self.assertNotIn("REFINE_ROOT", text)
 
     def test_datapoint_gradient_scripts_accept_optional_modes_and_algorithms(self):
         for dataset in DATASETS:
@@ -108,15 +119,88 @@ class TestScriptLayoutStatic(unittest.TestCase):
                         stage_text = stage_script.read_text()
                         self.assertIn("run_stage_config", stage_text)
 
-        for system in ("h100", "vista"):
-            with self.subTest(system=system):
-                script = ROOT / "tacc" / system / "datapoint_gradients.sh"
+        for dataset in DATASETS:
+            for system in ("h100", "vista"):
+                with self.subTest(dataset=dataset, system=system):
+                    script = ROOT / dataset / "tacc" / system / "datapoint_gradients.sh"
+                    self.assertTrue(script.is_file())
+                    text = script.read_text()
+                    self.assertIn('DATASET_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"', text)
+                    self.assertIn('ALGORITHMS="${ALGORITHMS:-${ALGO:-${ALGORITHM:-das}}}"', text)
+                    self.assertIn('GPU_IDS="${GPU_IDS:-0,1,2,3}"', text)
+                    self.assertIn('${DATASET_ROOT}/scripts/01_datapoint_gradients.sh', text)
+                    self.assertNotIn("DATASET=", text)
+                    self.assertNotIn("REFINE_ROOT", text)
+
+    def test_sample_for_attribution_scripts_select_model_mode_and_sample_root(self):
+        for dataset in DATASETS:
+            with self.subTest(dataset=dataset):
+                script = ROOT / dataset / "scripts" / "00_sample_for_attribution.sh"
                 self.assertTrue(script.is_file())
                 text = script.read_text()
-                self.assertIn('DATASET="${DATASET:-cifar2}"', text)
-                self.assertIn('ALGORITHMS="${ALGORITHMS:-${ALGO:-${ALGORITHM:-das}}}"', text)
-                self.assertIn('GPU_IDS="${GPU_IDS:-0,1,2,3}"', text)
-                self.assertIn('${REFINE_ROOT}/${DATASET}/scripts/01_datapoint_gradients.sh', text)
+                self.assertIn('SAMPLE_MODEL_MODE="${SAMPLE_MODEL_MODE:-prompted_solo}"', text)
+                self.assertIn('SAMPLE_ROOT="${SAMPLE_ROOT:-${ROOT}/result/${EXPERIMENT_TAG:-experiment1}/sample}"', text)
+                self.assertIn("UNPROMPTED=1", text)
+                self.assertIn('"${PYTHON_BIN}" "${ROOT}/sampling/run_sampling.py"', text)
+
+                config_text = (ROOT / dataset / "sampling" / "CONFIG.py").read_text()
+                self.assertIn("SAMPLE_MODEL_MODE", config_text)
+                self.assertIn('RESULT_ROOT / "sample"', config_text)
+                self.assertIn("MODEL_TAG = SAMPLE_MODEL_MODE", config_text)
+
+        for dataset in DATASETS:
+            for system in ("h100", "vista"):
+                with self.subTest(dataset=dataset, system=system):
+                    script = ROOT / dataset / "tacc" / system / "sample_for_attribution.sh"
+                    self.assertTrue(script.is_file())
+                    text = script.read_text()
+                    self.assertIn('DATASET_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"', text)
+                    self.assertIn('${DATASET_ROOT}/scripts/00_sample_for_attribution.sh', text)
+                    self.assertNotIn("DATASET=", text)
+                    self.assertNotIn("REFINE_ROOT", text)
+
+    def test_sample_query_gradient_is_one_job_per_model_seed_and_algorithm(self):
+        for dataset in DATASETS:
+            with self.subTest(dataset=dataset):
+                script = ROOT / dataset / "scripts" / "02_sample_query_gradient.sh"
+                self.assertTrue(script.is_file())
+                text = script.read_text()
+                self.assertIn('bash "${ROOT}/scripts/00_sample_for_attribution.sh"', text)
+                self.assertIn('ALGORITHMS_TEXT="${ALGORITHMS:-${ALGO:-${ALGORITHM:-das}}}"', text)
+                self.assertIn('SAMPLE_SEEDS_TEXT="${SAMPLE_SEEDS:-${INITIAL_SEED:-${SAMPLE_SEED:-0}}}"', text)
+                self.assertIn('SAMPLE_MODEL_MODE_TAG="prompted_solo"', text)
+                self.assertIn('SAMPLE_MODEL_MODE_TAG="unprompted_solo"', text)
+                self.assertIn('"${PYTHON_BIN}" 02_query_gradient.py', text)
+                self.assertIn('INITIAL_SEED="${SAMPLE_SEED_VALUE}"', text)
+
+        for dataset in DATASETS:
+            for system in ("h100", "vista"):
+                with self.subTest(dataset=dataset, system=system):
+                    script = ROOT / dataset / "tacc" / system / "sample_query_gradient.sh"
+                    self.assertTrue(script.is_file())
+                    text = script.read_text()
+                    self.assertIn('DATASET_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"', text)
+                    self.assertIn('${DATASET_ROOT}/scripts/02_sample_query_gradient.sh', text)
+                    self.assertNotIn("DATASET=", text)
+                    self.assertNotIn("REFINE_ROOT", text)
+
+    def test_lds_training_scripts_select_model_mode_seed_and_subset_size(self):
+        for dataset in ("cifar2", "cifar10"):
+            with self.subTest(dataset=dataset, mode="prompted"):
+                text = (ROOT / dataset / "scripts" / "03_lds_training.sh").read_text()
+                self.assertIn('SAMPLE_MODEL_MODE="${SAMPLE_MODEL_MODE:-prompted_solo}"', text)
+                self.assertIn('LDS_MODEL_TRAIN_SEED="${LDS_MODEL_TRAIN_SEED:-${LDS_TRAIN_SEED:-${TRAIN_SEED:-42}}}"', text)
+                self.assertIn('--sample-model-mode "${SAMPLE_MODEL_MODE}"', text)
+                self.assertIn('--model-train-seed "${LDS_MODEL_TRAIN_SEED}"', text)
+                self.assertIn('--m "${LDS_M:-${LDS_NUM_SUBSETS:-100}}"', text)
+                self.assertIn("--dataset-percentage", text)
+                self.assertIn("--k", text)
+
+            with self.subTest(dataset=dataset, mode="unprompted"):
+                text = (ROOT / dataset / "scripts" / "03_lds_training_unprompted.sh").read_text()
+                self.assertIn("--unprompted", text)
+                self.assertIn('SAMPLE_MODEL_MODE="${SAMPLE_MODEL_MODE:-unprompted_solo}"', text)
+                self.assertIn('--sample-model-mode "${SAMPLE_MODEL_MODE}"', text)
 
     def test_old_algorithm_entrypoints_are_removed(self):
         for dataset in DATASETS:

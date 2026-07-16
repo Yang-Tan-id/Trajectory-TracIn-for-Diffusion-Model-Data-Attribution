@@ -117,33 +117,45 @@ Test files
    - k=5000 creates 5000 kept and 5000 excluded indices;
    - kept/excluded are disjoint and cover the 10,000-point universe;
    - k=8000 creates 8000 kept and 2000 excluded indices;
-   - the folder LDS seed is separate from the model training seed;
-   - model training seed remains seed 42 and checkpoint naming reflects that.
+   - SAMPLE_MODEL_MODE, model training seed, and subset seed are separate folder
+     levels;
+   - configurable model training seed is recorded in metadata and checkpoint
+     naming;
+   - dataset percentage is recorded with the derived subset size.
 
    Purpose: prevent confusing LDS subset seed with actual diffusion model train
-   seed, and protect k=5000/k=8000 experiments.
+   seed, and protect fixed-k plus percentage-sized experiments.
 
 
 7. test_script_layout_static.py
 
-   These tests protect the refined script layout after removing old TACC
-   launchers.
+   These tests protect the refined script layout after moving TACC launchers
+   into each dataset.
 
    They cover:
 
-   - the old cifar2/tacc script directory is absent;
-   - new tacc/h100 and tacc/vista script_0 launchers exist;
+   - the top-level tacc script directory is absent;
+   - every dataset has tacc/h100 and tacc/vista launchers;
    - every dataset exposes four train modes:
      prompted_solo, prompted_multi, unprompted_solo, and unprompted_multi;
    - every dataset has a scripts/script_0.sh selector for those train modes;
    - train scripts delegate to common/train_shell_lib.sh;
    - training launchers do not use QUERY, TRAIN_PROMPTS, TRAIN_MODEL_TAG, or
      prompt-specific model folders for dataset filtering/checkpoint identity;
-   - tacc script_0 launchers select DATASET, TRAIN_MODE, GPU_IDS, and
-     JAX_NUM_DEVICES before delegating to the dataset script_0;
+   - dataset-local tacc script_0 launchers select TRAIN_MODE, GPU_IDS, and
+     JAX_NUM_DEVICES before delegating to that dataset's script_0;
    - dataset and TACC datapoint-gradient launchers accept optional TRAIN_MODES,
      DATAPOINT_GRADIENT_MODES, and ALGORITHMS/ALGO values with comma or space
      separators;
+   - dataset and TACC sample launchers accept SAMPLE_MODEL_MODE, EXPERIMENT_TAG,
+     SAMPLE_SEEDS, and write data-attribution trajectories under
+     result/<experiment>/sample/;
+   - dataset and TACC sample+query-gradient launchers run sampling and
+     02_query_gradient.py as one job, writing query gradients next to the sample
+     seed folder;
+   - CIFAR2/CIFAR10 LDS training scripts accept SAMPLE_MODEL_MODE,
+     LDS_MODEL_TRAIN_SEED, LDS_M/LDS_NUM_SUBSETS, and either
+     LDS_DATASET_PERCENTAGE or LDS_K/LDS_SUBSET_SIZE;
    - datapoint-gradient launchers write under
      model/<train_mode>/seed_<TRAIN_SEED>_train_gradient/<algorithm>/ instead of
      query attribution folders;
@@ -154,7 +166,7 @@ Test files
    - algorithm-local scripts no longer call stale absolute /scripts paths.
 
    Purpose: keep the refined workflow self-contained per dataset while we
-   replace the old TACC launch layer.
+   keep each dataset's launch layer next to its own result directory.
 
 
 8. test_aggregate_lds_by_seed.py

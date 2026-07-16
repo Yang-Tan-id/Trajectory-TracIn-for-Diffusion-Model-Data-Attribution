@@ -48,6 +48,7 @@ EVAL_ROOT = RESULT_ROOT / "eval"
 PROMPTED_JAX_MODEL_ROOT = MODEL_ROOT / "prompted_jax"
 UNPROMPTED_JAX_MODEL_ROOT = MODEL_ROOT / "unprompted_jax"
 SAMPLING_ROOT = EVAL_ROOT / "sampling"
+SAMPLE_ROOT = RESULT_ROOT / "sample"
 
 QUERY = os.environ.get("QUERY", "baroque")
 INITIAL_SEED = int(os.environ.get("INITIAL_SEED", os.environ.get("SAMPLE_SEED", "0")))
@@ -66,15 +67,15 @@ REFERENCE_CKPT = str(PROMPTED_JAX_MODEL_ROOT / f"{PROMPTED_CKPT_STEM}.ckpt")
 ATTRIBUTION_SAMPLE_DIR = os.environ.get(
     "ATTRIBUTION_SAMPLE_DIR",
     str(
-        SAMPLING_ROOT / "artbench_latent" / f"prompt_{_prompt_path_tag(QUERY)}"
-        / f"model_prompted_jax__ckpt_{Path(REFERENCE_CKPT).stem}"
+        SAMPLE_ROOT / "artbench_latent" / f"prompt_{_prompt_path_tag(QUERY)}"
+        / f"model_{os.environ.get('ATTRIBUTION_SAMPLE_MODEL_MODE', os.environ.get('SAMPLE_MODEL_MODE', 'prompted_solo'))}__ckpt_{Path(REFERENCE_CKPT).stem}"
     ),
 )
 UNPROMPTED_CKPT_STEM = PROMPTED_CKPT_STEM
 UNPROMPTED_JAX_REFERENCE_CKPT = str(UNPROMPTED_JAX_MODEL_ROOT / f"{UNPROMPTED_CKPT_STEM}.ckpt")
 UNPROMPTED_ATTRIBUTION_SAMPLE_DIR = str(
-    SAMPLING_ROOT / "artbench_latent" / "prompt_unconditional"
-    / f"model_unprompted_jax__ckpt_{UNPROMPTED_CKPT_STEM}"
+    SAMPLE_ROOT / "artbench_latent" / "prompt_unconditional"
+    / f"model_{os.environ.get('UNPROMPTED_SAMPLE_MODEL_MODE', 'unprompted_solo')}__ckpt_{UNPROMPTED_CKPT_STEM}"
 )
 LATENT_ROOT = DATASET_STORAGE_ROOT / "latents" / "artbench256"
 LATENT_NPZ_PATH = str(LATENT_ROOT / "train_latents.npz")
