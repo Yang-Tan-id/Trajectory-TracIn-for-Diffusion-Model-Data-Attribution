@@ -35,6 +35,15 @@ class TestAttributionCodeContracts(unittest.TestCase):
         self.assertIn('if algorithm == "traj_tracin"', text)
         self.assertIn('output_algorithm = f"{algorithm}_{_safe_tag(objective)}"', text)
 
+    def test_stage_runner_does_not_call_full_attribution_entrypoint(self):
+        text = (ROOT / "common" / "stage_runner.py").read_text()
+        self.assertIn('"train_datapoint_gradient"', text)
+        self.assertIn('"query_gradient"', text)
+        self.assertIn('"score"', text)
+        self.assertIn('f"seed_{train_seed}_train_gradient"', text)
+        self.assertNotIn("run_algorithm_config", text)
+        self.assertNotIn("run_attribution", text)
+
     def test_das_sherman_morrison_denominator_is_explicit_option(self):
         text = (LEGACY / "das" / "algorithm.py").read_text()
         self.assertIn("use_sherman_morrison_denominator: bool = False", text)

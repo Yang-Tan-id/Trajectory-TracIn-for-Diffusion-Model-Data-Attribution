@@ -83,16 +83,58 @@ class TestScriptLayoutStatic(unittest.TestCase):
                 self.assertIn('JAX_NUM_DEVICES', text)
                 self.assertIn('${REFINE_ROOT}/${DATASET}/scripts/script_0.sh', text)
 
-    def test_algorithm_reference_scripts_use_dataset_local_scripts(self):
+    def test_datapoint_gradient_scripts_accept_optional_modes_and_algorithms(self):
+        for dataset in DATASETS:
+            with self.subTest(dataset=dataset):
+                script = ROOT / dataset / "scripts" / "01_datapoint_gradients.sh"
+                self.assertTrue(script.is_file())
+                text = script.read_text()
+                self.assertIn('ALGORITHMS_TEXT="${ALGORITHMS:-${ALGO:-${ALGORITHM:-das}}}"', text)
+                self.assertIn('ALGORITHMS_TEXT="${ALGORITHMS_TEXT//,/ }"', text)
+                self.assertIn('TRAIN_MODES_TEXT="${TRAIN_MODES:-${TRAIN_MODE:-}}"', text)
+                self.assertIn('DATAPOINT_GRADIENT_MODES', text)
+                self.assertIn('model/${mode_label}/seed_${TRAIN_SEED:-42}_train_gradient', text)
+                self.assertIn('DATAPOINT_MODEL_MODE="${mode_label}"', text)
+                self.assertIn('bash "${ROOT}/scripts/script_0.sh" ${TRAIN_MODES_TEXT}', text)
+                self.assertIn('"${PYTHON_BIN}" 01_train_datapoint_gradient.py', text)
+                self.assertNotIn('bash "${ROOT}/scripts/01_data_attribution.sh"', text)
+                self.assertNotIn('bash "${ROOT}/scripts/01_data_attribution_unprompted.sh"', text)
+
+                for algorithm in ALGORITHMS:
+                    algorithm_dir = ROOT / dataset / "data_attribution" / algorithm
+                    for name in ("01_train_datapoint_gradient.py", "02_query_gradient.py", "03_score.py"):
+                        stage_script = algorithm_dir / name
+                        self.assertTrue(stage_script.is_file())
+                        stage_text = stage_script.read_text()
+                        self.assertIn("run_stage_config", stage_text)
+
+        for system in ("h100", "vista"):
+            with self.subTest(system=system):
+                script = ROOT / "tacc" / system / "datapoint_gradients.sh"
+                self.assertTrue(script.is_file())
+                text = script.read_text()
+                self.assertIn('DATASET="${DATASET:-cifar2}"', text)
+                self.assertIn('ALGORITHMS="${ALGORITHMS:-${ALGO:-${ALGORITHM:-das}}}"', text)
+                self.assertIn('GPU_IDS="${GPU_IDS:-0,1,2,3}"', text)
+                self.assertIn('${REFINE_ROOT}/${DATASET}/scripts/01_datapoint_gradients.sh', text)
+
+    def test_old_algorithm_entrypoints_are_removed(self):
         for dataset in DATASETS:
             for algorithm in ALGORITHMS:
                 with self.subTest(dataset=dataset, algorithm=algorithm):
-                    script = ROOT / dataset / "data_attribution" / algorithm / "script.sh"
-                    text = script.read_text()
-                    self.assertIn('${ROOT}/scripts/00_train_unprompted.sh', text)
-                    self.assertIn('${ROOT}/scripts/00_train_prompted_jax.sh', text)
-                    self.assertIn('${ROOT}/scripts/01_data_attribution_unprompted.sh', text)
-                    self.assertNotIn('bash "/scripts/', text)
+                    algorithm_dir = ROOT / dataset / "data_attribution" / algorithm
+                    self.assertFalse((algorithm_dir / "run_attribution.py").exists())
+                    self.assertFalse((algorithm_dir / "run_training.py").exists())
+                    self.assertFalse((algorithm_dir / "run_eval.py").exists())
+                    self.assertFalse((algorithm_dir / "script.sh").exists())
+
+    def test_prompted_attribution_script_uses_stage_two_and_three(self):
+        for dataset in DATASETS:
+            with self.subTest(dataset=dataset):
+                text = (ROOT / dataset / "scripts" / "01_data_attribution.sh").read_text()
+                self.assertIn("02_query_gradient.py", text)
+                self.assertIn("03_score.py", text)
+                self.assertNotIn("run_attribution.py", text)
 
 
 if __name__ == "__main__":

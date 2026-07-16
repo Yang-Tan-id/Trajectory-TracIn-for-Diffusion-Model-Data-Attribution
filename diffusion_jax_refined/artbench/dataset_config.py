@@ -213,6 +213,7 @@ def unprompted_training_command() -> list[str]:
 def commands_for_algorithm(algorithm: str) -> dict[str, list[str]]:
     return {
         "training": unprompted_training_command(),
-        "attribution": ["python", "run_attribution.py"],
-        "eval": ["python", "run_eval.py"],
+        "train_datapoint_gradient": ["python", "01_train_datapoint_gradient.py"],
+        "query_gradient": ["python", "02_query_gradient.py"],
+        "score": ["python", "03_score.py"],
     }

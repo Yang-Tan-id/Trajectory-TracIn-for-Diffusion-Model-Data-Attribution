@@ -13,7 +13,9 @@ Each dataset owns:
 
 - `dataset_config.py`: shared defaults, paths, experiment tags, and per-algorithm config dictionaries.
 - `data_attribution/<algorithm>/CONFIG.py`: algorithm-local config entrypoint.
-- `data_attribution/<algorithm>/run_attribution.py`: calls the legacy JAX attribution engine with that config.
+- `data_attribution/<algorithm>/01_train_datapoint_gradient.py`: train-dataset gradient/features stage.
+- `data_attribution/<algorithm>/02_query_gradient.py`: query/sample gradient/features stage.
+- `data_attribution/<algorithm>/03_score.py`: score-combination stage.
 - `sampling/`, `counterfactual/`, `lds/`: separate metric or helper entrypoints.
 - `scripts/`: convenience shell commands for training, attribution, counterfactual, and LDS.
 - `result/<experiment_tag>/model`, `result/<experiment_tag>/attribution_score`, `result/<experiment_tag>/eval`: output layout.
@@ -85,14 +87,26 @@ CUDA_VISIBLE_DEVICES=0,1 bash scripts/00_train_prompted_jax.sh
 # selects which sample a given attribution run reads.
 CUDA_VISIBLE_DEVICES=0 SAMPLE_SEEDS=0,1,2 SAMPLE_TRAJECTORY_STEPS=100 bash scripts/00_sample.sh
 
-# Or run from an individual attribution folder.
-(cd data_attribution/traj_tracin && CUDA_VISIBLE_DEVICES=0 bash script.sh train)
-
 # Run attribution for one saved query/initial-seed pair.
 QUERY=horse INITIAL_SEED=0 CUDA_VISIBLE_DEVICES=0 bash scripts/01_data_attribution.sh
 
 # Run only DAS and trajectory TracIn.
 CUDA_VISIBLE_DEVICES=1 ALGORITHMS="das traj_tracin" bash scripts/01_data_attribution.sh
+
+# Optional training + datapoint-gradient/feature computation entrypoint.
+# TRAIN_MODES is optional; omit it to reuse existing checkpoints.
+# ALGORITHMS/ALGO is optional and accepts spaces or commas.
+TRAIN_MODES="prompted_solo unprompted_solo" \
+DATAPOINT_GRADIENT_MODES="both" \
+ALGORITHMS="das,dtrak" \
+CUDA_VISIBLE_DEVICES=0 bash scripts/01_datapoint_gradients.sh
+
+This writes stage-1 outputs next to the model identity, for example:
+
+```text
+<dataset>/result/<experiment>/model/prompted_solo/seed_<TRAIN_SEED>_train_gradient/das/
+<dataset>/result/<experiment>/model/unprompted_solo/seed_<TRAIN_SEED>_train_gradient/das/
+```
 
 # Split trajectory TracIn scoring into multiple index ranges.
 CUDA_VISIBLE_DEVICES=0 ALGORITHMS="traj_tracin" ATTRIBUTION_RANGES="1-2500,2501-5000,5001-7500,7501-10000" bash scripts/01_data_attribution.sh

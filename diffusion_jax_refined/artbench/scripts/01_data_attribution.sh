@@ -6,6 +6,7 @@ ALGORITHMS="${ALGORITHMS:-das traj_tracin dtrak end_tracin journey_trak}"
 CUDA_DEVICE="${CUDA_DEVICE:-${CUDA:-${CUDA_VISIBLE_DEVICES:-0}}}"
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-${CUDA_DEVICE}}"
 ATTRIBUTION_RANGES="${ATTRIBUTION_RANGES:-${SCORE_INDEX_RANGES:-}}"
+PYTHON_BIN="${PYTHON_BIN:-python3}"
 
 echo "Running attribution on CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
 
@@ -14,10 +15,10 @@ for ALGORITHM in ${ALGORITHMS}; do
     RANGE_LIST="${ATTRIBUTION_RANGES//,/ }"
     for RANGE_VALUE in ${RANGE_LIST}; do
       echo "Running attribution: ${ALGORITHM} range=${RANGE_VALUE}"
-      (cd "${ROOT}/data_attribution/${ALGORITHM}" && SCORE_INDEX_RANGES="${RANGE_VALUE}" python run_attribution.py)
+      (cd "${ROOT}/data_attribution/${ALGORITHM}" && SCORE_INDEX_RANGES="${RANGE_VALUE}" "${PYTHON_BIN}" 02_query_gradient.py && SCORE_INDEX_RANGES="${RANGE_VALUE}" "${PYTHON_BIN}" 03_score.py)
     done
   else
     echo "Running attribution: ${ALGORITHM}"
-    (cd "${ROOT}/data_attribution/${ALGORITHM}" && python run_attribution.py)
+    (cd "${ROOT}/data_attribution/${ALGORITHM}" && "${PYTHON_BIN}" 02_query_gradient.py && "${PYTHON_BIN}" 03_score.py)
   fi
 done

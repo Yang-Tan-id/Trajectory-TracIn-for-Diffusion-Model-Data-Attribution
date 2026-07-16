@@ -141,6 +141,14 @@ Test files
      prompt-specific model folders for dataset filtering/checkpoint identity;
    - tacc script_0 launchers select DATASET, TRAIN_MODE, GPU_IDS, and
      JAX_NUM_DEVICES before delegating to the dataset script_0;
+   - dataset and TACC datapoint-gradient launchers accept optional TRAIN_MODES,
+     DATAPOINT_GRADIENT_MODES, and ALGORITHMS/ALGO values with comma or space
+     separators;
+   - datapoint-gradient launchers write under
+     model/<train_mode>/seed_<TRAIN_SEED>_train_gradient/<algorithm>/ instead of
+     query attribution folders;
+   - old algorithm-local run_attribution.py, run_training.py, run_eval.py, and
+     script.sh entrypoints are absent after the three-stage split;
    - every dataset/algorithm-local script.sh calls the dataset-local refined
      scripts under ${ROOT}/scripts;
    - algorithm-local scripts no longer call stale absolute /scripts paths.

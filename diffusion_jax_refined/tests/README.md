@@ -40,6 +40,11 @@ Current coverage focuses on:
 - script-layout static checks that keep old TACC scripts removed and ensure
   algorithm-local scripts call dataset-local refined scripts, while training
   remains independent of sampling/query prompts;
+- datapoint-gradient script checks for optional `TRAIN_MODES`,
+  `DATAPOINT_GRADIENT_MODES`, comma/space-separated algorithm selection, and
+  model-seed-rooted output folders;
+- script-layout checks that old algorithm-local `run_attribution.py`,
+  `run_training.py`, `run_eval.py`, and `script.sh` entrypoints are removed;
 - target-specific LDS eval overwrite protection;
 - per-seed LDS aggregate summary and combined scatter-grid generation;
 - attribution-code contracts such as DAS squared scores, EndTracIn MC sample counts,
