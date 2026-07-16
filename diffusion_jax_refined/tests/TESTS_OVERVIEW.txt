@@ -153,6 +153,10 @@ Test files
    - dataset and TACC sample+query-gradient launchers run sampling and
      02_query_gradient.py as one job, writing query gradients next to the sample
      seed folder;
+   - score outputs are rooted by SAMPLE_MODEL_MODE and TRAIN_SEED before
+     query/unprompted and initial seed;
+   - LDS eval outputs are rooted by SAMPLE_MODEL_MODE before query/unprompted
+     and initial seed;
    - CIFAR2/CIFAR10 LDS training scripts accept SAMPLE_MODEL_MODE,
      LDS_MODEL_TRAIN_SEED, LDS_M/LDS_NUM_SUBSETS, and either
      LDS_DATASET_PERCENTAGE or LDS_K/LDS_SUBSET_SIZE;

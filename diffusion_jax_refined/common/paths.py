@@ -48,18 +48,53 @@ def attribution_run_root(
     experiment_tag: str,
     query: object,
     initial_seed: int,
+    model_mode: str | None = None,
+    train_seed: int | None = None,
+    *,
+    unprompted: bool = False,
 ) -> Path:
     """Folder containing every algorithm/range output for one saved query sample."""
+    score_model_mode = model_mode or os.environ.get(
+        "ATTRIBUTION_SCORE_MODEL_MODE",
+        os.environ.get("ATTRIBUTION_SAMPLE_MODEL_MODE", os.environ.get("SAMPLE_MODEL_MODE", "prompted_solo")),
+    )
+    score_train_seed = int(train_seed if train_seed is not None else os.environ.get("TRAIN_SEED", "42"))
+    query_component = "unprompted" if unprompted or str(score_model_mode).startswith("unprompted_") else f"query_{path_tag(query)}"
     return (
         experiment_root(dataset_name, experiment_tag)
         / "attribution_score"
-        / f"query_{path_tag(query)}"
+        / str(score_model_mode)
+        / f"train_seed_{score_train_seed}"
+        / query_component
         / f"initial_seed_{int(initial_seed)}"
     )
 
 
 def eval_root(dataset_name: str, experiment_tag: str, metric_name: str) -> Path:
     return experiment_root(dataset_name, experiment_tag) / "eval" / metric_name
+
+
+def eval_run_root(
+    dataset_name: str,
+    experiment_tag: str,
+    query: object,
+    initial_seed: int,
+    model_mode: str | None = None,
+    *,
+    unprompted: bool = False,
+) -> Path:
+    score_model_mode = model_mode or os.environ.get(
+        "ATTRIBUTION_SCORE_MODEL_MODE",
+        os.environ.get("ATTRIBUTION_SAMPLE_MODEL_MODE", os.environ.get("SAMPLE_MODEL_MODE", "prompted_solo")),
+    )
+    query_component = "unprompted" if unprompted or str(score_model_mode).startswith("unprompted_") else f"query_{path_tag(query)}"
+    return (
+        experiment_root(dataset_name, experiment_tag)
+        / "eval"
+        / str(score_model_mode)
+        / query_component
+        / f"initial_seed_{int(initial_seed)}"
+    )
 
 
 def ensure_experiment_dirs(dataset_name: str, experiment_tag: str) -> None:

@@ -182,8 +182,8 @@ validate_samples() {
 score_dir_for_range() {
   local query="$1"
   local range="$2"
-  printf '%s/result/%s/attribution_score/query_%s/initial_seed_%s/%s_range_%s' \
-    "${ROOT}" "${EXPERIMENT_TAG}" "$(path_tag "${query}")" "${INITIAL_SEED}" \
+  printf '%s/result/%s/attribution_score/%s/train_seed_%s/query_%s/initial_seed_%s/%s_range_%s' \
+    "${ROOT}" "${EXPERIMENT_TAG}" "${ATTRIBUTION_SCORE_MODEL_MODE:-${SAMPLE_MODEL_MODE:-prompted_solo}}" "${TRAIN_SEED:-42}" "$(path_tag "${query}")" "${INITIAL_SEED}" \
     "$(traj_algorithm_tag)" "${range//-/_}"
 }
 
@@ -272,7 +272,7 @@ run_eval() {
     done
     for seed in ${LDS_SEEDS}; do
       model_dir="$(lds_model_dir_for_seed "${seed}")"
-      out_dir="${ROOT}/result/${EXPERIMENT_TAG}/eval/query_${tag}/initial_seed_${INITIAL_SEED}/lds/$(traj_algorithm_tag)/${LDS_TARGET_FUNCTION}/${pred_tag}/$(basename "${model_dir}")"
+      out_dir="${ROOT}/result/${EXPERIMENT_TAG}/eval/${ATTRIBUTION_SCORE_MODEL_MODE:-${SAMPLE_MODEL_MODE:-prompted_solo}}/query_${tag}/initial_seed_${INITIAL_SEED}/lds/$(traj_algorithm_tag)/${LDS_TARGET_FUNCTION}/${pred_tag}/$(basename "${model_dir}")"
       if [[ "${ALLOW_OVERWRITE}" != "1" && -f "${out_dir}/lds_results.csv" ]]; then
         echo "Skip existing eval: ${out_dir}"
         continue

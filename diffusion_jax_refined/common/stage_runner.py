@@ -47,13 +47,27 @@ def _stage_root(cfg_module: Any, algorithm: str, stage: str) -> Path:
         )
         return sample_dir / f"seed_{sample_seed:06d}_query_gradient" / algorithm
 
+    score_model_mode = os.environ.get(
+        "ATTRIBUTION_SCORE_MODEL_MODE",
+        os.environ.get(
+            "ATTRIBUTION_SAMPLE_MODEL_MODE",
+            os.environ.get("SAMPLE_MODEL_MODE", os.environ.get("TRAIN_MODE", "prompted_solo")),
+        ),
+    )
+    unprompted = (
+        os.environ.get("UNPROMPTED", "0") in ("1", "true", "True", "yes")
+        or str(score_model_mode).startswith("unprompted_")
+    )
     query = os.environ.get("QUERY", getattr(cfg_module, "QUERY", "unconditional"))
     initial_seed = int(os.environ.get("INITIAL_SEED", getattr(cfg_module, "INITIAL_SEED", 0)))
     safe_query = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in str(query)).strip("_")
+    query_component = "unprompted" if unprompted else f"query_{safe_query or 'unconditional'}"
     return (
         model_root.parent
         / "attribution_score"
-        / f"query_{safe_query or 'unconditional'}"
+        / str(score_model_mode)
+        / f"train_seed_{train_seed}"
+        / query_component
         / f"initial_seed_{initial_seed}"
         / algorithm
         / stage

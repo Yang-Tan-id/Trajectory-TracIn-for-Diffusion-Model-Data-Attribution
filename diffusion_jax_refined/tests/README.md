@@ -47,6 +47,12 @@ Current coverage focuses on:
   `EXPERIMENT_TAG`, and the result-level `sample` output root;
 - sample+query-gradient job checks that sampling and `02_query_gradient.py`
   run together, keyed by `SAMPLE_MODEL_MODE`, `SAMPLE_SEEDS`, and algorithm;
+- score-output path checks for
+  `attribution_score/<SAMPLE_MODEL_MODE>/train_seed_<TRAIN_SEED>/query_<query>/initial_seed_<seed>/`
+  and the unprompted equivalent;
+- LDS eval path checks for
+  `eval/<SAMPLE_MODEL_MODE>/query_<query>/initial_seed_<seed>/lds/` and the
+  unprompted equivalent;
 - LDS model-training checks for selectable `SAMPLE_MODEL_MODE`,
   `LDS_MODEL_TRAIN_SEED`, `LDS_M`/`LDS_NUM_SUBSETS`, and either
   `LDS_DATASET_PERCENTAGE` or `LDS_K` subset sizing;

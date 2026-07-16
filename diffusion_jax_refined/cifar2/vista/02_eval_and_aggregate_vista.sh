@@ -113,7 +113,7 @@ PREDICTION_TAG="$(prediction_tag "${LDS_PREDICTION_SUBSET}" "${LDS_PREDICTION_SI
 score_dirs() {
   local query="$1"
   local algorithm="$2"
-  local root="${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/attribution_score/query_$(path_tag "${query}")/initial_seed_${INITIAL_SEED}"
+  local root="${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/attribution_score/${ATTRIBUTION_SCORE_MODEL_MODE:-${SAMPLE_MODEL_MODE:-prompted_solo}}/train_seed_${TRAIN_SEED:-42}/query_$(path_tag "${query}")/initial_seed_${INITIAL_SEED}"
   local range output=""
   if [[ "${algorithm}" == "traj_tracin" ]]; then
     for range in "${TRAJ_RANGES[@]}"; do
@@ -169,7 +169,7 @@ for seed in ${LDS_SEEDS}; do
       for input in "${inputs[@]}"; do
         [[ -f "${input}/scores.npy" ]] || { echo "Missing attribution scores: ${input}/scores.npy" >&2; exit 1; }
       done
-      out_dir="${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/eval/query_${query_tag}/initial_seed_${INITIAL_SEED}/lds/${eval_algorithm}/${LDS_TARGET_FUNCTION}/${PREDICTION_TAG}/$(basename "${model_dir}")"
+      out_dir="${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/eval/${ATTRIBUTION_SCORE_MODEL_MODE:-${SAMPLE_MODEL_MODE:-prompted_solo}}/query_${query_tag}/initial_seed_${INITIAL_SEED}/lds/${eval_algorithm}/${LDS_TARGET_FUNCTION}/${PREDICTION_TAG}/$(basename "${model_dir}")"
       if [[ "${ALLOW_OVERWRITE}" != "1" && -e "${out_dir}" ]]; then
         echo "Refusing to overwrite ${out_dir}" >&2
         exit 1

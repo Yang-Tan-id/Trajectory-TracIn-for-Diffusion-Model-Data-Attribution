@@ -37,8 +37,25 @@ class TestCifar2PathConfig(unittest.TestCase):
 
     def test_query_and_initial_seed_are_in_attribution_and_eval_roots(self):
         cfg = self.load_cifar2(query="horse", initial_seed=42)
-        self.assertTrue(str(cfg.ATTRIBUTION_RUN_ROOT).endswith("attribution_score/query_horse/initial_seed_42"))
-        self.assertTrue(str(cfg.EVAL_RUN_ROOT).endswith("eval/query_horse/initial_seed_42"))
+        self.assertTrue(
+            str(cfg.ATTRIBUTION_RUN_ROOT).endswith(
+                "attribution_score/prompted_solo/train_seed_42/query_horse/initial_seed_42"
+            )
+        )
+        self.assertTrue(str(cfg.EVAL_RUN_ROOT).endswith("eval/prompted_solo/query_horse/initial_seed_42"))
+
+    def test_unprompted_attribution_root_uses_model_mode_and_unprompted_label(self):
+        cfg = self.load_cifar2(query="horse", initial_seed=42)
+        self.assertTrue(
+            str(cfg.UNPROMPTED_ATTRIBUTION_RUN_ROOT).endswith(
+                "attribution_score/unprompted_solo/train_seed_42/unprompted/initial_seed_42"
+            )
+        )
+        self.assertTrue(
+            str(cfg.UNPROMPTED_EVAL_RUN_ROOT).endswith(
+                "eval/unprompted_solo/unprompted/initial_seed_42"
+            )
+        )
 
     def test_multiple_queries_map_to_distinct_folders(self):
         folders = {}

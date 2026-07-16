@@ -50,21 +50,48 @@ UNPROMPTED_JAX_MODEL_ROOT = MODEL_ROOT / "unprompted_jax"
 SAMPLING_ROOT = EVAL_ROOT / "sampling"
 SAMPLE_ROOT = RESULT_ROOT / "sample"
 
+TRAIN_SEED = int(os.environ.get("TRAIN_SEED", "42"))
+JAX_EPOCHS = int(os.environ.get("JAX_EPOCHS", "200"))
 QUERY = os.environ.get("QUERY", "truck")
 INITIAL_SEED = int(os.environ.get("INITIAL_SEED", os.environ.get("SAMPLE_SEED", "0")))
-ATTRIBUTION_RUN_ROOT = (
-    ATTRIBUTION_ROOT / f"query_{_prompt_path_tag(QUERY)}" / f"initial_seed_{INITIAL_SEED}"
+ATTRIBUTION_SCORE_MODEL_MODE = os.environ.get(
+    "ATTRIBUTION_SCORE_MODEL_MODE",
+    os.environ.get("ATTRIBUTION_SAMPLE_MODEL_MODE", os.environ.get("SAMPLE_MODEL_MODE", "prompted_solo")),
 )
-EVAL_RUN_ROOT = EVAL_ROOT / f"query_{_prompt_path_tag(QUERY)}" / f"initial_seed_{INITIAL_SEED}"
+UNPROMPTED_SCORE_MODEL_MODE = os.environ.get(
+    "UNPROMPTED_SCORE_MODEL_MODE",
+    os.environ.get("UNPROMPTED_SAMPLE_MODEL_MODE", "unprompted_solo"),
+)
+ATTRIBUTION_RUN_ROOT = (
+    ATTRIBUTION_ROOT
+    / ATTRIBUTION_SCORE_MODEL_MODE
+    / f"train_seed_{TRAIN_SEED}"
+    / f"query_{_prompt_path_tag(QUERY)}"
+    / f"initial_seed_{INITIAL_SEED}"
+)
+EVAL_RUN_ROOT = (
+    EVAL_ROOT
+    / ATTRIBUTION_SCORE_MODEL_MODE
+    / f"query_{_prompt_path_tag(QUERY)}"
+    / f"initial_seed_{INITIAL_SEED}"
+)
 UNPROMPTED_ATTRIBUTION_RUN_ROOT = (
-    ATTRIBUTION_ROOT / "query_unconditional" / f"initial_seed_{INITIAL_SEED}"
+    ATTRIBUTION_ROOT
+    / UNPROMPTED_SCORE_MODEL_MODE
+    / f"train_seed_{TRAIN_SEED}"
+    / "unprompted"
+    / f"initial_seed_{INITIAL_SEED}"
+)
+UNPROMPTED_EVAL_RUN_ROOT = (
+    EVAL_ROOT
+    / UNPROMPTED_SCORE_MODEL_MODE
+    / "unprompted"
+    / f"initial_seed_{INITIAL_SEED}"
 )
 DATA_ROOT = str(DATASET_STORAGE_ROOT / "cifar-10-batches-py")
 HF_DATASET_ROOT = str(DATASET_STORAGE_ROOT / "hf_cifar10")
 LDS_INDEX_ROOT = DATASET_STORAGE_ROOT / "indices" / "lds-val"
 CHECKPOINT_DIR = str(PROMPTED_JAX_MODEL_ROOT)
-TRAIN_SEED = int(os.environ.get("TRAIN_SEED", "42"))
-JAX_EPOCHS = int(os.environ.get("JAX_EPOCHS", "200"))
 PROMPTED_CKPT_STEM = f"seed_{TRAIN_SEED}_epoch_{JAX_EPOCHS:04d}"
 REFERENCE_CKPT = str(PROMPTED_JAX_MODEL_ROOT / f"{PROMPTED_CKPT_STEM}.ckpt")
 ATTRIBUTION_SAMPLE_DIR = os.environ.get(

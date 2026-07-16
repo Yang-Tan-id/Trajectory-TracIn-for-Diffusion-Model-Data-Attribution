@@ -11,11 +11,11 @@ from dataset_config import (
     CLASS_NAMES,
     DATASET_NAME,
     DATA_ROOT,
-    EVAL_ROOT,
     EXPERIMENT_TAG,
     SCORE_INDEX_RANGES,
     UNPROMPTED_ATTRIBUTION_SAMPLE_DIR,
     UNPROMPTED_JAX_REFERENCE_CKPT,
+    UNPROMPTED_EVAL_RUN_ROOT,
 )
 
 
@@ -93,7 +93,7 @@ COMMANDS = {
         "--prediction-sign",
         os.environ.get("LDS_PREDICTION_SIGN", "-1"),
         "--out-root",
-        str(EVAL_ROOT / "lds_unprompted" / ALGORITHM),
+        str(UNPROMPTED_EVAL_RUN_ROOT / "lds_unprompted" / ALGORITHM),
         "--run-name",
         f"{EXPERIMENT_TAG}_{DATASET_NAME}_{ALGORITHM}_unprompted",
         "--epochs",

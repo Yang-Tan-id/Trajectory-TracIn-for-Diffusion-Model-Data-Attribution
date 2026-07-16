@@ -189,8 +189,9 @@ def main() -> None:
     else:
         names = _compact_model_group_name(model_dirs)
         eval_kind = "lds_unprompted" if args.unprompted else "lds"
+        eval_root_attr = "UNPROMPTED_EVAL_RUN_ROOT" if args.unprompted else "EVAL_RUN_ROOT"
         out_dir = (
-            Path(require_attr(dataset_cfg, "EVAL_RUN_ROOT"))
+            Path(require_attr(dataset_cfg, eval_root_attr))
             / eval_kind
             / args.algorithm
             / args.target_function

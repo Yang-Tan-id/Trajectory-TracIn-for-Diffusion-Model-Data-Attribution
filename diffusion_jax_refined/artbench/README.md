@@ -20,7 +20,11 @@ These four engines read a saved sample. `QUERY` selects its default folder; the
 prompt stored in sample metadata becomes the attribution condition. Select an
 existing sample with `ATTRIBUTION_SAMPLE_DIR=/absolute/path`. `INITIAL_SEED`
 selects the saved sample seed. Attribution scores are grouped under
-`result/<experiment>/attribution_score/query_<query>/initial_seed_<seed>/`.
+`result/<experiment>/attribution_score/<SAMPLE_MODEL_MODE>/train_seed_<TRAIN_SEED>/query_<query>/initial_seed_<seed>/`.
+Unprompted scores use `unprompted/initial_seed_<seed>/` instead of a query
+folder.
+LDS eval outputs are grouped under
+`result/<experiment>/eval/<SAMPLE_MODEL_MODE>/query_<query>/initial_seed_<seed>/lds/`.
 `journey_trak` constructs its trajectory internally.
 
 Traj TracIn ranges:

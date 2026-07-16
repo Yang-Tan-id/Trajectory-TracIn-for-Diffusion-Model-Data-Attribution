@@ -106,16 +106,16 @@ sample_dir_for_query() {
 score_dir_for_traj_range() {
   local query="$1"
   local range="$2"
-  printf '%s/result/%s/attribution_score/query_%s/initial_seed_%s/%s_range_%s' \
-    "${CIFAR2_ROOT}" "${EXPERIMENT_TAG}" "$(path_tag "${query}")" "${INITIAL_SEED}" \
+  printf '%s/result/%s/attribution_score/%s/train_seed_%s/query_%s/initial_seed_%s/%s_range_%s' \
+    "${CIFAR2_ROOT}" "${EXPERIMENT_TAG}" "${ATTRIBUTION_SCORE_MODEL_MODE:-${SAMPLE_MODEL_MODE:-prompted_solo}}" "${TRAIN_SEED:-42}" "$(path_tag "${query}")" "${INITIAL_SEED}" \
     "$(traj_algorithm_tag)" "${range//-/_}"
 }
 
 score_dir_for_endpoint() {
   local query="$1"
   local algorithm="$2"
-  printf '%s/result/%s/attribution_score/query_%s/initial_seed_%s/%s_range_1_10000' \
-    "${CIFAR2_ROOT}" "${EXPERIMENT_TAG}" "$(path_tag "${query}")" "${INITIAL_SEED}" "${algorithm}"
+  printf '%s/result/%s/attribution_score/%s/train_seed_%s/query_%s/initial_seed_%s/%s_range_1_10000' \
+    "${CIFAR2_ROOT}" "${EXPERIMENT_TAG}" "${ATTRIBUTION_SCORE_MODEL_MODE:-${SAMPLE_MODEL_MODE:-prompted_solo}}" "${TRAIN_SEED:-42}" "$(path_tag "${query}")" "${INITIAL_SEED}" "${algorithm}"
 }
 
 wait_batch() {

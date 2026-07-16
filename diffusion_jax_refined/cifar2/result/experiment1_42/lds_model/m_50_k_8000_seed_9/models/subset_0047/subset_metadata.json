@@ -1,6 +1,0 @@
-{
-  "subset_id": 47,
-  "subset_seed": 2117931156,
-  "subset_size": 8000,
-  "subset_dir": "/work2/11447/yangtan7447/stampede3/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment1_42/lds_model/m_50_k_8000_seed_9/models/subset_0047"
-}

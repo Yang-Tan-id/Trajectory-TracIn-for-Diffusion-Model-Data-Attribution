@@ -123,7 +123,16 @@ def _load_score_indices(score_dir: Path) -> np.ndarray:
 
 
 def _load_scores_for_algorithm(base: Path, query: str, initial_seed: int, algorithm: str) -> tuple[np.ndarray, np.ndarray]:
-    root = base / "attribution_score" / f"query_{_path_tag(query)}" / f"initial_seed_{initial_seed}"
+    model_mode = os.environ.get("ATTRIBUTION_SCORE_MODEL_MODE", os.environ.get("SAMPLE_MODEL_MODE", "prompted_solo"))
+    train_seed = int(os.environ.get("TRAIN_SEED", "42"))
+    root = (
+        base
+        / "attribution_score"
+        / model_mode
+        / f"train_seed_{train_seed}"
+        / f"query_{_path_tag(query)}"
+        / f"initial_seed_{initial_seed}"
+    )
     if algorithm == "traj_tracin":
         names = [
             "traj_tracin_range_1_2000",

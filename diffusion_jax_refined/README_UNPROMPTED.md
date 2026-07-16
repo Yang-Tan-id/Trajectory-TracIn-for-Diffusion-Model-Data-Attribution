@@ -45,7 +45,7 @@ trajectory inside the attribution engine.
 Attribution outputs retain the existing evaluation contract:
 
 ```text
-result/<experiment>/attribution_score/<algorithm>_unprompted/
+result/<experiment>/attribution_score/unprompted_solo/train_seed_<TRAIN_SEED>/unprompted/initial_seed_<seed>/<algorithm>_unprompted/
 ```
 
 Full LDS uses independently trained, reusable unconditional subset models:

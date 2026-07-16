@@ -182,7 +182,13 @@ def main() -> None:
             "Replace the proxy target with retrained diffusers subset targets for full LDS."
         ),
     }
-    out_root = Path(require_attr(cfg, "EVAL_ROOT")) / "lds_unprompted" / args.algorithm
+    fallback_eval_root = (
+        Path(require_attr(cfg, "EVAL_ROOT"))
+        / "unprompted_solo"
+        / "unprompted"
+        / f"initial_seed_{int(os.environ.get('INITIAL_SEED', '0'))}"
+    )
+    out_root = Path(getattr(cfg, "UNPROMPTED_EVAL_RUN_ROOT", fallback_eval_root)) / "lds_unprompted" / args.algorithm
     out_root.mkdir(parents=True, exist_ok=True)
     with open(out_root / "lds_unprompted_summary.json", "w") as f:
         json.dump(summary, f, indent=2)
