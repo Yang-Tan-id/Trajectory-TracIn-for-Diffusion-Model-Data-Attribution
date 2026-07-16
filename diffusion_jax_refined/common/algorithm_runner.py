@@ -17,27 +17,27 @@ from .paths import (
 
 ENGINE_MAP: dict[str, tuple[str, str, str]] = {
     "das": (
-        "DM_dataAttribution_algo_end_das",
+        "das",
         "EndpointProjectedDASJAXConfig",
         "run_endpoint_das_projected_jax",
     ),
     "traj_tracin": (
-        "DM_dataAttribution_algo_traj_tracin",
+        "traj_tracin",
         "TrajAttributionConfig",
         "run_attribution",
     ),
     "dtrak": (
-        "DM_dataAttribution_algo_end_dtrak",
+        "dtrak",
         "EndpointDTrakJAXConfig",
         "run_endpoint_dtrak_jax",
     ),
     "end_tracin": (
-        "DM_dataAttribution_algo_end_tracin",
+        "end_tracin",
         "EndpointTraceInConfig",
         "run_endpoint_tracein",
     ),
     "journey_trak": (
-        "DM_dataAttribution_algo_traj_journeytrak",
+        "journey_trak",
         "JourneyTRAKJAXConfig",
         "run_journey_trak_jax",
     ),

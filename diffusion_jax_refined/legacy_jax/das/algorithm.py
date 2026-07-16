@@ -500,7 +500,7 @@ class EndpointProjectedDASJAXConfig:
     eta: float = 0.0
 
     timesteps: Tuple[int, ...] = (0, 400, 800, 1200, 1600, 1999)
-    num_mc_noise: int = 8
+    num_mc_noise: int = 10
     damping: float = 1e-3
     proj_dim: int = 4096
     normalize_projected_grads: bool = True
@@ -1585,7 +1585,7 @@ if __name__ == "__main__":
             ddim_steps=2000,
             eta=0.0,
             timesteps=(0, 400, 800, 1200, 1600, 1999),
-            num_mc_noise=8,
+            num_mc_noise=10,
             damping=1e-3,
             proj_dim=4069,
             ckpt_stride=1,
@@ -1615,7 +1615,7 @@ if __name__ == "__main__":
             timesteps_total=2000,
             ddim_steps=2000,
             timesteps=(0, 400, 800, 1200, 1600, 1999),
-            num_mc_noise=8,
+            num_mc_noise=10,
             damping=1e-3,
             proj_dim=4069,
             ckpt_stride=1,

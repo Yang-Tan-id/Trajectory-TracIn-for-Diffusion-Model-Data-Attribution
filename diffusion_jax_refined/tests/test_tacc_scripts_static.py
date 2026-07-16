@@ -102,7 +102,7 @@ class TestTaccScriptsStatic(unittest.TestCase):
         self.assertIn('"per_example_grad_batch_size": int(os.environ.get("DAS_GRAD_BATCH_SIZE", "8"))', text)
         self.assertIn('"score_batch_size": int(os.environ.get("TRAJ_SCORE_BATCH_SIZE", "32"))', text)
         self.assertIn('"DAS_SHERMAN_MORRISON_DENOMINATOR", "1"', text)
-        das_text = (ROOT / "legacy_jax" / "DM_dataAttribution_algo_end_das.py").read_text()
+        das_text = (ROOT / "legacy_jax" / "das" / "algorithm.py").read_text()
         self.assertIn("compute_batched_das_term", das_text)
         self.assertIn("jax.vmap(phi_fn", das_text)
         self.assertIn("H_device = H_device + phi_batch.T @ phi_batch", das_text)

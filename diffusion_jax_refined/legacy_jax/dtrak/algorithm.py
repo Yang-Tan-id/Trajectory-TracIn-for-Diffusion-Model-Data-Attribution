@@ -605,8 +605,8 @@ class EndpointDTrakJAXConfig:
     damping: float = 1e-3
     num_samples: int = 1
     batch_size: int = 64
-    train_expectation_samples: int = 8
-    query_expectation_samples: int = 8
+    train_expectation_samples: int = 10
+    query_expectation_samples: int = 10
     progress_every_batches: int = 10
     use_tqdm: bool = True
     use_jax_countsketch: bool = True
@@ -1606,8 +1606,8 @@ if __name__ == "__main__":
             damping=1e-3,
             num_samples=1,
             batch_size=64,
-            train_expectation_samples=8,
-            query_expectation_samples=8,
+            train_expectation_samples=10,
+            query_expectation_samples=10,
             progress_every_batches=5,
             max_train_points=2000,
             random_subset=True,
@@ -1634,8 +1634,8 @@ if __name__ == "__main__":
             damping=1e-3,
             num_samples=1,
             batch_size=64,
-            train_expectation_samples=8,
-            query_expectation_samples=8,
+            train_expectation_samples=10,
+            query_expectation_samples=10,
             progress_every_batches=5,
             max_train_points=1024,
             random_subset=True,

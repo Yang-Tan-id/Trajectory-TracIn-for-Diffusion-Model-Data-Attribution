@@ -457,8 +457,8 @@ class JourneyTRAKJAXConfig:
     num_samples: int = 1
     batch_size: int = 64
 
-    train_expectation_samples: int = 8
-    query_expectation_samples: int = 8
+    train_expectation_samples: int = 10
+    query_expectation_samples: int = 10
 
     num_query_traj_steps: int = 50
 
@@ -1098,8 +1098,8 @@ if __name__ == "__main__":
             damping=1e-3,
             num_samples=1,
             batch_size=64,
-            train_expectation_samples=8,
-            query_expectation_samples=8,
+            train_expectation_samples=10,
+            query_expectation_samples=10,
             num_query_traj_steps=50,
             ckpt_stride=1,
             max_num_ckpts=1,
@@ -1127,8 +1127,8 @@ if __name__ == "__main__":
             damping=1e-3,
             num_samples=1,
             batch_size=64,
-            train_expectation_samples=8,
-            query_expectation_samples=8,
+            train_expectation_samples=10,
+            query_expectation_samples=10,
             num_query_traj_steps=50,
             ckpt_stride=1,
             max_num_ckpts=1,

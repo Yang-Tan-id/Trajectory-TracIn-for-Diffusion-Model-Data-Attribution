@@ -629,8 +629,8 @@ class EndpointTraceInConfig:
     t_max_end_frac: float = 0.2
 
     # Monte Carlo controls
-    endpoint_mc_samples: int = 8
-    train_mc_samples: int = 8
+    endpoint_mc_samples: int = 10
+    train_mc_samples: int = 10
 
     # scoring set
     max_train_points: int = 1024
@@ -1042,7 +1042,7 @@ def score_one_trainpoint_given_gend(
     train_cond,
     *,
     eta_k=1.0,
-    train_mc_samples=8,
+    train_mc_samples=10,
     rng,
 ):
     def loss_fn(p):
@@ -1100,7 +1100,7 @@ def make_score_train_batch_fn(
     g_end,
     *,
     eta_k=1.0,
-    train_mc_samples=8,
+    train_mc_samples=10,
 ):
     def one_score(params, x0_one, cond_one, rng_one):
         x0_one = x0_one[None, ...]
@@ -1681,7 +1681,7 @@ def run_endpoint_tracein(cfg: EndpointTraceInConfig):
 #    separate driver script and call run_endpoint_tracein(cfg).
 #
 #    cd "diffusion model_jax"
-#    python3 DM_dataAttribution_algo_end_tracin.py
+#    python3 -m end_tracin.algorithm
 #
 #    The input sample is final_state.npy from:
 #      attribution_samples/cifar/prompt_truck/ckpt_seed_0_epoch_0200/seed_000000/
@@ -1710,8 +1710,8 @@ if __name__ == "__main__":
             csv_path="databases/3x3_4342_100000.csv",
             query=["background_color_red", "shape_color_blue", "shape_ring"],
             ddim_steps=1000,
-            endpoint_mc_samples=8,
-            train_mc_samples=8,
+            endpoint_mc_samples=10,
+            train_mc_samples=10,
             max_train_points=2000,
             random_subset=True,
             topk=2000,
@@ -1731,8 +1731,8 @@ if __name__ == "__main__":
             cond_mode="class_id",
             query="airplane",
             ddim_steps=1000,
-            endpoint_mc_samples=8,
-            train_mc_samples=8,
+            endpoint_mc_samples=10,
+            train_mc_samples=10,
             max_train_points=2000,
             random_subset=True,
             topk=2000,
