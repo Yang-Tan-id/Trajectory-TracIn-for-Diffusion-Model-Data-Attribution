@@ -2,4 +2,5 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-exec bash "${ROOT}/scripts/00_train_unprompted_multi.sh"
+source "${ROOT}/../common/train_shell_lib.sh"
+train_run_unprompted_solo "${ROOT}"

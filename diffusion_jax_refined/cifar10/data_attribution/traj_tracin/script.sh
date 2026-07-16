@@ -15,7 +15,7 @@ export GPU_IDS="${GPU_IDS:-${CUDA_DEVICE}}"
 export MAIN_PROCESS_PORT="${MAIN_PROCESS_PORT:-29500}"
 
 run_unprompted_training() {
-  bash "/scripts/00_train_unprompted.sh" "" ""
+  bash "${ROOT}/scripts/00_train_unprompted.sh" "${START_INDEX}" "${END_INDEX}"
 }
 
 case "${MODE}" in
@@ -24,7 +24,7 @@ case "${MODE}" in
     ALGORITHMS="${ALGORITHM}" bash "${ROOT}/scripts/00_train_prompted_jax.sh"
     ;;
   train_unprompted)
-    echo "shared unprompted diffusers training on CUDA_VISIBLE_DEVICES=, GPU_IDS="
+    echo "shared unprompted diffusers training on CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}, GPU_IDS=${GPU_IDS}"
     run_unprompted_training
     ;;
   attribution)
@@ -47,7 +47,7 @@ case "${MODE}" in
     ALGORITHMS="${ALGORITHM}" bash "${ROOT}/scripts/03_metric_lds_unprompted.sh"
     ;;
   all_unprompted)
-    echo "shared unprompted diffusers training +  attribution + eval"
+    echo "shared unprompted diffusers training + ${ALGORITHM} attribution + eval"
     run_unprompted_training
     ALGORITHMS="${ALGORITHM}" bash "${ROOT}/scripts/01_data_attribution_unprompted.sh"
     ALGORITHMS="${ALGORITHM}" bash "${ROOT}/scripts/02_metric_counterfactual_unprompted.sh"

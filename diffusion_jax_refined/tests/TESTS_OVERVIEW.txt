@@ -124,30 +124,29 @@ Test files
    seed, and protect k=5000/k=8000 experiments.
 
 
-7. test_tacc_scripts_static.py
+7. test_script_layout_static.py
 
-   These tests statically inspect TACC Slurm scripts.
+   These tests protect the refined script layout after removing old TACC
+   launchers.
 
    They cover:
 
-   - H100 scripts do not use --gres;
-   - k=8000 LDS training requests 4 nodes x 4 tasks;
-   - eval scripts request 1 node x 4 tasks;
-   - scripts unset PYTHONPATH and activate the conda environment;
-   - scripts use set -euo pipefail;
-   - scripts contain overwrite protection;
-   - combined LDS eval overwrite protection is target-specific, so an existing
-     eval/query_<query>/initial_seed_<seed> folder does not block reruns for a
-     different LDS target such as simple_loss;
-   - per-seed eval runs aggregate_lds_by_seed.py after successful separate evals,
-     producing mean/std summaries and combined scatter grids;
-   - attribution part1/part2 sharding is explicit;
-   - sample validation exists in the attribution script.
-   - sample/attribution H100 jobs can fill the 4-node allocation with up to
-     16 independent one-GPU tasks, and the DAS config defaults to the batched
-     GPU path without requiring any real result files.
+   - the old cifar2/tacc script directory is absent;
+   - new tacc/h100 and tacc/vista script_0 launchers exist;
+   - every dataset exposes four train modes:
+     prompted_solo, prompted_multi, unprompted_solo, and unprompted_multi;
+   - every dataset has a scripts/script_0.sh selector for those train modes;
+   - train scripts delegate to common/train_shell_lib.sh;
+   - training launchers do not use QUERY, TRAIN_PROMPTS, TRAIN_MODEL_TAG, or
+     prompt-specific model folders for dataset filtering/checkpoint identity;
+   - tacc script_0 launchers select DATASET, TRAIN_MODE, GPU_IDS, and
+     JAX_NUM_DEVICES before delegating to the dataset script_0;
+   - every dataset/algorithm-local script.sh calls the dataset-local refined
+     scripts under ${ROOT}/scripts;
+   - algorithm-local scripts no longer call stale absolute /scripts paths.
 
-   Purpose: catch TACC submission/script mistakes before burning queue time.
+   Purpose: keep the refined workflow self-contained per dataset while we
+   replace the old TACC launch layer.
 
 
 8. test_aggregate_lds_by_seed.py
@@ -181,7 +180,19 @@ Test files
    - DAS saves squared-magnitude scores while the Sherman-Morrison denominator
      remains an explicit opt-in option;
    - EndTracIn uses endpoint-anchored loss with MC samples;
-   - CIFAR2 attribution/eval sample-count settings are pinned.
+   - CIFAR2 attribution/eval sample-count settings are pinned at 10 for MC /
+     expectation samples;
+   - CIFAR2, CIFAR10, and ArtBench attribution configs expose tunable GPU
+     batch/chunk knobs such as TRAJ_SNAPSHOT_CHUNK_SIZE, DTRAK_BATCH_SIZE, and
+     JOURNEY_BATCH_SIZE;
+   - D-TRAK train features are computed with a batched jax.vmap helper instead
+     of a Python loop over datapoints;
+   - D-TRAK PASS1 caches phi_cache while building the Gram matrix, and PASS2
+     reads Phi from that cache instead of calling train_phi_batch_fn a second
+     time;
+   - DAS, D-TRAK, EndTracIn, TrajTracIn, and JourneyTRAK each expose a
+     method-specific stages.py facade for train gradients/features, query
+     gradients/features, and score calculation.
 
    Purpose: make intentional algorithm-definition changes visible. If one of
    these fails after an intentional method change, update both the code and this
@@ -197,4 +208,4 @@ What this suite does not do
 - It does not verify final CIFAR2 scientific quality.
 
 Instead, it is a fast regression suite for logic, path conventions, metadata,
-score indexing, sharding, LDS math, and TACC-script safety.
+score indexing, sharding, LDS math, and script-layout safety.

@@ -37,7 +37,12 @@ Current coverage focuses on:
 - LDS Spearman/prediction sign/subset math;
 - sample prompt/seed/shape validation;
 - LDS subset metadata invariants;
-- TACC Slurm script static safety checks;
+- script-layout static checks that keep old TACC scripts removed and ensure
+  algorithm-local scripts call dataset-local refined scripts, while training
+  remains independent of sampling/query prompts;
 - target-specific LDS eval overwrite protection;
 - per-seed LDS aggregate summary and combined scatter-grid generation;
-- attribution-code contracts such as DAS squared scores and EndTracIn MC sample counts.
+- attribution-code contracts such as DAS squared scores, EndTracIn MC sample counts,
+  method-specific three-stage facades, tunable GPU batch/chunk settings, and
+  D-TRAK's batched train-feature cache that prevents PASS2 from recomputing
+  train gradients.

@@ -45,6 +45,12 @@ def _checkpoint_dir(cfg_module, algorithm: str, *, unconditional: bool = False) 
     return require_attr(cfg_module, "CHECKPOINT_DIR")
 
 
+def _training_class_names(cfg_module, default_attr: str):
+    if default_attr == "CLASS_NAMES" and os.environ.get("TRAIN_USE_ALL_CLASSES"):
+        return None
+    return getattr(cfg_module, default_attr, None)
+
+
 def run_prompted_cifar_training(
     config_path: str | Path,
     algorithm: str,
@@ -60,10 +66,11 @@ def run_prompted_cifar_training(
     chdir_legacy_jax_root()
 
     train_mod = __import__("DM__training_CIFAR10_pixel")
+    class_names = _training_class_names(cfg_module, "CLASS_NAMES")
     train_cfg = train_mod.TrainConfig(
         data_root=require_attr(cfg_module, "DATA_ROOT"),
         batch_names=None,
-        class_names=getattr(cfg_module, "CLASS_NAMES", None),
+        class_names=class_names,
         use_test=False,
         exclude_ranges=None,
         exclude_indices=None,
@@ -156,7 +163,7 @@ def run_prompted_artbench_training(
         data_root=str(Path(dataset_storage_root) / "raw"),
         train_split="train",
         test_split="test",
-        class_names=None,
+        class_names=_training_class_names(cfg_module, "CLASS_NAMES"),
         image_size=_optional_int("ARTBENCH_IMAGE_SIZE", 256),
         resize_mode=os.environ.get("ARTBENCH_RESIZE_MODE", "shortest_center_crop"),
         file_extensions=(".jpg", ".jpeg", ".png", ".webp"),

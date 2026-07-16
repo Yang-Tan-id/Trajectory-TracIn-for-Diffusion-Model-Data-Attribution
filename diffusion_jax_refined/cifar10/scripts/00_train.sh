@@ -2,4 +2,4 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-exec bash "${ROOT}/scripts/00_train_prompted_jax.sh" "$@"
+exec bash "${ROOT}/scripts/script_0.sh" "${TRAIN_MODE:-prompted_multi}"

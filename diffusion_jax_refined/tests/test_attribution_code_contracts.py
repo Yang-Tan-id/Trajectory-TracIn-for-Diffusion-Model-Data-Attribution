@@ -58,6 +58,24 @@ class TestAttributionCodeContracts(unittest.TestCase):
         self.assertIn('"query_expectation_samples": 10', text)
         self.assertIn('"train_expectation_samples": 10', text)
 
+    def test_batch_sizes_are_tunable_for_gpu_utilization(self):
+        for dataset in ("cifar2", "cifar10", "artbench"):
+            with self.subTest(dataset=dataset):
+                text = (ROOT / dataset / "dataset_config.py").read_text()
+                self.assertIn("TRAJ_SNAPSHOT_CHUNK_SIZE", text)
+                self.assertIn("DTRAK_BATCH_SIZE", text)
+                self.assertIn("JOURNEY_BATCH_SIZE", text)
+
+    def test_dtrak_train_features_are_batched_with_vmap(self):
+        text = (LEGACY / "dtrak" / "algorithm.py").read_text()
+        self.assertIn("def make_train_phi_batch_fn", text)
+        self.assertIn("jax.vmap(train_phi_fn", text)
+        self.assertIn("train_phi_batch_fn(params_k, x_batch, cond_batch, rng_batch)", text)
+        self.assertIn("phi_cache = np.empty((M, d), dtype=np.float32)", text)
+        self.assertIn("phi_cache[start:start + len(batch)] = Phi", text)
+        self.assertIn("Phi = phi_cache[start:start + len(batch)]", text)
+        self.assertEqual(text.count("train_phi_batch_fn(params_k, x_batch, cond_batch, rng_batch)"), 1)
+
     def test_algorithms_expose_three_stage_facades(self):
         expected_exports = {
             "das": ("compute_train_gradient_features", "compute_query_gradient_features", "compute_scores"),

@@ -60,14 +60,25 @@ cd diffusion_jax_refined/cifar2
 
 # Pick a GPU with CUDA=0, CUDA=1, or CUDA_VISIBLE_DEVICES=0.
 
-# Run the original prompted JAX training.
-EXPERIMENT_TAG=experiment1 TRAIN_SEED=42 CUDA_VISIBLE_DEVICES=0 bash scripts/00_train.sh
+# Training framework: experiment tags still write under result/<experiment>/.
+# The selector accepts prompted_solo, prompted_multi, unprompted_solo, or
+# unprompted_multi. Solo/multi means single-GPU vs multi-GPU launch style;
+# query/prompt labels are for sampling later, not for training.
+EXPERIMENT_TAG=experiment1 TRAIN_SEED=42 CUDA_VISIBLE_DEVICES=0 \
+  bash scripts/script_0.sh prompted_solo
 
-# Equivalent shape with explicit CUDA shorthand.
-CUDA_VISIBLE_DEVICES=0 bash scripts/00_train.sh 0 0
+EXPERIMENT_TAG=experiment1 TRAIN_SEED=43 CUDA_VISIBLE_DEVICES=0,1 \
+  bash scripts/script_0.sh prompted_multi
 
-# Same explicit entrypoint for prompted JAX training.
-CUDA_VISIBLE_DEVICES=0 bash scripts/00_train_prompted_jax.sh
+EXPERIMENT_TAG=experiment1 TRAIN_SEED=42 CUDA_VISIBLE_DEVICES=0 \
+  bash scripts/script_0.sh unprompted_solo
+
+EXPERIMENT_TAG=experiment1 TRAIN_SEED=43 CUDA_VISIBLE_DEVICES=0,1 \
+  bash scripts/script_0.sh unprompted_multi
+
+# Backward-compatible aliases still route into script_0/new train modes.
+CUDA_VISIBLE_DEVICES=0,1 bash scripts/00_train.sh
+CUDA_VISIBLE_DEVICES=0,1 bash scripts/00_train_prompted_jax.sh
 
 # Generate attribution sample trajectories from result/<experiment>/model/prompted_jax.
 # One model can produce many samples; attribution_sample_seed/index in dataset_config.py
@@ -118,10 +129,32 @@ EXPERIMENT_TAG=experiment1 ALGORITHMS="das" TOPK=5000 bash scripts/02_metric_cou
 EXPERIMENT_TAG=experiment1 ALGORITHMS="das" LDS_M=100 LDS_SUBSET_SIZE=5000 bash scripts/03_metric_lds_unprompted.sh
 ```
 
-The default unprompted model path is:
+The default unprompted comparison path is:
 
 ```text
 <dataset>/result/<experiment>/model/unprompted_jax/
+```
+
+Training does not create prompt-specific model folders. The dataset split is
+defined by the dataset config, and checkpoint files are distinguished by
+`TRAIN_SEED`:
+
+```text
+<dataset>/result/<experiment>/model/prompted_jax/seed_<TRAIN_SEED>_epoch_<epoch>.ckpt
+<dataset>/result/<experiment>/model/unprompted_jax/seed_<TRAIN_SEED>_epoch_<epoch>.ckpt
+```
+
+Machine-family launch wrappers live under:
+
+```bash
+DATASET=cifar2 TRAIN_MODE=prompted_solo TRAIN_SEED=42 GPU_IDS=0 \
+  bash ../tacc/h100/script_0.sh
+
+DATASET=cifar2 TRAIN_MODES="prompted_solo unprompted_solo" TRAIN_SEED=42 GPU_IDS=0 \
+  bash ../tacc/h100/script_0.sh
+
+DATASET=cifar10 TRAIN_MODE=prompted_multi TRAIN_SEED=42 GPU_IDS=0,1,2,3 \
+  bash ../tacc/vista/script_0.sh
 ```
 
 Sampling is deliberately separate. `01_data_attribution_unprompted.sh` never
@@ -150,8 +183,8 @@ Set `EXPERIMENT_TAG=experiment2` or `experiment3` to route outputs into a differ
 
 - Training seed/model identity: `TRAIN_SEED=42` at launch time.
 - Experiment output folder: `EXPERIMENT_TAG=experiment1`.
-- Prompt/query: `QUERY` in `<dataset>/dataset_config.py`.
-- Prompted checkpoint path: `REFERENCE_CKPT` and `CHECKPOINT_DIR` in `<dataset>/dataset_config.py`.
+- Sampling/attribution query: `QUERY` in `<dataset>/dataset_config.py`.
+- Training checkpoint path: `REFERENCE_CKPT` and `CHECKPOINT_DIR` in `<dataset>/dataset_config.py`.
 - Number of generated samples: `SAMPLE_SEEDS=0,1,2,...` in `scripts/00_sample.sh`.
 - Which generated sample attribution reads: `attribution_sample_seed` and `attribution_sample_index` in `<dataset>/dataset_config.py`.
 - Traj TracIn score ranges: `ATTRIBUTION_RANGES` or `SCORE_INDEX_RANGES`.

@@ -62,7 +62,10 @@ DATA_ROOT = str(DATASET_STORAGE_ROOT / "cifar-10-batches-py")
 HF_DATASET_ROOT = str(DATASET_STORAGE_ROOT / "hf_cifar10")
 LDS_INDEX_ROOT = DATASET_STORAGE_ROOT / "indices" / "lds-val"
 CHECKPOINT_DIR = str(PROMPTED_JAX_MODEL_ROOT)
-REFERENCE_CKPT = str(PROMPTED_JAX_MODEL_ROOT / "seed_42_epoch_0200.ckpt")
+TRAIN_SEED = int(os.environ.get("TRAIN_SEED", "42"))
+JAX_EPOCHS = int(os.environ.get("JAX_EPOCHS", "200"))
+PROMPTED_CKPT_STEM = f"seed_{TRAIN_SEED}_epoch_{JAX_EPOCHS:04d}"
+REFERENCE_CKPT = str(PROMPTED_JAX_MODEL_ROOT / f"{PROMPTED_CKPT_STEM}.ckpt")
 ATTRIBUTION_SAMPLE_DIR = os.environ.get(
     "ATTRIBUTION_SAMPLE_DIR",
     str(
@@ -70,9 +73,7 @@ ATTRIBUTION_SAMPLE_DIR = os.environ.get(
         / f"model_prompted_jax__ckpt_{Path(REFERENCE_CKPT).stem}"
     ),
 )
-UNPROMPTED_TRAIN_SEED = int(os.environ.get("TRAIN_SEED", "42"))
-UNPROMPTED_EPOCHS = int(os.environ.get("JAX_EPOCHS", "200"))
-UNPROMPTED_CKPT_STEM = f"seed_{UNPROMPTED_TRAIN_SEED}_epoch_{UNPROMPTED_EPOCHS:04d}"
+UNPROMPTED_CKPT_STEM = PROMPTED_CKPT_STEM
 UNPROMPTED_JAX_REFERENCE_CKPT = str(UNPROMPTED_JAX_MODEL_ROOT / f"{UNPROMPTED_CKPT_STEM}.ckpt")
 UNPROMPTED_ATTRIBUTION_SAMPLE_DIR = str(
     SAMPLING_ROOT / "cifar" / "prompt_unconditional"
@@ -119,7 +120,7 @@ ATTRIBUTION_CONFIGS = {
         "damping": 1e-3,
         "batch_size": 64,
         "use_batched_per_example_grads": os.environ.get("DAS_BATCHED", "1") not in ("0", "false", "False"),
-        "per_example_grad_batch_size": int(os.environ.get("DAS_GRAD_BATCH_SIZE", "4")),
+        "per_example_grad_batch_size": int(os.environ.get("DAS_GRAD_BATCH_SIZE", "8")),
         "max_num_ckpts": 1,
     },
     "traj_tracin": {
@@ -132,9 +133,9 @@ ATTRIBUTION_CONFIGS = {
         "use_saved_trajectory": True,
         "ddim_steps": 1000,
         "num_traj_snapshots": 100,
-        "snapshot_chunk_size": 3,
+        "snapshot_chunk_size": int(os.environ.get("TRAJ_SNAPSHOT_CHUNK_SIZE", "8")),
         "train_mc_samples": 10,
-        "score_batch_size": 2,
+        "score_batch_size": int(os.environ.get("TRAJ_SCORE_BATCH_SIZE", "16")),
         "progress_every": 512,
     },
     "dtrak": {
@@ -149,7 +150,7 @@ ATTRIBUTION_CONFIGS = {
         "proj_dim": 4096,
         "damping": 1e-3,
         "num_samples": 1,
-        "batch_size": 64,
+        "batch_size": int(os.environ.get("DTRAK_BATCH_SIZE", "64")),
         "train_expectation_samples": 10,
         "query_expectation_samples": 10,
     },
@@ -177,7 +178,7 @@ ATTRIBUTION_CONFIGS = {
         "proj_dim": 4096,
         "damping": 1e-3,
         "num_samples": 1,
-        "batch_size": 64,
+        "batch_size": int(os.environ.get("JOURNEY_BATCH_SIZE", "64")),
         "train_expectation_samples": 10,
         "query_expectation_samples": 10,
         "num_query_traj_steps": 50,

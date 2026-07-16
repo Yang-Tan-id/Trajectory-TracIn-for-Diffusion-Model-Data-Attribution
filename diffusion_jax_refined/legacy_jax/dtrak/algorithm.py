@@ -857,6 +857,26 @@ def make_train_phi_fn(adapter, model, schedule, projector, *, num_expectation_sa
     return jax.jit(train_phi)
 
 
+def make_train_phi_batch_fn(adapter, model, schedule, projector, *, num_expectation_samples: int):
+    train_phi_fn = make_train_phi_fn(
+        adapter,
+        model,
+        schedule,
+        projector,
+        num_expectation_samples=num_expectation_samples,
+    )
+
+    def train_phi_batch(params, x0_batch, cond_batch, rng_batch):
+        return jax.vmap(train_phi_fn, in_axes=(None, 0, 0, 0))(
+            params,
+            x0_batch,
+            cond_batch,
+            rng_batch,
+        )
+
+    return jax.jit(train_phi_batch)
+
+
 # ============================================================
 # Checkpoint selection
 # ============================================================
@@ -1391,7 +1411,7 @@ def run_endpoint_dtrak_jax(cfg: EndpointDTrakJAXConfig):
                 t_max=t_max_end,
                 num_expectation_samples=int(cfg.query_expectation_samples),
             )
-            train_phi_fn = make_train_phi_fn(
+            train_phi_batch_fn = make_train_phi_batch_fn(
                 adapter,
                 model,
                 schedule,
@@ -1405,8 +1425,9 @@ def run_endpoint_dtrak_jax(cfg: EndpointDTrakJAXConfig):
 
             print(f"[sample] query feature ready | Lq={float(Lq):.6f}")
 
-            # PASS 1: Gram
+            # PASS 1: build Gram and cache projected train features.
             G = np.zeros((d, d), dtype=np.float32)
+            phi_cache = np.empty((M, d), dtype=np.float32)
             pass1_t0 = time.perf_counter()
 
             pass1_iter = iter_with_tqdm(
@@ -1428,18 +1449,22 @@ def run_endpoint_dtrak_jax(cfg: EndpointDTrakJAXConfig):
                         f"elapsed={format_seconds(elapsed)} | eta={eta}"
                     )
 
-                phis = []
+                x_items = []
+                cond_items = []
+                rng_items = []
                 for idx in batch:
                     x0, cond = adapter.get_item(ds, idx)
-                    x0 = array_to_device(x0, device)
-                    cond = array_to_device(cond, device)
-                    rng_i = array_to_device(make_jax_key(cfg.seed, "tr", ckpt_i, s_i, idx), device)
+                    x_items.append(x0)
+                    cond_items.append(cond)
+                    rng_items.append(make_jax_key(cfg.seed, "tr", ckpt_i, s_i, idx))
 
-                    phi_i = train_phi_fn(params_k, x0, cond, rng_i)
-                    phi_i.block_until_ready()
-                    phis.append(np.asarray(phi_i, dtype=np.float32))
-
-                Phi = np.stack(phis, axis=0)
+                x_batch = array_to_device(jnp.stack(x_items, axis=0), device)
+                cond_batch = array_to_device(jnp.stack(cond_items, axis=0), device)
+                rng_batch = array_to_device(jnp.stack(rng_items, axis=0), device)
+                phi_batch = train_phi_batch_fn(params_k, x_batch, cond_batch, rng_batch)
+                phi_batch.block_until_ready()
+                Phi = np.asarray(phi_batch, dtype=np.float32)
+                phi_cache[start:start + len(batch)] = Phi
                 G += Phi.T @ Phi
                 if hasattr(pass1_iter, "set_postfix"):
                     pass1_iter.set_postfix(samples=f"{min(start + len(batch), M)}/{M}")
@@ -1451,7 +1476,7 @@ def run_endpoint_dtrak_jax(cfg: EndpointDTrakJAXConfig):
             u = np.linalg.solve(G, np.asarray(phi_q, dtype=np.float32))
             print(f"[sample] solve complete | elapsed={format_seconds(time.perf_counter() - solve_t0)}")
 
-            print("[sample] Starting PASS2 scoring...")
+            print("[sample] Starting PASS2 scoring from cached train features...")
 
             # PASS 2: score
             pass2_t0 = time.perf_counter()
@@ -1474,18 +1499,7 @@ def run_endpoint_dtrak_jax(cfg: EndpointDTrakJAXConfig):
                         f"elapsed={format_seconds(elapsed)} | eta={eta}"
                     )
 
-                phis = []
-                for idx in batch:
-                    x0, cond = adapter.get_item(ds, idx)
-                    x0 = array_to_device(x0, device)
-                    cond = array_to_device(cond, device)
-                    rng_i = array_to_device(make_jax_key(cfg.seed, "tr", ckpt_i, s_i, idx), device)
-
-                    phi_i = train_phi_fn(params_k, x0, cond, rng_i)
-                    phi_i.block_until_ready()
-                    phis.append(np.asarray(phi_i, dtype=np.float32))
-
-                Phi = np.stack(phis, axis=0)
+                Phi = phi_cache[start:start + len(batch)]
                 batch_scores = Phi @ u
                 scores[start:start + len(batch)] += batch_scores.astype(np.float64)
                 if hasattr(pass2_iter, "set_postfix"):
