@@ -186,7 +186,7 @@ The score matrix step is separate because LDS needs query-specific scores
 (`query x train`), while the regular `05_score.sh` averages queries and writes
 one train-score vector.
 
-For DAS1 residual weighting:
+For the simplified DAS1 residual weighting:
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 DEVICE=cuda TIMESTEPS=1000 BATCH_SIZE=256 bash cifar2/scripts/11_error_train.sh
@@ -196,9 +196,27 @@ SCORES=runs/cifar2/lds/das1_query_train_scores.npy OUTPUT=runs/cifar2/lds/das1_l
   NUM_SUBSETS=64 SEEDS=0,1,2 EVAL_SEEDS=0 bash cifar2/scripts/10_lds_score.sh
 ```
 
+For the original DAS-clone-style scoring path, reuse the same gradients,
+train errors, subset masks, and LDS losses, then sweep the original lambda
+list with the inverse feature kernel:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 DEVICE=cuda TIMESTEPS=1000 BATCH_SIZE=256 bash cifar2/scripts/11_error_train.sh
+CUDA_VISIBLE_DEVICES=0 DEVICE=cuda TRAIN_SHAPE=10000,4096 QUERY_SHAPE=1000,4096 \
+  METHOD=das1 bash cifar2/scripts/14_original_das_sweep.sh
+```
+
+This writes:
+
+```text
+runs/cifar2/lds/original_das/lambda_sweep.csv
+runs/cifar2/lds/original_das/best_lds_results.csv
+```
+
 The JAX refined DAS path already includes residual projection and optional
-leverage correction in `legacy_jax/das/algorithm.py`; this torch DAS1 path adds
-the residual-weighted scoring used by the original torch DAS clone.
+leverage correction in `legacy_jax/das/algorithm.py`. The torch
+`14_original_das_sweep.sh` path mirrors the original clone's score-stage
+lambda sweep more closely than the simplified `13_lds_das1_score_matrix.sh`.
 
 For faster projected gradients, install the optional CUDA projector dependency
 after torch is installed:

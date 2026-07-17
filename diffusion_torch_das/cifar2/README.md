@@ -21,8 +21,8 @@ bash cifar2/scripts/04_grad_query.sh
 bash cifar2/scripts/05_score.sh
 ```
 
-For DAS1 residual weighting, first compute train residual weights from the full
-model, then score:
+For the simplified DAS1 residual weighting, first compute train residual
+weights from the full model, then score:
 
 ```bash
 CUDA_VISIBLE_DEVICES=0 DEVICE=cuda TIMESTEPS=1000 BATCH_SIZE=256 \
@@ -69,6 +69,23 @@ CUDA_VISIBLE_DEVICES=0 DEVICE=cuda TIMESTEPS=1000 BATCH_SIZE=256 bash cifar2/scr
 TRAIN_SHAPE=10000,4096 QUERY_SHAPE=1000,4096 bash cifar2/scripts/13_lds_das1_score_matrix.sh
 SCORES=runs/cifar2/lds/das1_query_train_scores.npy OUTPUT=runs/cifar2/lds/das1_lds_results.csv \
   NUM_SUBSETS=64 SEEDS=0,1,2 EVAL_SEEDS=0 bash cifar2/scripts/10_lds_score.sh
+```
+
+To match the original DAS clone's score stage more closely, use the lambda
+sweep script. It reuses the gradients, residual weights, subset masks, and LDS
+losses you already generated:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 DEVICE=cuda TIMESTEPS=1000 BATCH_SIZE=256 bash cifar2/scripts/11_error_train.sh
+CUDA_VISIBLE_DEVICES=0 DEVICE=cuda TRAIN_SHAPE=10000,4096 QUERY_SHAPE=1000,4096 \
+  METHOD=das1 bash cifar2/scripts/14_original_das_sweep.sh
+```
+
+Read:
+
+```bash
+cat runs/cifar2/lds/original_das/lambda_sweep.csv
+tail -5 runs/cifar2/lds/original_das/best_lds_results.csv
 ```
 
 For a tiny sanity check:
