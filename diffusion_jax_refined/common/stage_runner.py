@@ -16,6 +16,14 @@ STAGES = {
 }
 
 
+def canonical_train_model_mode(mode: str) -> str:
+    if mode in ("prompted_multi", "prompted_jax", "prompted"):
+        return "prompted_solo"
+    if mode in ("unprompted_multi", "unprompted_jax", "unprompted"):
+        return "unprompted_solo"
+    return mode
+
+
 def _stage_root(cfg_module: Any, algorithm: str, stage: str) -> Path:
     train_seed = int(os.environ.get("TRAIN_SEED", getattr(cfg_module, "TRAIN_SEED", 42)))
     experiment = require_attr(cfg_module, "EXPERIMENT_TAG")
@@ -28,7 +36,20 @@ def _stage_root(cfg_module: Any, algorithm: str, stage: str) -> Path:
     )
 
     if stage == "train_datapoint_gradient":
-        mode = os.environ.get("DATAPOINT_MODEL_MODE", os.environ.get("TRAIN_MODE", "prompted_solo"))
+        mode = os.environ.get(
+            "DATAPOINT_MODEL_MODE",
+            os.environ.get(
+                "TRAIN_MODE",
+                os.environ.get(
+                    "ATTRIBUTION_SCORE_MODEL_MODE",
+                    os.environ.get(
+                        "ATTRIBUTION_SAMPLE_MODEL_MODE",
+                        os.environ.get("SAMPLE_MODEL_MODE", "prompted_solo"),
+                    ),
+                ),
+            ),
+        )
+        mode = canonical_train_model_mode(str(mode))
         return model_root.parent / "model" / mode / f"seed_{train_seed}_train_gradient" / algorithm
 
     config_values = dict(require_attr(cfg_module, "ATTRIBUTION_CONFIG"))
@@ -72,6 +93,14 @@ def _stage_root(cfg_module: Any, algorithm: str, stage: str) -> Path:
         / algorithm
         / stage
     )
+
+
+def stage_root(config_path: str | Path, stage: str) -> Path:
+    if stage not in STAGES:
+        raise ValueError(f"Unsupported stage {stage!r}; expected one of {sorted(STAGES)}")
+    cfg_module = load_config(config_path)
+    algorithm = require_attr(cfg_module, "ALGORITHM")
+    return _stage_root(cfg_module, algorithm, stage)
 
 
 def _write_manifest(out_dir: Path, *, cfg_module: Any, algorithm: str, stage: str, config_values: dict[str, Any]) -> None:

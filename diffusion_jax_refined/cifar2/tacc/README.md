@@ -45,10 +45,12 @@ GPU_IDS=0 \
 ```
 
 The datapoint-gradient launcher writes under the model identity rather than the
-query attribution folder:
+query attribution folder. The score combiner expects the train-side artifact
+file here:
 
 ```text
 result/<experiment>/model/<train_mode>/seed_<TRAIN_SEED>_train_gradient/<algorithm>/
+result/<experiment>/model/<train_mode>/seed_<TRAIN_SEED>_train_gradient/<algorithm>/train_datapoint_gradient_artifact.npz
 ```
 
 The sample launcher writes trajectory samples under:
@@ -58,11 +60,18 @@ result/<experiment>/sample/<adapter>/prompt_<query>/model_<SAMPLE_MODEL_MODE>__c
 ```
 
 The sample+query-gradient launcher writes query gradients beside the sample
-seed:
+seed. The score combiner expects the query-side artifact file here:
 
 ```text
 result/<experiment>/sample/<adapter>/prompt_<query>/model_<SAMPLE_MODEL_MODE>__ckpt_<checkpoint>/seed_<sample_seed>_query_gradient/<algorithm>/
+result/<experiment>/sample/<adapter>/prompt_<query>/model_<SAMPLE_MODEL_MODE>__ckpt_<checkpoint>/seed_<sample_seed>_query_gradient/<algorithm>/query_gradient_artifact.npz
 ```
+
+`03_score.py` is pure now: it combines existing artifacts and writes
+`scores.npy`, `score_indices.npy`, and `top_scores.json` under
+`result/<experiment>/attribution_score/...`. It does not rerun the monolithic
+legacy attribution engine; if either artifact is missing, it fails with the
+missing path.
 
 Checkpoints are grouped by dataset/experiment/model type, with the training seed
 in the file name:

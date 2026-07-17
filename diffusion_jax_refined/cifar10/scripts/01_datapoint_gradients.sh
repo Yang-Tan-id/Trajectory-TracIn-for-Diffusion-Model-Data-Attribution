@@ -17,8 +17,12 @@ model_mode_label() {
   local mode
   for mode in ${TRAIN_MODES_TEXT}; do
     case "${kind}:${mode}" in
-      prompted:prompted_solo|prompted:prompted_multi|unprompted:unprompted_solo|unprompted:unprompted_multi)
-        printf '%s\n' "${mode}"
+      prompted:prompted_solo|prompted:prompted_multi)
+        printf '%s\n' "prompted_solo"
+        return
+        ;;
+      unprompted:unprompted_solo|unprompted:unprompted_multi)
+        printf '%s\n' "unprompted_solo"
         return
         ;;
     esac

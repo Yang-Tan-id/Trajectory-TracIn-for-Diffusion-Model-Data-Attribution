@@ -12,36 +12,54 @@ class TestVistaScriptsStatic(unittest.TestCase):
     def read(self, name: str) -> str:
         return (VISTA / name).read_text()
 
-    def test_train_lds_requests_gh_16_nodes_50_percent(self):
-        text = self.read("00_train_lds_50pct_vista.sh")
+    def test_train_base_checkpoints_requests_gh_2_nodes_seed_67(self):
+        text = self.read("00_train_four_models_vista.sh")
         self.assertIn("#SBATCH --partition=gh", text)
         self.assertIn("#SBATCH --account=CCR25021", text)
-        self.assertIn("#SBATCH --nodes=16", text)
-        self.assertIn("#SBATCH --time=12:00:00", text)
-        self.assertIn('LDS_M="${LDS_M:-50}"', text)
-        self.assertIn('LDS_K="${LDS_K:-5000}"', text)
-        self.assertIn('LDS_SEEDS="${LDS_SEEDS:-$(seq -s \' \' 1 16)}"', text)
+        self.assertIn("#SBATCH --nodes=2", text)
+        self.assertIn("#SBATCH --time=02:00:00", text)
+        self.assertIn("MODEL_MODES=(prompted_solo unprompted_solo)", text)
+        self.assertNotIn("MODEL_MODES=(prompted_solo prompted_multi unprompted_solo unprompted_multi)", text)
+        self.assertIn("share prompted_jax checkpoints", text)
+        self.assertIn('TRAIN_SEED="${TRAIN_SEED:-67}"', (VISTA / "_vista_pipeline_lib.sh").read_text())
 
-    def test_sample_attr_requests_24_nodes_and_normalized_traj(self):
-        text = self.read("01_sample_and_attribute_vista.sh")
+    def test_train_lds_requests_gh_64_nodes_50_percent_all_modes(self):
+        text = self.read("01_train_lds_models_vista.sh")
         self.assertIn("#SBATCH --partition=gh", text)
-        self.assertIn("#SBATCH --nodes=24", text)
+        self.assertIn("#SBATCH --nodes=64", text)
         self.assertIn("#SBATCH --time=24:00:00", text)
-        self.assertIn('INITIAL_SEED="${INITIAL_SEED:-24}"', text)
-        self.assertIn('TRAJ_QUERY_OBJECTIVE="${TRAJ_QUERY_OBJECTIVE:-trajectory_noise_squared_deviation_normalized}"', text)
-        self.assertIn('QUERIES=("horse" "automobile" "horse,automobile")', text)
-        self.assertIn('TRAJ_RANGES=("1-2000" "2001-4000" "4001-6000" "6001-8000" "8001-10000")', text)
-        self.assertIn('ENDPOINT_ALGORITHMS=("das" "dtrak" "end_tracin")', text)
+        self.assertIn('LDS_M="${LDS_M:-50}"', text)
+        self.assertIn('LDS_DATASET_PERCENTAGE="${LDS_DATASET_PERCENTAGE:-50}"', text)
+        self.assertIn('LDS_SEEDS_TEXT="${LDS_SEEDS:-$(seq -s \' \' 1 16)}"', text)
+        self.assertIn("MODEL_MODES=(prompted_solo prompted_multi unprompted_solo unprompted_multi)", text)
 
-    def test_eval_depends_on_prior_jobs_and_uses_simple_loss_mc_10(self):
-        eval_text = self.read("02_eval_and_aggregate_vista.sh")
+    def test_train_gradient_requests_8_nodes_2_checkpoint_families_4_algorithms(self):
+        text = self.read("02_train_datapoint_gradients_vista.sh")
+        self.assertIn("#SBATCH --partition=gh", text)
+        self.assertIn("#SBATCH --nodes=8", text)
+        self.assertIn("#SBATCH --time=48:00:00", text)
+        self.assertIn("MODEL_MODES=(prompted_solo unprompted_solo)", text)
+        self.assertNotIn("MODEL_MODES=(prompted_solo prompted_multi unprompted_solo unprompted_multi)", text)
+        self.assertIn("ALGORITHMS=(dtrak das end_tracin traj_tracin)", text)
+
+    def test_sample_score_eval_request_21_nodes_and_dependencies(self):
+        sample_text = self.read("03_sample_query_gradients_vista.sh")
+        score_text = self.read("04_score_vista.sh")
+        eval_text = self.read("05_lds_eval_report_vista.sh")
         submit_text = self.read("submit_vista_pipeline.sh")
-        self.assertIn("#SBATCH --partition=gh", eval_text)
-        self.assertIn("#SBATCH --nodes=16", eval_text)
-        self.assertIn("#SBATCH --time=24:00:00", eval_text)
+        self.assertIn("#SBATCH --nodes=21", sample_text)
+        self.assertIn("#SBATCH --time=48:00:00", sample_text)
+        self.assertIn("#SBATCH --nodes=21", score_text)
+        self.assertIn("#SBATCH --time=24:00:00", score_text)
+        self.assertIn("#SBATCH --nodes=21", eval_text)
+        self.assertIn("#SBATCH --time=12:00:00", eval_text)
+        self.assertIn("horse,automobile|96", sample_text)
         self.assertIn("LDS_SIMPLE_LOSS_NUM_MC=10", eval_text)
         self.assertIn("aggregate_lds_by_seed.py", eval_text)
-        self.assertIn("afterok:${train_job}:${attr_job}", submit_text)
+        self.assertIn("summarize_lds_eval_report.py", eval_text)
+        self.assertIn("afterok:${train_job}", submit_text)
+        self.assertIn("afterok:${lds_job}:${train_grad_job}:${sample_qgrad_job}", submit_text)
+        self.assertIn("afterok:${score_job}", submit_text)
 
     def test_vista_scripts_do_not_hardcode_other_tacc_roots(self):
         forbidden = ("/work2/", "/scratch/11227/", "/home1/", "/home2/")

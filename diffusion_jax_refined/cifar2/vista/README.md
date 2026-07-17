@@ -1,4 +1,4 @@
-# CIFAR2 Vista gh Pipeline
+# CIFAR2 Vista Pipeline
 
 Submit from the repository root on Vista:
 
@@ -6,41 +6,77 @@ Submit from the repository root on Vista:
 bash diffusion_jax_refined/cifar2/vista/submit_vista_pipeline.sh
 ```
 
-This submits three jobs:
+The pipeline submits six Slurm jobs:
 
-```bash
-sbatch diffusion_jax_refined/cifar2/vista/00_train_lds_50pct_vista.sh
-sbatch diffusion_jax_refined/cifar2/vista/01_sample_and_attribute_vista.sh
-sbatch --dependency=afterok:<train_job_id>:<attr_job_id> diffusion_jax_refined/cifar2/vista/02_eval_and_aggregate_vista.sh
+```text
+00_train_four_models_vista.sh          2 nodes   2h   train prompted/unprompted base checkpoints, seed 67
+01_train_lds_models_vista.sh          64 nodes  24h  4 modes x 16 LDS subset seeds, M=50, 50%
+02_train_datapoint_gradients_vista.sh  8 nodes  48h  2 checkpoint families x 4 algorithms
+03_sample_query_gradients_vista.sh    21 nodes  48h  21 sample/query-gradient tasks
+04_score_vista.sh                     21 nodes  24h  21 pure score-combine tasks
+05_lds_eval_report_vista.sh           21 nodes  12h  LDS eval, scatter aggregates, report
 ```
 
-Progress commands:
+Dependencies:
+
+```text
+00 train prompted/unprompted base checkpoints
+  -> 01 train LDS models
+  -> 02 train datapoint gradients
+  -> 03 sample + query gradients
+01 + 02 + 03 -> 04 pure score combine -> 05 LDS eval + report
+```
+
+`04_score_vista.sh` does not rerun the legacy attribution engine. It calls each
+algorithm's `03_score.py`, which only reads train-side artifacts from
+`02_train_datapoint_gradients_vista.sh` and query-side artifacts from
+`03_sample_query_gradients_vista.sh`, then writes `scores.npy` under
+`attribution_score`.
+
+Default experiment and model seed:
+
+```text
+EXPERIMENT_TAG=experiment_67
+TRAIN_SEED=67
+```
+
+Training parameters:
+
+```text
+prompted_solo and prompted_multi share the same prompted_jax checkpoint.
+unprompted_solo and unprompted_multi share the same unprompted_jax checkpoint.
+solo/multi only changes launch/sample grouping, not model architecture.
+prompted vs unprompted differs by conditioning: class_cond=True vs class_cond=False.
+Both prompted and unprompted default to JAX_LEARNING_RATE=2e-4 unless overridden.
+```
+
+The 21 query tasks are:
+
+```text
+unprompted_solo  : seeds 24,48,96
+unprompted_multi : seeds 24,48,96
+prompted_solo    : horse and automobile, seeds 24,48,96
+prompted_multi   : horse, automobile, and horse,automobile, seeds 24,48,96
+```
+
+Per-task logs are written under:
+
+```text
+result/experiment_67/vista_logs/<job_name>/<slurm_job_id>/*.log
+```
+
+Final LDS eval report:
+
+```text
+result/experiment_67/eval/reports/lds_eval_report.md
+result/experiment_67/eval/reports/lds_eval_report.csv
+```
+
+Useful checks:
 
 ```bash
 squeue -u "$USER"
-sacct -j <job_id> --format=JobID,JobName%28,State,Elapsed,Timelimit,NodeList%24
-tail -f cifar2-lds-50pct-<job_id>.out
-tail -f cifar2-attr-norm-vista-<job_id>.out
-tail -f cifar2-eval-vista-<job_id>.out
-find diffusion_jax_refined/cifar2/result/experiment1_42/vista_logs -maxdepth 2 -type f -name '*.log' | sort
+sacct -j <job_ids> --format=JobID,JobName%32,State,Elapsed,Timelimit,NodeList%24
+find diffusion_jax_refined/cifar2/result/experiment_67/vista_logs -type f -name '*.log' | sort
+find diffusion_jax_refined/cifar2/result/experiment_67/eval -name 'per_seed_scatter_grid.svg' | sort
 ```
-
-Useful checks after completion:
-
-```bash
-find diffusion_jax_refined/cifar2/result/experiment1_42/lds_model -maxdepth 1 -name 'm_50_k_5000_seed_*' | wc -l
-find diffusion_jax_refined/cifar2/result/experiment1_42/attribution_score -path '*initial_seed_24*' -name scores.npy | wc -l
-find diffusion_jax_refined/cifar2/result/experiment1_42/eval -path '*initial_seed_24*' -name lds_summary.json | wc -l
-find diffusion_jax_refined/cifar2/result/experiment1_42/eval -path '*aggregate_m_50_k_5000_*normalized_traj_seed_24*' -name per_seed_summary.json
-```
-
-Defaults:
-
-- Partition: `gh`
-- Account: `CCR25021`
-- LDS: `M=50`, `K=5000`, seeds `1..16`, 12 hours, 16 nodes
-- Sample seed: `24`
-- Queries: `horse`, `automobile`, `horse,automobile`
-- Traj objective: `trajectory_noise_squared_deviation_normalized`
-- Traj score ranges: `1-2000`, `2001-4000`, `4001-6000`, `6001-8000`, `8001-10000`
-- Loss Monte Carlo for simple-loss LDS eval: `LDS_SIMPLE_LOSS_NUM_MC=10`

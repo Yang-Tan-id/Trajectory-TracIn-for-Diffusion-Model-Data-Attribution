@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+import importlib.util
 from pathlib import Path
 
 
@@ -42,8 +43,89 @@ class TestAttributionCodeContracts(unittest.TestCase):
         self.assertIn('"score"', text)
         self.assertIn('f"seed_{train_seed}_train_gradient"', text)
         self.assertIn('f"seed_{sample_seed:06d}_query_gradient"', text)
+        self.assertIn("def canonical_train_model_mode", text)
+        self.assertIn('"prompted_multi"', text)
+        self.assertIn('return "prompted_solo"', text)
+        self.assertIn('"unprompted_multi"', text)
+        self.assertIn('return "unprompted_solo"', text)
+        self.assertIn('"ATTRIBUTION_SCORE_MODEL_MODE"', text)
+        self.assertIn('"ATTRIBUTION_SAMPLE_MODEL_MODE"', text)
+        self.assertIn('"SAMPLE_MODEL_MODE"', text)
         self.assertNotIn("run_algorithm_config", text)
         self.assertNotIn("run_attribution", text)
+
+    def test_all_score_stages_are_pure_artifact_combiners(self):
+        for dataset in ("cifar2", "cifar10", "artbench"):
+            for algorithm in ("das", "dtrak", "end_tracin", "traj_tracin", "journey_trak"):
+                with self.subTest(dataset=dataset, algorithm=algorithm):
+                    text = (ROOT / dataset / "data_attribution" / algorithm / "03_score.py").read_text()
+                    self.assertIn("run_score_combination_stage", text)
+                    self.assertNotIn("run_algorithm_config", text)
+                    self.assertNotIn("run_attribution", text)
+
+    def test_score_artifact_combiner_dot_scores(self):
+        if importlib.util.find_spec("numpy") is None:
+            self.skipTest("numpy is not installed for this Python")
+        np = __import__("numpy")
+        from common.stage_artifact_runner import _combine_dot_scores
+
+        train = {
+            "train_features": np.asarray([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32),
+            "score_indices": np.asarray([10, 11], dtype=np.int64),
+        }
+        query = {"query_feature": np.asarray([5.0, 6.0], dtype=np.float32)}
+        scores = _combine_dot_scores(train, query, train_path=Path("train.npz"), query_path=Path("query.npz"))
+        np.testing.assert_allclose(scores, np.asarray([17.0, 39.0]))
+
+    def test_score_artifact_combiner_das_uses_residual_and_inverse_gram(self):
+        if importlib.util.find_spec("numpy") is None:
+            self.skipTest("numpy is not installed for this Python")
+        np = __import__("numpy")
+        from common.stage_artifact_runner import _combine_das_scores
+
+        train = {
+            "train_features": np.asarray([[1.0, 0.0], [0.0, 2.0]], dtype=np.float32),
+            "gram_inverse": np.asarray([[2.0, 0.0], [0.0, 0.5]], dtype=np.float32),
+        }
+        query = {
+            "query_feature": np.asarray([5.0, 6.0], dtype=np.float32),
+            "residuals": np.asarray([3.0, 4.0], dtype=np.float32),
+        }
+        scores = _combine_das_scores(train, query, train_path=Path("train.npz"), query_path=Path("query.npz"))
+        np.testing.assert_allclose(scores, np.asarray([900.0, 576.0]))
+
+    def test_score_artifact_combiner_dtrak_uses_gram_solve(self):
+        if importlib.util.find_spec("numpy") is None:
+            self.skipTest("numpy is not installed for this Python")
+        np = __import__("numpy")
+        from common.stage_artifact_runner import _combine_dtrak_scores
+
+        train = {
+            "train_features": np.asarray([[[1.0, 0.0], [0.0, 2.0]]], dtype=np.float32),
+            "gram": np.asarray([[[2.0, 0.0], [0.0, 4.0]]], dtype=np.float32),
+        }
+        query = {"query_features": np.asarray([[6.0, 8.0]], dtype=np.float32)}
+        scores = _combine_dtrak_scores(train, query, train_path=Path("train.npz"), query_path=Path("query.npz"))
+        np.testing.assert_allclose(scores, np.asarray([3.0, 4.0]))
+
+    def test_dtrak_stage_producer_is_wired_to_real_legacy_stage_mode(self):
+        text = (ROOT / "common" / "stage_artifact_producer.py").read_text()
+        self.assertIn('"DTRAK_STAGE_MODE": "train"', text)
+        self.assertIn('"DTRAK_STAGE_MODE": "query"', text)
+        self.assertIn("run_algorithm_config(config_path)", text)
+        dtrak_text = (LEGACY / "dtrak" / "algorithm.py").read_text()
+        self.assertIn('stage_mode = os.environ.get("DTRAK_STAGE_MODE"', dtrak_text)
+        self.assertIn("np.savez_compressed(", dtrak_text)
+        self.assertIn("train_features=np.stack(stage_train_features", dtrak_text)
+        self.assertIn("query_features=np.stack(stage_query_features", dtrak_text)
+
+    def test_strict_stage_producer_does_not_use_score_artifact_fallback(self):
+        text = (ROOT / "common" / "stage_artifact_producer.py").read_text()
+        self.assertNotIn("score_artifact_dir", text)
+        self.assertNotIn("ATTRIBUTION_OUT_DIR", text)
+        self.assertIn('"DAS_STAGE_MODE"', text)
+        self.assertIn('"END_TRACIN_STAGE_MODE"', text)
+        self.assertIn('"TRAJ_TRACIN_STAGE_MODE"', text)
 
     def test_das_sherman_morrison_denominator_is_explicit_option(self):
         text = (LEGACY / "das" / "algorithm.py").read_text()

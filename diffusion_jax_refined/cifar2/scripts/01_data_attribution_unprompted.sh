@@ -6,18 +6,21 @@ ALGORITHMS="${ALGORITHMS:-das traj_tracin dtrak end_tracin journey_trak}"
 CUDA_DEVICE="${CUDA_DEVICE:-${CUDA:-${CUDA_VISIBLE_DEVICES:-0}}}"
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-${CUDA_DEVICE}}"
 ATTRIBUTION_RANGES="${ATTRIBUTION_RANGES:-${SCORE_INDEX_RANGES:-}}"
+PYTHON_BIN="${PYTHON_BIN:-python3}"
+export UNPROMPTED=1
 
-echo "Running unprompted attribution on CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
+echo "Running staged unprompted attribution on CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
+echo "03_score.py is a pure artifact combiner; it will not rerun the monolithic attribution engine."
 
 for ALGORITHM in ${ALGORITHMS}; do
   if [[ -n "${ATTRIBUTION_RANGES}" ]]; then
     RANGE_LIST="${ATTRIBUTION_RANGES//,/ }"
     for RANGE_VALUE in ${RANGE_LIST}; do
-      echo "Running unprompted attribution: ${ALGORITHM} range=${RANGE_VALUE}"
-      SCORE_INDEX_RANGES="${RANGE_VALUE}" python "${ROOT}/../common/unprompted_jax_attribution.py" "${ROOT}/dataset_config.py" --algorithm "${ALGORITHM}"
+      echo "Running unprompted query-gradient + pure score combine: ${ALGORITHM} range=${RANGE_VALUE}"
+      (cd "${ROOT}/data_attribution/${ALGORITHM}" && SCORE_INDEX_RANGES="${RANGE_VALUE}" "${PYTHON_BIN}" 02_query_gradient.py && SCORE_INDEX_RANGES="${RANGE_VALUE}" "${PYTHON_BIN}" 03_score.py)
     done
   else
-    echo "Running unprompted attribution: ${ALGORITHM}"
-    python "${ROOT}/../common/unprompted_jax_attribution.py" "${ROOT}/dataset_config.py" --algorithm "${ALGORITHM}"
+    echo "Running unprompted query-gradient + pure score combine: ${ALGORITHM}"
+    (cd "${ROOT}/data_attribution/${ALGORITHM}" && "${PYTHON_BIN}" 02_query_gradient.py && "${PYTHON_BIN}" 03_score.py)
   fi
 done

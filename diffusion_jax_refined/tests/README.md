@@ -50,6 +50,10 @@ Current coverage focuses on:
 - score-output path checks for
   `attribution_score/<SAMPLE_MODEL_MODE>/train_seed_<TRAIN_SEED>/query_<query>/initial_seed_<seed>/`
   and the unprompted equivalent;
+- pure score-combiner checks that `03_score.py` no longer calls the monolithic
+  legacy attribution engine and only combines stage artifacts;
+- artifact-combiner math checks for dot-product attribution scores and DAS
+  residual/inverse-gram score composition;
 - LDS eval path checks for
   `eval/<SAMPLE_MODEL_MODE>/query_<query>/initial_seed_<seed>/lds/` and the
   unprompted equivalent;
@@ -58,6 +62,9 @@ Current coverage focuses on:
   `LDS_DATASET_PERCENTAGE` or `LDS_K` subset sizing;
 - script-layout checks that old algorithm-local `run_attribution.py`,
   `run_training.py`, `run_eval.py`, and `script.sh` entrypoints are removed;
+- prompted and unprompted attribution wrapper checks that old monolithic
+  attribution launchers are bypassed in favor of `02_query_gradient.py` and
+  pure `03_score.py`;
 - target-specific LDS eval overwrite protection;
 - per-seed LDS aggregate summary and combined scatter-grid generation;
 - attribution-code contracts such as DAS squared scores, EndTracIn MC sample counts,

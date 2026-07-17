@@ -1073,6 +1073,13 @@ def compute_batched_das_term(
 # ============================================================
 
 def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
+    stage_mode = os.environ.get("DAS_STAGE_MODE", "").strip().lower()
+    stage_artifact_path = os.environ.get("DAS_STAGE_ARTIFACT_PATH")
+    if stage_mode and stage_mode not in ("train", "query"):
+        raise ValueError("DAS_STAGE_MODE must be unset, 'train', or 'query'.")
+    if stage_mode and not stage_artifact_path:
+        raise ValueError("DAS_STAGE_ARTIFACT_PATH is required when DAS_STAGE_MODE is set.")
+
     out_suffix = apply_score_subset_suffix_to_out_dir(cfg)
     ensure_dir(cfg.out_dir)
     t0 = time.perf_counter()
@@ -1081,7 +1088,7 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
     x0_ref = None
     resolved_manifest_ckpt = None
     manifest_ckpt = None
-    if cfg.attribution_sample_dir is not None:
+    if cfg.attribution_sample_dir is not None and stage_mode != "train":
         print(f"[setup] loading precomputed attribution sample: {cfg.attribution_sample_dir}")
         x0_ref, precomputed_sample_meta = load_attribution_endpoint(cfg)
         inferred_query = infer_query_from_attribution_meta(precomputed_sample_meta)
@@ -1202,7 +1209,7 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
     ref_ckpt = cfg.reference_ckpt or resolved_manifest_ckpt or baseline_ckpts[-1]
     print(f"[setup] reference checkpoint: {os.path.basename(ref_ckpt)}")
 
-    if x0_ref is None:
+    if x0_ref is None and stage_mode != "train":
         print("[setup] restoring reference checkpoint...")
         ref_state, _ = adapter.restore_state(ref_ckpt, state_template)
         ref_params = tree_to_device(ref_state.ema_params, device)
@@ -1222,8 +1229,10 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
         )
         x0_ref = array_to_device(x0_ref, device)
         print("[setup] reference endpoint ready.")
-    else:
+    elif x0_ref is not None:
         print("[setup] using precomputed sampler endpoint as x0_ref")
+    else:
+        print("[setup] train artifact mode: skipping query endpoint construction")
 
     N_total = len(ds)
     picked = build_candidate_items(cfg, N_total)
@@ -1251,6 +1260,13 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
 
     total_mc_terms = len(baseline_ckpts) * len(timesteps) * num_mc_noise
     processed_mc_terms = 0
+    stage_train_features = []
+    stage_grams = []
+    stage_query_features = []
+    stage_residuals = []
+    stage_ckpt_indices = []
+    stage_timestep_values = []
+    stage_mc_indices = []
 
     for ckpt_i, ckpt_path in enumerate(baseline_ckpts):
         ckpt_t0 = time.perf_counter()
@@ -1295,9 +1311,12 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
                 )
 
                 rng_q = array_to_device(make_jax_key(cfg.seed, "pdas_q", ckpt_i, t_value, mc_i), device)
-                _, noise_q = sample_xt_and_noise_jax(schedule, x0_ref, t=t_tensor, rng=rng_q)
+                noise_q = None
+                if stage_mode != "train":
+                    _, noise_q = sample_xt_and_noise_jax(schedule, x0_ref, t=t_tensor, rng=rng_q)
                 rng_probe = array_to_device(make_jax_key(cfg.seed, "pdas_output_probe", ckpt_i, t_value, mc_i), device)
-                output_probe = array_to_device(sample_output_probe_jax(tuple(x0_ref.shape), rng=rng_probe), device)
+                probe_shape = tuple(x0_ref.shape) if x0_ref is not None else tuple(example_x.shape)
+                output_probe = array_to_device(sample_output_probe_jax(probe_shape, rng=rng_probe), device)
 
                 print("[mc] preparing shared projected-gradient projector...", flush=True)
                 projector = build_countsketch_projector_jax(
@@ -1314,14 +1333,59 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
                     normalize_projected_grads=bool(cfg.normalize_projected_grads),
                     normalize_eps=float(cfg.normalize_eps),
                 )
-                print("[mc] shared projector ready; compiling/running query phi...", flush=True)
+                print("[mc] shared projector ready", flush=True)
 
-                query_residual, phi_q = phi_fn(params_k, x0_ref, query_cond, t_tensor, noise_q, output_probe)
-                phi_q.block_until_ready()
-                print(
-                    "[mc] query projected eps-gradient ready | "
-                    f"query_residual_projection={float(query_residual):.6f}"
-                )
+                if stage_mode != "train":
+                    print("[mc] compiling/running query phi...", flush=True)
+                    query_residual, phi_q = phi_fn(params_k, x0_ref, query_cond, t_tensor, noise_q, output_probe)
+                    phi_q.block_until_ready()
+                    print(
+                        "[mc] query projected eps-gradient ready | "
+                        f"query_residual_projection={float(query_residual):.6f}"
+                    )
+                else:
+                    phi_q = None
+                    query_residual = 0.0
+
+                if stage_mode in ("train", "query"):
+                    phi_cache = np.empty((M, proj_dim), dtype=np.float32)
+                    residual_cache = np.empty((M,), dtype=np.float32)
+                    H_proj = np.zeros((proj_dim, proj_dim), dtype=np.float32)
+                    stage_iter = iter_with_tqdm(
+                        range(num_batches),
+                        total=num_batches,
+                        desc=f"DAS stage {stage_mode} ckpt {ckpt_i+1}/{len(baseline_ckpts)} t={t_value} mc={mc_i+1}",
+                        enabled=bool(cfg.use_tqdm),
+                    )
+                    for batch_idx in stage_iter:
+                        start = batch_idx * bs
+                        batch = picked[start:start + bs]
+                        for local_j, idx in enumerate(batch):
+                            x0_i, cond_i = adapter.get_item(ds, idx)
+                            x0_i = array_to_device(x0_i, device)
+                            cond_i = array_to_device(cond_i, device)
+                            rng_i = array_to_device(make_jax_key(cfg.seed, "pdas_tr", ckpt_i, t_value, mc_i, idx), device)
+                            _, noise_i = sample_xt_and_noise_jax(schedule, x0_i, t=t_tensor, rng=rng_i)
+                            residual_i, phi_i = phi_fn(params_k, x0_i, cond_i, t_tensor, noise_i, output_probe)
+                            phi_i.block_until_ready()
+                            phi_np = np.asarray(phi_i, dtype=np.float32)
+                            phi_cache[start + local_j] = phi_np
+                            residual_cache[start + local_j] = float(residual_i)
+                            H_proj += np.outer(phi_np, phi_np).astype(np.float32)
+                        if hasattr(stage_iter, "set_postfix"):
+                            stage_iter.set_postfix(samples=f"{min(start + len(batch), M)}/{M}")
+                    H_proj += damping * np.eye(proj_dim, dtype=np.float32)
+                    if stage_mode == "train":
+                        stage_train_features.append(phi_cache)
+                        stage_grams.append(H_proj)
+                    else:
+                        stage_query_features.append(np.asarray(phi_q, dtype=np.float32))
+                        stage_residuals.append(residual_cache)
+                    stage_ckpt_indices.append(int(ckpt_i))
+                    stage_timestep_values.append(int(t_value))
+                    stage_mc_indices.append(int(mc_i))
+                    print(f"[mc] DAS {stage_mode} artifact term cached; skipping score")
+                    continue
 
                 if cfg.use_batched_per_example_grads:
                     print(
@@ -1477,6 +1541,37 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
             f"elapsed={format_seconds(ckpt_elapsed)} | "
             f"remaining_eta={ckpt_eta}"
         )
+
+    if stage_mode == "train":
+        ensure_dir(os.path.dirname(stage_artifact_path))
+        np.savez_compressed(
+            stage_artifact_path,
+            train_features=np.stack(stage_train_features, axis=0).astype(np.float32),
+            gram=np.stack(stage_grams, axis=0).astype(np.float32),
+            score_indices=np.asarray(picked, dtype=np.int64),
+            ckpt_indices=np.asarray(stage_ckpt_indices, dtype=np.int32),
+            timesteps=np.asarray(stage_timestep_values, dtype=np.int32),
+            mc_indices=np.asarray(stage_mc_indices, dtype=np.int32),
+            damping=np.asarray(float(damping), dtype=np.float32),
+            proj_dim=np.asarray(int(proj_dim), dtype=np.int32),
+        )
+        print(f"[saved] DAS train artifact: {stage_artifact_path}")
+        return
+
+    if stage_mode == "query":
+        ensure_dir(os.path.dirname(stage_artifact_path))
+        np.savez_compressed(
+            stage_artifact_path,
+            query_features=np.stack(stage_query_features, axis=0).astype(np.float32),
+            residuals=np.stack(stage_residuals, axis=0).astype(np.float32),
+            ckpt_indices=np.asarray(stage_ckpt_indices, dtype=np.int32),
+            timesteps=np.asarray(stage_timestep_values, dtype=np.int32),
+            mc_indices=np.asarray(stage_mc_indices, dtype=np.int32),
+            damping=np.asarray(float(damping), dtype=np.float32),
+            proj_dim=np.asarray(int(proj_dim), dtype=np.int32),
+        )
+        print(f"[saved] DAS query artifact: {stage_artifact_path}")
+        return
 
     if total_terms > 0:
         scores /= float(total_terms)

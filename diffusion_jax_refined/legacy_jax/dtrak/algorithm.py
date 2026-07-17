@@ -1175,6 +1175,13 @@ def apply_score_subset_suffix_to_out_dir(cfg):
 # ============================================================
 
 def run_endpoint_dtrak_jax(cfg: EndpointDTrakJAXConfig):
+    stage_mode = os.environ.get("DTRAK_STAGE_MODE", "").strip().lower()
+    stage_artifact_path = os.environ.get("DTRAK_STAGE_ARTIFACT_PATH")
+    if stage_mode and stage_mode not in ("train", "query"):
+        raise ValueError("DTRAK_STAGE_MODE must be unset, 'train', or 'query'.")
+    if stage_mode and not stage_artifact_path:
+        raise ValueError("DTRAK_STAGE_ARTIFACT_PATH is required when DTRAK_STAGE_MODE is set.")
+
     out_suffix = apply_score_subset_suffix_to_out_dir(cfg)
     ensure_dir(cfg.out_dir)
     t0 = time.perf_counter()
@@ -1183,7 +1190,7 @@ def run_endpoint_dtrak_jax(cfg: EndpointDTrakJAXConfig):
     x0_ref = None
     manifest_ckpt = None
     resolved_manifest_ckpt = None
-    if cfg.attribution_sample_dir is not None:
+    if cfg.attribution_sample_dir is not None and stage_mode != "train":
         print(f"[setup] loading precomputed attribution sample: {cfg.attribution_sample_dir}")
         x0_ref, precomputed_sample_meta = load_attribution_endpoint(cfg)
         inferred_query = infer_query_from_attribution_meta(precomputed_sample_meta)
@@ -1305,7 +1312,7 @@ def run_endpoint_dtrak_jax(cfg: EndpointDTrakJAXConfig):
     ref_ckpt = cfg.reference_ckpt or resolved_manifest_ckpt or all_baseline_ckpts[-1]
     print(f"[setup] reference_ckpt={ref_ckpt}")
 
-    if x0_ref is None:
+    if x0_ref is None and stage_mode != "train":
         print("[setup] restoring reference checkpoint...")
         ref_state, _ = adapter.restore_state(ref_ckpt, state_template)
         ref_params = tree_to_device(ref_state.ema_params, device)
@@ -1324,8 +1331,10 @@ def run_endpoint_dtrak_jax(cfg: EndpointDTrakJAXConfig):
             progress_every=max(1, int(cfg.ddim_steps) // 10),
         )
         x0_ref = array_to_device(x0_ref, device)
-    else:
+    elif x0_ref is not None:
         print("[setup] using precomputed sampler endpoint as x0_ref")
+    else:
+        print("[setup] train artifact mode: skipping query endpoint construction")
 
     N_total = len(ds)
     picked = build_candidate_items(cfg, N_total)
@@ -1357,6 +1366,11 @@ def run_endpoint_dtrak_jax(cfg: EndpointDTrakJAXConfig):
     total_s = 0
     total_work_units = len(baseline_ckpts) * max(1, S)
     processed_work_units = 0
+    stage_train_features = []
+    stage_gram = []
+    stage_query_features = []
+    stage_ckpt_indices = []
+    stage_sample_indices = []
 
     for ckpt_i, ckpt_path in enumerate(baseline_ckpts):
         ckpt_t0 = time.perf_counter()
@@ -1379,13 +1393,14 @@ def run_endpoint_dtrak_jax(cfg: EndpointDTrakJAXConfig):
             global_elapsed = time.perf_counter() - t0
             global_eta = format_eta(processed_work_units, total_work_units, global_elapsed, warmup_steps=2)
 
+            action = "starting train artifact" if stage_mode == "train" else "starting query feature"
             print(
                 f"[sample] ckpt {ckpt_i+1}/{len(baseline_ckpts)} | "
                 f"sample {s_i+1}/{S} | "
                 f"global_step={processed_work_units}/{total_work_units} | "
                 f"total_elapsed={format_seconds(global_elapsed)} | "
                 f"total_eta={global_eta} | "
-                f"starting query feature"
+                f"{action}"
             )
 
             rng_q = array_to_device(make_jax_key(cfg.seed, "q", ckpt_i, s_i), device)
@@ -1419,11 +1434,20 @@ def run_endpoint_dtrak_jax(cfg: EndpointDTrakJAXConfig):
                 num_expectation_samples=int(cfg.train_expectation_samples),
             )
 
-            print("[sample] compiling/running query feature...", flush=True)
-            Lq, phi_q = query_phi_fn(params_k, x0_ref, query_cond, rng_q)
-            phi_q.block_until_ready()
-
-            print(f"[sample] query feature ready | Lq={float(Lq):.6f}")
+            if stage_mode != "train":
+                print("[sample] compiling/running query feature...", flush=True)
+                Lq, phi_q = query_phi_fn(params_k, x0_ref, query_cond, rng_q)
+                phi_q.block_until_ready()
+                print(f"[sample] query feature ready | Lq={float(Lq):.6f}")
+                if stage_mode == "query":
+                    stage_query_features.append(np.asarray(phi_q, dtype=np.float32))
+                    stage_ckpt_indices.append(int(ckpt_i))
+                    stage_sample_indices.append(int(s_i))
+                    print("[sample] query artifact mode: saved query feature in memory; skipping train pass")
+                    continue
+            else:
+                Lq = 0.0
+                phi_q = None
 
             # PASS 1: build Gram and cache projected train features.
             G = np.zeros((d, d), dtype=np.float32)
@@ -1472,6 +1496,14 @@ def run_endpoint_dtrak_jax(cfg: EndpointDTrakJAXConfig):
             print("[sample] PASS1 complete. Solving linear system...")
 
             G += lam * np.eye(d, dtype=np.float32)
+            if stage_mode == "train":
+                stage_train_features.append(phi_cache.astype(np.float32))
+                stage_gram.append(G.astype(np.float32))
+                stage_ckpt_indices.append(int(ckpt_i))
+                stage_sample_indices.append(int(s_i))
+                print("[sample] train artifact mode: cached train features + Gram; skipping solve/score")
+                continue
+
             solve_t0 = time.perf_counter()
             u = np.linalg.solve(G, np.asarray(phi_q, dtype=np.float32))
             print(f"[sample] solve complete | elapsed={format_seconds(time.perf_counter() - solve_t0)}")
@@ -1523,6 +1555,34 @@ def run_endpoint_dtrak_jax(cfg: EndpointDTrakJAXConfig):
             f"elapsed={format_seconds(ckpt_elapsed)} | "
             f"remaining_eta={ckpt_eta}"
         )
+
+    if stage_mode == "train":
+        ensure_dir(os.path.dirname(stage_artifact_path))
+        np.savez_compressed(
+            stage_artifact_path,
+            train_features=np.stack(stage_train_features, axis=0).astype(np.float32),
+            gram=np.stack(stage_gram, axis=0).astype(np.float32),
+            score_indices=np.asarray(picked, dtype=np.int64),
+            ckpt_indices=np.asarray(stage_ckpt_indices, dtype=np.int32),
+            sample_indices=np.asarray(stage_sample_indices, dtype=np.int32),
+            damping=np.asarray(float(lam), dtype=np.float32),
+            proj_dim=np.asarray(int(d), dtype=np.int32),
+        )
+        print(f"[saved] D-TRAK train artifact: {stage_artifact_path}")
+        return
+
+    if stage_mode == "query":
+        ensure_dir(os.path.dirname(stage_artifact_path))
+        np.savez_compressed(
+            stage_artifact_path,
+            query_features=np.stack(stage_query_features, axis=0).astype(np.float32),
+            ckpt_indices=np.asarray(stage_ckpt_indices, dtype=np.int32),
+            sample_indices=np.asarray(stage_sample_indices, dtype=np.int32),
+            damping=np.asarray(float(lam), dtype=np.float32),
+            proj_dim=np.asarray(int(d), dtype=np.int32),
+        )
+        print(f"[saved] D-TRAK query artifact: {stage_artifact_path}")
+        return
 
     if total_s > 0:
         scores /= float(total_s)

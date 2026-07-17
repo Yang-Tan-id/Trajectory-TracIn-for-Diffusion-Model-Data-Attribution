@@ -12,6 +12,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from common.aggregate_lds_by_seed import aggregate_group
+from common.aggregate_lds_by_seed import _seed_from_model_name
 
 
 class TestAggregateLdsBySeed(unittest.TestCase):
@@ -49,6 +50,10 @@ class TestAggregateLdsBySeed(unittest.TestCase):
             self.assertEqual(payload["num_seeds"], 2)
             self.assertEqual(payload["num_points"], 6)
             self.assertIn("lds_percent_mean", payload)
+
+    def test_seed_parser_accepts_refined_subset_seed_names(self):
+        self.assertEqual(_seed_from_model_name("m_50_k_5000_pct_50_subset_seed_16"), 16)
+        self.assertEqual(_seed_from_model_name("m_50_k_8000_seed_3"), 3)
 
 
 if __name__ == "__main__":

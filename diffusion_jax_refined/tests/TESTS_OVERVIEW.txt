@@ -214,6 +214,11 @@ Test files
    - D-TRAK PASS1 caches phi_cache while building the Gram matrix, and PASS2
      reads Phi from that cache instead of calling train_phi_batch_fn a second
      time;
+   - all dataset/algorithm 03_score.py entrypoints use the pure stage-artifact
+     combiner and do not call the monolithic legacy attribution runner;
+   - the stage-artifact combiner computes dot-product scores from
+     train/query feature artifacts and computes DAS scores with residuals plus
+     an optional inverse Gram matrix;
    - DAS, D-TRAK, EndTracIn, TrajTracIn, and JourneyTRAK each expose a
      method-specific stages.py facade for train gradients/features, query
      gradients/features, and score calculation.

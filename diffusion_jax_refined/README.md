@@ -15,7 +15,7 @@ Each dataset owns:
 - `data_attribution/<algorithm>/CONFIG.py`: algorithm-local config entrypoint.
 - `data_attribution/<algorithm>/01_train_datapoint_gradient.py`: train-dataset gradient/features stage.
 - `data_attribution/<algorithm>/02_query_gradient.py`: query/sample gradient/features stage.
-- `data_attribution/<algorithm>/03_score.py`: score-combination stage.
+- `data_attribution/<algorithm>/03_score.py`: pure score-combination stage; it reads stage artifacts and does not rerun the legacy attribution engine.
 - `sampling/`, `counterfactual/`, `lds/`: separate metric or helper entrypoints.
 - `scripts/`: convenience shell commands for training, attribution, counterfactual, and LDS.
 - `result/<experiment_tag>/model`, `result/<experiment_tag>/attribution_score`, `result/<experiment_tag>/eval`: output layout.

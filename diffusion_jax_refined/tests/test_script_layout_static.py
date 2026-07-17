@@ -66,6 +66,9 @@ class TestScriptLayoutStatic(unittest.TestCase):
 
         training_text = (ROOT / "common" / "prompted_jax_training.py").read_text()
         self.assertIn('return getattr(cfg_module, default_attr, None)', training_text)
+        self.assertIn('learning_rate=_optional_float("JAX_LEARNING_RATE", 2e-4)', training_text)
+        self.assertIn('dm_learning_rate=_optional_float("JAX_LEARNING_RATE", 2e-4)', training_text)
+        self.assertNotIn("1e-4 if unconditional else 2e-4", training_text)
         self.assertNotIn("TRAIN_PROMPT_MODE", training_text)
         self.assertNotIn("TRAIN_PROMPTS", training_text)
         self.assertNotIn("TRAIN_MODEL_TAG", training_text)
@@ -117,7 +120,15 @@ class TestScriptLayoutStatic(unittest.TestCase):
                         stage_script = algorithm_dir / name
                         self.assertTrue(stage_script.is_file())
                         stage_text = stage_script.read_text()
-                        self.assertIn("run_stage_config", stage_text)
+                        if name == "03_score.py":
+                            self.assertIn("run_score_combination_stage", stage_text)
+                            self.assertNotIn("run_algorithm_config", stage_text)
+                        elif name == "01_train_datapoint_gradient.py":
+                            self.assertIn("run_train_datapoint_gradient_artifact", stage_text)
+                            self.assertNotIn('run_stage_config(Path(__file__).with_name("CONFIG.py"), "train_datapoint_gradient")', stage_text)
+                        else:
+                            self.assertIn("run_query_gradient_artifact", stage_text)
+                            self.assertNotIn('run_stage_config(Path(__file__).with_name("CONFIG.py"), "query_gradient")', stage_text)
 
         for dataset in DATASETS:
             for system in ("h100", "vista"):
@@ -219,6 +230,15 @@ class TestScriptLayoutStatic(unittest.TestCase):
                 self.assertIn("02_query_gradient.py", text)
                 self.assertIn("03_score.py", text)
                 self.assertNotIn("run_attribution.py", text)
+
+    def test_unprompted_attribution_script_uses_stage_two_and_three(self):
+        for dataset in DATASETS:
+            with self.subTest(dataset=dataset):
+                text = (ROOT / dataset / "scripts" / "01_data_attribution_unprompted.sh").read_text()
+                self.assertIn("UNPROMPTED=1", text)
+                self.assertIn("02_query_gradient.py", text)
+                self.assertIn("03_score.py", text)
+                self.assertNotIn("unprompted_jax_attribution.py", text)
 
 
 if __name__ == "__main__":

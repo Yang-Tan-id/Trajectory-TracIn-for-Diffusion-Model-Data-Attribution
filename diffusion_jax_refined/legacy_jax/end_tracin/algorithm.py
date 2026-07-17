@@ -1204,6 +1204,12 @@ def apply_score_subset_suffix_to_out_dir(cfg):
 # ============================================================
 
 def run_endpoint_tracein(cfg: EndpointTraceInConfig):
+    stage_mode = os.environ.get("END_TRACIN_STAGE_MODE", "").strip().lower()
+    stage_artifact_path = os.environ.get("END_TRACIN_STAGE_ARTIFACT_PATH")
+    if stage_mode and stage_mode not in ("train", "query"):
+        raise ValueError("END_TRACIN_STAGE_MODE must be unset, 'train', or 'query'.")
+    if stage_mode and not stage_artifact_path:
+        raise ValueError("END_TRACIN_STAGE_ARTIFACT_PATH is required when END_TRACIN_STAGE_MODE is set.")
     out_suffix = apply_score_subset_suffix_to_out_dir(cfg)
     ensure_dir(cfg.out_dir)
     t0 = time.perf_counter()
@@ -1407,6 +1413,120 @@ def run_endpoint_tracein(cfg: EndpointTraceInConfig):
         raise RuntimeError("No training points selected for scoring.")
 
     print(f"[candidate-set] N={N} | M_selected={M}")
+
+    if stage_mode:
+        from dtrak.algorithm import build_countsketch_projector_jax
+
+        proj_dim = int(getattr(cfg, "proj_dim", int(os.environ.get("END_TRACIN_PROJ_DIM", "4096"))))
+        stage_features = []
+        stage_ckpt_indices = []
+        stage_ckpt_paths = []
+        stage_losses = []
+        stage_checkpoint_paths = baseline_ckpts + lora_ckpts
+        if not stage_checkpoint_paths:
+            raise FileNotFoundError("No checkpoints selected for EndTracIn stage artifact.")
+
+        for ckpt_idx, ckpt_path in enumerate(stage_checkpoint_paths):
+            print(f"[stage:{stage_mode}] EndTracIn checkpoint {ckpt_idx + 1}/{len(stage_checkpoint_paths)} | {os.path.basename(ckpt_path)}")
+            state_k, _ = adapter.restore_state(ckpt_path, state_template)
+            params_k = tree_to_device(state_k.ema_params, device)
+            active_mask = build_param_mask(
+                params_k,
+                mode="lora" if ckpt_path in lora_ckpts else "baseline",
+            )
+            projector = build_countsketch_projector_jax(
+                params_k,
+                proj_dim,
+                seed_parts=(cfg.seed, "end_tracin_projection", ckpt_idx),
+                device=device,
+            )
+
+            if stage_mode == "query":
+                g_rng = array_to_device(jax.random.PRNGKey(cfg.seed + 10_000 + ckpt_idx), device)
+                g_end, L_end = compute_g_end(
+                    adapter=adapter,
+                    model=model,
+                    params=params_k,
+                    active_mask=active_mask,
+                    schedule=schedule,
+                    x0_ref=x0_ref,
+                    query_cond=query_cond,
+                    t_min_end=int(cfg.t_min_end),
+                    t_max_end=int(t_max_end),
+                    endpoint_mc_samples=int(cfg.endpoint_mc_samples),
+                    rng=g_rng,
+                )
+                stage_features.append(np.asarray(projector(g_end), dtype=np.float32))
+                stage_losses.append(float(L_end))
+            else:
+                point_features = np.empty((M, proj_dim), dtype=np.float32)
+
+                def train_phi_one(p, x0_one, cond_one, rng_one):
+                    x0_one = x0_one[None, ...]
+                    if cond_one.ndim == 0:
+                        cond_one = cond_one[None]
+                    else:
+                        cond_one = cond_one[None, ...]
+
+                    def loss_fn(pp):
+                        return denoising_loss_mc_vectorized(
+                            adapter=adapter,
+                            model=model,
+                            params=pp,
+                            schedule=schedule,
+                            x0=x0_one,
+                            cond=cond_one,
+                            num_mc_samples=int(cfg.train_mc_samples),
+                            rng=rng_one,
+                        )
+
+                    _loss, grads = jax.value_and_grad(loss_fn)(p)
+                    return projector(tree_mask(grads, active_mask))
+
+                train_phi_batch = jax.jit(jax.vmap(train_phi_one, in_axes=(None, 0, 0, 0)))
+                bs_stage = max(1, int(cfg.score_batch_size))
+                for start in range(0, M, bs_stage):
+                    end = min(M, start + bs_stage)
+                    batch_indices = pad_indices_to_batch(picked[start:end], bs_stage)
+                    x0_train, cond_train = make_train_batch(adapter, ds, batch_indices, device)
+                    rngs = array_to_device(
+                        jnp.stack(
+                            [jax.random.PRNGKey(cfg.seed + 500_000 * (ckpt_idx + 1) + start + j) for j in range(bs_stage)],
+                            axis=0,
+                        ),
+                        device,
+                    )
+                    phi_batch = train_phi_batch(params_k, x0_train, cond_train, rngs)
+                    phi_batch.block_until_ready()
+                    point_features[start:end] = np.asarray(phi_batch[: end - start], dtype=np.float32)
+                    print(f"[stage:train] EndTracIn {end}/{M} train features")
+                stage_features.append(point_features)
+            stage_ckpt_indices.append(int(ckpt_idx))
+            stage_ckpt_paths.append(str(ckpt_path))
+
+        ensure_dir(os.path.dirname(stage_artifact_path))
+        if stage_mode == "query":
+            np.savez_compressed(
+                stage_artifact_path,
+                query_features=np.stack(stage_features, axis=0).astype(np.float32),
+                query_losses=np.asarray(stage_losses, dtype=np.float32),
+                term_weights=np.ones((len(stage_features),), dtype=np.float32),
+                ckpt_indices=np.asarray(stage_ckpt_indices, dtype=np.int32),
+                ckpt_paths=np.asarray(stage_ckpt_paths),
+                proj_dim=np.asarray(proj_dim, dtype=np.int32),
+            )
+        else:
+            np.savez_compressed(
+                stage_artifact_path,
+                train_features=np.stack(stage_features, axis=0).astype(np.float32),
+                score_indices=np.asarray(picked, dtype=np.int64),
+                term_weights=np.ones((len(stage_features),), dtype=np.float32),
+                ckpt_indices=np.asarray(stage_ckpt_indices, dtype=np.int32),
+                ckpt_paths=np.asarray(stage_ckpt_paths),
+                proj_dim=np.asarray(proj_dim, dtype=np.int32),
+            )
+        print(f"[saved] EndTracIn {stage_mode} artifact: {stage_artifact_path}")
+        return
 
     scores = np.zeros((M,), dtype=np.float64)
 

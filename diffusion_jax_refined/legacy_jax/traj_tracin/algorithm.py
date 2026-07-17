@@ -1211,6 +1211,12 @@ def make_score_snapshot_chunk_batch_fn(
 
 
 def run_attribution(cfg: TrajAttributionConfig):
+    stage_mode = os.environ.get("TRAJ_TRACIN_STAGE_MODE", "").strip().lower()
+    stage_artifact_path = os.environ.get("TRAJ_TRACIN_STAGE_ARTIFACT_PATH")
+    if stage_mode and stage_mode not in ("train", "query"):
+        raise ValueError("TRAJ_TRACIN_STAGE_MODE must be unset, 'train', or 'query'.")
+    if stage_mode and not stage_artifact_path:
+        raise ValueError("TRAJ_TRACIN_STAGE_ARTIFACT_PATH is required when TRAJ_TRACIN_STAGE_MODE is set.")
     cfg.query_objective = normalize_query_objective_name(cfg.query_objective)
     subset_suffix = apply_score_subset_suffix_to_out_dir(cfg)
     os.makedirs(cfg.out_dir, exist_ok=True)
@@ -1349,6 +1355,156 @@ def run_attribution(cfg: TrajAttributionConfig):
     if len(picked) > 0:
         preview = picked[: min(10, len(picked))]
         print(f"[setup] first picked indices: {preview}")
+
+    if stage_mode:
+        from dtrak.algorithm import build_countsketch_projector_jax
+
+        proj_dim = int(getattr(cfg, "proj_dim", int(os.environ.get("TRAJ_TRACIN_PROJ_DIM", "4096"))))
+        stage_features = []
+        stage_ckpt_indices = []
+        stage_timesteps = []
+        stage_snapshot_positions = []
+        stage_ckpt_paths = []
+        stage_term_weights = []
+        used_ckpts_for_stage = []
+
+        for ckpt_i, ckpt_path in enumerate(ckpts):
+            print(f"[stage:{stage_mode}] TrajTracIn checkpoint {ckpt_i + 1}/{len(ckpts)} | {os.path.basename(ckpt_path)}")
+            try:
+                state, _payload = adapter.restore_state(ckpt_path, state_template)
+            except Exception as exc:
+                if cfg.skip_unreadable_checkpoints:
+                    print(f"[warning] skipping unreadable checkpoint: {ckpt_path}: {exc}")
+                    continue
+                raise
+            params = tree_to_device(state.ema_params, device)
+            projector = build_countsketch_projector_jax(
+                params,
+                proj_dim,
+                seed_parts=(cfg.seed, "traj_tracin_projection", ckpt_i),
+                device=device,
+            )
+            eps_fn = lambda p, x, t, c: adapter.eps_apply(model, p, x, t, c)
+            if precomputed_traj is not None:
+                xt_refs_raw, t_seq, pos_seq, _ = precomputed_traj
+                xt_refs = [array_to_device(x, device) for x in xt_refs_raw]
+            else:
+                xt_refs, t_seq, pos_seq = compute_reference_trajectory_ddim(
+                    eps_fn=eps_fn,
+                    params=params,
+                    schedule=schedule,
+                    cond=query_cond,
+                    shape=tuple(example_x.shape),
+                    seed=cfg.seed,
+                    ddim_steps=cfg.ddim_steps,
+                    num_keep=cfg.num_traj_snapshots,
+                    snapshot_positions=cfg.traj_snapshot_positions,
+                )
+                xt_refs = [array_to_device(x, device) for x in xt_refs]
+
+            if stage_mode == "query":
+                query_grad_chunk_fn = make_query_grad_chunk_fn(adapter, model, cfg.query_objective)
+                for chunk_start in range(0, len(t_seq), max(1, int(cfg.snapshot_chunk_size))):
+                    chunk_end = min(chunk_start + max(1, int(cfg.snapshot_chunk_size)), len(t_seq))
+                    chunk_ids = list(range(chunk_start, chunk_end))
+                    xt_chunk = array_to_device(jnp.stack([xt_refs[i] for i in chunk_ids], axis=0), device)
+                    t_chunk = array_to_device(jnp.asarray([int(t_seq[i]) for i in chunk_ids], dtype=jnp.int32), device)
+                    query_grads = query_grad_chunk_fn(params, reference_params, xt_chunk, t_chunk, query_cond)
+                    for local_i, snap_id in enumerate(chunk_ids):
+                        one_grad = jax.tree_util.tree_map(lambda x: x[local_i], query_grads)
+                        stage_features.append(np.asarray(projector(one_grad), dtype=np.float32))
+                        stage_ckpt_indices.append(int(ckpt_i))
+                        stage_timesteps.append(int(t_seq[snap_id]))
+                        stage_snapshot_positions.append(int(pos_seq[snap_id]))
+                        stage_ckpt_paths.append(str(ckpt_path))
+                        stage_term_weights.append(1.0 / float(max(1, len(t_seq))))
+            else:
+                train_phi_terms = []
+
+                def train_phi_one(p, x0_one, cond_one, rng_one, t_scalar):
+                    x0_one = x0_one[None, ...]
+                    if cond_one.ndim == 0:
+                        cond_one = cond_one[None]
+                    else:
+                        cond_one = cond_one[None, ...]
+
+                    def loss_fn(pp):
+                        return train_losses_at_dynamic_t_mc_vectorized(
+                            adapter=adapter,
+                            model=model,
+                            params=pp,
+                            schedule=schedule,
+                            x0_batch=x0_one,
+                            cond_batch=cond_one,
+                            t_scalar=t_scalar,
+                            num_mc_samples=cfg.train_mc_samples,
+                            rng=rng_one,
+                        )[0]
+
+                    _loss, grads = jax.value_and_grad(loss_fn)(p)
+                    return projector(grads)
+
+                train_phi_batch = jax.jit(jax.vmap(train_phi_one, in_axes=(None, 0, 0, 0, None)))
+                bs_stage = max(1, int(cfg.score_batch_size))
+                for snap_id, t_value in enumerate(t_seq):
+                    term_features = np.empty((len(picked), proj_dim), dtype=np.float32)
+                    t_scalar = array_to_device(jnp.asarray(int(t_value), dtype=jnp.int32), device)
+                    for start in range(0, len(picked), bs_stage):
+                        end = min(len(picked), start + bs_stage)
+                        real_indices = picked[start:end]
+                        padded_indices = pad_indices_to_batch(real_indices, bs_stage)
+                        x_batch, cond_batch = make_train_batch(adapter, ds, padded_indices, device)
+                        rngs = array_to_device(
+                            jnp.stack(
+                                [
+                                    jax.random.PRNGKey(cfg.seed + 700_000 * (ckpt_i + 1) + 10_000 * snap_id + start + j)
+                                    for j in range(bs_stage)
+                                ],
+                                axis=0,
+                            ),
+                            device,
+                        )
+                        phi_batch = train_phi_batch(params, x_batch, cond_batch, rngs, t_scalar)
+                        phi_batch.block_until_ready()
+                        term_features[start:end] = np.asarray(phi_batch[: end - start], dtype=np.float32)
+                    train_phi_terms.append(term_features)
+                    stage_ckpt_indices.append(int(ckpt_i))
+                    stage_timesteps.append(int(t_value))
+                    stage_snapshot_positions.append(int(pos_seq[snap_id]))
+                    stage_ckpt_paths.append(str(ckpt_path))
+                    stage_term_weights.append(1.0 / float(max(1, len(t_seq))))
+                    print(f"[stage:train] TrajTracIn ckpt={ckpt_i + 1} snapshot={snap_id + 1}/{len(t_seq)}")
+                stage_features.extend(train_phi_terms)
+            used_ckpts_for_stage.append(ckpt_path)
+
+        if not stage_features:
+            raise RuntimeError(f"No TrajTracIn {stage_mode} stage features were produced.")
+        ensure_dir(os.path.dirname(stage_artifact_path))
+        if stage_mode == "query":
+            np.savez_compressed(
+                stage_artifact_path,
+                query_features=np.stack(stage_features, axis=0).astype(np.float32),
+                ckpt_indices=np.asarray(stage_ckpt_indices, dtype=np.int32),
+                timesteps=np.asarray(stage_timesteps, dtype=np.int32),
+                snapshot_positions=np.asarray(stage_snapshot_positions, dtype=np.int32),
+                term_weights=np.asarray(stage_term_weights, dtype=np.float32),
+                ckpt_paths=np.asarray(stage_ckpt_paths),
+                proj_dim=np.asarray(proj_dim, dtype=np.int32),
+            )
+        else:
+            np.savez_compressed(
+                stage_artifact_path,
+                train_features=np.stack(stage_features, axis=0).astype(np.float32),
+                score_indices=np.asarray(picked, dtype=np.int64),
+                ckpt_indices=np.asarray(stage_ckpt_indices, dtype=np.int32),
+                timesteps=np.asarray(stage_timesteps, dtype=np.int32),
+                snapshot_positions=np.asarray(stage_snapshot_positions, dtype=np.int32),
+                term_weights=np.asarray(stage_term_weights, dtype=np.float32),
+                ckpt_paths=np.asarray(stage_ckpt_paths),
+                proj_dim=np.asarray(proj_dim, dtype=np.int32),
+            )
+        print(f"[saved] TrajTracIn {stage_mode} artifact: {stage_artifact_path}")
+        return
 
     scores = np.zeros((len(picked),), dtype=np.float64)
 

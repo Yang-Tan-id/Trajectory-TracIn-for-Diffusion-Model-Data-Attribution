@@ -56,7 +56,7 @@ def _std(values: list[float]) -> float:
 
 
 def _seed_from_model_name(name: str) -> int | None:
-    match = re.search(r"_seed_(\d+)$", name)
+    match = re.search(r"(?:_subset)?_seed_(\d+)$", name)
     return int(match.group(1)) if match else None
 
 
@@ -281,16 +281,18 @@ def main() -> None:
         default=None,
         help="Optional prediction directory under target-function, e.g. pred_kept_sign_m1 or pred_removed_sign_1.",
     )
+    parser.add_argument("--eval-kind", default="lds", choices=["lds", "lds_unprompted"])
+    parser.add_argument("--model-glob", default=None)
     parser.add_argument("--output-name", default=None)
     args = parser.parse_args()
 
     eval_root = Path(args.eval_root)
     query_dirs = [eval_root / q for q in args.queries] if args.queries else sorted(eval_root.glob("query_*"))
-    model_glob = f"m_{args.lds_m}_k_{args.lds_k}_seed_*"
+    model_glob = args.model_glob or f"m_{args.lds_m}_k_{args.lds_k}_seed_*"
     output_name = args.output_name or f"aggregate_m_{args.lds_m}_k_{args.lds_k}"
     created = []
     for query_dir in query_dirs:
-        lds_root = query_dir / f"initial_seed_{args.initial_seed}" / "lds"
+        lds_root = query_dir / f"initial_seed_{args.initial_seed}" / args.eval_kind
         if not lds_root.is_dir():
             continue
         alg_dirs = [lds_root / a for a in args.algorithms] if args.algorithms else sorted(p for p in lds_root.iterdir() if p.is_dir())
