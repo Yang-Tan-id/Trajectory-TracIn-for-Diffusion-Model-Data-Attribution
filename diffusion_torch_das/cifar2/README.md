@@ -21,6 +21,17 @@ bash cifar2/scripts/04_grad_query.sh
 bash cifar2/scripts/05_score.sh
 ```
 
+For DAS1 residual weighting, first compute train residual weights from the full
+model, then score:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 DEVICE=cuda TIMESTEPS=1000 BATCH_SIZE=256 \
+  bash cifar2/scripts/11_error_train.sh
+
+TRAIN_SHAPE=10000,4096 QUERY_SHAPE=1000,4096 \
+  bash cifar2/scripts/12_das1_score.sh
+```
+
 Override defaults with environment variables, for example:
 
 ```bash
@@ -49,6 +60,15 @@ TRAIN_SHAPE=10000,4096 QUERY_SHAPE=1000,4096 bash cifar2/scripts/09_lds_score_ma
 
 # Compute Spearman LDS.
 NUM_SUBSETS=64 SEEDS=0,1,2 EVAL_SEEDS=0 bash cifar2/scripts/10_lds_score.sh
+```
+
+To evaluate DAS1 residual-weighted scores with the same LDS losses:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 DEVICE=cuda TIMESTEPS=1000 BATCH_SIZE=256 bash cifar2/scripts/11_error_train.sh
+TRAIN_SHAPE=10000,4096 QUERY_SHAPE=1000,4096 bash cifar2/scripts/13_lds_das1_score_matrix.sh
+SCORES=runs/cifar2/lds/das1_query_train_scores.npy OUTPUT=runs/cifar2/lds/das1_lds_results.csv \
+  NUM_SUBSETS=64 SEEDS=0,1,2 EVAL_SEEDS=0 bash cifar2/scripts/10_lds_score.sh
 ```
 
 For a tiny sanity check:
