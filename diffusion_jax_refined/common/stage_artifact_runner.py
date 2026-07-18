@@ -107,6 +107,12 @@ def _combine_multiterm_dot_scores(train_payload: dict[str, np.ndarray], query_pa
     weights = np.asarray(query_payload.get("term_weights", np.full((train.shape[0],), 1.0 / float(train.shape[0]))), dtype=np.float64).reshape(-1)
     if weights.shape[0] != train.shape[0]:
         raise ValueError(f"term_weights length {weights.shape[0]} does not match terms {train.shape[0]}")
+    if "term_weights" in train_payload:
+        train_weights = np.asarray(train_payload["term_weights"], dtype=np.float64).reshape(-1)
+        if train_weights.shape[0] != train.shape[0]:
+            raise ValueError(f"train term_weights length {train_weights.shape[0]} does not match terms {train.shape[0]}")
+        if not np.allclose(train_weights, weights, rtol=1e-5, atol=1e-12):
+            raise ValueError("train/query term_weights differ; regenerate both Traj TracIn artifacts with the same LR schedule")
     scores = np.zeros((train.shape[1],), dtype=np.float64)
     for i in range(train.shape[0]):
         scores += float(weights[i]) * (train[i] @ query[i])

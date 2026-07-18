@@ -47,7 +47,9 @@ prompted_solo and prompted_multi share the same prompted_jax checkpoint.
 unprompted_solo and unprompted_multi share the same unprompted_jax checkpoint.
 solo/multi only changes launch/sample grouping, not model architecture.
 prompted vs unprompted differs by conditioning: class_cond=True vs class_cond=False.
-Both prompted and unprompted default to JAX_LEARNING_RATE=2e-4 unless overridden.
+Both prompted and unprompted default to `JAX_LEARNING_RATE=1e-4`,
+`JAX_LR_SCHEDULE=cosine_warmup`, and `JAX_LR_WARMUP_RATIO=0.1` unless
+overridden.
 ```
 
 The 21 query tasks are:

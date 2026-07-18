@@ -80,7 +80,18 @@ def iter_with_tqdm(iterator, total: int, desc: str, use_tqdm: bool):
         from tqdm.auto import tqdm
     except ImportError as e:
         raise ImportError("use_tqdm=True but tqdm is not installed. Install with: pip install tqdm") from e
-    return tqdm(iterator, total=total, desc=desc, leave=True, dynamic_ncols=True, file=sys.stdout)
+    leave = os.environ.get("ATTRIBUTION_TQDM_LEAVE", "1") not in ("0", "false", "False")
+    mininterval = float(os.environ.get("ATTRIBUTION_TQDM_MININTERVAL", "1"))
+    return tqdm(
+        iterator,
+        total=total,
+        desc=desc,
+        leave=leave,
+        dynamic_ncols=True,
+        file=sys.stdout,
+        mininterval=mininterval,
+        maxinterval=max(30.0, mininterval),
+    )
 
 
 def tree_to_device(tree, device):

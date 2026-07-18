@@ -1,4 +1,5 @@
 import os
+import sys
 import time
 import json
 import pickle
@@ -96,7 +97,18 @@ def should_print_progress(done: int, total: int, every: int) -> bool:
 
 def iter_with_tqdm(iterable, total: Optional[int], desc: str, enabled: bool = True):
     if enabled and tqdm is not None:
-        return tqdm(iterable, total=total, desc=desc, dynamic_ncols=True, leave=True)
+        leave = os.environ.get("ATTRIBUTION_TQDM_LEAVE", "1") not in ("0", "false", "False")
+        mininterval = float(os.environ.get("ATTRIBUTION_TQDM_MININTERVAL", "1"))
+        return tqdm(
+            iterable,
+            total=total,
+            desc=desc,
+            dynamic_ncols=True,
+            leave=leave,
+            file=sys.stdout,
+            mininterval=mininterval,
+            maxinterval=max(30.0, mininterval),
+        )
     return iterable
 
 
@@ -1024,7 +1036,7 @@ def compute_batched_das_term(
         phi_cache[start:end] = phi_np
         residual_cache[start:end] = residual_np
 
-        if should_print_progress(
+        if (not cfg.use_tqdm) and should_print_progress(
             done_batches,
             num_batches,
             max(1, int(cfg.progress_every_batches)),
@@ -1443,7 +1455,7 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
                     batch = picked[start:start + bs]
                     done_batches = batch_idx + 1
 
-                    if should_print_progress(done_batches, num_batches, max(1, int(cfg.progress_every_batches))):
+                    if (not cfg.use_tqdm) and should_print_progress(done_batches, num_batches, max(1, int(cfg.progress_every_batches))):
                         elapsed = time.perf_counter() - pass1_t0
                         eta = format_eta(done_batches, num_batches, elapsed, warmup_steps=2)
                         print(
@@ -1486,7 +1498,7 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
                     batch = picked[start:start + bs]
                     done_batches = batch_idx + 1
 
-                    if should_print_progress(done_batches, num_batches, max(1, int(cfg.progress_every_batches))):
+                    if (not cfg.use_tqdm) and should_print_progress(done_batches, num_batches, max(1, int(cfg.progress_every_batches))):
                         elapsed = time.perf_counter() - pass2_t0
                         eta = format_eta(done_batches, num_batches, elapsed, warmup_steps=2)
                         print(

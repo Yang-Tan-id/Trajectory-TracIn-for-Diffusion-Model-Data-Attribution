@@ -61,6 +61,23 @@ def tracin_scores(
     return [dot(query_grad, linear_grad(theta0, x, y)) for x, y in zip(train_x, train_y)]
 
 
+def cosine_warmup_lr(base_lr: float, step: int, total_steps: int, warmup_steps: int) -> float:
+    step = max(0, min(step, total_steps))
+    if warmup_steps > 0 and step < warmup_steps:
+        return base_lr * step / warmup_steps
+    progress = (step - warmup_steps) / max(1, total_steps - warmup_steps)
+    return base_lr * 0.5 * (1.0 + math.cos(math.pi * progress))
+
+
+def lr_weighted_tracin_terms(raw_terms: list[float], checkpoint_epochs: list[int], *, base_lr: float, steps_per_epoch: int, total_steps: int, warmup_ratio: float) -> list[float]:
+    warmup_steps = math.ceil(total_steps * warmup_ratio)
+    out = []
+    for raw, epoch in zip(raw_terms, checkpoint_epochs):
+        lr = cosine_warmup_lr(base_lr, epoch * steps_per_epoch, total_steps, warmup_steps)
+        out.append(lr * raw)
+    return out
+
+
 def das_raw_scores(query_phi: list[float], train_phi: list[list[float]]) -> list[float]:
     return [dot(query_phi, phi) for phi in train_phi]
 
@@ -198,6 +215,31 @@ class TestAlgorithmLogic(unittest.TestCase):
 
         self.assertGreater(spearman(preds, true_improvements), 0.95)
         self.assertLess(spearman([-x for x in preds], true_improvements), -0.95)
+
+    def test_cosine_warmup_lr_matches_diffusers_style_schedule(self):
+        base_lr = 1e-4
+        total_steps = 8000
+        warmup_steps = 800
+        self.assertAlmostEqual(cosine_warmup_lr(base_lr, 0, total_steps, warmup_steps), 0.0)
+        self.assertAlmostEqual(cosine_warmup_lr(base_lr, 400, total_steps, warmup_steps), 5e-5)
+        self.assertAlmostEqual(cosine_warmup_lr(base_lr, 800, total_steps, warmup_steps), base_lr)
+        self.assertLess(cosine_warmup_lr(base_lr, 4000, total_steps, warmup_steps), base_lr)
+        self.assertAlmostEqual(cosine_warmup_lr(base_lr, 8000, total_steps, warmup_steps), 0.0)
+
+    def test_traj_tracin_checkpoint_terms_are_learning_rate_weighted(self):
+        raw_terms = [10.0, 10.0, 10.0]
+        weighted = lr_weighted_tracin_terms(
+            raw_terms,
+            [10, 20, 200],
+            base_lr=1e-4,
+            steps_per_epoch=40,
+            total_steps=8000,
+            warmup_ratio=0.1,
+        )
+        self.assertAlmostEqual(weighted[0], 5e-4)
+        self.assertAlmostEqual(weighted[1], 1e-3)
+        self.assertAlmostEqual(weighted[2], 0.0)
+        self.assertNotEqual(weighted, [1e-3, 1e-3, 1e-3])
 
     def test_traj_shard_merge_preserves_full_prediction(self):
         scores = {idx: math.sin(idx) + 0.1 * idx for idx in range(20)}

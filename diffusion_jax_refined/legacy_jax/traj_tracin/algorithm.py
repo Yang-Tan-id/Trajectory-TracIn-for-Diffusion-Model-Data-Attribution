@@ -1,8 +1,10 @@
 import os
+import sys
 import time
 import math
 import json
 import pickle
+import re
 from dataclasses import dataclass, asdict
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
@@ -52,7 +54,18 @@ def format_seconds(sec: float) -> str:
 
 def iter_with_tqdm(iterable, total: Optional[int], desc: str, enabled: bool = True):
     if enabled and tqdm is not None:
-        return tqdm(iterable, total=total, desc=desc, dynamic_ncols=True, leave=True)
+        leave = os.environ.get("ATTRIBUTION_TQDM_LEAVE", "1") not in ("0", "false", "False")
+        mininterval = float(os.environ.get("ATTRIBUTION_TQDM_MININTERVAL", "1"))
+        return tqdm(
+            iterable,
+            total=total,
+            desc=desc,
+            dynamic_ncols=True,
+            leave=leave,
+            file=sys.stdout,
+            mininterval=mininterval,
+            maxinterval=max(30.0, mininterval),
+        )
     return iterable
 
 
@@ -561,6 +574,11 @@ CHECKPOINT_CONFIG_FIELDS = (
     "beta_end",
     "predict_x0",
     "use_bfloat16",
+    "epochs",
+    "batch_size",
+    "learning_rate",
+    "lr_schedule",
+    "lr_warmup_ratio",
 )
 
 
@@ -591,11 +609,15 @@ def apply_checkpoint_config(cfg: "TrajAttributionConfig", ckpt_path: Optional[st
     for name in CHECKPOINT_CONFIG_FIELDS:
         if name not in ckpt_cfg:
             continue
+        target_name = {
+            "lr_schedule": "tracin_lr_schedule",
+            "lr_warmup_ratio": "tracin_warmup_ratio",
+        }.get(name, name)
         old = getattr(cfg, name, None)
         new = ckpt_cfg[name]
         if old != new:
-            setattr(cfg, name, new)
-            changed.append(name)
+            setattr(cfg, target_name, new)
+            changed.append(f"{name}->{target_name}" if target_name != name else name)
 
     if changed:
         print(
@@ -868,6 +890,10 @@ class TrajAttributionConfig:
     topk: int = 100
     progress_every: int = 50
     skip_unreadable_checkpoints: bool = True
+    tracin_use_learning_rate_weights: bool = True
+    tracin_learning_rate: Optional[float] = None
+    tracin_lr_schedule: str = "cosine_warmup"  # "constant", "cosine_warmup", or "none"
+    tracin_warmup_ratio: float = 0.1
 
     # save
     out_dir: str = "./traj_attr_out"
@@ -891,7 +917,7 @@ class TrajAttributionConfig:
     prefer_device: str = "gpu"
     epochs: int = 1
     batch_size: int = 128
-    learning_rate: float = 2e-4
+    learning_rate: float = 1e-4
     weight_decay: float = 1e-4
     grad_clip_norm: float = 1.0
     ema_decay: float = 0.999
@@ -929,6 +955,57 @@ def get_adapter(cfg: TrajAttributionConfig):
     if cfg.task_type == "artbench_latent":
         return ArtBenchLatentTaskAdapter(module)
     raise ValueError("task_type must be 'x3', 'cifar10', or 'artbench_latent'")
+
+
+def checkpoint_epoch_from_path(path: str) -> Optional[int]:
+    match = re.search(r"_epoch_(\d+)", os.path.basename(str(path)))
+    return int(match.group(1)) if match else None
+
+
+def cosine_warmup_learning_rate(base_lr: float, step: int, total_steps: int, warmup_steps: int) -> float:
+    if total_steps <= 0:
+        return float(base_lr)
+    step = max(0, min(int(step), int(total_steps)))
+    warmup_steps = max(0, min(int(warmup_steps), int(total_steps)))
+    if warmup_steps > 0 and step < warmup_steps:
+        return float(base_lr) * float(step) / float(max(1, warmup_steps))
+    if total_steps <= warmup_steps:
+        return float(base_lr)
+    progress = float(step - warmup_steps) / float(max(1, total_steps - warmup_steps))
+    return float(base_lr) * 0.5 * (1.0 + math.cos(math.pi * progress))
+
+
+def tracin_checkpoint_lr_weight(
+    cfg: TrajAttributionConfig,
+    ckpt_path: str,
+    ckpt_index: int,
+    num_ckpts: int,
+    ds_size: int,
+) -> float:
+    if not bool(cfg.tracin_use_learning_rate_weights):
+        return 1.0
+    schedule = str(cfg.tracin_lr_schedule or "constant").lower()
+    if schedule in ("none", "off", "false", "0"):
+        return 1.0
+    base_lr = float(cfg.tracin_learning_rate if cfg.tracin_learning_rate is not None else cfg.learning_rate)
+    if schedule in ("constant", "fixed"):
+        return base_lr
+    if schedule in ("cosine", "cosine_warmup", "warmup_cosine"):
+        steps_per_epoch = int(math.ceil(float(max(1, ds_size)) / float(max(1, int(cfg.batch_size)))))
+        total_steps = int(max(1, steps_per_epoch * max(1, int(cfg.epochs))))
+        warmup_steps = int(math.ceil(total_steps * float(cfg.tracin_warmup_ratio)))
+        epoch = checkpoint_epoch_from_path(ckpt_path)
+        if epoch is None:
+            # Historical checkpoint names may not include an epoch. In that
+            # case, spread selected checkpoints uniformly over training.
+            step = int(round(total_steps * float(ckpt_index + 1) / float(max(1, num_ckpts))))
+        else:
+            step = int(epoch) * steps_per_epoch
+        return cosine_warmup_learning_rate(base_lr, step, total_steps, warmup_steps)
+    raise ValueError(
+        f"Unsupported tracin_lr_schedule={cfg.tracin_lr_schedule!r}; "
+        "expected 'constant', 'cosine_warmup', or 'none'."
+    )
 
 
 def normalize_query_objective_name(name: str) -> str:
@@ -1369,7 +1446,12 @@ def run_attribution(cfg: TrajAttributionConfig):
         used_ckpts_for_stage = []
 
         for ckpt_i, ckpt_path in enumerate(ckpts):
-            print(f"[stage:{stage_mode}] TrajTracIn checkpoint {ckpt_i + 1}/{len(ckpts)} | {os.path.basename(ckpt_path)}")
+            ckpt_lr_weight = tracin_checkpoint_lr_weight(cfg, ckpt_path, ckpt_i, len(ckpts), len(ds))
+            print(
+                f"[stage:{stage_mode}] TrajTracIn checkpoint {ckpt_i + 1}/{len(ckpts)} | "
+                f"{os.path.basename(ckpt_path)} | lr_weight={ckpt_lr_weight:.8g} "
+                f"schedule={cfg.tracin_lr_schedule}"
+            )
             try:
                 state, _payload = adapter.restore_state(ckpt_path, state_template)
             except Exception as exc:
@@ -1417,7 +1499,7 @@ def run_attribution(cfg: TrajAttributionConfig):
                         stage_timesteps.append(int(t_seq[snap_id]))
                         stage_snapshot_positions.append(int(pos_seq[snap_id]))
                         stage_ckpt_paths.append(str(ckpt_path))
-                        stage_term_weights.append(1.0 / float(max(1, len(t_seq))))
+                        stage_term_weights.append(ckpt_lr_weight / float(max(1, len(t_seq))))
             else:
                 train_phi_terms = []
 
@@ -1472,7 +1554,7 @@ def run_attribution(cfg: TrajAttributionConfig):
                     stage_timesteps.append(int(t_value))
                     stage_snapshot_positions.append(int(pos_seq[snap_id]))
                     stage_ckpt_paths.append(str(ckpt_path))
-                    stage_term_weights.append(1.0 / float(max(1, len(t_seq))))
+                    stage_term_weights.append(ckpt_lr_weight / float(max(1, len(t_seq))))
                     print(f"[stage:train] TrajTracIn ckpt={ckpt_i + 1} snapshot={snap_id + 1}/{len(t_seq)}")
                 stage_features.extend(train_phi_terms)
             used_ckpts_for_stage.append(ckpt_path)
@@ -1527,9 +1609,14 @@ def run_attribution(cfg: TrajAttributionConfig):
     for ckpt_i, ckpt_path in enumerate(ckpts):
         ckpt_start = time.time()
         ckpt_name = os.path.basename(ckpt_path)
+        ckpt_lr_weight = tracin_checkpoint_lr_weight(cfg, ckpt_path, ckpt_i, len(ckpts), len(ds))
 
         print("\n" + "-" * 90)
         print(f"[checkpoint {ckpt_i + 1}/{len(ckpts)}] starting {ckpt_name}")
+        print(
+            f"[checkpoint {ckpt_i + 1}/{len(ckpts)}] "
+            f"lr_weight={ckpt_lr_weight:.8g} schedule={cfg.tracin_lr_schedule}"
+        )
         if os.path.abspath(ckpt_path) == os.path.abspath(reference_ckpt):
             print(
                 "[warning] this checkpoint is theta_ref, so f_noise=0 and its "
@@ -1625,7 +1712,7 @@ def run_attribution(cfg: TrajAttributionConfig):
         )
 
         done_units = 0
-        snap_weight = 1.0 / float(max(1, len(t_seq)))
+        snap_weight = ckpt_lr_weight / float(max(1, len(t_seq)))
         report_every_batches = max(1, int(math.ceil(cfg.progress_every / batch_size)))
         snapshot_chunk_size = max(1, int(cfg.snapshot_chunk_size))
 
@@ -1700,7 +1787,7 @@ def run_attribution(cfg: TrajAttributionConfig):
                         samples=f"{end}/{len(picked)}",
                     )
 
-                if (
+                if (not cfg.use_tqdm) and (
                     (chunk_start == 0 and batch_no == 1)
                     or (chunk_end == len(t_seq) and (end == len(picked) or batch_no % report_every_batches == 0))
                 ):

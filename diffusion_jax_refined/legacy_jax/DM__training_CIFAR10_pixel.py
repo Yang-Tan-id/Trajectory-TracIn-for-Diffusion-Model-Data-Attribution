@@ -1,5 +1,6 @@
 """
-50000 data points, 200 epochs, 1000 timesteps, 128 batch size, 2e-4 lr, 1e-4 weight decay, 0.999 ema decay, 100 log_every
+50000 data points, 200 epochs, 1000 timesteps, 128 batch size, 1e-4 lr,
+10% warmup + cosine decay, 1e-4 weight decay, 0.999 ema decay, 100 log_every
 8.333hrs on A100 40GB, 16.5hr on V100 32GB, 25.5hrs on RTX 3090 24GB (with mixed precision)
 """
 
@@ -312,7 +313,9 @@ class TrainConfig:
     seed: int = 0
     epochs: int = 200
     batch_size: int = 128
-    learning_rate: float = 2e-4
+    learning_rate: float = 1e-4
+    lr_schedule: str = "cosine_warmup"
+    lr_warmup_ratio: float = 0.1
     weight_decay: float = 1e-4
     adam_b1: float = 0.9
     adam_b2: float = 0.999
@@ -789,7 +792,28 @@ def build_model(cfg: TrainConfig) -> nn.Module:
     raise ValueError("cfg.model_type must be 'cnn' or 'unet'")
 
 
-def create_train_state(cfg: TrainConfig, model: nn.Module, rng: jax.Array, device) -> TrainState:
+def make_learning_rate_schedule(cfg: TrainConfig, total_steps: int):
+    schedule_name = str(getattr(cfg, "lr_schedule", "constant") or "constant").lower()
+    base_lr = float(cfg.learning_rate)
+    if schedule_name in ("constant", "fixed"):
+        return optax.constant_schedule(base_lr)
+    if schedule_name in ("cosine", "cosine_warmup", "warmup_cosine"):
+        warmup_steps = int(math.ceil(max(1, int(total_steps)) * float(getattr(cfg, "lr_warmup_ratio", 0.1))))
+        return optax.warmup_cosine_decay_schedule(
+            init_value=0.0,
+            peak_value=base_lr,
+            warmup_steps=warmup_steps,
+            decay_steps=max(1, int(total_steps)),
+            end_value=0.0,
+        )
+    raise ValueError(f"Unsupported lr_schedule={cfg.lr_schedule!r}; expected 'constant' or 'cosine_warmup'.")
+
+
+def learning_rate_at_step(cfg: TrainConfig, step: int, total_steps: int) -> float:
+    return float(make_learning_rate_schedule(cfg, total_steps)(int(step)))
+
+
+def create_train_state(cfg: TrainConfig, model: nn.Module, rng: jax.Array, device, total_steps: int) -> TrainState:
     compute_dtype = resolve_compute_dtype(cfg.use_bfloat16)
     dummy_x = jnp.zeros((1, cfg.image_size, cfg.image_size, cfg.in_channels), dtype=compute_dtype)
     dummy_t = jnp.zeros((1,), dtype=jnp.int32)
@@ -807,10 +831,11 @@ def create_train_state(cfg: TrainConfig, model: nn.Module, rng: jax.Array, devic
         variables = model.init(rng, dummy_x, dummy_t, dummy_y, train=True)
         params = variables["params"]
 
+    lr_schedule = make_learning_rate_schedule(cfg, total_steps)
     tx = optax.chain(
         optax.clip_by_global_norm(cfg.grad_clip_norm),
         optax.adamw(
-            learning_rate=cfg.learning_rate,
+            learning_rate=lr_schedule,
             b1=getattr(cfg, "adam_b1", 0.9),
             b2=getattr(cfg, "adam_b2", 0.999),
             eps=getattr(cfg, "adam_eps", 1e-8),
@@ -1196,6 +1221,11 @@ def train(cfg: TrainConfig):
         f"steps_per_epoch={steps_per_epoch} "
         f"(drop_last={train_drop_last}), total_epochs={cfg.epochs}, total_train_steps={total_steps}"
     )
+    warmup_steps = int(math.ceil(max(1, total_steps) * float(getattr(cfg, "lr_warmup_ratio", 0.1))))
+    print(
+        f"learning_rate={cfg.learning_rate:g}, lr_schedule={getattr(cfg, 'lr_schedule', 'constant')}, "
+        f"warmup_steps={warmup_steps if getattr(cfg, 'lr_schedule', 'constant') != 'constant' else 0}"
+    )
 
     if steps_per_epoch == 0:
         raise ValueError(
@@ -1213,7 +1243,7 @@ def train(cfg: TrainConfig):
     rng = jax.random.PRNGKey(cfg.seed)
     schedule = make_diffusion_schedule(cfg.timesteps, cfg.beta_start, cfg.beta_end)
     model = build_model(cfg)
-    state = create_train_state(cfg, model, rng, device)
+    state = create_train_state(cfg, model, rng, device, total_steps)
     if use_pmap:
         state = jax_utils.replicate(state, devices=devices)
         sharded_rng = jax.random.split(rng, len(devices))
@@ -1286,17 +1316,20 @@ def train(cfg: TrainConfig):
                         loss_val = float(metrics["loss"][0])
                     else:
                         loss_val = float(metrics["loss"])
+                    lr_val = learning_rate_at_step(cfg, global_step, total_steps)
                     print(
                         f"epoch={epoch}/{cfg.epochs} "
                         f"step={global_step}/{total_steps} "
-                        f"loss={loss_val:.6f}"
+                        f"loss={loss_val:.6f} "
+                        f"lr={lr_val:.6g}"
                     )
                     if cfg.use_tqdm:
-                        train_iter.set_postfix(loss=f"{loss_val:.4f}")
+                        train_iter.set_postfix(loss=f"{loss_val:.4f}", lr=f"{lr_val:.3g}")
                     if wandb_run is not None and cfg.wandb_log_step_metrics:
                         wandb_run.log(
                             {
                                 "train/loss_step": loss_val,
+                                "train/lr": lr_val,
                                 "train/epoch": epoch,
                                 "train/global_step": global_step,
                             },
@@ -1476,7 +1509,9 @@ if __name__ == "__main__":
         batch_size=256,
         prefetch_size=4,
         epochs=200,
-        learning_rate=2e-4,
+        learning_rate=1e-4,
+        lr_schedule="cosine_warmup",
+        lr_warmup_ratio=0.1,
         base_channels=160,
         class_cond=True,
         cond_mode="multi_hot",

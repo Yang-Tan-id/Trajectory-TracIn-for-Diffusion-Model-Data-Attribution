@@ -185,6 +185,11 @@ ATTRIBUTION_CONFIGS = {
         "num_traj_snapshots": 100,
         "snapshot_chunk_size": int(os.environ.get("TRAJ_SNAPSHOT_CHUNK_SIZE", "8")),
         "train_mc_samples": 10,
+        "tracin_use_learning_rate_weights": os.environ.get(
+            "TRACIN_USE_LR_WEIGHTS", "1"
+        ) not in ("0", "false", "False"),
+        "tracin_lr_schedule": os.environ.get("TRACIN_LR_SCHEDULE", "cosine_warmup"),
+        "tracin_warmup_ratio": float(os.environ.get("TRACIN_WARMUP_RATIO", "0.1")),
         "score_batch_size": int(os.environ.get("TRAJ_SCORE_BATCH_SIZE", "32")),
         "progress_every": 512,
     },

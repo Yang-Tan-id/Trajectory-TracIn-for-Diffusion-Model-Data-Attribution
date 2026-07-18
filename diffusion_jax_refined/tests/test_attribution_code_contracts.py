@@ -22,6 +22,28 @@ class TestAttributionCodeContracts(unittest.TestCase):
         self.assertIn("eps_theta(x_ref_k,k)-eps_theta_ref(x_ref_k,k)", text)
         self.assertIn('np.save(os.path.join(cfg.out_dir, "score_indices.npy")', text)
 
+    def test_cifar_jax_training_uses_cosine_warmup_lr_by_default(self):
+        text = (LEGACY / "DM__training_CIFAR10_pixel.py").read_text()
+        self.assertIn("learning_rate: float = 1e-4", text)
+        self.assertIn('lr_schedule: str = "cosine_warmup"', text)
+        self.assertIn("lr_warmup_ratio: float = 0.1", text)
+        self.assertIn("optax.warmup_cosine_decay_schedule", text)
+        self.assertIn("learning_rate=lr_schedule", text)
+        self.assertIn('"train/lr": lr_val', text)
+
+    def test_traj_tracin_uses_checkpoint_lr_weights(self):
+        text = (LEGACY / "traj_tracin" / "algorithm.py").read_text()
+        self.assertIn("tracin_checkpoint_lr_weight", text)
+        self.assertIn('tracin_lr_schedule: str = "cosine_warmup"', text)
+        self.assertIn('\"lr_schedule\": \"tracin_lr_schedule\"', text)
+        self.assertIn("stage_term_weights.append(ckpt_lr_weight / float(max(1, len(t_seq))))", text)
+        self.assertIn("snap_weight = ckpt_lr_weight / float(max(1, len(t_seq)))", text)
+
+    def test_traj_tracin_score_combiner_rejects_mismatched_term_weights(self):
+        text = (ROOT / "common" / "stage_artifact_runner.py").read_text()
+        self.assertIn("train/query term_weights differ", text)
+        self.assertIn("np.allclose(train_weights, weights", text)
+
     def test_traj_tracin_has_normalized_eps_deviation_objectives(self):
         text = (LEGACY / "traj_tracin" / "algorithm.py").read_text()
         self.assertIn('query_objective: str = "trajectory_noise_squared_deviation"', text)
@@ -157,6 +179,23 @@ class TestAttributionCodeContracts(unittest.TestCase):
                 self.assertIn("TRAJ_SNAPSHOT_CHUNK_SIZE", text)
                 self.assertIn("DTRAK_BATCH_SIZE", text)
                 self.assertIn("JOURNEY_BATCH_SIZE", text)
+
+    def test_attribution_progress_logs_prefer_single_tqdm_bar(self):
+        for algorithm in ("das", "dtrak", "traj_tracin"):
+            with self.subTest(algorithm=algorithm):
+                text = (LEGACY / algorithm / "algorithm.py").read_text()
+                self.assertIn("ATTRIBUTION_TQDM_MININTERVAL", text)
+                self.assertIn("ATTRIBUTION_TQDM_LEAVE", text)
+                if algorithm in ("das", "dtrak"):
+                    self.assertIn("(not cfg.use_tqdm) and should_print_progress", text)
+                else:
+                    self.assertIn("if (not cfg.use_tqdm) and (", text)
+
+        end_text = (LEGACY / "end_tracin" / "algorithm.py").read_text()
+        self.assertIn("ATTRIBUTION_TQDM_MININTERVAL", end_text)
+        vista_text = (ROOT / "cifar2" / "vista_original" / "02_sample_and_original_attribution_vista.sh").read_text()
+        self.assertIn("PYTHONUNBUFFERED=1", vista_text)
+        self.assertIn("ATTRIBUTION_TQDM_MININTERVAL", vista_text)
 
     def test_dtrak_train_features_are_batched_with_vmap(self):
         text = (LEGACY / "dtrak" / "algorithm.py").read_text()

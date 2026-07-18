@@ -66,8 +66,10 @@ class TestScriptLayoutStatic(unittest.TestCase):
 
         training_text = (ROOT / "common" / "prompted_jax_training.py").read_text()
         self.assertIn('return getattr(cfg_module, default_attr, None)', training_text)
-        self.assertIn('learning_rate=_optional_float("JAX_LEARNING_RATE", 2e-4)', training_text)
-        self.assertIn('dm_learning_rate=_optional_float("JAX_LEARNING_RATE", 2e-4)', training_text)
+        self.assertIn('learning_rate=_optional_float("JAX_LEARNING_RATE", 1e-4)', training_text)
+        self.assertIn('lr_schedule=os.environ.get("JAX_LR_SCHEDULE", "cosine_warmup")', training_text)
+        self.assertIn('lr_warmup_ratio=_optional_float("JAX_LR_WARMUP_RATIO", 0.1)', training_text)
+        self.assertIn('dm_learning_rate=_optional_float("JAX_LEARNING_RATE", 1e-4)', training_text)
         self.assertNotIn("1e-4 if unconditional else 2e-4", training_text)
         self.assertNotIn("TRAIN_PROMPT_MODE", training_text)
         self.assertNotIn("TRAIN_PROMPTS", training_text)
