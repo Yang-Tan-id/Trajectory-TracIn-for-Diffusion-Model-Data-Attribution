@@ -11,7 +11,20 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="${VISTA_PIPELINE_DIR:-}"
+if [[ -z "${SCRIPT_DIR}" || ! -f "${SCRIPT_DIR}/_vista_pipeline_lib.sh" ]]; then
+  for candidate in \
+    "${SLURM_SUBMIT_DIR:-}" \
+    "${SLURM_SUBMIT_DIR:-}/diffusion_jax_refined/cifar2/vista"; do
+    if [[ -n "${candidate}" && -f "${candidate}/_vista_pipeline_lib.sh" ]]; then
+      SCRIPT_DIR="${candidate}"
+      break
+    fi
+  done
+fi
+if [[ -z "${SCRIPT_DIR}" || ! -f "${SCRIPT_DIR}/_vista_pipeline_lib.sh" ]]; then
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+fi
 # shellcheck source=_vista_pipeline_lib.sh
 source "${SCRIPT_DIR}/_vista_pipeline_lib.sh"
 vista_init
@@ -53,7 +66,9 @@ for spec in "${SPECS[@]}"; do
       EXPERIMENT_TAG="${EXPERIMENT_TAG}" \
       TRAIN_SEED="${TRAIN_SEED}" \
       SAMPLE_MODEL_MODE="${mode}" \
+      UNPROMPTED_SAMPLE_MODEL_MODE="${mode}" \
       ATTRIBUTION_SCORE_MODEL_MODE="${mode}" \
+      UNPROMPTED_SCORE_MODEL_MODE="${mode}" \
       QUERY="${query_env}" \
       INITIAL_SEED="${seed}" \
       SAMPLE_SEED="${seed}" \

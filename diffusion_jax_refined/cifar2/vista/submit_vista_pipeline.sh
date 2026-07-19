@@ -6,6 +6,9 @@ set -euo pipefail
 #   bash diffusion_jax_refined/cifar2/vista/submit_vista_pipeline.sh
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
+export REPO_ROOT
+export VISTA_PIPELINE_DIR="${SCRIPT_DIR}"
 cd "${SCRIPT_DIR}"
 
 submit_job() {

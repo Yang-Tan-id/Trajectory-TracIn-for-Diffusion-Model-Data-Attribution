@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
 
 vista_init() {
-  REPO_ROOT="${REPO_ROOT:-${SLURM_SUBMIT_DIR:-$(pwd)}}"
+  if [[ -z "${REPO_ROOT:-}" ]]; then
+    if [[ -n "${SCRIPT_DIR:-}" ]]; then
+      REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
+    else
+      REPO_ROOT="${SLURM_SUBMIT_DIR:-$(pwd)}"
+    fi
+  fi
   CIFAR2_ROOT="${CIFAR2_ROOT:-${REPO_ROOT}/diffusion_jax_refined/cifar2}"
   EXPERIMENT_TAG="${EXPERIMENT_TAG:-experiment_67}"
   TRAIN_SEED="${TRAIN_SEED:-67}"
@@ -13,8 +19,14 @@ vista_init() {
     # shellcheck disable=SC1090
     source "${ENV_SETUP}"
   else
-    CONDA_ENV_PATH="${CONDA_ENV_PATH:-${SCRATCH}/conda-envs/trajectory-tracin}"
-    if [[ -f "${SCRATCH}/miniforge3/etc/profile.d/conda.sh" ]]; then
+    if [[ -z "${CONDA_ENV_PATH:-}" ]]; then
+      if [[ -n "${SCRATCH:-}" ]]; then
+        CONDA_ENV_PATH="${SCRATCH}/conda-envs/trajectory-tracin"
+      else
+        CONDA_ENV_PATH="${HOME}/conda-envs/trajectory-tracin"
+      fi
+    fi
+    if [[ -n "${SCRATCH:-}" && -f "${SCRATCH}/miniforge3/etc/profile.d/conda.sh" ]]; then
       # shellcheck disable=SC1090
       source "${SCRATCH}/miniforge3/etc/profile.d/conda.sh"
       conda activate "${CONDA_ENV_PATH}"
@@ -85,7 +97,16 @@ wait_all() {
 run_slot() {
   local slot="$1"
   shift
-  if command -v ibrun >/dev/null; then
+  local backend="${VISTA_SLOT_BACKEND:-srun}"
+  if [[ "${backend}" == "srun" && -n "${SLURM_JOB_ID:-}" ]] && command -v srun >/dev/null; then
+    srun \
+      --nodes=1 \
+      --ntasks=1 \
+      --cpus-per-task="${SLURM_CPUS_PER_TASK:-1}" \
+      --exclusive \
+      --mpi=none \
+      "$@"
+  elif [[ "${backend}" == "ibrun" ]] && command -v ibrun >/dev/null; then
     ibrun -n 1 -o "${slot}" "$@"
   else
     "$@"

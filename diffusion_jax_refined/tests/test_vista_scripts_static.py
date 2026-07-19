@@ -54,6 +54,10 @@ class TestVistaScriptsStatic(unittest.TestCase):
         self.assertIn("#SBATCH --nodes=21", eval_text)
         self.assertIn("#SBATCH --time=12:00:00", eval_text)
         self.assertIn("horse,automobile|96", sample_text)
+        self.assertIn('UNPROMPTED_SAMPLE_MODEL_MODE="${mode}"', sample_text)
+        self.assertIn('UNPROMPTED_SCORE_MODEL_MODE="${mode}"', sample_text)
+        self.assertIn('UNPROMPTED_SAMPLE_MODEL_MODE="${mode}"', eval_text)
+        self.assertIn('UNPROMPTED_SCORE_MODEL_MODE="${mode}"', eval_text)
         self.assertIn("LDS_SIMPLE_LOSS_NUM_MC=10", eval_text)
         self.assertIn("aggregate_lds_by_seed.py", eval_text)
         self.assertIn("summarize_lds_eval_report.py", eval_text)
@@ -68,6 +72,39 @@ class TestVistaScriptsStatic(unittest.TestCase):
             with self.subTest(script=script.name):
                 for needle in forbidden:
                     self.assertNotIn(needle, text)
+
+    def test_vista_jobs_find_real_script_dir_under_slurm_spool(self):
+        job_scripts = (
+            "00_train_four_models_vista.sh",
+            "01_train_lds_models_vista.sh",
+            "02_train_datapoint_gradients_vista.sh",
+            "03_sample_query_gradients_vista.sh",
+            "04_score_vista.sh",
+            "05_lds_eval_report_vista.sh",
+        )
+        for name in job_scripts:
+            with self.subTest(name=name):
+                text = self.read(name)
+                self.assertIn('SCRIPT_DIR="${VISTA_PIPELINE_DIR:-}"', text)
+                self.assertIn('${SLURM_SUBMIT_DIR:-}/diffusion_jax_refined/cifar2/vista', text)
+                self.assertIn('! -f "${SCRIPT_DIR}/_vista_pipeline_lib.sh"', text)
+                self.assertIn('source "${SCRIPT_DIR}/_vista_pipeline_lib.sh"', text)
+
+        submit_text = self.read("submit_vista_pipeline.sh")
+        self.assertIn('export VISTA_PIPELINE_DIR="${SCRIPT_DIR}"', submit_text)
+
+    def test_vista_lib_does_not_require_scratch_env(self):
+        text = self.read("_vista_pipeline_lib.sh")
+        self.assertIn('${SCRATCH:-}', text)
+        self.assertNotIn('${SCRATCH}/conda-envs/trajectory-tracin}', text)
+
+    def test_vista_run_slot_prefers_srun_over_ibrun_mpirun(self):
+        text = self.read("_vista_pipeline_lib.sh")
+        self.assertIn('local backend="${VISTA_SLOT_BACKEND:-srun}"', text)
+        self.assertIn("command -v srun", text)
+        self.assertIn("--exclusive", text)
+        self.assertIn("--mpi=none", text)
+        self.assertIn('elif [[ "${backend}" == "ibrun" ]]', text)
 
 
 if __name__ == "__main__":
