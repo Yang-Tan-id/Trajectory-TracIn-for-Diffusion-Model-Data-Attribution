@@ -11,7 +11,10 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="${VISTA_ORIGINAL_DIR:-${SLURM_SUBMIT_DIR:-}}"
+if [[ -z "${SCRIPT_DIR}" || ! -f "${SCRIPT_DIR}/_vista_original_lib.sh" ]]; then
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+fi
 # shellcheck source=_vista_original_lib.sh
 source "${SCRIPT_DIR}/_vista_original_lib.sh"
 vista_original_init

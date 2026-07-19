@@ -8,6 +8,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 export REPO_ROOT
+export VISTA_ORIGINAL_DIR="${SCRIPT_DIR}"
 cd "${SCRIPT_DIR}"
 
 submit_job() {
