@@ -1,0 +1,7 @@
+Job 00: train base checkpoint families
+experiment=experiment_67; train_seed=67; modes=prompted_solo unprompted_solo
+prompted_solo/prompted_multi share prompted_jax checkpoints; unprompted_solo/unprompted_multi share unprompted_jax checkpoints.
+logs=/work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/vista_original_logs/00_train_base/842572
+Launch training mode=prompted_solo slot=0 -> /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/vista_original_logs/00_train_base/842572/prompted_solo.log
+Launch training mode=unprompted_solo slot=1 -> /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/vista_original_logs/00_train_base/842572/unprompted_solo.log
+Job 00 complete.

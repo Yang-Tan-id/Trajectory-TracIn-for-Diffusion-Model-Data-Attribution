@@ -1,0 +1,834 @@
+TACC:  Starting up job 842572 
+TACC:  Setting up parallel environment for OpenMPI mpirun. 
+TACC:  Starting parallel tasks... 
+unprompted_solo: unconditional training, gpu=0, seed=67, experiment=experiment_67
+========================================================================================
+Unprompted JAX training
+dataset       : cifar2
+experiment    : experiment_67
+algorithm     : shared
+checkpoint_dir: /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/model/unprompted_jax
+class_names   : ('horse', 'automobile')
+cond_mode     : multi_hot
+class_cond    : False
+========================================================================================
+{'data_root': '/work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/dataset/cifar2/cifar-10-batches-py', 'batch_names': None, 'class_names': ('horse', 'automobile'), 'use_test': False, 'exclude_ranges': None, 'exclude_indices': None, 'model_type': 'unet', 'image_size': 32, 'in_channels': 3, 'base_channels': 160, 'channel_mults': (1, 2, 2), 'num_res_blocks': 2, 'time_emb_dim': 128, 'num_classes': 10, 'class_cond': False, 'cond_mode': 'multi_hot', 'dropout': 0.1, 'seed': 67, 'epochs': 200, 'batch_size': 128, 'learning_rate': 0.0001, 'lr_schedule': 'cosine_warmup', 'lr_warmup_ratio': 0.1, 'weight_decay': 1e-06, 'adam_b1': 0.95, 'adam_b2': 0.999, 'adam_eps': 1e-08, 'grad_clip_norm': 1.0, 'ema_decay': 0.999, 'log_every': 100, 'timesteps': 1000, 'beta_start': 0.0001, 'beta_end': 0.02, 'predict_x0': False, 'prefer_device': 'gpu', 'use_bfloat16': False, 'use_data_parallel': True, 'num_devices': 1, 'checkpoint_dir': '/work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/model/unprompted_jax', 'save_every_epochs': 4, 'keep_last_k': None, 'resume_from': None, 'num_workers': 0, 'use_tqdm': True, 'prefetch_size': 4, 'use_wandb': False, 'wandb_project': 'DA-unet-cifar10-pixel-training', 'wandb_entity': 'clearoboticslab', 'wandb_run_name': 'cifar2-experiment_67-shared-unprompted-jax-seed67', 'wandb_mode': 'offline', 'wandb_log_step_metrics': False}
+Using backend=gpu, primary_device=cuda:0
+Visible devices (1): ['cuda:0']
+Data parallel enabled: False
+Config: {'data_root': '/work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/dataset/cifar2/cifar-10-batches-py', 'batch_names': None, 'class_names': ('horse', 'automobile'), 'use_test': False, 'exclude_ranges': None, 'exclude_indices': None, 'model_type': 'unet', 'image_size': 32, 'in_channels': 3, 'base_channels': 160, 'channel_mults': (1, 2, 2), 'num_res_blocks': 2, 'time_emb_dim': 128, 'num_classes': 10, 'class_cond': False, 'cond_mode': 'multi_hot', 'dropout': 0.1, 'seed': 67, 'epochs': 200, 'batch_size': 128, 'learning_rate': 0.0001, 'lr_schedule': 'cosine_warmup', 'lr_warmup_ratio': 0.1, 'weight_decay': 1e-06, 'adam_b1': 0.95, 'adam_b2': 0.999, 'adam_eps': 1e-08, 'grad_clip_norm': 1.0, 'ema_decay': 0.999, 'log_every': 100, 'timesteps': 1000, 'beta_start': 0.0001, 'beta_end': 0.02, 'predict_x0': False, 'prefer_device': 'gpu', 'use_bfloat16': False, 'use_data_parallel': True, 'num_devices': 1, 'checkpoint_dir': '/work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/model/unprompted_jax', 'save_every_epochs': 4, 'keep_last_k': None, 'resume_from': None, 'num_workers': 0, 'use_tqdm': True, 'prefetch_size': 4, 'use_wandb': False, 'wandb_project': 'DA-unet-cifar10-pixel-training', 'wandb_entity': 'clearoboticslab', 'wandb_run_name': 'cifar2-experiment_67-shared-unprompted-jax-seed67', 'wandb_mode': 'offline', 'wandb_log_step_metrics': False}
+Precision policy: compute_dtype=<class 'jax.numpy.float32'>, param_dtype=<class 'jax.numpy.float32'>
+Loaded 10000 images from all train batches
+Class subset: ('horse', 'automobile')
+steps_per_epoch=78 (drop_last=True), total_epochs=200, total_train_steps=15600
+learning_rate=0.0001, lr_schedule=cosine_warmup, warmup_steps=1560
+E0718 23:16:12.101398 3132536 cuda_timer.cc:88] Delay kernel timed out: measured time has sub-optimal accuracy. There may be a missing warmup execution, please investigate in Nsight Systems.
+E0718 23:16:12.247796 3132536 cuda_timer.cc:88] Delay kernel timed out: measured time has sub-optimal accuracy. There may be a missing warmup execution, please investigate in Nsight Systems.
+
+[epoch 1/200] train_loss=1.056352 time=15.0s
+[epoch 1/200] eval_loss=1.286639
+epoch=2/200 step=100/15600 loss=0.521938 lr=6.41026e-06
+
+[epoch 2/200] train_loss=0.413830 time=3.4s
+[epoch 2/200] eval_loss=1.175714
+epoch=3/200 step=200/15600 loss=0.154292 lr=1.28205e-05
+
+[epoch 3/200] train_loss=0.163668 time=3.0s
+[epoch 3/200] eval_loss=0.995735
+epoch=4/200 step=300/15600 loss=0.104616 lr=1.92308e-05
+
+[epoch 4/200] train_loss=0.119904 time=3.0s
+[epoch 4/200] eval_loss=0.836054
+Saved checkpoint for epoch 4 to /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/model/unprompted_jax (keeping last None)
+
+[epoch 5/200] train_loss=0.104059 time=3.0s
+[epoch 5/200] eval_loss=0.661377
+epoch=6/200 step=400/15600 loss=0.084377 lr=2.5641e-05
+
+[epoch 6/200] train_loss=0.090664 time=3.0s
+[epoch 6/200] eval_loss=0.520008
+epoch=7/200 step=500/15600 loss=0.076986 lr=3.20513e-05
+
+[epoch 7/200] train_loss=0.078713 time=3.0s
+[epoch 7/200] eval_loss=0.408359
+epoch=8/200 step=600/15600 loss=0.050807 lr=3.84615e-05
+
+[epoch 8/200] train_loss=0.074133 time=3.1s
+[epoch 8/200] eval_loss=0.317327
+Saved checkpoint for epoch 8 to /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/model/unprompted_jax (keeping last None)
+epoch=9/200 step=700/15600 loss=0.069415 lr=4.48718e-05
+
+[epoch 9/200] train_loss=0.072792 time=3.1s
+[epoch 9/200] eval_loss=0.256131
+
+[epoch 10/200] train_loss=0.067256 time=3.1s
+[epoch 10/200] eval_loss=0.191184
+epoch=11/200 step=800/15600 loss=0.064496 lr=5.12821e-05
+
+[epoch 11/200] train_loss=0.062768 time=3.1s
+[epoch 11/200] eval_loss=0.174236
+epoch=12/200 step=900/15600 loss=0.059559 lr=5.76923e-05
+
+[epoch 12/200] train_loss=0.061909 time=3.1s
+[epoch 12/200] eval_loss=0.152562
+Saved checkpoint for epoch 12 to /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/model/unprompted_jax (keeping last None)
+epoch=13/200 step=1000/15600 loss=0.064154 lr=6.41026e-05
+
+[epoch 13/200] train_loss=0.057921 time=3.0s
+[epoch 13/200] eval_loss=0.122489
+
+[epoch 14/200] train_loss=0.055489 time=3.0s
+[epoch 14/200] eval_loss=0.131907
+epoch=15/200 step=1100/15600 loss=0.050089 lr=7.05128e-05
+
+[epoch 15/200] train_loss=0.054422 time=3.1s
+[epoch 15/200] eval_loss=0.130470
+epoch=16/200 step=1200/15600 loss=0.047066 lr=7.69231e-05
+
+[epoch 16/200] train_loss=0.054016 time=3.1s
+[epoch 16/200] eval_loss=0.096539
+Saved checkpoint for epoch 16 to /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/model/unprompted_jax (keeping last None)
+epoch=17/200 step=1300/15600 loss=0.054077 lr=8.33333e-05
+
+[epoch 17/200] train_loss=0.053894 time=3.1s
+[epoch 17/200] eval_loss=0.121089
+epoch=18/200 step=1400/15600 loss=0.049867 lr=8.97436e-05
+
+[epoch 18/200] train_loss=0.052725 time=3.0s
+[epoch 18/200] eval_loss=0.095248
+
+[epoch 19/200] train_loss=0.050673 time=3.1s
+[epoch 19/200] eval_loss=0.105928
+epoch=20/200 step=1500/15600 loss=0.040940 lr=9.61538e-05
+
+[epoch 20/200] train_loss=0.049032 time=3.1s
+[epoch 20/200] eval_loss=0.084123
+Saved checkpoint for epoch 20 to /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/model/unprompted_jax (keeping last None)
+epoch=21/200 step=1600/15600 loss=0.045875 lr=9.9998e-05
+
+[epoch 21/200] train_loss=0.049278 time=3.1s
+[epoch 21/200] eval_loss=0.095653
+epoch=22/200 step=1700/15600 loss=0.051051 lr=9.99755e-05
+
+[epoch 22/200] train_loss=0.047213 time=3.1s
+[epoch 22/200] eval_loss=0.105909
+
+[epoch 23/200] train_loss=0.046482 time=3.1s
+[epoch 23/200] eval_loss=0.086755
+epoch=24/200 step=1800/15600 loss=0.041229 lr=9.99279e-05
+
+[epoch 24/200] train_loss=0.046350 time=3.1s
+[epoch 24/200] eval_loss=0.083955
+Saved checkpoint for epoch 24 to /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/model/unprompted_jax (keeping last None)
+epoch=25/200 step=1900/15600 loss=0.053204 lr=9.98554e-05
+
+[epoch 25/200] train_loss=0.046565 time=3.0s
+[epoch 25/200] eval_loss=0.057120
+epoch=26/200 step=2000/15600 loss=0.052961 lr=9.97579e-05
+
+[epoch 26/200] train_loss=0.044450 time=3.0s
+[epoch 26/200] eval_loss=0.065563
+epoch=27/200 step=2100/15600 loss=0.038139 lr=9.96354e-05
+
+[epoch 27/200] train_loss=0.045508 time=3.1s
+[epoch 27/200] eval_loss=0.064620
+
+[epoch 28/200] train_loss=0.044542 time=3.0s
+[epoch 28/200] eval_loss=0.070439
+Saved checkpoint for epoch 28 to /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/model/unprompted_jax (keeping last None)
+epoch=29/200 step=2200/15600 loss=0.049120 lr=9.94882e-05
+
+[epoch 29/200] train_loss=0.046290 time=3.0s
+[epoch 29/200] eval_loss=0.062158
+epoch=30/200 step=2300/15600 loss=0.050567 lr=9.93161e-05
+
+[epoch 30/200] train_loss=0.043396 time=3.0s
+[epoch 30/200] eval_loss=0.062151
+epoch=31/200 step=2400/15600 loss=0.046914 lr=9.91194e-05
+
+[epoch 31/200] train_loss=0.043567 time=3.0s
+[epoch 31/200] eval_loss=0.053378
+
+[epoch 32/200] train_loss=0.041913 time=3.1s
+[epoch 32/200] eval_loss=0.060660
+Saved checkpoint for epoch 32 to /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/model/unprompted_jax (keeping last None)
+epoch=33/200 step=2500/15600 loss=0.051237 lr=9.88981e-05
+
+[epoch 33/200] train_loss=0.042556 time=3.1s
+[epoch 33/200] eval_loss=0.056160
+epoch=34/200 step=2600/15600 loss=0.036633 lr=9.86522e-05
+
+[epoch 34/200] train_loss=0.044102 time=3.1s
+[epoch 34/200] eval_loss=0.041569
+epoch=35/200 step=2700/15600 loss=0.044566 lr=9.83821e-05
+
+[epoch 35/200] train_loss=0.041631 time=3.1s
+[epoch 35/200] eval_loss=0.056003
+epoch=36/200 step=2800/15600 loss=0.042603 lr=9.80877e-05
+
+[epoch 36/200] train_loss=0.041611 time=3.0s
+[epoch 36/200] eval_loss=0.050539
+Saved checkpoint for epoch 36 to /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/model/unprompted_jax (keeping last None)
+
+[epoch 37/200] train_loss=0.041416 time=3.0s
+[epoch 37/200] eval_loss=0.055297
+epoch=38/200 step=2900/15600 loss=0.034365 lr=9.77692e-05
+
+[epoch 38/200] train_loss=0.041191 time=3.1s
+[epoch 38/200] eval_loss=0.049104
+epoch=39/200 step=3000/15600 loss=0.038489 lr=9.74268e-05
+
+[epoch 39/200] train_loss=0.043120 time=3.1s
+[epoch 39/200] eval_loss=0.044233
+epoch=40/200 step=3100/15600 loss=0.030991 lr=9.70607e-05
+
+[epoch 40/200] train_loss=0.040526 time=3.1s
+[epoch 40/200] eval_loss=0.032781
+Saved checkpoint for epoch 40 to /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/model/unprompted_jax (keeping last None)
+
+[epoch 41/200] train_loss=0.041120 time=3.1s
+[epoch 41/200] eval_loss=0.046866
+epoch=42/200 step=3200/15600 loss=0.041482 lr=9.6671e-05
+
+[epoch 42/200] train_loss=0.041197 time=3.1s
+[epoch 42/200] eval_loss=0.035666
+epoch=43/200 step=3300/15600 loss=0.036227 lr=9.62579e-05
+
+[epoch 43/200] train_loss=0.041450 time=3.1s
+[epoch 43/200] eval_loss=0.056284
+epoch=44/200 step=3400/15600 loss=0.044434 lr=9.58217e-05
+
+[epoch 44/200] train_loss=0.040056 time=3.0s
+[epoch 44/200] eval_loss=0.044107
+Saved checkpoint for epoch 44 to /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/model/unprompted_jax (keeping last None)
+epoch=45/200 step=3500/15600 loss=0.030030 lr=9.53626e-05
+
+[epoch 45/200] train_loss=0.038606 time=3.1s
+[epoch 45/200] eval_loss=0.050750
+
+[epoch 46/200] train_loss=0.039941 time=3.1s
+[epoch 46/200] eval_loss=0.053541
+epoch=47/200 step=3600/15600 loss=0.042051 lr=9.48807e-05
+
+[epoch 47/200] train_loss=0.040711 time=3.1s
+[epoch 47/200] eval_loss=0.041220
+epoch=48/200 step=3700/15600 loss=0.048047 lr=9.43763e-05
+
+[epoch 48/200] train_loss=0.039846 time=3.0s
+[epoch 48/200] eval_loss=0.044224
+Saved checkpoint for epoch 48 to /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/model/unprompted_jax (keeping last None)
+epoch=49/200 step=3800/15600 loss=0.030469 lr=9.38498e-05
+
+[epoch 49/200] train_loss=0.039966 time=3.0s
+[epoch 49/200] eval_loss=0.044876
+epoch=50/200 step=3900/15600 loss=0.036994 lr=9.33013e-05
+
+[epoch 50/200] train_loss=0.040293 time=3.0s
+[epoch 50/200] eval_loss=0.050028
+
+[epoch 51/200] train_loss=0.038683 time=3.0s
+[epoch 51/200] eval_loss=0.039317
+epoch=52/200 step=4000/15600 loss=0.040901 lr=9.27311e-05
+
+[epoch 52/200] train_loss=0.039860 time=3.0s
+[epoch 52/200] eval_loss=0.034445
+Saved checkpoint for epoch 52 to /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/model/unprompted_jax (keeping last None)
+epoch=53/200 step=4100/15600 loss=0.048628 lr=9.21395e-05
+
+[epoch 53/200] train_loss=0.039659 time=3.0s
+[epoch 53/200] eval_loss=0.036482
+epoch=54/200 step=4200/15600 loss=0.045706 lr=9.15268e-05
+
+[epoch 54/200] train_loss=0.040517 time=3.0s
+[epoch 54/200] eval_loss=0.045923
+
+[epoch 55/200] train_loss=0.040495 time=3.0s
+[epoch 55/200] eval_loss=0.042694
+epoch=56/200 step=4300/15600 loss=0.037204 lr=9.08933e-05
+
+[epoch 56/200] train_loss=0.038722 time=3.0s
+[epoch 56/200] eval_loss=0.030965
+Saved checkpoint for epoch 56 to /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/model/unprompted_jax (keeping last None)
+epoch=57/200 step=4400/15600 loss=0.036864 lr=9.02394e-05
+
+[epoch 57/200] train_loss=0.038693 time=3.0s
+[epoch 57/200] eval_loss=0.040456
+epoch=58/200 step=4500/15600 loss=0.044818 lr=8.95653e-05
+
+[epoch 58/200] train_loss=0.038888 time=3.1s
+[epoch 58/200] eval_loss=0.043889
+epoch=59/200 step=4600/15600 loss=0.048598 lr=8.88714e-05
+
+[epoch 59/200] train_loss=0.039946 time=3.0s
+[epoch 59/200] eval_loss=0.036496
+
+[epoch 60/200] train_loss=0.038962 time=3.0s
+[epoch 60/200] eval_loss=0.043019
+Saved checkpoint for epoch 60 to /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/model/unprompted_jax (keeping last None)
+epoch=61/200 step=4700/15600 loss=0.038970 lr=8.8158e-05
+
+[epoch 61/200] train_loss=0.037978 time=3.0s
+[epoch 61/200] eval_loss=0.044786
+epoch=62/200 step=4800/15600 loss=0.030011 lr=8.74255e-05
+
+[epoch 62/200] train_loss=0.038031 time=3.1s
+[epoch 62/200] eval_loss=0.036869
+epoch=63/200 step=4900/15600 loss=0.036631 lr=8.66743e-05
+
+[epoch 63/200] train_loss=0.038045 time=3.0s
+[epoch 63/200] eval_loss=0.043564
+
+[epoch 64/200] train_loss=0.038141 time=3.1s
+[epoch 64/200] eval_loss=0.025431
+Saved checkpoint for epoch 64 to /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/model/unprompted_jax (keeping last None)
+epoch=65/200 step=5000/15600 loss=0.043786 lr=8.59048e-05
+
+[epoch 65/200] train_loss=0.037256 time=3.1s
+[epoch 65/200] eval_loss=0.037959
+epoch=66/200 step=5100/15600 loss=0.047511 lr=8.51172e-05
+
+[epoch 66/200] train_loss=0.037668 time=3.1s
+[epoch 66/200] eval_loss=0.036151
+epoch=67/200 step=5200/15600 loss=0.039076 lr=8.43121e-05
+
+[epoch 67/200] train_loss=0.036652 time=3.0s
+[epoch 67/200] eval_loss=0.029257
+epoch=68/200 step=5300/15600 loss=0.042618 lr=8.34898e-05
+
+[epoch 68/200] train_loss=0.037468 time=3.1s
+[epoch 68/200] eval_loss=0.028713
+Saved checkpoint for epoch 68 to /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/model/unprompted_jax (keeping last None)
+
+[epoch 69/200] train_loss=0.038596 time=3.1s
+[epoch 69/200] eval_loss=0.034742
+epoch=70/200 step=5400/15600 loss=0.044890 lr=8.26507e-05
+
+[epoch 70/200] train_loss=0.037512 time=3.1s
+[epoch 70/200] eval_loss=0.029135
+epoch=71/200 step=5500/15600 loss=0.038667 lr=8.17953e-05
+
+[epoch 71/200] train_loss=0.038050 time=3.0s
+[epoch 71/200] eval_loss=0.044940
+epoch=72/200 step=5600/15600 loss=0.026857 lr=8.09239e-05
+
+[epoch 72/200] train_loss=0.037301 time=3.0s
+[epoch 72/200] eval_loss=0.049573
+Saved checkpoint for epoch 72 to /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/model/unprompted_jax (keeping last None)
+
+[epoch 73/200] train_loss=0.036882 time=3.1s
+[epoch 73/200] eval_loss=0.046590
+epoch=74/200 step=5700/15600 loss=0.043914 lr=8.00371e-05
+
+[epoch 74/200] train_loss=0.036723 time=3.1s
+[epoch 74/200] eval_loss=0.027037
+epoch=75/200 step=5800/15600 loss=0.034529 lr=7.91353e-05
+
+[epoch 75/200] train_loss=0.037293 time=3.1s
+[epoch 75/200] eval_loss=0.037361
+epoch=76/200 step=5900/15600 loss=0.047583 lr=7.82188e-05
+
+[epoch 76/200] train_loss=0.037690 time=3.1s
+[epoch 76/200] eval_loss=0.046420
+Saved checkpoint for epoch 76 to /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/model/unprompted_jax (keeping last None)
+epoch=77/200 step=6000/15600 loss=0.041442 lr=7.72882e-05
+
+[epoch 77/200] train_loss=0.035781 time=3.1s
+[epoch 77/200] eval_loss=0.036020
+
+[epoch 78/200] train_loss=0.036857 time=3.1s
+[epoch 78/200] eval_loss=0.037497
+epoch=79/200 step=6100/15600 loss=0.032652 lr=7.6344e-05
+
+[epoch 79/200] train_loss=0.036459 time=3.1s
+[epoch 79/200] eval_loss=0.040112
+epoch=80/200 step=6200/15600 loss=0.033063 lr=7.53866e-05
+
+[epoch 80/200] train_loss=0.037125 time=3.0s
+[epoch 80/200] eval_loss=0.041865
+Saved checkpoint for epoch 80 to /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/model/unprompted_jax (keeping last None)
+epoch=81/200 step=6300/15600 loss=0.038000 lr=7.44164e-05
+
+[epoch 81/200] train_loss=0.036718 time=3.0s
+[epoch 81/200] eval_loss=0.028475
+
+[epoch 82/200] train_loss=0.036199 time=3.1s
+[epoch 82/200] eval_loss=0.032707
+epoch=83/200 step=6400/15600 loss=0.050394 lr=7.34341e-05
+
+[epoch 83/200] train_loss=0.038124 time=3.1s
+[epoch 83/200] eval_loss=0.043492
+epoch=84/200 step=6500/15600 loss=0.043833 lr=7.244e-05
+
+[epoch 84/200] train_loss=0.037302 time=3.1s
+[epoch 84/200] eval_loss=0.027674
+Saved checkpoint for epoch 84 to /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/model/unprompted_jax (keeping last None)
+epoch=85/200 step=6600/15600 loss=0.036882 lr=7.14346e-05
+
+[epoch 85/200] train_loss=0.036385 time=3.1s
+[epoch 85/200] eval_loss=0.037383
+epoch=86/200 step=6700/15600 loss=0.031689 lr=7.04186e-05
+
+[epoch 86/200] train_loss=0.037015 time=3.1s
+[epoch 86/200] eval_loss=0.031761
+
+[epoch 87/200] train_loss=0.035615 time=3.1s
+[epoch 87/200] eval_loss=0.034095
+epoch=88/200 step=6800/15600 loss=0.034701 lr=6.93923e-05
+
+[epoch 88/200] train_loss=0.037258 time=3.0s
+[epoch 88/200] eval_loss=0.033637
+Saved checkpoint for epoch 88 to /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/model/unprompted_jax (keeping last None)
+epoch=89/200 step=6900/15600 loss=0.029383 lr=6.83563e-05
+
+[epoch 89/200] train_loss=0.035843 time=3.0s
+[epoch 89/200] eval_loss=0.032812
+epoch=90/200 step=7000/15600 loss=0.040240 lr=6.73111e-05
+
+[epoch 90/200] train_loss=0.037328 time=3.0s
+[epoch 90/200] eval_loss=0.032393
+
+[epoch 91/200] train_loss=0.036184 time=3.0s
+[epoch 91/200] eval_loss=0.029736
+epoch=92/200 step=7100/15600 loss=0.037940 lr=6.62572e-05
+
+[epoch 92/200] train_loss=0.038116 time=3.0s
+[epoch 92/200] eval_loss=0.038631
+Saved checkpoint for epoch 92 to /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/model/unprompted_jax (keeping last None)
+epoch=93/200 step=7200/15600 loss=0.034505 lr=6.51953e-05
+
+[epoch 93/200] train_loss=0.036999 time=3.0s
+[epoch 93/200] eval_loss=0.028402
+epoch=94/200 step=7300/15600 loss=0.025333 lr=6.41257e-05
+
+[epoch 94/200] train_loss=0.037432 time=3.1s
+[epoch 94/200] eval_loss=0.027673
+epoch=95/200 step=7400/15600 loss=0.036938 lr=6.3049e-05
+
+[epoch 95/200] train_loss=0.036160 time=3.1s
+[epoch 95/200] eval_loss=0.038822
+
+[epoch 96/200] train_loss=0.034116 time=3.0s
+[epoch 96/200] eval_loss=0.029442
+Saved checkpoint for epoch 96 to /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/model/unprompted_jax (keeping last None)
+epoch=97/200 step=7500/15600 loss=0.038163 lr=6.19658e-05
+
+[epoch 97/200] train_loss=0.035693 time=3.0s
+[epoch 97/200] eval_loss=0.033377
+epoch=98/200 step=7600/15600 loss=0.028881 lr=6.08766e-05
+
+[epoch 98/200] train_loss=0.036055 time=3.0s
+[epoch 98/200] eval_loss=0.041303
+epoch=99/200 step=7700/15600 loss=0.027570 lr=5.97819e-05
+
+[epoch 99/200] train_loss=0.035620 time=3.0s
+[epoch 99/200] eval_loss=0.036537
+epoch=100/200 step=7800/15600 loss=0.049927 lr=5.86824e-05
+
+[epoch 100/200] train_loss=0.035935 time=3.0s
+[epoch 100/200] eval_loss=0.030656
+Saved checkpoint for epoch 100 to /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/model/unprompted_jax (keeping last None)
+
+[epoch 101/200] train_loss=0.036593 time=3.0s
+[epoch 101/200] eval_loss=0.031930
+epoch=102/200 step=7900/15600 loss=0.038373 lr=5.75785e-05
+
+[epoch 102/200] train_loss=0.034701 time=3.1s
+[epoch 102/200] eval_loss=0.027268
+epoch=103/200 step=8000/15600 loss=0.043704 lr=5.64708e-05
+
+[epoch 103/200] train_loss=0.037552 time=3.1s
+[epoch 103/200] eval_loss=0.034700
+epoch=104/200 step=8100/15600 loss=0.029041 lr=5.53599e-05
+
+[epoch 104/200] train_loss=0.035887 time=3.1s
+[epoch 104/200] eval_loss=0.026279
+Saved checkpoint for epoch 104 to /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/model/unprompted_jax (keeping last None)
+
+[epoch 105/200] train_loss=0.034655 time=3.0s
+[epoch 105/200] eval_loss=0.035996
+epoch=106/200 step=8200/15600 loss=0.031631 lr=5.42463e-05
+
+[epoch 106/200] train_loss=0.036346 time=3.0s
+[epoch 106/200] eval_loss=0.038089
+epoch=107/200 step=8300/15600 loss=0.034310 lr=5.31306e-05
+
+[epoch 107/200] train_loss=0.037068 time=3.0s
+[epoch 107/200] eval_loss=0.031826
+epoch=108/200 step=8400/15600 loss=0.029356 lr=5.20133e-05
+
+[epoch 108/200] train_loss=0.036497 time=3.0s
+[epoch 108/200] eval_loss=0.033865
+Saved checkpoint for epoch 108 to /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/model/unprompted_jax (keeping last None)
+epoch=109/200 step=8500/15600 loss=0.035770 lr=5.0895e-05
+
+[epoch 109/200] train_loss=0.033998 time=3.0s
+[epoch 109/200] eval_loss=0.039789
+
+[epoch 110/200] train_loss=0.034836 time=3.1s
+[epoch 110/200] eval_loss=0.024860
+epoch=111/200 step=8600/15600 loss=0.036065 lr=4.97762e-05
+
+[epoch 111/200] train_loss=0.035908 time=3.0s
+[epoch 111/200] eval_loss=0.048994
+epoch=112/200 step=8700/15600 loss=0.025640 lr=4.86576e-05
+
+[epoch 112/200] train_loss=0.036237 time=3.1s
+[epoch 112/200] eval_loss=0.030195
+Saved checkpoint for epoch 112 to /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/model/unprompted_jax (keeping last None)
+epoch=113/200 step=8800/15600 loss=0.035287 lr=4.75396e-05
+
+[epoch 113/200] train_loss=0.035667 time=3.1s
+[epoch 113/200] eval_loss=0.039299
+
+[epoch 114/200] train_loss=0.035685 time=3.1s
+[epoch 114/200] eval_loss=0.043487
+epoch=115/200 step=8900/15600 loss=0.035738 lr=4.64229e-05
+
+[epoch 115/200] train_loss=0.036788 time=3.1s
+[epoch 115/200] eval_loss=0.028667
+epoch=116/200 step=9000/15600 loss=0.036621 lr=4.5308e-05
+
+[epoch 116/200] train_loss=0.036072 time=3.0s
+[epoch 116/200] eval_loss=0.030416
+Saved checkpoint for epoch 116 to /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/model/unprompted_jax (keeping last None)
+epoch=117/200 step=9100/15600 loss=0.045971 lr=4.41953e-05
+
+[epoch 117/200] train_loss=0.035691 time=3.0s
+[epoch 117/200] eval_loss=0.039015
+epoch=118/200 step=9200/15600 loss=0.031746 lr=4.30857e-05
+
+[epoch 118/200] train_loss=0.035169 time=3.0s
+[epoch 118/200] eval_loss=0.037674
+
+[epoch 119/200] train_loss=0.035211 time=3.0s
+[epoch 119/200] eval_loss=0.038280
+epoch=120/200 step=9300/15600 loss=0.032280 lr=4.19794e-05
+
+[epoch 120/200] train_loss=0.035670 time=3.1s
+[epoch 120/200] eval_loss=0.037870
+Saved checkpoint for epoch 120 to /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/model/unprompted_jax (keeping last None)
+epoch=121/200 step=9400/15600 loss=0.037082 lr=4.08772e-05
+
+[epoch 121/200] train_loss=0.033371 time=3.1s
+[epoch 121/200] eval_loss=0.031431
+epoch=122/200 step=9500/15600 loss=0.039336 lr=3.97796e-05
+
+[epoch 122/200] train_loss=0.034238 time=3.1s
+[epoch 122/200] eval_loss=0.035323
+
+[epoch 123/200] train_loss=0.035633 time=3.1s
+[epoch 123/200] eval_loss=0.028475
+epoch=124/200 step=9600/15600 loss=0.025744 lr=3.8687e-05
+
+[epoch 124/200] train_loss=0.035262 time=3.1s
+[epoch 124/200] eval_loss=0.023561
+Saved checkpoint for epoch 124 to /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/model/unprompted_jax (keeping last None)
+epoch=125/200 step=9700/15600 loss=0.036733 lr=3.76002e-05
+
+[epoch 125/200] train_loss=0.035514 time=3.1s
+[epoch 125/200] eval_loss=0.035089
+epoch=126/200 step=9800/15600 loss=0.038046 lr=3.65195e-05
+
+[epoch 126/200] train_loss=0.035974 time=3.1s
+[epoch 126/200] eval_loss=0.036365
+epoch=127/200 step=9900/15600 loss=0.026543 lr=3.54456e-05
+
+[epoch 127/200] train_loss=0.035118 time=3.1s
+[epoch 127/200] eval_loss=0.025852
+
+[epoch 128/200] train_loss=0.036090 time=3.0s
+[epoch 128/200] eval_loss=0.033593
+Saved checkpoint for epoch 128 to /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/model/unprompted_jax (keeping last None)
+epoch=129/200 step=10000/15600 loss=0.026460 lr=3.4379e-05
+
+[epoch 129/200] train_loss=0.035662 time=3.0s
+[epoch 129/200] eval_loss=0.038477
+epoch=130/200 step=10100/15600 loss=0.022607 lr=3.33202e-05
+
+[epoch 130/200] train_loss=0.035366 time=3.0s
+[epoch 130/200] eval_loss=0.034396
+epoch=131/200 step=10200/15600 loss=0.035005 lr=3.22698e-05
+
+[epoch 131/200] train_loss=0.035735 time=3.0s
+[epoch 131/200] eval_loss=0.038307
+
+[epoch 132/200] train_loss=0.034110 time=3.0s
+[epoch 132/200] eval_loss=0.040009
+Saved checkpoint for epoch 132 to /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/model/unprompted_jax (keeping last None)
+epoch=133/200 step=10300/15600 loss=0.047130 lr=3.12282e-05
+
+[epoch 133/200] train_loss=0.035536 time=3.0s
+[epoch 133/200] eval_loss=0.034270
+epoch=134/200 step=10400/15600 loss=0.038307 lr=3.0196e-05
+
+[epoch 134/200] train_loss=0.034222 time=3.1s
+[epoch 134/200] eval_loss=0.031413
+epoch=135/200 step=10500/15600 loss=0.038846 lr=2.91738e-05
+
+[epoch 135/200] train_loss=0.033827 time=3.0s
+[epoch 135/200] eval_loss=0.043823
+epoch=136/200 step=10600/15600 loss=0.035311 lr=2.81619e-05
+
+[epoch 136/200] train_loss=0.034325 time=3.1s
+[epoch 136/200] eval_loss=0.026061
+Saved checkpoint for epoch 136 to /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/model/unprompted_jax (keeping last None)
+
+[epoch 137/200] train_loss=0.036279 time=3.0s
+[epoch 137/200] eval_loss=0.027119
+epoch=138/200 step=10700/15600 loss=0.043359 lr=2.7161e-05
+
+[epoch 138/200] train_loss=0.034580 time=3.0s
+[epoch 138/200] eval_loss=0.035518
+epoch=139/200 step=10800/15600 loss=0.043706 lr=2.61716e-05
+
+[epoch 139/200] train_loss=0.035310 time=3.1s
+[epoch 139/200] eval_loss=0.037599
+epoch=140/200 step=10900/15600 loss=0.040514 lr=2.5194e-05
+
+[epoch 140/200] train_loss=0.035456 time=3.0s
+[epoch 140/200] eval_loss=0.035801
+Saved checkpoint for epoch 140 to /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/model/unprompted_jax (keeping last None)
+
+[epoch 141/200] train_loss=0.036551 time=3.0s
+[epoch 141/200] eval_loss=0.033201
+epoch=142/200 step=11000/15600 loss=0.027299 lr=2.42289e-05
+
+[epoch 142/200] train_loss=0.035058 time=3.0s
+[epoch 142/200] eval_loss=0.039901
+epoch=143/200 step=11100/15600 loss=0.031138 lr=2.32767e-05
+
+[epoch 143/200] train_loss=0.034081 time=3.1s
+[epoch 143/200] eval_loss=0.031850
+epoch=144/200 step=11200/15600 loss=0.032922 lr=2.23379e-05
+
+[epoch 144/200] train_loss=0.035416 time=3.1s
+[epoch 144/200] eval_loss=0.032896
+Saved checkpoint for epoch 144 to /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/model/unprompted_jax (keeping last None)
+epoch=145/200 step=11300/15600 loss=0.040183 lr=2.14129e-05
+
+[epoch 145/200] train_loss=0.034404 time=3.0s
+[epoch 145/200] eval_loss=0.038584
+
+[epoch 146/200] train_loss=0.035268 time=3.1s
+[epoch 146/200] eval_loss=0.023046
+epoch=147/200 step=11400/15600 loss=0.028294 lr=2.05022e-05
+
+[epoch 147/200] train_loss=0.035143 time=3.0s
+[epoch 147/200] eval_loss=0.043597
+epoch=148/200 step=11500/15600 loss=0.037221 lr=1.96063e-05
+
+[epoch 148/200] train_loss=0.034921 time=3.1s
+[epoch 148/200] eval_loss=0.028010
+Saved checkpoint for epoch 148 to /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/model/unprompted_jax (keeping last None)
+epoch=149/200 step=11600/15600 loss=0.032927 lr=1.87256e-05
+
+[epoch 149/200] train_loss=0.035416 time=3.1s
+[epoch 149/200] eval_loss=0.024703
+epoch=150/200 step=11700/15600 loss=0.037266 lr=1.78606e-05
+
+[epoch 150/200] train_loss=0.034290 time=3.1s
+[epoch 150/200] eval_loss=0.037770
+
+[epoch 151/200] train_loss=0.034230 time=3.1s
+[epoch 151/200] eval_loss=0.036171
+epoch=152/200 step=11800/15600 loss=0.035920 lr=1.70117e-05
+
+[epoch 152/200] train_loss=0.033088 time=3.1s
+[epoch 152/200] eval_loss=0.034354
+Saved checkpoint for epoch 152 to /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/model/unprompted_jax (keeping last None)
+epoch=153/200 step=11900/15600 loss=0.024134 lr=1.61793e-05
+
+[epoch 153/200] train_loss=0.035545 time=3.1s
+[epoch 153/200] eval_loss=0.044877
+epoch=154/200 step=12000/15600 loss=0.022999 lr=1.53638e-05
+
+[epoch 154/200] train_loss=0.035224 time=3.1s
+[epoch 154/200] eval_loss=0.030120
+
+[epoch 155/200] train_loss=0.034735 time=3.1s
+[epoch 155/200] eval_loss=0.042445
+epoch=156/200 step=12100/15600 loss=0.031669 lr=1.45656e-05
+
+[epoch 156/200] train_loss=0.034024 time=3.1s
+[epoch 156/200] eval_loss=0.028434
+Saved checkpoint for epoch 156 to /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/model/unprompted_jax (keeping last None)
+epoch=157/200 step=12200/15600 loss=0.030783 lr=1.37852e-05
+
+[epoch 157/200] train_loss=0.034985 time=3.1s
+[epoch 157/200] eval_loss=0.035122
+epoch=158/200 step=12300/15600 loss=0.032361 lr=1.3023e-05
+
+[epoch 158/200] train_loss=0.034542 time=3.1s
+[epoch 158/200] eval_loss=0.049306
+epoch=159/200 step=12400/15600 loss=0.029422 lr=1.22792e-05
+
+[epoch 159/200] train_loss=0.034213 time=3.1s
+[epoch 159/200] eval_loss=0.028245
+
+[epoch 160/200] train_loss=0.033444 time=3.1s
+[epoch 160/200] eval_loss=0.044892
+Saved checkpoint for epoch 160 to /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/model/unprompted_jax (keeping last None)
+epoch=161/200 step=12500/15600 loss=0.037289 lr=1.15543e-05
+
+[epoch 161/200] train_loss=0.034826 time=3.1s
+[epoch 161/200] eval_loss=0.031587
+epoch=162/200 step=12600/15600 loss=0.037216 lr=1.08487e-05
+
+[epoch 162/200] train_loss=0.035030 time=3.1s
+[epoch 162/200] eval_loss=0.045659
+epoch=163/200 step=12700/15600 loss=0.040948 lr=1.01627e-05
+
+[epoch 163/200] train_loss=0.034545 time=3.1s
+[epoch 163/200] eval_loss=0.035670
+
+[epoch 164/200] train_loss=0.033943 time=3.1s
+[epoch 164/200] eval_loss=0.051187
+Saved checkpoint for epoch 164 to /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/model/unprompted_jax (keeping last None)
+epoch=165/200 step=12800/15600 loss=0.030318 lr=9.49661e-06
+
+[epoch 165/200] train_loss=0.034095 time=3.0s
+[epoch 165/200] eval_loss=0.036738
+epoch=166/200 step=12900/15600 loss=0.034524 lr=8.85081e-06
+
+[epoch 166/200] train_loss=0.034597 time=3.0s
+[epoch 166/200] eval_loss=0.029629
+epoch=167/200 step=13000/15600 loss=0.033924 lr=8.22561e-06
+
+[epoch 167/200] train_loss=0.032570 time=3.1s
+[epoch 167/200] eval_loss=0.036282
+epoch=168/200 step=13100/15600 loss=0.031691 lr=7.62133e-06
+
+[epoch 168/200] train_loss=0.033666 time=3.0s
+[epoch 168/200] eval_loss=0.025188
+Saved checkpoint for epoch 168 to /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/model/unprompted_jax (keeping last None)
+
+[epoch 169/200] train_loss=0.033013 time=3.1s
+[epoch 169/200] eval_loss=0.027041
+epoch=170/200 step=13200/15600 loss=0.029490 lr=7.03826e-06
+
+[epoch 170/200] train_loss=0.034932 time=3.1s
+[epoch 170/200] eval_loss=0.033259
+epoch=171/200 step=13300/15600 loss=0.034009 lr=6.47671e-06
+
+[epoch 171/200] train_loss=0.034450 time=3.1s
+[epoch 171/200] eval_loss=0.028219
+epoch=172/200 step=13400/15600 loss=0.042429 lr=5.93694e-06
+
+[epoch 172/200] train_loss=0.034303 time=3.1s
+[epoch 172/200] eval_loss=0.045558
+Saved checkpoint for epoch 172 to /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/model/unprompted_jax (keeping last None)
+
+[epoch 173/200] train_loss=0.034286 time=3.0s
+[epoch 173/200] eval_loss=0.031983
+epoch=174/200 step=13500/15600 loss=0.029763 lr=5.41924e-06
+
+[epoch 174/200] train_loss=0.034822 time=3.1s
+[epoch 174/200] eval_loss=0.034070
+epoch=175/200 step=13600/15600 loss=0.034436 lr=4.92385e-06
+
+[epoch 175/200] train_loss=0.034186 time=3.1s
+[epoch 175/200] eval_loss=0.047776
+epoch=176/200 step=13700/15600 loss=0.040301 lr=4.45103e-06
+
+[epoch 176/200] train_loss=0.035097 time=3.1s
+[epoch 176/200] eval_loss=0.031862
+Saved checkpoint for epoch 176 to /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/model/unprompted_jax (keeping last None)
+epoch=177/200 step=13800/15600 loss=0.031547 lr=4.00103e-06
+
+[epoch 177/200] train_loss=0.035650 time=3.1s
+[epoch 177/200] eval_loss=0.040001
+
+[epoch 178/200] train_loss=0.034341 time=3.1s
+[epoch 178/200] eval_loss=0.037525
+epoch=179/200 step=13900/15600 loss=0.029017 lr=3.57405e-06
+
+[epoch 179/200] train_loss=0.034065 time=3.1s
+[epoch 179/200] eval_loss=0.035387
+epoch=180/200 step=14000/15600 loss=0.036517 lr=3.17031e-06
+
+[epoch 180/200] train_loss=0.035269 time=3.1s
+[epoch 180/200] eval_loss=0.033756
+Saved checkpoint for epoch 180 to /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/model/unprompted_jax (keeping last None)
+epoch=181/200 step=14100/15600 loss=0.026347 lr=2.79002e-06
+
+[epoch 181/200] train_loss=0.033223 time=3.1s
+[epoch 181/200] eval_loss=0.034418
+
+[epoch 182/200] train_loss=0.033855 time=3.1s
+[epoch 182/200] eval_loss=0.032399
+epoch=183/200 step=14200/15600 loss=0.028092 lr=2.43337e-06
+
+[epoch 183/200] train_loss=0.032957 time=3.1s
+[epoch 183/200] eval_loss=0.026027
+epoch=184/200 step=14300/15600 loss=0.039122 lr=2.10052e-06
+
+[epoch 184/200] train_loss=0.034357 time=3.1s
+[epoch 184/200] eval_loss=0.034797
+Saved checkpoint for epoch 184 to /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/model/unprompted_jax (keeping last None)
+epoch=185/200 step=14400/15600 loss=0.027617 lr=1.79166e-06
+
+[epoch 185/200] train_loss=0.033883 time=3.0s
+[epoch 185/200] eval_loss=0.040443
+epoch=186/200 step=14500/15600 loss=0.038605 lr=1.50694e-06
+
+[epoch 186/200] train_loss=0.034788 time=3.0s
+[epoch 186/200] eval_loss=0.031071
+
+[epoch 187/200] train_loss=0.034479 time=3.0s
+[epoch 187/200] eval_loss=0.028417
+epoch=188/200 step=14600/15600 loss=0.030715 lr=1.2465e-06
+
+[epoch 188/200] train_loss=0.034905 time=3.0s
+[epoch 188/200] eval_loss=0.035854
+Saved checkpoint for epoch 188 to /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/model/unprompted_jax (keeping last None)
+epoch=189/200 step=14700/15600 loss=0.035281 lr=1.01047e-06
+
+[epoch 189/200] train_loss=0.034983 time=3.0s
+[epoch 189/200] eval_loss=0.035301
+epoch=190/200 step=14800/15600 loss=0.033017 lr=7.98961e-07
+
+[epoch 190/200] train_loss=0.033270 time=3.0s
+[epoch 190/200] eval_loss=0.023622
+
+[epoch 191/200] train_loss=0.033083 time=3.0s
+[epoch 191/200] eval_loss=0.031687
+epoch=192/200 step=14900/15600 loss=0.030789 lr=6.12086e-07
+
+[epoch 192/200] train_loss=0.034753 time=3.0s
+[epoch 192/200] eval_loss=0.030447
+Saved checkpoint for epoch 192 to /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/model/unprompted_jax (keeping last None)
+epoch=193/200 step=15000/15600 loss=0.025608 lr=4.49941e-07
+
+[epoch 193/200] train_loss=0.034391 time=3.0s
+[epoch 193/200] eval_loss=0.023279
+epoch=194/200 step=15100/15600 loss=0.025039 lr=3.12603e-07
+
+[epoch 194/200] train_loss=0.034305 time=3.0s
+[epoch 194/200] eval_loss=0.032154
+epoch=195/200 step=15200/15600 loss=0.035619 lr=2.0014e-07
+
+[epoch 195/200] train_loss=0.034056 time=3.0s
+[epoch 195/200] eval_loss=0.046136
+
+[epoch 196/200] train_loss=0.033826 time=3.1s
+[epoch 196/200] eval_loss=0.036776
+Saved checkpoint for epoch 196 to /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/model/unprompted_jax (keeping last None)
+epoch=197/200 step=15300/15600 loss=0.024389 lr=1.12611e-07
+
+[epoch 197/200] train_loss=0.035117 time=3.1s
+[epoch 197/200] eval_loss=0.034762
+epoch=198/200 step=15400/15600 loss=0.033535 lr=5.0059e-08
+
+[epoch 198/200] train_loss=0.035293 time=3.0s
+[epoch 198/200] eval_loss=0.037662
+epoch=199/200 step=15500/15600 loss=0.038832 lr=1.2517e-08
+
+[epoch 199/200] train_loss=0.033273 time=3.1s
+[epoch 199/200] eval_loss=0.033737
+epoch=200/200 step=15600/15600 loss=0.030693 lr=0
+
+[epoch 200/200] train_loss=0.034361 time=3.1s
+[epoch 200/200] eval_loss=0.033279
+Saved checkpoint for epoch 200 to /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/model/unprompted_jax (keeping last None)
+Training finished. Total time: 00h 11m 01.52s (661.52 seconds)
+TACC:  Shutdown complete. Exiting. 

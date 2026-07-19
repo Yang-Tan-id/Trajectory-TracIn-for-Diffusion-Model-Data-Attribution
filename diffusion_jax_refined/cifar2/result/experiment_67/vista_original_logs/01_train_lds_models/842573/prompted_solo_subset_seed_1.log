@@ -1,0 +1,13 @@
+TACC:  Starting up job 842573 
+TACC:  Setting up parallel environment for OpenMPI mpirun. 
+TACC:  Starting parallel tasks... 
+usage: run_training.py [-h] [--m M] [--k K]
+                       [--dataset-percentage DATASET_PERCENTAGE]
+                       [--model-train-seed MODEL_TRAIN_SEED]
+                       [--sample-model-mode SAMPLE_MODEL_MODE]
+                       [--sample-random-seed SAMPLE_RANDOM_SEED]
+                       [--unprompted] [--dry-run]
+                       config
+run_training.py: error: Use either --k or --dataset-percentage, not both
+TACC:  MPI job exited with code: 2 
+TACC:  Shutdown complete. Exiting. 

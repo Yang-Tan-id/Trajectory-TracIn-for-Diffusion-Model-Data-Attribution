@@ -1,0 +1,6 @@
+TACC:  Starting up job 842573 
+TACC:  Setting up parallel environment for OpenMPI mpirun. 
+TACC:  Starting parallel tasks... 
+/usr/local/bin/ibrun: line 814: 413410 Segmentation fault      (core dumped) mpirun -np $MY_NSLOTS -hostfile $hostfile_tacc $TACC_OPENMPI_ENV $OPENMPI_AFFINITY $TACC_OPENMPI_OPTIONS $MY_MPIRUN_OPTIONS $fullcmd "$@"
+TACC:  MPI job exited with code: 139 
+TACC:  Shutdown complete. Exiting. 
