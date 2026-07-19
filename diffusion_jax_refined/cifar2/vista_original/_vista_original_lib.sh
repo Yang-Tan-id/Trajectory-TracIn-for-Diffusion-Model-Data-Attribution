@@ -20,8 +20,14 @@ vista_original_init() {
     # shellcheck disable=SC1090
     source "${ENV_SETUP}"
   else
-    CONDA_ENV_PATH="${CONDA_ENV_PATH:-${SCRATCH}/conda-envs/trajectory-tracin}"
-    if [[ -f "${SCRATCH}/miniforge3/etc/profile.d/conda.sh" ]]; then
+    if [[ -z "${CONDA_ENV_PATH:-}" ]]; then
+      if [[ -n "${SCRATCH:-}" ]]; then
+        CONDA_ENV_PATH="${SCRATCH}/conda-envs/trajectory-tracin"
+      else
+        CONDA_ENV_PATH="${HOME}/conda-envs/trajectory-tracin"
+      fi
+    fi
+    if [[ -n "${SCRATCH:-}" && -f "${SCRATCH}/miniforge3/etc/profile.d/conda.sh" ]]; then
       # shellcheck disable=SC1090
       source "${SCRATCH}/miniforge3/etc/profile.d/conda.sh"
       conda activate "${CONDA_ENV_PATH}"

@@ -11,7 +11,17 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="${VISTA_ORIGINAL_DIR:-${SLURM_SUBMIT_DIR:-}}"
+SCRIPT_DIR="${VISTA_ORIGINAL_DIR:-}"
+if [[ -z "${SCRIPT_DIR}" || ! -f "${SCRIPT_DIR}/_vista_original_lib.sh" ]]; then
+  for candidate in \
+    "${SLURM_SUBMIT_DIR:-}" \
+    "${SLURM_SUBMIT_DIR:-}/diffusion_jax_refined/cifar2/vista_original"; do
+    if [[ -n "${candidate}" && -f "${candidate}/_vista_original_lib.sh" ]]; then
+      SCRIPT_DIR="${candidate}"
+      break
+    fi
+  done
+fi
 if [[ -z "${SCRIPT_DIR}" || ! -f "${SCRIPT_DIR}/_vista_original_lib.sh" ]]; then
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 fi
