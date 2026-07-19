@@ -1,0 +1,7 @@
+TACC:  Starting up job 814397 
+TACC:  Setting up parallel environment for OpenMPI mpirun. 
+TACC:  Starting parallel tasks... 
+free(): invalid next size (fast)
+/usr/local/bin/ibrun: line 814: 1207576 Aborted                 (core dumped) mpirun -np $MY_NSLOTS -hostfile $hostfile_tacc $TACC_OPENMPI_ENV $OPENMPI_AFFINITY $TACC_OPENMPI_OPTIONS $MY_MPIRUN_OPTIONS $fullcmd "$@"
+TACC:  MPI job exited with code: 134 
+TACC:  Shutdown complete. Exiting. 

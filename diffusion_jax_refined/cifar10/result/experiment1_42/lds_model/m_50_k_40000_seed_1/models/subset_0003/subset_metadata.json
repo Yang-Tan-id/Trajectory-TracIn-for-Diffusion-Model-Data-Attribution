@@ -1,0 +1,6 @@
+{
+  "subset_id": 3,
+  "subset_seed": 2041105244,
+  "subset_size": 40000,
+  "subset_dir": "/work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar10/result/experiment1_42/lds_model/m_50_k_40000_seed_1/models/subset_0003"
+}

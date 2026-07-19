@@ -1,0 +1,25 @@
+Vista gh job: baseline + LDS
+Experiment     : experiment1_42
+Baseline seed  : 42
+Baseline ckpt  : /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar10/result/experiment1_42/model/prompted_jax/seed_42_epoch_0200.ckpt
+LDS config     : m=50, k=40000, seeds=1-16, epochs=200
+Logs           : /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar10/result/experiment1_42/vista_logs/baseline_lds_814397
+Phase 1/2: training prompted baseline on full CIFAR-10 (slot 0)
+Baseline checkpoint ready: /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar10/result/experiment1_42/model/prompted_jax/seed_42_epoch_0200.ckpt
+Phase 2/2: training LDS seeds 1-16 on slots 1-16
+Launching LDS seed 1 on slot 1 -> /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar10/result/experiment1_42/vista_logs/baseline_lds_814397/lds_seed_1.log
+Launching LDS seed 2 on slot 2 -> /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar10/result/experiment1_42/vista_logs/baseline_lds_814397/lds_seed_2.log
+Launching LDS seed 3 on slot 3 -> /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar10/result/experiment1_42/vista_logs/baseline_lds_814397/lds_seed_3.log
+Launching LDS seed 4 on slot 4 -> /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar10/result/experiment1_42/vista_logs/baseline_lds_814397/lds_seed_4.log
+Launching LDS seed 5 on slot 5 -> /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar10/result/experiment1_42/vista_logs/baseline_lds_814397/lds_seed_5.log
+Launching LDS seed 6 on slot 6 -> /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar10/result/experiment1_42/vista_logs/baseline_lds_814397/lds_seed_6.log
+Launching LDS seed 7 on slot 7 -> /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar10/result/experiment1_42/vista_logs/baseline_lds_814397/lds_seed_7.log
+Launching LDS seed 8 on slot 8 -> /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar10/result/experiment1_42/vista_logs/baseline_lds_814397/lds_seed_8.log
+Launching LDS seed 9 on slot 9 -> /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar10/result/experiment1_42/vista_logs/baseline_lds_814397/lds_seed_9.log
+Launching LDS seed 10 on slot 10 -> /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar10/result/experiment1_42/vista_logs/baseline_lds_814397/lds_seed_10.log
+Launching LDS seed 11 on slot 11 -> /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar10/result/experiment1_42/vista_logs/baseline_lds_814397/lds_seed_11.log
+Launching LDS seed 12 on slot 12 -> /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar10/result/experiment1_42/vista_logs/baseline_lds_814397/lds_seed_12.log
+Launching LDS seed 13 on slot 13 -> /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar10/result/experiment1_42/vista_logs/baseline_lds_814397/lds_seed_13.log
+Launching LDS seed 14 on slot 14 -> /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar10/result/experiment1_42/vista_logs/baseline_lds_814397/lds_seed_14.log
+Launching LDS seed 15 on slot 15 -> /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar10/result/experiment1_42/vista_logs/baseline_lds_814397/lds_seed_15.log
+Launching LDS seed 16 on slot 16 -> /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar10/result/experiment1_42/vista_logs/baseline_lds_814397/lds_seed_16.log

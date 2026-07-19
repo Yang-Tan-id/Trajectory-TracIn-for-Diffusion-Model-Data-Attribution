@@ -1,0 +1,41 @@
+LDS-only Vista gh job
+Baseline ckpt : /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar10/result/experiment1_42/model/prompted_jax/seed_42_epoch_0200.ckpt
+LDS seeds     : 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16
+Logs          : /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar10/result/experiment1_42/vista_logs/lds_only_816289
+TACC:  Starting up job 816289 
+TACC:  Setting up parallel environment for OpenMPI mpirun. 
+TACC:  Starting parallel tasks... 
+[rank 0] running LDS seed 1
+[rank 0] running LDS seed 1
+[rank 0] running LDS seed 1
+[rank 0] running LDS seed 1
+[rank 0] running LDS seed 1
+[rank 0] running LDS seed 1
+[rank 0] running LDS seed 1
+[rank 0] running LDS seed 1
+[rank 0] running LDS seed 1
+[rank 0] running LDS seed 1
+[rank 0] running LDS seed 1
+[rank 0] running LDS seed 1
+[rank 0] running LDS seed 1
+[rank 0] running LDS seed 1
+[rank 0] running LDS seed 1
+[rank 0] running LDS seed 1
+[rank 0] LDS seed 1 completed
+[rank 0] LDS seed 1 completed
+[rank 0] LDS seed 1 completed
+[rank 0] LDS seed 1 completed
+[rank 0] LDS seed 1 completed
+[rank 0] LDS seed 1 completed
+[rank 0] LDS seed 1 completed
+[rank 0] LDS seed 1 completed
+[rank 0] LDS seed 1 completed
+[rank 0] LDS seed 1 completed
+[rank 0] LDS seed 1 completed
+[rank 0] LDS seed 1 completed
+[rank 0] LDS seed 1 completed
+[rank 0] LDS seed 1 completed
+[rank 0] LDS seed 1 completed
+[rank 0] LDS seed 1 completed
+TACC:  Shutdown complete. Exiting. 
+All requested LDS seeds completed successfully.
