@@ -88,7 +88,16 @@ wait_all() {
 run_slot() {
   local slot="$1"
   shift
-  if command -v ibrun >/dev/null; then
+  local backend="${VISTA_SLOT_BACKEND:-srun}"
+  if [[ "${backend}" == "srun" && -n "${SLURM_JOB_ID:-}" ]] && command -v srun >/dev/null; then
+    srun \
+      --nodes=1 \
+      --ntasks=1 \
+      --cpus-per-task="${SLURM_CPUS_PER_TASK:-1}" \
+      --exclusive \
+      --mpi=none \
+      "$@"
+  elif [[ "${backend}" == "ibrun" ]] && command -v ibrun >/dev/null; then
     ibrun -n 1 -o "${slot}" "$@"
   else
     "$@"
