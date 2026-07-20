@@ -6,7 +6,7 @@ DATASET_DIR = Path(__file__).resolve().parents[1]
 if str(DATASET_DIR) not in sys.path:
     sys.path.insert(0, str(DATASET_DIR))
 
-from dataset_config import DATA_ROOT, DATASET_NAME, QUERY, REFERENCE_CKPT, RESULT_ROOT, UNPROMPTED_JAX_REFERENCE_CKPT
+from dataset_config import DATA_ROOT, DATASET_NAME, EXPERIMENT_TAG, QUERY, REFERENCE_CKPT, RESULT_ROOT, UNPROMPTED_JAX_REFERENCE_CKPT
 
 
 def _normalize_model_mode(value: str, *, unprompted: bool) -> str:

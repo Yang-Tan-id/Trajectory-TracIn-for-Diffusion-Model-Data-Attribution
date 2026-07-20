@@ -158,6 +158,7 @@ class TestScriptLayoutStatic(unittest.TestCase):
 
                 config_text = (ROOT / dataset / "sampling" / "CONFIG.py").read_text()
                 self.assertIn("SAMPLE_MODEL_MODE", config_text)
+                self.assertIn("EXPERIMENT_TAG", config_text)
                 self.assertIn('RESULT_ROOT / "sample"', config_text)
                 self.assertIn("MODEL_TAG = SAMPLE_MODEL_MODE", config_text)
 
@@ -208,12 +209,14 @@ class TestScriptLayoutStatic(unittest.TestCase):
                 self.assertIn('--m "${LDS_M:-${LDS_NUM_SUBSETS:-100}}"', text)
                 self.assertIn("--dataset-percentage", text)
                 self.assertIn("--k", text)
+                self.assertIn("unset LDS_K LDS_SUBSET_SIZE", text)
 
             with self.subTest(dataset=dataset, mode="unprompted"):
                 text = (ROOT / dataset / "scripts" / "03_lds_training_unprompted.sh").read_text()
                 self.assertIn("--unprompted", text)
                 self.assertIn('SAMPLE_MODEL_MODE="${SAMPLE_MODEL_MODE:-unprompted_solo}"', text)
                 self.assertIn('--sample-model-mode "${SAMPLE_MODEL_MODE}"', text)
+                self.assertIn("unset LDS_K LDS_SUBSET_SIZE", text)
 
     def test_old_algorithm_entrypoints_are_removed(self):
         for dataset in DATASETS:

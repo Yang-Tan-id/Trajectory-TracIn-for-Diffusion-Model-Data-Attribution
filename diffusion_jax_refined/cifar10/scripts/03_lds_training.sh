@@ -15,6 +15,7 @@ ARGS=(
 
 if [[ -n "${LDS_DATASET_PERCENTAGE:-${LDS_DATASET_PERCENT:-}}" ]]; then
   ARGS+=(--dataset-percentage "${LDS_DATASET_PERCENTAGE:-${LDS_DATASET_PERCENT:-}}")
+  unset LDS_K LDS_SUBSET_SIZE
 elif [[ -n "${LDS_K:-${LDS_SUBSET_SIZE:-}}" ]]; then
   ARGS+=(--k "${LDS_K:-${LDS_SUBSET_SIZE:-}}")
 fi
