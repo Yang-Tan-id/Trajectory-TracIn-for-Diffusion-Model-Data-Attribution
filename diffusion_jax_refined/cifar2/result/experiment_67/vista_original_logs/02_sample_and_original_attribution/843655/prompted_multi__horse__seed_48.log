@@ -1,0 +1,13 @@
+[sample] mode=prompted_multi query=horse initial_seed=48
+Sampling data-attribution trajectory: experiment=experiment_67, model_mode=prompted_multi, sample_root=/work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/sample, cuda=0
+Traceback (most recent call last):
+  File "/work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/sampling/run_sampling.py", line 12, in <module>
+    raise SystemExit(run_named_command(Path(__file__).with_name("CONFIG.py"), "sampling"))
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/common/command_runner.py", line 43, in run_named_command
+    experiment_tag = require_attr(cfg, "EXPERIMENT_TAG")
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/common/config_loader.py", line 20, in require_attr
+    raise AttributeError(f"{module.__file__} must define {name}")
+AttributeError: /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/sampling/CONFIG.py must define EXPERIMENT_TAG
+srun: error: c610-041: task 0: Exited with exit code 1

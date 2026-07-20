@@ -1,0 +1,9 @@
+usage: run_training.py [-h] [--m M] [--k K]
+                       [--dataset-percentage DATASET_PERCENTAGE]
+                       [--model-train-seed MODEL_TRAIN_SEED]
+                       [--sample-model-mode SAMPLE_MODEL_MODE]
+                       [--sample-random-seed SAMPLE_RANDOM_SEED]
+                       [--unprompted] [--dry-run]
+                       config
+srun: error: c620-101: task 0: Exited with exit code 2
+run_training.py: error: Use either --k or --dataset-percentage, not both
