@@ -1,0 +1,85 @@
+[sample] mode=prompted_solo query=horse initial_seed=24
+Sampling data-attribution trajectory: experiment=experiment_67, model_mode=prompted_solo, sample_root=/work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/sample, cuda=0
++ python3 DM___data_attribution_sampler.py --adapter=cifar --code-file=DM__training_CIFAR10_pixel.py --checkpoint=/work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/model/prompted_jax/seed_67_epoch_0200.ckpt --cifar-data-root=/work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/dataset/cifar2/cifar-10-batches-py --model-tag=prompted_solo --prompt=horse --seeds=24 --batch-size=1 --prefer-device=gpu --outdir=/work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/sample --num-trajectory-steps=100
+[cifar] restored lightweight EMA checkpoint through epoch 200
+[setup] adapter=cifar
+[setup] model_tag=prompted_solo
+[setup] prompt=horse
+[setup] num_seeds=1 | batch_size=1
+[setup] saving 100 evenly spaced timesteps
+[setup] output_root=/work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/sample/cifar/prompt_horse/model_prompted_solo__ckpt_seed_67_epoch_0200
+[seed 1/1] sampling seed=24
+E0720 13:41:22.643221  124276 cuda_timer.cc:88] Delay kernel timed out: measured time has sub-optimal accuracy. There may be a missing warmup execution, please investigate in Nsight Systems.
+[seed 1/1] done | elapsed=00h 00m 05.32s | saved_to=/work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/sample/cifar/prompt_horse/model_prompted_solo__ckpt_seed_67_epoch_0200/seed_000024
+[done] total_time=00h 00m 05.32s
+[done] output_root=/work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/sample/cifar/prompt_horse/model_prompted_solo__ckpt_seed_67_epoch_0200
+[original-attribution] mode=prompted_solo query=horse initial_seed=24 algorithm=dtrak
+========================================================================================
+dataset       : cifar2
+experiment    : experiment_67
+algorithm     : dtrak
+legacy engine : dtrak.run_endpoint_dtrak_jax
+out_dir       : /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/attribution_score/prompted_solo/train_seed_67/query_horse/initial_seed_24/dtrak
+========================================================================================
+[setup] loading precomputed attribution sample: /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/sample/cifar/prompt_horse/model_prompted_solo__ckpt_seed_67_epoch_0200
+[setup] query loaded from attribution sample: horse
+[setup] loaded x0_ref shape=(1, 32, 32, 3) from final_state.npy
+[setup] synced model config from checkpoint seed_67_epoch_0200.ckpt: use_bfloat16
+==========================================================================================
+Starting endpoint D-TRAK JAX run
+task_type                : cifar10
+module_name              : DM__training_CIFAR10_pixel
+baseline_dir             : /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/model/prompted_jax
+reference_ckpt           : /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/model/prompted_jax/seed_67_epoch_0200.ckpt
+config_ckpt              : /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/model/prompted_jax/seed_67_epoch_0200.ckpt
+attribution_sample       : /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/sample/cifar/prompt_horse/model_prompted_solo__ckpt_seed_67_epoch_0200
+sample_source            : final_state.npy
+sample_shape             : [1, 32, 32, 3]
+seed                     : 42
+query                    : horse
+timesteps                : 1000
+ddim_steps               : 1000
+t_min_end                : 0
+t_max_end_frac           : 0.2
+num_checkpoints_to_use   : -1
+proj_dim                 : 4096
+damping                  : 0.001
+num_samples              : 1
+batch_size               : 64
+train_expect_samples     : 10
+query_expect_samples     : 10
+progress_every_batches   : 10
+use_tqdm                 : True
+use_jax_countsketch      : True
+max_train_points         : 10000
+random_subset            : False
+score_index_ranges       : ((1, 10000),)
+score_index_base         : 1
+topk                     : 10000
+out_dir                  : /work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/cifar2/result/experiment_67/attribution_score/prompted_solo/train_seed_67/query_horse/initial_seed_24/dtrak_range_1_10000
+subset_suffix            : range_1_10000
+==========================================================================================
+[device] backend=gpu | device=cuda:0
+[device] available=[CudaDevice(id=0)]
+[setup] loading dataset...
+[setup] dataset ready | size=10000
+[setup] example shape=(1, 32, 32, 3)
+[setup] building model...
+[setup] model ready
+[setup] building state template...
+Traceback (most recent call last):
+  File "/work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/common/run_original_attribution_config.py", line 25, in <module>
+    main()
+  File "/work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/common/run_original_attribution_config.py", line 21, in main
+    run_algorithm_config(args.config_path)
+  File "/work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/common/algorithm_runner.py", line 111, in run_algorithm_config
+    result = run_fn(cfg)
+             ^^^^^^^^^^^
+  File "/work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/legacy_jax/dtrak/algorithm.py", line 1290, in run_endpoint_dtrak_jax
+    state_template = adapter.build_state_template(cfg, model, device)
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/work/11227/kg35276/vista/Trajectory-TracIn-for-Diffusion-Model-Data-Attribution/diffusion_jax_refined/legacy_jax/dtrak/algorithm.py", line 504, in build_state_template
+    return self.m.create_train_state(cfg, model, rng, device)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: create_train_state() missing 1 required positional argument: 'total_steps'
+srun: error: c641-012: task 0: Exited with exit code 1
