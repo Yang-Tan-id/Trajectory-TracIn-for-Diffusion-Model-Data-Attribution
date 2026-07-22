@@ -2,7 +2,7 @@
 #SBATCH --job-name=cifar2-orig-lds
 #SBATCH --partition=gh
 #SBATCH --account=CCR25021
-#SBATCH --nodes=64
+#SBATCH --nodes=16
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=72
 #SBATCH --time=24:00:00
@@ -29,9 +29,9 @@ fi
 source "${SCRIPT_DIR}/_vista_original_lib.sh"
 vista_original_init
 
-MODEL_MODES=(prompted_solo prompted_multi unprompted_solo unprompted_multi)
-LDS_SEEDS_TEXT="${LDS_SEEDS:-$(seq -s ' ' 1 16)}"
-LDS_M="${LDS_M:-50}"
+MODEL_MODES=(prompted_solo unprompted_solo)
+LDS_SEEDS_TEXT="${LDS_SEEDS:-$(seq -s ' ' 0 7)}"
+LDS_M="${LDS_M:-64}"
 LDS_DATASET_PERCENTAGE="${LDS_DATASET_PERCENTAGE:-50}"
 LDS_K="${LDS_K:-5000}"
 LDS_MODEL_TRAIN_SEED="${LDS_MODEL_TRAIN_SEED:-${TRAIN_SEED}}"

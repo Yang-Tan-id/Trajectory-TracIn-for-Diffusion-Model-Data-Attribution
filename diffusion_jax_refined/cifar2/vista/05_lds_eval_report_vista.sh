@@ -89,7 +89,15 @@ for spec in "${SPECS[@]}"; do
         set -euo pipefail
         for algorithm in dtrak das end_tracin traj_tracin; do
           for lds_seed in ${LDS_SEEDS_TEXT:-$(seq -s " " 1 16)}; do
-            model_dir="${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/lds_model/${SAMPLE_MODEL_MODE}/train_seed_${TRAIN_SEED}/m_${LDS_M}_k_${LDS_K}_pct_${LDS_DATASET_PERCENTAGE}_subset_seed_${lds_seed}"
+            model_root="${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/lds_model/${SAMPLE_MODEL_MODE}/train_seed_${TRAIN_SEED}"
+            model_pattern="${model_root}/m_${LDS_M}_k_*_pct_${LDS_DATASET_PERCENTAGE}_subset_seed_${lds_seed}"
+            mapfile -t model_matches < <(compgen -G "${model_pattern}" | sort)
+            if [[ "${#model_matches[@]}" -ne 1 ]]; then
+              echo "Expected exactly one LDS model dir for pattern ${model_pattern}, found ${#model_matches[@]}" >&2
+              printf '  %s\n' "${model_matches[@]}" >&2
+              exit 1
+            fi
+            model_dir="${model_matches[0]}"
             echo "[lds-eval] mode=${SAMPLE_MODEL_MODE} query=${QUERY} initial_seed=${INITIAL_SEED} algorithm=${algorithm} lds_seed=${lds_seed} model_dir=${model_dir}"
             if [[ "${SAMPLE_MODEL_MODE}" == unprompted_* ]]; then
               LDS_MODEL_DIRS="${model_dir}" "${PYTHON_BIN}" lds/run_eval.py --unprompted --algorithm "${algorithm}" --lds-model-dirs "${model_dir}" --target-function "${LDS_TARGET_FUNCTION}"
@@ -114,7 +122,7 @@ for mode in prompted_solo prompted_multi; do
       --target-function "${LDS_TARGET_FUNCTION}" \
       --lds-m "${LDS_M}" \
       --lds-k "${LDS_K}" \
-      --model-glob "m_${LDS_M}_k_${LDS_K}_pct_${LDS_DATASET_PERCENTAGE}_subset_seed_*" \
+      --model-glob "m_${LDS_M}_k_*_pct_${LDS_DATASET_PERCENTAGE}_subset_seed_*" \
       --initial-seed "${initial_seed}" \
       --prediction-dir "${PRED_TAG}" \
       --algorithms "${ALGORITHMS[@]}" \
@@ -131,7 +139,7 @@ for mode in unprompted_solo unprompted_multi; do
       --queries unprompted \
       --lds-m "${LDS_M}" \
       --lds-k "${LDS_K}" \
-      --model-glob "m_${LDS_M}_k_${LDS_K}_pct_${LDS_DATASET_PERCENTAGE}_subset_seed_*" \
+      --model-glob "m_${LDS_M}_k_*_pct_${LDS_DATASET_PERCENTAGE}_subset_seed_*" \
       --initial-seed "${initial_seed}" \
       --prediction-dir "${PRED_TAG}" \
       --algorithms "${ALGORITHMS[@]}" \
