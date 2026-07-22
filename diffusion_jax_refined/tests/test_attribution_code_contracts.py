@@ -141,6 +141,14 @@ class TestAttributionCodeContracts(unittest.TestCase):
         self.assertIn("train_features=np.stack(stage_train_features", dtrak_text)
         self.assertIn("query_features=np.stack(stage_query_features", dtrak_text)
 
+    def test_original_algorithm_runner_uses_unique_output_dirs_for_ranges_and_unprompted(self):
+        text = (ROOT / "common" / "algorithm_runner.py").read_text()
+        self.assertIn("def _range_suffix_from_env", text)
+        self.assertIn('os.environ.get("ATTRIBUTION_RANGES") or os.environ.get("SCORE_INDEX_RANGES")', text)
+        self.assertIn('output_algorithm = f"{output_algorithm}_unprompted"', text)
+        self.assertIn('output_algorithm = f"{output_algorithm}_{range_suffix}"', text)
+        self.assertIn("ATTRIBUTION_RANGES/SCORE_INDEX_RANGES must look like", text)
+
     def test_strict_stage_producer_does_not_use_score_artifact_fallback(self):
         text = (ROOT / "common" / "stage_artifact_producer.py").read_text()
         self.assertNotIn("score_artifact_dir", text)
@@ -193,7 +201,7 @@ class TestAttributionCodeContracts(unittest.TestCase):
 
         end_text = (LEGACY / "end_tracin" / "algorithm.py").read_text()
         self.assertIn("ATTRIBUTION_TQDM_MININTERVAL", end_text)
-        vista_text = (ROOT / "cifar2" / "vista_original" / "02_sample_and_original_attribution_vista.sh").read_text()
+        vista_text = (ROOT / "cifar2" / "vista_original" / "02_attribution_chunk_vista.sh").read_text()
         self.assertIn("PYTHONUNBUFFERED=1", vista_text)
         self.assertIn("ATTRIBUTION_TQDM_MININTERVAL", vista_text)
 

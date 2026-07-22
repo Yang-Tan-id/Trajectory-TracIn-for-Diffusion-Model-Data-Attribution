@@ -34,6 +34,7 @@ ATTR_NUM_JOBS="${ATTR_NUM_JOBS:-6}"
 ATTR_CHUNK_SIZE="${ATTR_CHUNK_SIZE:-64}"
 PROMPTED_SEEDS_TEXT="${PROMPTED_INITIAL_SEEDS:-$(seq -s ' ' 0 7)}"
 UNPROMPTED_SEEDS_TEXT="${UNPROMPTED_INITIAL_SEEDS:-$(seq -s ' ' 0 23)}"
+JAX_EPOCHS="${JAX_EPOCHS:-200}"
 TRAJ_RANGES=(1-2500 2501-5000 5001-7500 7501-10000)
 LOG_ROOT="${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/vista_original_logs/02_attribution_chunks/${SLURM_JOB_ID:-local}/chunk_${ATTR_JOB_INDEX}"
 mkdir -p "${LOG_ROOT}"
@@ -99,6 +100,12 @@ for ((i = start; i < end; i++)); do
     query_env="unconditional"
   fi
   range_tag="${range:-all}"
+  prompt_tag="$(path_tag "${query_env}")"
+  printf -v seed_tag "%06d" "${seed}"
+  printf -v ckpt_stem "seed_%s_epoch_%04d" "${TRAIN_SEED}" "${JAX_EPOCHS}"
+  sample_run_root="${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/sample/cifar/prompt_${prompt_tag}/model_${sample_mode}__ckpt_${ckpt_stem}"
+  sample_done_file="${sample_run_root}/seed_${seed_tag}/trajectory_xt.npy"
+  sample_lock_dir="${sample_run_root}/.sample_seed_${seed_tag}.lock"
   log="${LOG_ROOT}/task_${i}__${algorithm}__${score_mode}__$(path_tag "${query}")__seed_${seed}__range_${range_tag}.log"
   echo "Launch task=${i} algorithm=${algorithm} range=${range_tag} sample_mode=${sample_mode} score_mode=${score_mode} query=${query} seed=${seed} slot=${slot} -> ${log}"
   (
@@ -123,6 +130,9 @@ for ((i = start; i < end; i++)); do
       INITIAL_SEED="${seed}" \
       SAMPLE_SEED="${seed}" \
       SAMPLE_SEEDS="${seed}" \
+      SAMPLE_DONE_FILE="${sample_done_file}" \
+      SAMPLE_LOCK_DIR="${sample_lock_dir}" \
+      SAMPLE_LOCK_WAIT_SECONDS="${SAMPLE_LOCK_WAIT_SECONDS:-21600}" \
       ATTRIBUTION_RANGES="${range}" \
       SCORE_INDEX_RANGES="${range}" \
       UNPROMPTED="${unprompted_flag}" \
@@ -130,7 +140,31 @@ for ((i = start; i < end; i++)); do
       bash -c '
         set -euo pipefail
         echo "[sample] sample_mode=${SAMPLE_MODEL_MODE} score_mode=${ATTRIBUTION_SCORE_MODEL_MODE} query=${QUERY} initial_seed=${INITIAL_SEED}"
-        bash scripts/00_sample_for_attribution.sh
+        if [[ -f "${SAMPLE_DONE_FILE}" ]]; then
+          echo "[sample] reuse existing ${SAMPLE_DONE_FILE}"
+        elif mkdir "${SAMPLE_LOCK_DIR}" 2>/dev/null; then
+          trap '\''rmdir "${SAMPLE_LOCK_DIR}" 2>/dev/null || true'\'' EXIT
+          if [[ -f "${SAMPLE_DONE_FILE}" ]]; then
+            echo "[sample] reuse existing ${SAMPLE_DONE_FILE}"
+          else
+            echo "[sample] generating ${SAMPLE_DONE_FILE}"
+            bash scripts/00_sample_for_attribution.sh
+          fi
+          rmdir "${SAMPLE_LOCK_DIR}" 2>/dev/null || true
+          trap - EXIT
+        else
+          echo "[sample] waiting for locked sample ${SAMPLE_DONE_FILE}"
+          waited=0
+          while [[ ! -f "${SAMPLE_DONE_FILE}" ]]; do
+            if (( waited >= SAMPLE_LOCK_WAIT_SECONDS )); then
+              echo "Timed out waiting for sample ${SAMPLE_DONE_FILE}" >&2
+              exit 1
+            fi
+            sleep 30
+            waited=$((waited + 30))
+          done
+          echo "[sample] reuse after wait ${SAMPLE_DONE_FILE}"
+        fi
         echo "[original-attribution] algorithm=${ALGORITHM} range=${ATTRIBUTION_RANGES:-all} score_mode=${ATTRIBUTION_SCORE_MODEL_MODE} query=${QUERY} initial_seed=${INITIAL_SEED}"
         "${PYTHON_BIN}" "${REFINE_ROOT}/common/run_original_attribution_config.py" "${CIFAR2_ROOT}/data_attribution/${ALGORITHM}/CONFIG.py"
       '

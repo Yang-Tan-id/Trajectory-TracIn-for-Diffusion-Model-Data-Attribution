@@ -67,6 +67,22 @@ def _safe_tag(value: object) -> str:
     return tag
 
 
+def _range_suffix_from_env() -> str | None:
+    text = os.environ.get("ATTRIBUTION_RANGES") or os.environ.get("SCORE_INDEX_RANGES")
+    if not text:
+        return None
+    parts = []
+    for part in text.replace(",", " ").split():
+        token = part.strip()
+        if not token:
+            continue
+        start_end = token.replace(":", "-").split("-")
+        if len(start_end) != 2:
+            raise ValueError("ATTRIBUTION_RANGES/SCORE_INDEX_RANGES must look like '1-2500,2501-5000'.")
+        parts.append(f"{int(start_end[0])}_{int(start_end[1])}")
+    return "range_" + "__".join(parts) if parts else None
+
+
 def run_algorithm_config(config_path: str | Path) -> Any:
     cfg_module = load_config(config_path)
     dataset_name = require_attr(cfg_module, "DATASET_NAME")
@@ -83,10 +99,18 @@ def run_algorithm_config(config_path: str | Path) -> Any:
         config_values.get("attribution_sample_seed", os.environ.get("INITIAL_SEED", "0"))
     )
     output_algorithm = algorithm
+    unprompted = os.environ.get("UNPROMPTED", "0") in ("1", "true", "True", "yes") or str(query) == "unconditional"
+    if unprompted:
+        output_algorithm = f"{output_algorithm}_unprompted"
     if algorithm == "traj_tracin":
         objective = config_values.get("query_objective", "trajectory_noise_squared_deviation")
         if objective != "trajectory_noise_squared_deviation":
             output_algorithm = f"{algorithm}_{_safe_tag(objective)}"
+            if unprompted:
+                output_algorithm = f"{output_algorithm}_unprompted"
+        range_suffix = _range_suffix_from_env()
+        if range_suffix is not None:
+            output_algorithm = f"{output_algorithm}_{range_suffix}"
     config_values.setdefault(
         "out_dir",
         build_output_dir(dataset_name, experiment_tag, output_algorithm, query, initial_seed),

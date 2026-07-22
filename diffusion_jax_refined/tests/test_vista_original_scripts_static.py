@@ -21,7 +21,6 @@ class TestVistaOriginalScriptsStatic(unittest.TestCase):
             "02d_attribution_priority_vista.sh",
             "02e_attribution_priority_vista.sh",
             "02f_attribution_priority_vista.sh",
-            "02_sample_and_original_attribution_vista.sh",
             "03_lds_eval_report_vista.sh",
             "submit_vista_original_pipeline.sh",
             "README.md",
@@ -29,6 +28,7 @@ class TestVistaOriginalScriptsStatic(unittest.TestCase):
         for name in expected:
             with self.subTest(name=name):
                 self.assertTrue((VISTA_ORIGINAL / name).is_file())
+        self.assertFalse((VISTA_ORIGINAL / "02_sample_and_original_attribution_vista.sh").exists())
 
     def test_original_lds_training_uses_two_real_checkpoint_families(self):
         text = (VISTA_ORIGINAL / "01_train_lds_models_vista.sh").read_text()
@@ -54,6 +54,11 @@ class TestVistaOriginalScriptsStatic(unittest.TestCase):
         self.assertIn("for algorithm in dtrak end_tracin", text)
         self.assertIn('ATTRIBUTION_SCORE_MODEL_MODE="${score_mode}"', text)
         self.assertIn('ATTRIBUTION_RANGES="${range}"', text)
+        self.assertIn('SAMPLE_DONE_FILE="${sample_done_file}"', text)
+        self.assertIn('SAMPLE_LOCK_DIR="${sample_lock_dir}"', text)
+        self.assertIn('mkdir "${SAMPLE_LOCK_DIR}"', text)
+        self.assertIn('reuse existing ${SAMPLE_DONE_FILE}', text)
+        self.assertIn('Timed out waiting for sample ${SAMPLE_DONE_FILE}', text)
         self.assertNotIn("01_train_datapoint_gradient.py", text)
         self.assertNotIn("02_query_gradient.py", text)
         self.assertNotIn("03_score.py", text)
