@@ -34,7 +34,8 @@ class TestStampede3DasScriptsStatic(unittest.TestCase):
                 if path.name.startswith("_") or path.name.startswith("submit"):
                     continue
                 self.assertIn("#SBATCH -p h100", text)
-                self.assertIn("#SBATCH -A CCR25021", text)
+                self.assertNotIn("CCR25021", text)
+                self.assertNotIn("#SBATCH -A", text)
                 self.assertNotIn("--gres", text)
                 self.assertNotIn("--gpus-per-task", text)
 
@@ -94,6 +95,8 @@ class TestStampede3DasScriptsStatic(unittest.TestCase):
     def test_stampede3_submit_uses_four_submissions_for_h100_limits(self):
         text = (STAMPEDE3_DAS / "submit_stampede3_das_pipeline.sh").read_text()
         self.assertIn("Max Submit=4", text)
+        self.assertIn("STAMPEDE3_ACCOUNT", text)
+        self.assertIn("SBATCH_ACCOUNT_ARGS=(-A", text)
         self.assertIn("00_train_base_models_stampede3.sh", text)
         self.assertIn("01_train_lds_models_stampede3.sh", text)
         self.assertIn("02_das_attribution_array_stampede3.sh", text)

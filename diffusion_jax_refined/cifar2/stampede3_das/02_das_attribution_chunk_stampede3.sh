@@ -3,7 +3,6 @@
 #SBATCH -o cifar2-s3-das-attr-%j.out
 #SBATCH -e cifar2-s3-das-attr-%j.err
 #SBATCH -p h100
-#SBATCH -A CCR25021
 #SBATCH -N 4
 #SBATCH -n 16
 #SBATCH --cpus-per-task=24

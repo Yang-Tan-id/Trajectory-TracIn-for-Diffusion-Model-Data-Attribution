@@ -3,7 +3,6 @@
 #SBATCH -o cifar2-s3-das-train-%j.out
 #SBATCH -e cifar2-s3-das-train-%j.err
 #SBATCH -p h100
-#SBATCH -A CCR25021
 #SBATCH -N 1
 #SBATCH -n 4
 #SBATCH --cpus-per-task=24
