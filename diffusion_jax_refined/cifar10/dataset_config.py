@@ -23,6 +23,13 @@ def _parse_score_index_ranges(default: tuple[tuple[int, int], ...]) -> tuple[tup
     return tuple(ranges)
 
 
+def _parse_float_list_env(name: str, default: tuple[float, ...]) -> tuple[float, ...]:
+    text = os.environ.get(name)
+    if not text:
+        return default
+    return tuple(float(part) for part in text.replace(",", " ").split() if part.strip())
+
+
 def _prompt_path_tag(prompt: str) -> str:
     text = str(prompt).strip().replace(",", "__")
     text = re.sub(r"[^A-Za-z0-9._-]+", "_", text)
@@ -53,6 +60,12 @@ SAMPLE_ROOT = RESULT_ROOT / "sample"
 TRAIN_SEED = int(os.environ.get("TRAIN_SEED", "42"))
 JAX_EPOCHS = int(os.environ.get("JAX_EPOCHS", "200"))
 QUERY = os.environ.get("QUERY", "truck")
+DAS_DAMPING_SWEEP_VALUES = _parse_float_list_env(
+    "DAS_DAMPING_SWEEP_VALUES",
+    (
+        0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0,
+    ),
+)
 INITIAL_SEED = int(os.environ.get("INITIAL_SEED", os.environ.get("SAMPLE_SEED", "0")))
 ATTRIBUTION_SCORE_MODEL_MODE = os.environ.get(
     "ATTRIBUTION_SCORE_MODEL_MODE",
@@ -145,7 +158,8 @@ ATTRIBUTION_CONFIGS = {
         "timesteps": (0, 200, 400, 600, 800, 999),
         "num_mc_noise": 10,
         "proj_dim": 4096,
-        "damping": 1e-3,
+        "damping": float(os.environ.get("DAS_DAMPING", "2")),
+        "damping_sweep_values": DAS_DAMPING_SWEEP_VALUES,
         "batch_size": 64,
         "use_batched_per_example_grads": os.environ.get("DAS_BATCHED", "1") not in ("0", "false", "False"),
         "per_example_grad_batch_size": int(os.environ.get("DAS_GRAD_BATCH_SIZE", "8")),

@@ -34,6 +34,7 @@ ATTR_NUM_JOBS="${ATTR_NUM_JOBS:-6}"
 ATTR_CHUNK_SIZE="${ATTR_CHUNK_SIZE:-64}"
 PROMPTED_SEEDS_TEXT="${PROMPTED_INITIAL_SEEDS:-$(seq -s ' ' 0 7)}"
 UNPROMPTED_SEEDS_TEXT="${UNPROMPTED_INITIAL_SEEDS:-$(seq -s ' ' 0 23)}"
+DAS_DAMPING_SWEEP_VALUES="${DAS_DAMPING_SWEEP_VALUES:-0.1 0.2 0.5 1 2 5 10 20 50}"
 JAX_EPOCHS="${JAX_EPOCHS:-200}"
 TRAJ_RANGES=(1-2500 2501-5000 5001-7500 7501-10000)
 LOG_ROOT="${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/vista_original_logs/02_attribution_chunks/${SLURM_JOB_ID:-local}/chunk_${ATTR_JOB_INDEX}"
@@ -116,6 +117,8 @@ for ((i = start; i < end; i++)); do
       PYTHONUNBUFFERED=1 \
       ATTRIBUTION_TQDM_MININTERVAL="${ATTRIBUTION_TQDM_MININTERVAL:-1}" \
       ATTRIBUTION_TQDM_LEAVE="${ATTRIBUTION_TQDM_LEAVE:-1}" \
+      DAS_DAMPING_SWEEP="${DAS_DAMPING_SWEEP:-0}" \
+      DAS_DAMPING_SWEEP_VALUES="${DAS_DAMPING_SWEEP_VALUES}" \
       CIFAR2_ROOT="${CIFAR2_ROOT}" \
       REFINE_ROOT="${REFINE_ROOT}" \
       PYTHON_BIN="${PYTHON_BIN}" \
@@ -166,7 +169,16 @@ for ((i = start; i < end; i++)); do
           echo "[sample] reuse after wait ${SAMPLE_DONE_FILE}"
         fi
         echo "[original-attribution] algorithm=${ALGORITHM} range=${ATTRIBUTION_RANGES:-all} score_mode=${ATTRIBUTION_SCORE_MODEL_MODE} query=${QUERY} initial_seed=${INITIAL_SEED}"
-        "${PYTHON_BIN}" "${REFINE_ROOT}/common/run_original_attribution_config.py" "${CIFAR2_ROOT}/data_attribution/${ALGORITHM}/CONFIG.py"
+        if [[ "${ALGORITHM}" == "das" && "${DAS_DAMPING_SWEEP}" == "1" ]]; then
+          for lambda in ${DAS_DAMPING_SWEEP_VALUES}; do
+            echo "[das-sweep] lambda=${lambda}"
+            DAS_DAMPING="${lambda}" \
+            DAS_DAMPING_OUTPUT_TAG="${lambda}" \
+            "${PYTHON_BIN}" "${REFINE_ROOT}/common/run_original_attribution_config.py" "${CIFAR2_ROOT}/data_attribution/${ALGORITHM}/CONFIG.py"
+          done
+        else
+          "${PYTHON_BIN}" "${REFINE_ROOT}/common/run_original_attribution_config.py" "${CIFAR2_ROOT}/data_attribution/${ALGORITHM}/CONFIG.py"
+        fi
       '
   ) >"${log}" 2>&1 &
   pids+=("$!")

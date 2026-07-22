@@ -59,6 +59,11 @@ class TestVistaOriginalScriptsStatic(unittest.TestCase):
         self.assertIn('mkdir "${SAMPLE_LOCK_DIR}"', text)
         self.assertIn('reuse existing ${SAMPLE_DONE_FILE}', text)
         self.assertIn('Timed out waiting for sample ${SAMPLE_DONE_FILE}', text)
+        self.assertIn('DAS_DAMPING_SWEEP_VALUES="${DAS_DAMPING_SWEEP_VALUES:-0.1 0.2 0.5 1 2 5 10 20 50}"', text)
+        self.assertIn('if [[ "${ALGORITHM}" == "das" && "${DAS_DAMPING_SWEEP}" == "1" ]]', text)
+        self.assertIn('for lambda in ${DAS_DAMPING_SWEEP_VALUES}', text)
+        self.assertIn('DAS_DAMPING="${lambda}"', text)
+        self.assertIn('DAS_DAMPING_OUTPUT_TAG="${lambda}"', text)
         self.assertNotIn("01_train_datapoint_gradient.py", text)
         self.assertNotIn("02_query_gradient.py", text)
         self.assertNotIn("03_score.py", text)
@@ -129,6 +134,15 @@ class TestVistaOriginalScriptsStatic(unittest.TestCase):
         self.assertIn('LDS_M="${LDS_M:-64}"', text)
         self.assertIn('UNPROMPTED_SEEDS_TEXT="${UNPROMPTED_INITIAL_SEEDS:-$(seq -s \' \' 0 23)}"', text)
         self.assertIn("for query in horse automobile horse,automobile", text)
+        self.assertIn('DAS_DAMPING_SWEEP_VALUES="${DAS_DAMPING_SWEEP_VALUES:-0.1 0.2 0.5 1 2 5 10 20 50}"', text)
+        self.assertIn('EVAL_ALGORITHMS=(dtrak end_tracin traj_tracin)', text)
+        self.assertIn('EVAL_ALGORITHMS+=("das_lambda_$(damping_tag "${lambda}")")', text)
+        self.assertIn("score_dir_for_das_lambda", text)
+        self.assertIn("das_unprompted/lambda_%s", text)
+        self.assertIn("das/lambda_%s", text)
+        self.assertIn('ATTRIBUTION_RESULT_DIRS="${score_dir}"', text)
+        self.assertIn('eval_algorithm=das_lambda_${lambda_tag}', text)
+        self.assertIn('--algorithms "${EVAL_ALGORITHMS[@]}"', text)
         self.assertIn("summarize_lds_eval_report.py", text)
 
     def test_original_eval_resolves_percentage_lds_model_dirs_by_actual_k(self):
@@ -143,6 +157,12 @@ class TestVistaOriginalScriptsStatic(unittest.TestCase):
         text = (ROOT / "common" / "run_original_attribution_config.py").read_text()
         self.assertIn("run_algorithm_config(args.config_path)", text)
         self.assertIn("common.algorithm_runner", text)
+
+    def test_original_das_sweep_scores_are_written_under_lambda_subdirs(self):
+        text = (ROOT / "common" / "algorithm_runner.py").read_text()
+        self.assertIn("def _damping_tag", text)
+        self.assertIn('if algorithm == "das" and os.environ.get("DAS_DAMPING_OUTPUT_TAG")', text)
+        self.assertIn('out_dir = out_dir / f"lambda_{_damping_tag(os.environ[', text)
 
 
 if __name__ == "__main__":

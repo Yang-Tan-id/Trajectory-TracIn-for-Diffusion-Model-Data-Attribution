@@ -107,14 +107,14 @@ class TestAttributionCodeContracts(unittest.TestCase):
 
         train = {
             "train_features": np.asarray([[1.0, 0.0], [0.0, 2.0]], dtype=np.float32),
-            "gram_inverse": np.asarray([[2.0, 0.0], [0.0, 0.5]], dtype=np.float32),
+            "gram_inverse": np.asarray([[0.2, 0.0], [0.0, 0.05]], dtype=np.float32),
         }
         query = {
             "query_feature": np.asarray([5.0, 6.0], dtype=np.float32),
             "residuals": np.asarray([3.0, 4.0], dtype=np.float32),
         }
         scores = _combine_das_scores(train, query, train_path=Path("train.npz"), query_path=Path("query.npz"))
-        np.testing.assert_allclose(scores, np.asarray([900.0, 576.0]))
+        np.testing.assert_allclose(scores, np.asarray([14.0625, 9.0]))
 
     def test_score_artifact_combiner_dtrak_uses_gram_solve(self):
         if importlib.util.find_spec("numpy") is None:
@@ -164,6 +164,40 @@ class TestAttributionCodeContracts(unittest.TestCase):
         self.assertIn("denom_i = 1.0 - leverage_i", text)
         cifar2_text = (ROOT / "cifar2" / "dataset_config.py").read_text()
         self.assertIn("DAS_SHERMAN_MORRISON_DENOMINATOR", cifar2_text)
+
+    def test_das_damping_defaults_to_two_and_is_env_tunable(self):
+        text = (LEGACY / "das" / "algorithm.py").read_text()
+        self.assertIn("damping: float = 2.0", text)
+        for dataset in ("cifar2", "cifar10", "artbench"):
+            with self.subTest(dataset=dataset):
+                dataset_text = (ROOT / dataset / "dataset_config.py").read_text()
+                self.assertIn('"damping": float(os.environ.get("DAS_DAMPING", "2"))', dataset_text)
+
+    def test_das_damping_sweep_values_are_pinned(self):
+        expected_values = (
+            "0.1", "0.2", "0.5", "1.0", "2.0", "5.0", "10.0", "20.0", "50.0",
+        )
+        excluded_values = (
+            "0.01", "0.02", "0.05", "100.0", "200.0", "500.0", "1000.0",
+            "2000.0", "5000.0", "10000.0", "20000.0", "50000.0",
+        )
+        text = (LEGACY / "das" / "algorithm.py").read_text()
+        self.assertIn("damping_sweep_values: Tuple[float, ...]", text)
+        sweep_block = text.split("damping_sweep_values: Tuple[float, ...]", 1)[1].split("proj_dim: int", 1)[0]
+        for value in expected_values:
+            self.assertIn(value, sweep_block)
+        for value in excluded_values:
+            self.assertNotIn(value, sweep_block)
+        for dataset in ("cifar2", "cifar10", "artbench"):
+            with self.subTest(dataset=dataset):
+                dataset_text = (ROOT / dataset / "dataset_config.py").read_text()
+                self.assertIn("DAS_DAMPING_SWEEP_VALUES", dataset_text)
+                self.assertIn('"damping_sweep_values": DAS_DAMPING_SWEEP_VALUES', dataset_text)
+                dataset_sweep_block = dataset_text.split("DAS_DAMPING_SWEEP_VALUES = _parse_float_list_env", 1)[1].split("TRAIN_SEED =", 1)[0]
+                for value in expected_values:
+                    self.assertIn(value, dataset_sweep_block)
+                for value in excluded_values:
+                    self.assertNotIn(value, dataset_sweep_block)
 
     def test_end_tracin_uses_endpoint_anchored_loss_with_mc_samples(self):
         text = (LEGACY / "end_tracin" / "algorithm.py").read_text()

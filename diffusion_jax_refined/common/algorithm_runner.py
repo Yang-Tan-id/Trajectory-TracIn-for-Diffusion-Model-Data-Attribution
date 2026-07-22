@@ -67,6 +67,10 @@ def _safe_tag(value: object) -> str:
     return tag
 
 
+def _damping_tag(value: object) -> str:
+    return _safe_tag(str(value).replace("+", "").replace("-", "neg_").replace(".", "p"))
+
+
 def _range_suffix_from_env() -> str | None:
     text = os.environ.get("ATTRIBUTION_RANGES") or os.environ.get("SCORE_INDEX_RANGES")
     if not text:
@@ -111,10 +115,10 @@ def run_algorithm_config(config_path: str | Path) -> Any:
         range_suffix = _range_suffix_from_env()
         if range_suffix is not None:
             output_algorithm = f"{output_algorithm}_{range_suffix}"
-    config_values.setdefault(
-        "out_dir",
-        build_output_dir(dataset_name, experiment_tag, output_algorithm, query, initial_seed),
-    )
+    out_dir = Path(build_output_dir(dataset_name, experiment_tag, output_algorithm, query, initial_seed))
+    if algorithm == "das" and os.environ.get("DAS_DAMPING_OUTPUT_TAG"):
+        out_dir = out_dir / f"lambda_{_damping_tag(os.environ['DAS_DAMPING_OUTPUT_TAG'])}"
+    config_values.setdefault("out_dir", str(out_dir))
 
     add_legacy_jax_to_path()
     chdir_legacy_jax_root()

@@ -513,7 +513,10 @@ class EndpointProjectedDASJAXConfig:
 
     timesteps: Tuple[int, ...] = (0, 400, 800, 1200, 1600, 1999)
     num_mc_noise: int = 10
-    damping: float = 1e-3
+    damping: float = 2.0
+    damping_sweep_values: Tuple[float, ...] = (
+        0.1, 0.2, 0.5, 1.0, 2.0, 5.0, 10.0, 20.0, 50.0,
+    )
     proj_dim: int = 4096
     normalize_projected_grads: bool = True
     normalize_eps: float = 1e-8
