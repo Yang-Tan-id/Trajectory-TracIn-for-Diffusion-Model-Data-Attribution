@@ -64,7 +64,7 @@ class TestStampede3DasScriptsStatic(unittest.TestCase):
         text = (STAMPEDE3_DAS / "02_das_attribution_chunk_stampede3.sh").read_text()
         self.assertIn("#SBATCH -N 4", text)
         self.assertIn("#SBATCH -n 16", text)
-        self.assertIn("#SBATCH -t 24:00:00", text)
+        self.assertIn("#SBATCH -t 48:00:00", text)
         self.assertIn('ATTR_JOB_INDEX="${ATTR_JOB_INDEX:-${SLURM_ARRAY_TASK_ID:-0}}"', text)
         self.assertIn('ATTR_NUM_JOBS="${ATTR_NUM_JOBS:-3}"', text)
         self.assertIn('ATTR_CHUNK_SIZE="${ATTR_CHUNK_SIZE:-16}"', text)

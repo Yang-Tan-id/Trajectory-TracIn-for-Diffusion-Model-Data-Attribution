@@ -12,7 +12,7 @@ Jobs:
 | --- | --- | --- | --- | --- |
 | 00 | `00_train_base_models_stampede3.sh` | 1 H100 node, 2h | none | Train `prompted_solo` on GPUs 0,1 and `unprompted_solo` on GPUs 2,3. |
 | 01 | `01_train_lds_models_stampede3.sh` | 4 H100 nodes, 24h | after 00 | Train LDS models for `prompted_solo` and `unprompted_solo`, seeds 0-7, `M=64`, `50%`. |
-| 02 | `02_das_attribution_array_stampede3.sh` | 3 array tasks, each 4 H100 nodes, 24h | after 00 | 48 query/sample tasks split into 3 chunks of 16 GPUs. Runs DAS with 21 lambda sweep values. |
+| 02 | `02_das_attribution_array_stampede3.sh` | 3 array tasks, each 4 H100 nodes, 48h | after 00 | 48 query/sample tasks split into 3 chunks of 16 GPUs. Runs DAS with 21 lambda sweep values. |
 | 03 | `03_das_lds_eval_report_stampede3.sh` | 4 H100 nodes, 24h | after 01 and 02 | LDS eval for two targets and DAS lambda variants. Each GPU handles three query specs. |
 
 Submit in stages from the repository root on Stampede3. The default stage only
