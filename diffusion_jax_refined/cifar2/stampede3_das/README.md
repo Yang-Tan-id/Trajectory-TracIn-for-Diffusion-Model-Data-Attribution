@@ -15,10 +15,28 @@ Jobs:
 | 02 | `02_das_attribution_array_stampede3.sh` | 3 array tasks, each 4 H100 nodes, 24h | after 00 | 48 query/sample tasks split into 3 chunks of 16 GPUs. Runs DAS with 21 lambda sweep values. |
 | 03 | `03_das_lds_eval_report_stampede3.sh` | 4 H100 nodes, 24h | after 01 and 02 | LDS eval for two targets and DAS lambda variants. Each GPU handles three query specs. |
 
-Run from the repository root on Stampede3:
+Submit in stages from the repository root on Stampede3. The default stage only
+submits base training and LDS training, because the `h100` submit limit counts
+each Slurm array element.
 
 ```bash
-EXPERIMENT_TAG=experiment_67 TRAIN_SEED=67 \
+STAMPEDE3_ACCOUNT=IRI26004 EXPERIMENT_TAG=experiment_67 TRAIN_SEED=67 \
+  bash diffusion_jax_refined/cifar2/stampede3_das/submit_stampede3_das_pipeline.sh
+```
+
+After the base training job finishes and submit slots are free:
+
+```bash
+STAMPEDE3_ACCOUNT=IRI26004 EXPERIMENT_TAG=experiment_67 TRAIN_SEED=67 \
+STAMPEDE3_SUBMIT_STAGE=attr TRAIN_JOB_ID=<00_job_id> \
+  bash diffusion_jax_refined/cifar2/stampede3_das/submit_stampede3_das_pipeline.sh
+```
+
+After LDS and attribution finish:
+
+```bash
+STAMPEDE3_ACCOUNT=IRI26004 EXPERIMENT_TAG=experiment_67 TRAIN_SEED=67 \
+STAMPEDE3_SUBMIT_STAGE=eval LDS_JOB_ID=<01_job_id> ATTR_JOB_ID=<02_array_job_id> \
   bash diffusion_jax_refined/cifar2/stampede3_das/submit_stampede3_das_pipeline.sh
 ```
 
