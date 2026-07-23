@@ -36,6 +36,7 @@ UNPROMPTED_SEEDS_TEXT="${UNPROMPTED_INITIAL_SEEDS:-$(seq -s ' ' 0 23)}"
 DAS_DAMPING_SWEEP=1
 DAS_DAMPING_SWEEP_VALUES="${DAS_DAMPING_SWEEP_VALUES:-0.01 0.02 0.05 0.1 0.2 0.5 1 2 5 10 20 50 100 200 500 1000 2000 5000 10000 20000 50000}"
 JAX_EPOCHS="${JAX_EPOCHS:-200}"
+export DAS_DAMPING_SWEEP DAS_DAMPING_SWEEP_VALUES
 LOG_ROOT="${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/stampede3_das_logs/02_das_attribution/${SLURM_JOB_ID:-local}/chunk_${ATTR_JOB_INDEX}"
 mkdir -p "${LOG_ROOT}"
 
@@ -113,8 +114,6 @@ for ((i = start; i < end; i++)); do
       SAMPLE_LOCK_WAIT_SECONDS="${SAMPLE_LOCK_WAIT_SECONDS:-21600}" \
       UNPROMPTED="${unprompted_flag}" \
       ALGORITHM=das \
-      DAS_DAMPING_SWEEP=1 \
-      DAS_DAMPING_SWEEP_VALUES="${DAS_DAMPING_SWEEP_VALUES}" \
       bash -c '
         set -euo pipefail
         echo "[sample] sample_mode=${SAMPLE_MODEL_MODE} score_mode=${ATTRIBUTION_SCORE_MODEL_MODE} query=${QUERY} initial_seed=${INITIAL_SEED}"
