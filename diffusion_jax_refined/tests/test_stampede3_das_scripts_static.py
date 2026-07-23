@@ -98,7 +98,7 @@ class TestStampede3DasScriptsStatic(unittest.TestCase):
 
     def test_stampede3_submit_uses_staged_submission_for_h100_limits(self):
         text = (STAMPEDE3_DAS / "submit_stampede3_das_pipeline.sh").read_text()
-        self.assertIn("array elements toward the submit limit", text)
+        self.assertIn("split into three explicit chunk jobs", text)
         self.assertIn("STAMPEDE3_ACCOUNT", text)
         self.assertIn("SBATCH_ACCOUNT_ARGS=(-A", text)
         self.assertIn('stage="${STAMPEDE3_SUBMIT_STAGE:-base_lds}"', text)
@@ -107,11 +107,14 @@ class TestStampede3DasScriptsStatic(unittest.TestCase):
         self.assertIn("eval)", text)
         self.assertIn("00_train_base_models_stampede3.sh", text)
         self.assertIn("01_train_lds_models_stampede3.sh", text)
-        self.assertIn("02_das_attribution_array_stampede3.sh", text)
+        self.assertIn("02a_das_attribution_stampede3.sh", text)
+        self.assertIn("02b_das_attribution_stampede3.sh", text)
+        self.assertIn("02c_das_attribution_stampede3.sh", text)
         self.assertIn("03_das_lds_eval_report_stampede3.sh", text)
-        self.assertIn("afterok:${train_job}", text)
-        self.assertIn("afterok:${lds_job}:${attr_job}", text)
-        self.assertIn("TRAIN_JOB_ID", text)
+        self.assertIn('dependency_args=(--dependency=afterok:${TRAIN_JOB_ID})', text)
+        self.assertIn("afterok:${lds_job}:${attr_jobs}", text)
+        self.assertIn("ATTR_JOB_IDS", text)
+        self.assertNotIn("02 DAS attribution array 0-2", text)
         self.assertIn("LDS_JOB_ID", text)
         self.assertIn("ATTR_JOB_ID", text)
 
