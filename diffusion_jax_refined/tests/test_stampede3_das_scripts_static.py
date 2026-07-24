@@ -15,11 +15,13 @@ class TestStampede3DasScriptsStatic(unittest.TestCase):
             "00_train_base_models_stampede3.sh",
             "01_train_lds_models_stampede3.sh",
             "02_das_attribution_chunk_stampede3.sh",
+            "02_das_attribution_task_stampede3.sh",
             "02_das_attribution_array_stampede3.sh",
             "02a_das_attribution_stampede3.sh",
             "02b_das_attribution_stampede3.sh",
             "02c_das_attribution_stampede3.sh",
             "03_das_lds_eval_report_stampede3.sh",
+            "03_das_lds_eval_slot_stampede3.sh",
             "submit_stampede3_das_pipeline.sh",
             "README.md",
         )
@@ -31,7 +33,7 @@ class TestStampede3DasScriptsStatic(unittest.TestCase):
         for path in STAMPEDE3_DAS.glob("*.sh"):
             with self.subTest(path=path.name):
                 text = path.read_text()
-                if path.name.startswith("_") or path.name.startswith("submit"):
+                if path.name.startswith("_") or path.name.startswith("submit") or "_task_" in path.name or "_slot_" in path.name:
                     continue
                 self.assertIn("#SBATCH -p h100", text)
                 self.assertNotIn("CCR25021", text)
@@ -73,8 +75,15 @@ class TestStampede3DasScriptsStatic(unittest.TestCase):
         self.assertIn("0.01 0.02 0.05 0.1 0.2 0.5 1 2 5 10 20 50 100 200 500 1000 2000 5000 10000 20000 50000", text)
         self.assertIn("export DAS_DAMPING_SWEEP DAS_DAMPING_SWEEP_VALUES", text)
         self.assertNotIn('DAS_DAMPING_SWEEP_VALUES="${DAS_DAMPING_SWEEP_VALUES}" \\\n      bash -c', text)
-        self.assertIn("bash scripts/00_sample_for_attribution.sh", text)
-        self.assertIn("DAS_DAMPING_OUTPUT_TAG", text)
+        self.assertIn("expected_score_file()", text)
+        self.assertIn("Missing DAS score artifact", text)
+        self.assertIn("scores.npy", text)
+        self.assertIn('bash "${SCRIPT_DIR}/02_das_attribution_task_stampede3.sh"', text)
+        self.assertNotIn("bash -c", text)
+        task_text = (STAMPEDE3_DAS / "02_das_attribution_task_stampede3.sh").read_text()
+        self.assertIn("bash scripts/00_sample_for_attribution.sh", task_text)
+        self.assertIn("[das-sweep] lambda=", task_text)
+        self.assertIn("DAS_DAMPING_OUTPUT_TAG", task_text)
         self.assertNotIn("dtrak", text)
         self.assertNotIn("traj_tracin", text)
         array_text = (STAMPEDE3_DAS / "02_das_attribution_array_stampede3.sh").read_text()
@@ -87,13 +96,18 @@ class TestStampede3DasScriptsStatic(unittest.TestCase):
         self.assertIn("#SBATCH -t 24:00:00", text)
         self.assertIn("TARGETS=(simple_loss noise_trajectory)", text)
         self.assertIn("for slot in $(seq 0 15)", text)
-        self.assertIn("idx += 16", text)
         self.assertIn("queries_per_gpu=3", text)
         self.assertIn("das_lambda_$(damping_tag", text)
         self.assertIn("export PROMPTED_SEEDS_TEXT UNPROMPTED_SEEDS_TEXT LDS_SEEDS_TEXT TARGETS_TEXT DAS_DAMPING_SWEEP_VALUES", text)
         self.assertNotIn('TARGETS_TEXT="${TARGETS[*]}" \\\n      DAS_DAMPING_SWEEP_VALUES="${DAS_DAMPING_SWEEP_VALUES}"', text)
-        self.assertIn("das_unprompted/lambda_%s", text)
-        self.assertIn("das/lambda_%s", text)
+        self.assertIn('bash "${SCRIPT_DIR}/03_das_lds_eval_slot_stampede3.sh"', text)
+        self.assertNotIn("bash -c", text)
+        slot_text = (STAMPEDE3_DAS / "03_das_lds_eval_slot_stampede3.sh").read_text()
+        self.assertIn("query_specs_inner()", slot_text)
+        self.assertIn("score_dir_for_das_lambda()", slot_text)
+        self.assertIn("idx += 16", slot_text)
+        self.assertIn("das_unprompted/lambda_%s", slot_text)
+        self.assertIn("das/lambda_%s", slot_text)
         self.assertIn('--algorithms "${EVAL_ALGORITHMS[@]}"', text)
 
     def test_stampede3_submit_uses_staged_submission_for_h100_limits(self):

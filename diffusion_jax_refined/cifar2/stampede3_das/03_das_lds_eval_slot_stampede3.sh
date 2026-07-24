@@ -1,0 +1,81 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+tag_value() {
+  local value="$1"
+  value="${value//,/__}"
+  value="${value//+/_}"
+  value="${value//[^A-Za-z0-9._-]/_}"
+  while [[ "${value}" == *"__"* ]]; do value="${value//__/_}"; done
+  value="${value#_}"
+  value="${value%_}"
+  printf "%s" "${value:-unprompted}"
+}
+
+damping_tag_inner() {
+  local value="$1"
+  value="${value//+/_}"
+  value="${value//-/neg_}"
+  value="${value//./p}"
+  tag_value "${value}"
+}
+
+query_specs_inner() {
+  local seed
+  for seed in ${UNPROMPTED_SEEDS_TEXT}; do
+    printf "unprompted_solo|unprompted|unconditional|%s|1\n" "${seed}"
+  done
+  for seed in ${PROMPTED_SEEDS_TEXT}; do
+    printf "prompted_solo|horse|horse|%s|0\n" "${seed}"
+    printf "prompted_solo|automobile|automobile|%s|0\n" "${seed}"
+    printf "prompted_solo|horse,automobile|horse,automobile|%s|0\n" "${seed}"
+  done
+}
+
+score_dir_for_das_lambda() {
+  local lambda="$1"
+  local tag
+  tag="$(damping_tag_inner "${lambda}")"
+  if [[ "${UNPROMPTED}" == "1" ]]; then
+    printf "%s/result/%s/attribution_score/%s/train_seed_%s/unprompted/initial_seed_%s/das_unprompted/lambda_%s" \
+      "${CIFAR2_ROOT}" "${EXPERIMENT_TAG}" "${SAMPLE_MODEL_MODE}" "${TRAIN_SEED}" "${INITIAL_SEED}" "${tag}"
+  else
+    printf "%s/result/%s/attribution_score/%s/train_seed_%s/query_%s/initial_seed_%s/das/lambda_%s" \
+      "${CIFAR2_ROOT}" "${EXPERIMENT_TAG}" "${SAMPLE_MODEL_MODE}" "${TRAIN_SEED}" "$(tag_value "${QUERY}")" "${INITIAL_SEED}" "${tag}"
+  fi
+}
+
+mapfile -t specs < <(query_specs_inner)
+for ((idx = SLOT_INDEX; idx < ${#specs[@]}; idx += 16)); do
+  IFS="|" read -r score_mode _query query_env seed unprompted_flag <<<"${specs[$idx]}"
+  export SAMPLE_MODEL_MODE="${score_mode}"
+  export UNPROMPTED_SAMPLE_MODEL_MODE="${score_mode}"
+  export ATTRIBUTION_SCORE_MODEL_MODE="${score_mode}"
+  export UNPROMPTED_SCORE_MODEL_MODE="${score_mode}"
+  export QUERY="${query_env}"
+  export INITIAL_SEED="${seed}"
+  export UNPROMPTED="${unprompted_flag}"
+  for target in ${TARGETS_TEXT}; do
+    for lds_seed in ${LDS_SEEDS_TEXT}; do
+      model_root="${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/lds_model/${SAMPLE_MODEL_MODE}/train_seed_${TRAIN_SEED}"
+      model_pattern="${model_root}/m_${LDS_M}_k_*_pct_${LDS_DATASET_PERCENTAGE}_subset_seed_${lds_seed}"
+      mapfile -t model_matches < <(compgen -G "${model_pattern}" | sort)
+      if [[ "${#model_matches[@]}" -ne 1 ]]; then
+        echo "Expected exactly one LDS model dir for pattern ${model_pattern}, found ${#model_matches[@]}" >&2
+        printf "  %s\n" "${model_matches[@]}" >&2
+        exit 1
+      fi
+      model_dir="${model_matches[0]}"
+      for lambda in ${DAS_DAMPING_SWEEP_VALUES}; do
+        lambda_tag="$(damping_tag_inner "${lambda}")"
+        score_dir="$(score_dir_for_das_lambda "${lambda}")"
+        echo "[lds-eval] idx=${idx} mode=${SAMPLE_MODEL_MODE} query=${QUERY} initial_seed=${INITIAL_SEED} target=${target} lambda=${lambda} lds_seed=${lds_seed}"
+        if [[ "${UNPROMPTED}" == "1" ]]; then
+          ATTRIBUTION_RESULT_DIRS="${score_dir}" LDS_MODEL_DIRS="${model_dir}" "${PYTHON_BIN}" lds/run_eval.py --unprompted --algorithm "das_lambda_${lambda_tag}" --lds-model-dirs "${model_dir}" --target-function "${target}"
+        else
+          ATTRIBUTION_RESULT_DIRS="${score_dir}" LDS_MODEL_DIRS="${model_dir}" "${PYTHON_BIN}" lds/run_eval.py --algorithm "das_lambda_${lambda_tag}" --lds-model-dirs "${model_dir}" --target-function "${target}"
+        fi
+      done
+    done
+  done
+done

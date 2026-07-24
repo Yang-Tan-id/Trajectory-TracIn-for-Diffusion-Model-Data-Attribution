@@ -52,6 +52,23 @@ task_lines() {
   done
 }
 
+expected_score_file() {
+  local score_mode="$1"
+  local query="$2"
+  local seed="$3"
+  local unprompted_flag="$4"
+  local lambda="$5"
+  local lambda_tag
+  lambda_tag="$(damping_tag "${lambda}")"
+  if [[ "${unprompted_flag}" == "1" || "${score_mode}" == unprompted_* ]]; then
+    printf '%s/result/%s/attribution_score/%s/train_seed_%s/unprompted/initial_seed_%s/das_unprompted/lambda_%s/scores.npy' \
+      "${CIFAR2_ROOT}" "${EXPERIMENT_TAG}" "${score_mode}" "${TRAIN_SEED}" "${seed}" "${lambda_tag}"
+  else
+    printf '%s/result/%s/attribution_score/%s/train_seed_%s/query_%s/initial_seed_%s/das/lambda_%s/scores.npy' \
+      "${CIFAR2_ROOT}" "${EXPERIMENT_TAG}" "${score_mode}" "${TRAIN_SEED}" "$(path_tag "${query}")" "${seed}" "${lambda_tag}"
+  fi
+}
+
 mapfile -t TASKS < <(task_lines)
 total_tasks="${#TASKS[@]}"
 start=$((ATTR_JOB_INDEX * ATTR_CHUNK_SIZE))
@@ -114,45 +131,26 @@ for ((i = start; i < end; i++)); do
       SAMPLE_LOCK_WAIT_SECONDS="${SAMPLE_LOCK_WAIT_SECONDS:-21600}" \
       UNPROMPTED="${unprompted_flag}" \
       ALGORITHM=das \
-      bash -c '
-        set -euo pipefail
-        echo "[sample] sample_mode=${SAMPLE_MODEL_MODE} score_mode=${ATTRIBUTION_SCORE_MODEL_MODE} query=${QUERY} initial_seed=${INITIAL_SEED}"
-        if [[ -f "${SAMPLE_DONE_FILE}" ]]; then
-          echo "[sample] reuse existing ${SAMPLE_DONE_FILE}"
-        elif mkdir "${SAMPLE_LOCK_DIR}" 2>/dev/null; then
-          trap '\''rmdir "${SAMPLE_LOCK_DIR}" 2>/dev/null || true'\'' EXIT
-          if [[ -f "${SAMPLE_DONE_FILE}" ]]; then
-            echo "[sample] reuse existing ${SAMPLE_DONE_FILE}"
-          else
-            echo "[sample] generating ${SAMPLE_DONE_FILE}"
-            bash scripts/00_sample_for_attribution.sh
-          fi
-          rmdir "${SAMPLE_LOCK_DIR}" 2>/dev/null || true
-          trap - EXIT
-        else
-          echo "[sample] waiting for locked sample ${SAMPLE_DONE_FILE}"
-          waited=0
-          while [[ ! -f "${SAMPLE_DONE_FILE}" ]]; do
-            if (( waited >= SAMPLE_LOCK_WAIT_SECONDS )); then
-              echo "Timed out waiting for sample ${SAMPLE_DONE_FILE}" >&2
-              exit 1
-            fi
-            sleep 30
-            waited=$((waited + 30))
-          done
-          echo "[sample] reuse after wait ${SAMPLE_DONE_FILE}"
-        fi
-        for lambda in ${DAS_DAMPING_SWEEP_VALUES}; do
-          echo "[das-sweep] lambda=${lambda} score_mode=${ATTRIBUTION_SCORE_MODEL_MODE} query=${QUERY} initial_seed=${INITIAL_SEED}"
-          DAS_DAMPING="${lambda}" \
-          DAS_DAMPING_OUTPUT_TAG="${lambda}" \
-          "${PYTHON_BIN}" "${REFINE_ROOT}/common/run_original_attribution_config.py" "${CIFAR2_ROOT}/data_attribution/das/CONFIG.py"
-        done
-      '
+      bash "${SCRIPT_DIR}/02_das_attribution_task_stampede3.sh"
   ) >"${log}" 2>&1 &
   pids+=("$!")
   slot=$((slot + 1))
 done
 
 wait_all "${pids[@]}"
+missing=0
+for ((i = start; i < end; i++)); do
+  IFS='|' read -r _sample_mode score_mode query seed unprompted_flag <<<"${TASKS[$i]}"
+  for lambda in ${DAS_DAMPING_SWEEP_VALUES}; do
+    score_file="$(expected_score_file "${score_mode}" "${query}" "${seed}" "${unprompted_flag}" "${lambda}")"
+    if [[ ! -s "${score_file}" ]]; then
+      echo "Missing DAS score artifact for task=${i}, lambda=${lambda}: ${score_file}" >&2
+      missing=$((missing + 1))
+    fi
+  done
+done
+if (( missing > 0 )); then
+  echo "Job 02 chunk ${ATTR_JOB_INDEX} missing ${missing} expected DAS score artifacts." >&2
+  exit 1
+fi
 echo "Job 02 chunk ${ATTR_JOB_INDEX} complete."
