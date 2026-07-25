@@ -126,14 +126,15 @@ class TestStampede3DasScriptsStatic(unittest.TestCase):
         self.assertIn("#SBATCH -p rtx-small", rtx_text)
         self.assertIn('exec bash "${SCRIPT_DIR}/02_smoke_das_attribution_stampede3.sh"', rtx_text)
 
-    def test_stampede3_rtx_small_full_das_uses_one_node_four_gpu_formal_settings(self):
+    def test_stampede3_rtx_small_full_das_uses_one_node_one_gpu_formal_settings(self):
         text = (STAMPEDE3_DAS / "02_full_das_attribution_rtx_small.sh").read_text()
         self.assertIn("#SBATCH -p rtx-small", text)
         self.assertIn("#SBATCH -N 1", text)
-        self.assertIn("#SBATCH -n 4", text)
-        self.assertIn("#SBATCH -t 48:00:00", text)
+        self.assertIn("#SBATCH -n 1", text)
+        self.assertIn("#SBATCH -t 24:00:00", text)
         self.assertIn('STAMPEDE3_SLOT_BACKEND="${STAMPEDE3_SLOT_BACKEND:-local}"', text)
-        self.assertIn('ATTR_CHUNK_SIZE="${ATTR_CHUNK_SIZE:-4}"', text)
+        self.assertIn('ATTR_NUM_JOBS="${ATTR_NUM_JOBS:-48}"', text)
+        self.assertIn('ATTR_CHUNK_SIZE="${ATTR_CHUNK_SIZE:-1}"', text)
         self.assertIn("0.01 0.02 0.05 0.1 0.2 0.5 1 2 5 10 20 50 100 200 500 1000 2000 5000 10000 20000 50000", text)
         self.assertIn("unset SCORE_INDEX_RANGES ATTRIBUTION_RANGES DAS_PROJ_DIM DAS_TIMESTEPS DAS_NUM_MC_NOISE", text)
         self.assertIn('exec bash "${SCRIPT_DIR}/02_das_attribution_chunk_stampede3.sh"', text)
