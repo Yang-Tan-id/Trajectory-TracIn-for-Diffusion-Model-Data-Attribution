@@ -17,6 +17,7 @@ class TestStampede3DasScriptsStatic(unittest.TestCase):
             "02_das_attribution_chunk_stampede3.sh",
             "02_das_attribution_task_stampede3.sh",
             "02_smoke_das_attribution_stampede3.sh",
+            "02_smoke_das_attribution_rtx_small.sh",
             "02_das_attribution_array_stampede3.sh",
             "02a_das_attribution_stampede3.sh",
             "02b_das_attribution_stampede3.sh",
@@ -34,6 +35,11 @@ class TestStampede3DasScriptsStatic(unittest.TestCase):
         for path in STAMPEDE3_DAS.glob("*.sh"):
             with self.subTest(path=path.name):
                 text = path.read_text()
+                if path.name == "02_smoke_das_attribution_rtx_small.sh":
+                    self.assertIn("#SBATCH -p rtx-small", text)
+                    self.assertNotIn("--gres", text)
+                    self.assertNotIn("--gpus-per-task", text)
+                    continue
                 if path.name.startswith("_") or path.name.startswith("submit") or "_task_" in path.name or "_slot_" in path.name:
                     continue
                 self.assertIn("#SBATCH -p h100", text)
@@ -99,6 +105,9 @@ class TestStampede3DasScriptsStatic(unittest.TestCase):
         self.assertIn("02_das_attribution_task_stampede3.sh", text)
         self.assertIn("Missing smoke DAS score artifact", text)
         self.assertIn("Smoke DAS attribution complete.", text)
+        rtx_text = (STAMPEDE3_DAS / "02_smoke_das_attribution_rtx_small.sh").read_text()
+        self.assertIn("#SBATCH -p rtx-small", rtx_text)
+        self.assertIn('exec bash "${SCRIPT_DIR}/02_smoke_das_attribution_stampede3.sh"', rtx_text)
 
     def test_stampede3_eval_runs_sixteen_slots_three_queries_each(self):
         text = (STAMPEDE3_DAS / "03_das_lds_eval_report_stampede3.sh").read_text()
