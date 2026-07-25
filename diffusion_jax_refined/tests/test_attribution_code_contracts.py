@@ -164,6 +164,8 @@ class TestAttributionCodeContracts(unittest.TestCase):
         self.assertIn("use_sherman_morrison_denominator: bool = False", text)
         self.assertIn("raw /= denominator", text)
         self.assertIn("denom_i = 1.0 - leverage_i", text)
+        self.assertIn("[batched] solving damped projected Gram", text)
+        self.assertIn("[batched] applying Sherman-Morrison denominator", text)
         cifar2_text = (ROOT / "cifar2" / "dataset_config.py").read_text()
         self.assertIn("DAS_SHERMAN_MORRISON_DENOMINATOR", cifar2_text)
 
@@ -174,6 +176,12 @@ class TestAttributionCodeContracts(unittest.TestCase):
             with self.subTest(dataset=dataset):
                 dataset_text = (ROOT / dataset / "dataset_config.py").read_text()
                 self.assertIn('"damping": float(os.environ.get("DAS_DAMPING", "2"))', dataset_text)
+
+    def test_das_projection_dimension_is_env_tunable_for_smoke_runs(self):
+        for dataset in ("cifar2", "cifar10", "artbench"):
+            with self.subTest(dataset=dataset):
+                dataset_text = (ROOT / dataset / "dataset_config.py").read_text()
+                self.assertIn('"proj_dim": int(os.environ.get("DAS_PROJ_DIM", "4096"))', dataset_text)
 
     def test_das_damping_sweep_values_are_pinned(self):
         expected_values = (

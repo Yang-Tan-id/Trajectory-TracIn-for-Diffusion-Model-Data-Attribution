@@ -157,7 +157,7 @@ ATTRIBUTION_CONFIGS = {
         "ddim_steps": 1000,
         "timesteps": (0, 200, 400, 600, 800, 999),
         "num_mc_noise": 10,
-        "proj_dim": 4096,
+        "proj_dim": int(os.environ.get("DAS_PROJ_DIM", "4096")),
         "damping": float(os.environ.get("DAS_DAMPING", "2")),
         "damping_sweep_values": DAS_DAMPING_SWEEP_VALUES,
         "batch_size": 64,

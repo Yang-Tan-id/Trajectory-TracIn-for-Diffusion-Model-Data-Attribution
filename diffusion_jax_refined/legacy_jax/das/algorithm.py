@@ -1058,12 +1058,27 @@ def compute_batched_das_term(
     H_proj = np.asarray(H_device, dtype=np.float32).copy()
     H_proj += float(cfg.damping) * np.eye(proj_dim, dtype=np.float32)
     phi_q_np = np.asarray(phi_q, dtype=np.float32)
+    solve_started = time.perf_counter()
+    print(
+        f"[batched] solving damped projected Gram | proj_dim={proj_dim} | damping={cfg.damping}",
+        flush=True,
+    )
     u = np.linalg.solve(H_proj, phi_q_np)
+    print(
+        f"[batched] query solve complete | elapsed={format_seconds(time.perf_counter() - solve_started)}",
+        flush=True,
+    )
 
+    score_started = time.perf_counter()
+    print(f"[batched] scoring cached projected features | samples={num_points}", flush=True)
     raw = (phi_cache @ u).astype(np.float64) * residual_cache.astype(np.float64)
     if cfg.use_sherman_morrison_denominator:
         # Solve several right-hand sides together while preserving one
         # leverage/denominator per example.
+        print(
+            f"[batched] applying Sherman-Morrison denominator | solve_batch_size={max(1, batch_size)}",
+            flush=True,
+        )
         denominator = np.empty((num_points,), dtype=np.float64)
         solve_batch_size = max(1, batch_size)
         for start in range(0, num_points, solve_batch_size):
@@ -1080,6 +1095,10 @@ def compute_batched_das_term(
             denominator[start:end] = denom
         raw /= denominator
 
+    print(
+        f"[batched] DAS term complete | elapsed={format_seconds(time.perf_counter() - score_started)}",
+        flush=True,
+    )
     return np.square(raw), float(np.mean(residual_cache))
 
 
