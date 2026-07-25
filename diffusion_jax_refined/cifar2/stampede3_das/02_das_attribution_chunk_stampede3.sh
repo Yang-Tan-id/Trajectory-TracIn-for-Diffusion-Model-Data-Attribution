@@ -69,6 +69,15 @@ expected_score_file() {
   fi
 }
 
+score_file_matches() {
+  local expected="$1"
+  local base_dir
+  local lambda_dir
+  base_dir="$(dirname "$(dirname "${expected}")")"
+  lambda_dir="$(basename "$(dirname "${expected}")")"
+  compgen -G "${base_dir}/${lambda_dir}*/scores.npy" | sort
+}
+
 mapfile -t TASKS < <(task_lines)
 total_tasks="${#TASKS[@]}"
 start=$((ATTR_JOB_INDEX * ATTR_CHUNK_SIZE))
@@ -143,9 +152,12 @@ for ((i = start; i < end; i++)); do
   IFS='|' read -r _sample_mode score_mode query seed unprompted_flag <<<"${TASKS[$i]}"
   for lambda in ${DAS_DAMPING_SWEEP_VALUES}; do
     score_file="$(expected_score_file "${score_mode}" "${query}" "${seed}" "${unprompted_flag}" "${lambda}")"
-    if [[ ! -s "${score_file}" ]]; then
+    mapfile -t score_matches < <(score_file_matches "${score_file}")
+    if [[ "${#score_matches[@]}" -eq 0 ]]; then
       echo "Missing DAS score artifact for task=${i}, lambda=${lambda}: ${score_file}" >&2
       missing=$((missing + 1))
+    else
+      printf 'Found DAS score artifact for task=%s, lambda=%s: %s\n' "${i}" "${lambda}" "${score_matches[0]}"
     fi
   done
 done

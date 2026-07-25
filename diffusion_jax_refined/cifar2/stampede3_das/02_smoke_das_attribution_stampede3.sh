@@ -99,11 +99,14 @@ for lambda in ${DAS_DAMPING_SWEEP_VALUES}; do
   else
     score_file="${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/attribution_score/${SMOKE_SCORE_MODE}/train_seed_${TRAIN_SEED}/query_$(path_tag "${SMOKE_QUERY}")/initial_seed_${SMOKE_INITIAL_SEED}/das/lambda_${lambda_tag}/scores.npy"
   fi
-  if [[ ! -s "${score_file}" ]]; then
+  score_base_dir="$(dirname "$(dirname "${score_file}")")"
+  score_lambda_dir="$(basename "$(dirname "${score_file}")")"
+  mapfile -t score_matches < <(compgen -G "${score_base_dir}/${score_lambda_dir}*/scores.npy" | sort)
+  if [[ "${#score_matches[@]}" -eq 0 ]]; then
     echo "Missing smoke DAS score artifact for lambda=${lambda}: ${score_file}" >&2
     missing=$((missing + 1))
   else
-    echo "Found smoke DAS score artifact: ${score_file}"
+    echo "Found smoke DAS score artifact: ${score_matches[0]}"
   fi
 done
 
