@@ -16,6 +16,7 @@ class TestStampede3DasScriptsStatic(unittest.TestCase):
             "01_train_lds_models_stampede3.sh",
             "02_das_attribution_chunk_stampede3.sh",
             "02_das_attribution_task_stampede3.sh",
+            "02_smoke_das_attribution_stampede3.sh",
             "02_das_attribution_array_stampede3.sh",
             "02a_das_attribution_stampede3.sh",
             "02b_das_attribution_stampede3.sh",
@@ -88,6 +89,16 @@ class TestStampede3DasScriptsStatic(unittest.TestCase):
         self.assertNotIn("traj_tracin", text)
         array_text = (STAMPEDE3_DAS / "02_das_attribution_array_stampede3.sh").read_text()
         self.assertIn("#SBATCH --array=0-2%1", array_text)
+
+    def test_stampede3_smoke_attribution_uses_one_node_one_lambda_and_checks_score(self):
+        text = (STAMPEDE3_DAS / "02_smoke_das_attribution_stampede3.sh").read_text()
+        self.assertIn("#SBATCH -N 1", text)
+        self.assertIn("#SBATCH -n 1", text)
+        self.assertIn("#SBATCH -t 00:30:00", text)
+        self.assertIn('DAS_DAMPING_SWEEP_VALUES="${DAS_DAMPING_SWEEP_VALUES:-0.01}"', text)
+        self.assertIn("02_das_attribution_task_stampede3.sh", text)
+        self.assertIn("Missing smoke DAS score artifact", text)
+        self.assertIn("Smoke DAS attribution complete.", text)
 
     def test_stampede3_eval_runs_sixteen_slots_three_queries_each(self):
         text = (STAMPEDE3_DAS / "03_das_lds_eval_report_stampede3.sh").read_text()

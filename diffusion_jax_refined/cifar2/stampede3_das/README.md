@@ -12,6 +12,7 @@ Jobs:
 | --- | --- | --- | --- | --- |
 | 00 | `00_train_base_models_stampede3.sh` | 1 H100 node, 2h | none | Train `prompted_solo` on GPUs 0,1 and `unprompted_solo` on GPUs 2,3. |
 | 01 | `01_train_lds_models_stampede3.sh` | 4 H100 nodes, 24h | after 00 | Train LDS models for `prompted_solo` and `unprompted_solo`, seeds 0-7, `M=64`, `50%`. |
+| 02 smoke | `02_smoke_das_attribution_stampede3.sh` | 1 H100 node, 30m | after 00 | One sample/query/lambda smoke test. Verifies `scores.npy` before large attribution jobs. |
 | 02a/02b/02c | `02a_das_attribution_stampede3.sh`, `02b_das_attribution_stampede3.sh`, `02c_das_attribution_stampede3.sh` | each 4 H100 nodes, 48h | after 00 if `TRAIN_JOB_ID` is set | 48 query/sample tasks split into 3 chunks of 16 GPUs. Runs DAS with 21 lambda sweep values. |
 | 03 | `03_das_lds_eval_report_stampede3.sh` | 4 H100 nodes, 24h | after 01 and 02a/02b/02c | LDS eval for two targets and DAS lambda variants. Each GPU handles three query specs. |
 
@@ -24,6 +25,13 @@ STAMPEDE3_ACCOUNT=IRI26004 EXPERIMENT_TAG=experiment_67 TRAIN_SEED=67 \
 ```
 
 After the base training job finishes and submit slots are free:
+
+```bash
+STAMPEDE3_ACCOUNT=IRI26004 EXPERIMENT_TAG=experiment_67 TRAIN_SEED=67 \
+  sbatch -A IRI26004 --parsable diffusion_jax_refined/cifar2/stampede3_das/02_smoke_das_attribution_stampede3.sh
+```
+
+After the smoke job completes with `COMPLETED 0:0`:
 
 ```bash
 STAMPEDE3_ACCOUNT=IRI26004 EXPERIMENT_TAG=experiment_67 TRAIN_SEED=67 \
