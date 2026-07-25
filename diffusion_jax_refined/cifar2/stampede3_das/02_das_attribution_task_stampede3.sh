@@ -28,9 +28,5 @@ else
   echo "[sample] reuse after wait ${SAMPLE_DONE_FILE}"
 fi
 
-for lambda in ${DAS_DAMPING_SWEEP_VALUES}; do
-  echo "[das-sweep] lambda=${lambda} score_mode=${ATTRIBUTION_SCORE_MODEL_MODE} query=${QUERY} initial_seed=${INITIAL_SEED}"
-  DAS_DAMPING="${lambda}" \
-  DAS_DAMPING_OUTPUT_TAG="${lambda}" \
-  "${PYTHON_BIN}" "${REFINE_ROOT}/common/run_original_attribution_config.py" "${CIFAR2_ROOT}/data_attribution/das/CONFIG.py"
-done
+echo "[das-sweep] lambdas=${DAS_DAMPING_SWEEP_VALUES} score_mode=${ATTRIBUTION_SCORE_MODEL_MODE} query=${QUERY} initial_seed=${INITIAL_SEED}"
+"${PYTHON_BIN}" "${REFINE_ROOT}/common/run_original_attribution_config.py" "${CIFAR2_ROOT}/data_attribution/das/CONFIG.py"

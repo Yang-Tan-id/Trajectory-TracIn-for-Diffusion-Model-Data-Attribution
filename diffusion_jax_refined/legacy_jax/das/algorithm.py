@@ -17,6 +17,12 @@ try:
 except Exception:
     tqdm = None
 
+try:
+    from scipy.linalg import cho_factor, cho_solve
+except Exception:
+    cho_factor = None
+    cho_solve = None
+
 
 # ============================================================
 # Utilities
@@ -110,6 +116,29 @@ def iter_with_tqdm(iterable, total: Optional[int], desc: str, enabled: bool = Tr
             maxinterval=max(30.0, mininterval),
         )
     return iterable
+
+
+def make_spd_solver(matrix: np.ndarray):
+    if cho_factor is not None and cho_solve is not None:
+        factor = cho_factor(matrix, lower=True, check_finite=False)
+
+        def solve(rhs: np.ndarray) -> np.ndarray:
+            return cho_solve(factor, rhs, check_finite=False)
+
+        return solve
+
+    chol = np.linalg.cholesky(matrix)
+
+    def solve(rhs: np.ndarray) -> np.ndarray:
+        y = np.linalg.solve(chol, rhs)
+        return np.linalg.solve(chol.T, y)
+
+    return solve
+
+
+def damping_output_tag(value: float) -> str:
+    text = ("%g" % float(value)).replace("+", "_").replace("-", "neg_").replace(".", "p")
+    return text or "0"
 
 
 def tree_to_device(tree, device):
@@ -976,6 +1005,7 @@ def compute_batched_das_term(
     device,
     phi_q,
     description: str,
+    damping_values: Sequence[float],
 ):
     """Compute one DAS term with exact per-example grads evaluated via vmap."""
     batch_size = max(1, int(cfg.per_example_grad_batch_size))
@@ -1053,53 +1083,72 @@ def compute_batched_das_term(
         if hasattr(iterator, "set_postfix"):
             iterator.set_postfix(samples=f"{end}/{num_points}")
 
-    # np.asarray(jax_array) may return a read-only host view. Make a writable
-    # copy before adding damping in-place.
-    H_proj = np.asarray(H_device, dtype=np.float32).copy()
-    H_proj += float(cfg.damping) * np.eye(proj_dim, dtype=np.float32)
+    # Reuse the cached train features and undamped Gram for all DAS lambdas.
+    H_base = np.asarray(H_device, dtype=np.float32)
     phi_q_np = np.asarray(phi_q, dtype=np.float32)
-    solve_started = time.perf_counter()
-    print(
-        f"[batched] solving damped projected Gram | proj_dim={proj_dim} | damping={cfg.damping}",
-        flush=True,
-    )
-    u = np.linalg.solve(H_proj, phi_q_np)
-    print(
-        f"[batched] query solve complete | elapsed={format_seconds(time.perf_counter() - solve_started)}",
-        flush=True,
-    )
+    eye = np.eye(proj_dim, dtype=np.float32)
+    scores_by_damping: Dict[float, np.ndarray] = {}
 
-    score_started = time.perf_counter()
-    print(f"[batched] scoring cached projected features | samples={num_points}", flush=True)
-    raw = (phi_cache @ u).astype(np.float64) * residual_cache.astype(np.float64)
-    if cfg.use_sherman_morrison_denominator:
-        # Solve several right-hand sides together while preserving one
-        # leverage/denominator per example.
+    for damping_value in damping_values:
+        damping_value = float(damping_value)
+        H_proj = H_base.copy()
+        H_proj += damping_value * eye
+        solve_started = time.perf_counter()
         print(
-            f"[batched] applying Sherman-Morrison denominator | solve_batch_size={max(1, batch_size)}",
+            f"[batched] solving damped projected Gram | proj_dim={proj_dim} | damping={damping_value}",
             flush=True,
         )
-        denominator = np.empty((num_points,), dtype=np.float64)
-        solve_batch_size = max(1, batch_size)
-        for start in range(0, num_points, solve_batch_size):
-            end = min(start + solve_batch_size, num_points)
-            phi_chunk = phi_cache[start:end]
-            solved = np.linalg.solve(H_proj, phi_chunk.T).T
-            leverage = np.einsum("bi,bi->b", phi_chunk, solved, dtype=np.float64)
-            denom = 1.0 - leverage
-            denom = np.where(
-                np.abs(denom) < 1e-6,
-                np.where(denom >= 0.0, 1e-6, -1e-6),
-                denom,
-            )
-            denominator[start:end] = denom
-        raw /= denominator
+        solve_h_proj = make_spd_solver(H_proj)
+        u = solve_h_proj(phi_q_np)
+        print(
+            f"[batched] query solve complete | elapsed={format_seconds(time.perf_counter() - solve_started)}",
+            flush=True,
+        )
 
-    print(
-        f"[batched] DAS term complete | elapsed={format_seconds(time.perf_counter() - score_started)}",
-        flush=True,
-    )
-    return np.square(raw), float(np.mean(residual_cache))
+        score_started = time.perf_counter()
+        print(f"[batched] scoring cached projected features | samples={num_points}", flush=True)
+        raw = (phi_cache @ u).astype(np.float64) * residual_cache.astype(np.float64)
+        if cfg.use_sherman_morrison_denominator:
+            # Solve several right-hand sides together while preserving one
+            # leverage/denominator per example.
+            print(
+                f"[batched] applying Sherman-Morrison denominator | damping={damping_value} | "
+                f"solve_batch_size={max(1, batch_size)}",
+                flush=True,
+            )
+            denominator = np.empty((num_points,), dtype=np.float64)
+            solve_batch_size = max(1, batch_size)
+            starts = range(0, num_points, solve_batch_size)
+            denom_iter = iter_with_tqdm(
+                starts,
+                total=(num_points + solve_batch_size - 1) // solve_batch_size,
+                desc=f"DAS denominator lambda={damping_output_tag(damping_value)}",
+                enabled=bool(cfg.use_tqdm),
+            )
+            for start in denom_iter:
+                end = min(start + solve_batch_size, num_points)
+                phi_chunk = phi_cache[start:end]
+                solved = solve_h_proj(phi_chunk.T).T
+                leverage = np.einsum("bi,bi->b", phi_chunk, solved, dtype=np.float64)
+                denom = 1.0 - leverage
+                denom = np.where(
+                    np.abs(denom) < 1e-6,
+                    np.where(denom >= 0.0, 1e-6, -1e-6),
+                    denom,
+                )
+                denominator[start:end] = denom
+                if hasattr(denom_iter, "set_postfix"):
+                    denom_iter.set_postfix(samples=f"{end}/{num_points}")
+            raw /= denominator
+
+        scores_by_damping[damping_value] = np.square(raw)
+        print(
+            f"[batched] DAS term complete | damping={damping_value} | "
+            f"elapsed={format_seconds(time.perf_counter() - score_started)}",
+            flush=True,
+        )
+
+    return scores_by_damping, float(np.mean(residual_cache))
 
 
 # ============================================================
@@ -1282,12 +1331,22 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
     )
     print(f"[candidate-set] first indices={picked[:min(10, len(picked))]}")
 
-    scores = np.zeros((M,), dtype=np.float64)
-
     timesteps = [int(t) for t in cfg.timesteps]
     num_mc_noise = int(cfg.num_mc_noise)
     proj_dim = int(cfg.proj_dim)
     damping = float(cfg.damping)
+    sweep_enabled = os.environ.get("DAS_DAMPING_SWEEP", "0") in ("1", "true", "True", "yes")
+    damping_values = (
+        tuple(float(v) for v in cfg.damping_sweep_values)
+        if sweep_enabled
+        else (damping,)
+    )
+    if not damping_values:
+        damping_values = (damping,)
+    scores_by_damping = {
+        float(damping_value): np.zeros((M,), dtype=np.float64)
+        for damping_value in damping_values
+    }
     bs = int(cfg.batch_size)
     num_batches = (M + bs - 1) // bs
     total_terms = 0
@@ -1426,7 +1485,7 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
                         "[mc] using batched exact per-example gradients | "
                         f"microbatch={int(cfg.per_example_grad_batch_size)}"
                     )
-                    term_scores, avg_resid = compute_batched_das_term(
+                    term_scores_by_damping, avg_resid = compute_batched_das_term(
                         adapter=adapter,
                         ds=ds,
                         picked=picked,
@@ -1444,8 +1503,10 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
                             f"DAS batched ckpt {ckpt_i+1}/{len(baseline_ckpts)} "
                             f"t={t_value} mc={mc_i+1}"
                         ),
+                        damping_values=damping_values,
                     )
-                    scores += term_scores
+                    for damping_value, term_scores in term_scores_by_damping.items():
+                        scores_by_damping[float(damping_value)] += term_scores
                     term_elapsed = time.perf_counter() - term_t0
                     term_eta = format_eta(
                         processed_mc_terms,
@@ -1551,7 +1612,7 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
                         batch_scores.append(score_i)
                         batch_residuals_dbg.append(float(residual_i))
 
-                    scores[start:start + len(batch)] += np.asarray(batch_scores, dtype=np.float64)
+                    scores_by_damping[damping][start:start + len(batch)] += np.asarray(batch_scores, dtype=np.float64)
                     if hasattr(pass2_iter, "set_postfix"):
                         pass2_iter.set_postfix(samples=f"{min(start + len(batch), M)}/{M}")
 
@@ -1607,87 +1668,95 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
         print(f"[saved] DAS query artifact: {stage_artifact_path}")
         return
 
-    if total_terms > 0:
-        scores /= float(total_terms)
+    save_root = cfg.out_dir
+    for damping_value, scores in scores_by_damping.items():
+        if total_terms > 0:
+            scores = scores / float(total_terms)
 
-    topk = min(int(cfg.topk), M)
-    order = np.argsort(-scores)[:topk]
+        out_dir = save_root
+        if sweep_enabled and not os.environ.get("DAS_DAMPING_OUTPUT_TAG"):
+            out_dir = os.path.join(save_root, f"lambda_{damping_output_tag(damping_value)}")
 
-    top = []
-    for r in range(topk):
-        j = int(order[r])
-        train_idx = int(picked[j])
-        top.append({
-            "idx": train_idx,
-            "idx_1based": train_idx + 1,
-            "score": float(scores[j]),
-        })
+        topk = min(int(cfg.topk), M)
+        order = np.argsort(-scores)[:topk]
 
-    run_info = {
-        "ref_ckpt": ref_ckpt,
-        "num_ckpts": int(len(baseline_ckpts)),
-        "ckpt_stride": int(cfg.ckpt_stride),
-        "max_num_ckpts": cfg.max_num_ckpts,
-        "used_ckpts": [os.path.basename(p) for p in baseline_ckpts],
-        "T": int(schedule.betas.shape[0]),
-        "ddim_steps": int(cfg.ddim_steps),
-        "M_scored": int(M),
-        "device": str(device),
-        "seed": int(cfg.seed),
-        "timesteps": timesteps,
-        "num_mc_noise": int(num_mc_noise),
-        "damping": float(damping),
-        "proj_dim": int(proj_dim),
-        "normalize_projected_grads": bool(cfg.normalize_projected_grads),
-        "use_batched_per_example_grads": bool(cfg.use_batched_per_example_grads),
-        "per_example_grad_batch_size": int(cfg.per_example_grad_batch_size),
-        "use_sherman_morrison_denominator": bool(cfg.use_sherman_morrison_denominator),
-        "num_terms_total": int(total_terms),
-        "attribution_sample_dir": cfg.attribution_sample_dir,
-        "attribution_sample_meta": precomputed_sample_meta,
-        "manifest_checkpoint": manifest_ckpt,
-        "resolved_manifest_checkpoint": resolved_manifest_ckpt,
-        "score_index_ranges": cfg.score_index_ranges,
-        "score_index_base": int(cfg.score_index_base),
-        "score_subset_suffix": out_suffix,
-        "use_tqdm": bool(cfg.use_tqdm),
-        "elapsed_sec": float(time.perf_counter() - t0),
-        "solver": (
-            "projected_eps_jacobian_das_jax_batched"
-            if cfg.use_batched_per_example_grads
-            else "projected_eps_jacobian_das_jax"
-        ),
-    }
+        top = []
+        for r in range(topk):
+            j = int(order[r])
+            train_idx = int(picked[j])
+            top.append({
+                "idx": train_idx,
+                "idx_1based": train_idx + 1,
+                "score": float(scores[j]),
+            })
 
-    save_json(os.path.join(cfg.out_dir, "run_config.json"), asdict(cfg))
-    save_json(os.path.join(cfg.out_dir, "run_info.json"), run_info)
-    save_json(
-        os.path.join(cfg.out_dir, "score_indices.json"),
-        {
-            "N_total": int(N_total),
-            "M_selected": int(M),
+        run_info = {
+            "ref_ckpt": ref_ckpt,
+            "num_ckpts": int(len(baseline_ckpts)),
+            "ckpt_stride": int(cfg.ckpt_stride),
+            "max_num_ckpts": cfg.max_num_ckpts,
+            "used_ckpts": [os.path.basename(p) for p in baseline_ckpts],
+            "T": int(schedule.betas.shape[0]),
+            "ddim_steps": int(cfg.ddim_steps),
+            "M_scored": int(M),
+            "device": str(device),
+            "seed": int(cfg.seed),
+            "timesteps": timesteps,
+            "num_mc_noise": int(num_mc_noise),
+            "damping": float(damping_value),
+            "damping_sweep_enabled": bool(sweep_enabled),
+            "damping_sweep_values": [float(v) for v in damping_values],
+            "proj_dim": int(proj_dim),
+            "normalize_projected_grads": bool(cfg.normalize_projected_grads),
+            "use_batched_per_example_grads": bool(cfg.use_batched_per_example_grads),
+            "per_example_grad_batch_size": int(cfg.per_example_grad_batch_size),
+            "use_sherman_morrison_denominator": bool(cfg.use_sherman_morrison_denominator),
+            "num_terms_total": int(total_terms),
+            "attribution_sample_dir": cfg.attribution_sample_dir,
+            "attribution_sample_meta": precomputed_sample_meta,
+            "manifest_checkpoint": manifest_ckpt,
+            "resolved_manifest_checkpoint": resolved_manifest_ckpt,
             "score_index_ranges": cfg.score_index_ranges,
             "score_index_base": int(cfg.score_index_base),
-            "picked_indices": [int(i) for i in picked],
-            "picked_indices_base1": [int(i) + 1 for i in picked],
-        },
-    )
-    save_json(
-        os.path.join(cfg.out_dir, "result_topk.json"),
-        {
-            "N_total": int(N_total),
-            "M_selected": int(M),
-            "topk": int(topk),
-            "top": top,
-        },
-    )
-    np.save(os.path.join(cfg.out_dir, "scores.npy"), scores)
+            "score_subset_suffix": out_suffix,
+            "use_tqdm": bool(cfg.use_tqdm),
+            "elapsed_sec": float(time.perf_counter() - t0),
+            "solver": (
+                "projected_eps_jacobian_das_jax_batched"
+                if cfg.use_batched_per_example_grads
+                else "projected_eps_jacobian_das_jax"
+            ),
+        }
 
-    print(f"\n[saved] {cfg.out_dir}/run_config.json")
-    print(f"[saved] {cfg.out_dir}/run_info.json")
-    print(f"[saved] {cfg.out_dir}/score_indices.json")
-    print(f"[saved] {cfg.out_dir}/result_topk.json")
-    print(f"[saved] {cfg.out_dir}/scores.npy")
+        save_json(os.path.join(out_dir, "run_config.json"), asdict(cfg))
+        save_json(os.path.join(out_dir, "run_info.json"), run_info)
+        save_json(
+            os.path.join(out_dir, "score_indices.json"),
+            {
+                "N_total": int(N_total),
+                "M_selected": int(M),
+                "score_index_ranges": cfg.score_index_ranges,
+                "score_index_base": int(cfg.score_index_base),
+                "picked_indices": [int(i) for i in picked],
+                "picked_indices_base1": [int(i) + 1 for i in picked],
+            },
+        )
+        save_json(
+            os.path.join(out_dir, "result_topk.json"),
+            {
+                "N_total": int(N_total),
+                "M_selected": int(M),
+                "topk": int(topk),
+                "top": top,
+            },
+        )
+        np.save(os.path.join(out_dir, "scores.npy"), scores)
+
+        print(f"\n[saved] {out_dir}/run_config.json")
+        print(f"[saved] {out_dir}/run_info.json")
+        print(f"[saved] {out_dir}/score_indices.json")
+        print(f"[saved] {out_dir}/result_topk.json")
+        print(f"[saved] {out_dir}/scores.npy")
     print(f"\n(done) total elapsed={format_seconds(time.perf_counter() - t0)}")
 
 

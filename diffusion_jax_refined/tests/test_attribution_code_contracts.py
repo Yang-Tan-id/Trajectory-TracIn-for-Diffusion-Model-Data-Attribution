@@ -12,9 +12,9 @@ LEGACY = ROOT / "legacy_jax"
 class TestAttributionCodeContracts(unittest.TestCase):
     def test_das_current_scores_are_squared_magnitude(self):
         text = (LEGACY / "das" / "algorithm.py").read_text()
-        self.assertIn("return np.square(raw)", text)
+        self.assertIn("np.square(raw)", text)
         self.assertIn("score_i = raw_i * raw_i", text)
-        self.assertIn('np.save(os.path.join(cfg.out_dir, "scores.npy"), scores)', text)
+        self.assertIn('np.save(os.path.join(out_dir, "scores.npy"), scores)', text)
 
     def test_traj_tracin_query_objective_is_noise_squared_deviation(self):
         text = (LEGACY / "traj_tracin" / "algorithm.py").read_text()
@@ -166,6 +166,14 @@ class TestAttributionCodeContracts(unittest.TestCase):
         self.assertIn("denom_i = 1.0 - leverage_i", text)
         self.assertIn("[batched] solving damped projected Gram", text)
         self.assertIn("[batched] applying Sherman-Morrison denominator", text)
+        self.assertIn("def make_spd_solver", text)
+        self.assertIn("cho_factor(matrix", text)
+        self.assertIn("solve_h_proj = make_spd_solver(H_proj)", text)
+        self.assertIn("DAS denominator lambda=", text)
+        self.assertIn("scores_by_damping", text)
+        self.assertIn('out_dir = os.path.join(save_root, f"lambda_{damping_output_tag(damping_value)}")', text)
+        batched_block = text.split("def compute_batched_das_term", 1)[1].split("# ============================================================\n# Main", 1)[0]
+        self.assertNotIn("np.linalg.solve(H_proj", batched_block)
         cifar2_text = (ROOT / "cifar2" / "dataset_config.py").read_text()
         self.assertIn("DAS_SHERMAN_MORRISON_DENOMINATOR", cifar2_text)
 
