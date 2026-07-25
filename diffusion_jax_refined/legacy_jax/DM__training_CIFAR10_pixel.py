@@ -813,7 +813,9 @@ def learning_rate_at_step(cfg: TrainConfig, step: int, total_steps: int) -> floa
     return float(make_learning_rate_schedule(cfg, total_steps)(int(step)))
 
 
-def create_train_state(cfg: TrainConfig, model: nn.Module, rng: jax.Array, device, total_steps: int) -> TrainState:
+def create_train_state(cfg: TrainConfig, model: nn.Module, rng: jax.Array, device, total_steps: Optional[int] = None) -> TrainState:
+    if total_steps is None:
+        total_steps = max(1, int(getattr(cfg, "epochs", 1)) * int(math.ceil(max(1, getattr(cfg, "max_train_points", getattr(cfg, "batch_size", 1))) / max(1, getattr(cfg, "batch_size", 1)))))
     compute_dtype = resolve_compute_dtype(cfg.use_bfloat16)
     dummy_x = jnp.zeros((1, cfg.image_size, cfg.image_size, cfg.in_channels), dtype=compute_dtype)
     dummy_t = jnp.zeros((1,), dtype=jnp.int32)

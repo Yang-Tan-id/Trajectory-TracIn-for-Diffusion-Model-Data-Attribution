@@ -30,6 +30,8 @@ class TestAttributionCodeContracts(unittest.TestCase):
         self.assertIn("optax.warmup_cosine_decay_schedule", text)
         self.assertIn("learning_rate=lr_schedule", text)
         self.assertIn('"train/lr": lr_val', text)
+        self.assertIn("total_steps: Optional[int] = None", text)
+        self.assertIn("if total_steps is None:", text)
 
     def test_traj_tracin_uses_checkpoint_lr_weights(self):
         text = (LEGACY / "traj_tracin" / "algorithm.py").read_text()
