@@ -18,6 +18,7 @@ class TestStampede3DasScriptsStatic(unittest.TestCase):
             "02_das_attribution_task_stampede3.sh",
             "02_smoke_das_attribution_stampede3.sh",
             "02_smoke_das_attribution_rtx_small.sh",
+            "02_full_das_attribution_rtx_small.sh",
             "02_das_attribution_array_stampede3.sh",
             "02a_das_attribution_stampede3.sh",
             "02b_das_attribution_stampede3.sh",
@@ -36,6 +37,11 @@ class TestStampede3DasScriptsStatic(unittest.TestCase):
             with self.subTest(path=path.name):
                 text = path.read_text()
                 if path.name == "02_smoke_das_attribution_rtx_small.sh":
+                    self.assertIn("#SBATCH -p rtx-small", text)
+                    self.assertNotIn("--gres", text)
+                    self.assertNotIn("--gpus-per-task", text)
+                    continue
+                if path.name == "02_full_das_attribution_rtx_small.sh":
                     self.assertIn("#SBATCH -p rtx-small", text)
                     self.assertNotIn("--gres", text)
                     self.assertNotIn("--gpus-per-task", text)
@@ -106,8 +112,12 @@ class TestStampede3DasScriptsStatic(unittest.TestCase):
         self.assertIn('DAS_DAMPING_SWEEP_VALUES="${DAS_DAMPING_SWEEP_VALUES:-0.01}"', text)
         self.assertIn('SMOKE_SCORE_INDEX_RANGES="${SMOKE_SCORE_INDEX_RANGES:-1-64}"', text)
         self.assertIn('SMOKE_DAS_PROJ_DIM="${SMOKE_DAS_PROJ_DIM:-512}"', text)
+        self.assertIn('SMOKE_DAS_TIMESTEPS="${SMOKE_DAS_TIMESTEPS:-0}"', text)
+        self.assertIn('SMOKE_DAS_NUM_MC_NOISE="${SMOKE_DAS_NUM_MC_NOISE:-1}"', text)
         self.assertIn('SCORE_INDEX_RANGES="${SMOKE_SCORE_INDEX_RANGES}"', text)
         self.assertIn('DAS_PROJ_DIM="${SMOKE_DAS_PROJ_DIM}"', text)
+        self.assertIn('DAS_TIMESTEPS="${SMOKE_DAS_TIMESTEPS}"', text)
+        self.assertIn('DAS_NUM_MC_NOISE="${SMOKE_DAS_NUM_MC_NOISE}"', text)
         self.assertIn("02_das_attribution_task_stampede3.sh", text)
         self.assertIn("Missing smoke DAS score artifact", text)
         self.assertIn('${score_lambda_dir}*/scores.npy', text)
@@ -115,6 +125,18 @@ class TestStampede3DasScriptsStatic(unittest.TestCase):
         rtx_text = (STAMPEDE3_DAS / "02_smoke_das_attribution_rtx_small.sh").read_text()
         self.assertIn("#SBATCH -p rtx-small", rtx_text)
         self.assertIn('exec bash "${SCRIPT_DIR}/02_smoke_das_attribution_stampede3.sh"', rtx_text)
+
+    def test_stampede3_rtx_small_full_das_uses_one_node_four_gpu_formal_settings(self):
+        text = (STAMPEDE3_DAS / "02_full_das_attribution_rtx_small.sh").read_text()
+        self.assertIn("#SBATCH -p rtx-small", text)
+        self.assertIn("#SBATCH -N 1", text)
+        self.assertIn("#SBATCH -n 4", text)
+        self.assertIn("#SBATCH -t 48:00:00", text)
+        self.assertIn('STAMPEDE3_SLOT_BACKEND="${STAMPEDE3_SLOT_BACKEND:-local}"', text)
+        self.assertIn('ATTR_CHUNK_SIZE="${ATTR_CHUNK_SIZE:-4}"', text)
+        self.assertIn("0.01 0.02 0.05 0.1 0.2 0.5 1 2 5 10 20 50 100 200 500 1000 2000 5000 10000 20000 50000", text)
+        self.assertIn("unset SCORE_INDEX_RANGES ATTRIBUTION_RANGES DAS_PROJ_DIM DAS_TIMESTEPS DAS_NUM_MC_NOISE", text)
+        self.assertIn('exec bash "${SCRIPT_DIR}/02_das_attribution_chunk_stampede3.sh"', text)
 
     def test_stampede3_eval_runs_sixteen_slots_three_queries_each(self):
         text = (STAMPEDE3_DAS / "03_das_lds_eval_report_stampede3.sh").read_text()

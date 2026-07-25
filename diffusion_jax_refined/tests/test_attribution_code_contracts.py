@@ -182,6 +182,9 @@ class TestAttributionCodeContracts(unittest.TestCase):
             with self.subTest(dataset=dataset):
                 dataset_text = (ROOT / dataset / "dataset_config.py").read_text()
                 self.assertIn('"proj_dim": int(os.environ.get("DAS_PROJ_DIM", "4096"))', dataset_text)
+                self.assertIn("def _parse_int_list_env", dataset_text)
+                self.assertIn('"timesteps": _parse_int_list_env("DAS_TIMESTEPS"', dataset_text)
+                self.assertIn('"num_mc_noise": int(os.environ.get("DAS_NUM_MC_NOISE", "10"))', dataset_text)
 
     def test_das_damping_sweep_values_are_pinned(self):
         expected_values = (
@@ -220,7 +223,7 @@ class TestAttributionCodeContracts(unittest.TestCase):
         text = (ROOT / "cifar2" / "dataset_config.py").read_text()
         self.assertIn('"endpoint_mc_samples": 10', text)
         self.assertIn('"train_mc_samples": 10', text)
-        self.assertIn('"num_mc_noise": 10', text)
+        self.assertIn('"num_mc_noise": int(os.environ.get("DAS_NUM_MC_NOISE", "10"))', text)
         self.assertIn('"query_expectation_samples": 10', text)
         self.assertIn('"train_expectation_samples": 10', text)
 

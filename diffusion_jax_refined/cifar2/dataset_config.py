@@ -30,6 +30,13 @@ def _parse_float_list_env(name: str, default: tuple[float, ...]) -> tuple[float,
     return tuple(float(part) for part in text.replace(",", " ").split() if part.strip())
 
 
+def _parse_int_list_env(name: str, default: tuple[int, ...]) -> tuple[int, ...]:
+    text = os.environ.get(name)
+    if not text:
+        return default
+    return tuple(int(part) for part in text.replace(",", " ").split() if part.strip())
+
+
 def _prompt_path_tag(prompt: str) -> str:
     text = str(prompt).strip().replace(",", "__")
     text = re.sub(r"[^A-Za-z0-9._-]+", "_", text)
@@ -171,8 +178,8 @@ ATTRIBUTION_CONFIGS = {
         "attribution_use_trajectory_endpoint": True,
         "timesteps_total": 1000,
         "ddim_steps": 1000,
-        "timesteps": (0, 111, 222, 333, 444, 555, 666, 777, 888, 999),
-        "num_mc_noise": 10,
+        "timesteps": _parse_int_list_env("DAS_TIMESTEPS", (0, 111, 222, 333, 444, 555, 666, 777, 888, 999)),
+        "num_mc_noise": int(os.environ.get("DAS_NUM_MC_NOISE", "10")),
         "proj_dim": int(os.environ.get("DAS_PROJ_DIM", "4096")),
         # "proj_dim": 32768,
         "damping": float(os.environ.get("DAS_DAMPING", "2")),
