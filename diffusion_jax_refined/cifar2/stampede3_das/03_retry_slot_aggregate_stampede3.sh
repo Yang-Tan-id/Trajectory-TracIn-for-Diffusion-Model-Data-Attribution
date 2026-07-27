@@ -4,7 +4,7 @@
 #SBATCH -e cifar2-s3-das-eval-retry-%j.err
 #SBATCH -p h100
 #SBATCH -N 1
-#SBATCH -n 1
+#SBATCH -n 4
 #SBATCH --cpus-per-task=24
 #SBATCH -t 24:00:00
 
@@ -27,6 +27,7 @@ fi
 
 export STAMPEDE3_DAS_DIR="${SCRIPT_DIR}"
 export EVAL_SLOT_ONLY="${EVAL_SLOT_ONLY:-3}"
-export LDS_DEVICE="${LDS_DEVICE:-cpu}"
+export EVAL_SLOT_SHARD_COUNT="${EVAL_SLOT_SHARD_COUNT:-4}"
+export LDS_EVAL_DEVICE_MODE="${LDS_EVAL_DEVICE_MODE:-gpu_then_cpu}"
 
 exec bash "${SCRIPT_DIR}/03_das_lds_eval_report_stampede3.sh"

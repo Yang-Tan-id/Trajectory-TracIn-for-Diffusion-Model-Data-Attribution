@@ -73,6 +73,9 @@ eval_summary_for_call() {
 }
 
 mapfile -t specs < <(query_specs_inner)
+eval_call_index=0
+eval_slot_shard_index="${EVAL_SLOT_SHARD_INDEX:-0}"
+eval_slot_shard_count="${EVAL_SLOT_SHARD_COUNT:-1}"
 for ((idx = SLOT_INDEX; idx < ${#specs[@]}; idx += 16)); do
   IFS="|" read -r score_mode _query query_env seed unprompted_flag <<<"${specs[$idx]}"
   export SAMPLE_MODEL_MODE="${score_mode}"
@@ -94,19 +97,27 @@ for ((idx = SLOT_INDEX; idx < ${#specs[@]}; idx += 16)); do
       fi
       model_dir="${model_matches[0]}"
       for lambda in ${DAS_DAMPING_SWEEP_VALUES}; do
+        if (( eval_slot_shard_count > 1 )); then
+          if (( eval_call_index % eval_slot_shard_count != eval_slot_shard_index )); then
+            eval_call_index=$((eval_call_index + 1))
+            continue
+          fi
+        fi
         lambda_tag="$(damping_tag_inner "${lambda}")"
         score_dir="$(score_dir_for_das_lambda "${lambda}")"
         eval_summary="$(eval_summary_for_call "${lambda_tag}" "${target}" "${model_dir}")"
         if [[ -f "${eval_summary}" ]]; then
-          echo "[lds-eval-skip] idx=${idx} mode=${SAMPLE_MODEL_MODE} query=${QUERY} initial_seed=${INITIAL_SEED} target=${target} lambda=${lambda} lds_seed=${lds_seed} existing=${eval_summary}"
+          echo "[lds-eval-skip] shard=${eval_slot_shard_index}/${eval_slot_shard_count} call=${eval_call_index} idx=${idx} mode=${SAMPLE_MODEL_MODE} query=${QUERY} initial_seed=${INITIAL_SEED} target=${target} lambda=${lambda} lds_seed=${lds_seed} existing=${eval_summary}"
+          eval_call_index=$((eval_call_index + 1))
           continue
         fi
-        echo "[lds-eval] idx=${idx} mode=${SAMPLE_MODEL_MODE} query=${QUERY} initial_seed=${INITIAL_SEED} target=${target} lambda=${lambda} lds_seed=${lds_seed}"
+        echo "[lds-eval] shard=${eval_slot_shard_index}/${eval_slot_shard_count} call=${eval_call_index} idx=${idx} mode=${SAMPLE_MODEL_MODE} query=${QUERY} initial_seed=${INITIAL_SEED} target=${target} lambda=${lambda} lds_seed=${lds_seed}"
         if [[ "${UNPROMPTED}" == "1" ]]; then
           ATTRIBUTION_RESULT_DIRS="${score_dir}" LDS_MODEL_DIRS="${model_dir}" "${PYTHON_BIN}" lds/run_eval.py --unprompted --algorithm "das_lambda_${lambda_tag}" --lds-model-dirs "${model_dir}" --target-function "${target}"
         else
           ATTRIBUTION_RESULT_DIRS="${score_dir}" LDS_MODEL_DIRS="${model_dir}" "${PYTHON_BIN}" lds/run_eval.py --algorithm "das_lambda_${lambda_tag}" --lds-model-dirs "${model_dir}" --target-function "${target}"
         fi
+        eval_call_index=$((eval_call_index + 1))
       done
     done
   done

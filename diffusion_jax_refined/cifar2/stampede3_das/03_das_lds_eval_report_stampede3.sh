@@ -72,36 +72,101 @@ echo "Job 03 Stampede3 DAS: LDS eval + aggregate/report"
 echo "experiment=${EXPERIMENT_TAG}; train_seed=${TRAIN_SEED}; query_tasks=${#SPECS[@]}; eval_slots=${SLOT_LIST}; queries_per_slot=3"
 echo "targets=${TARGETS[*]}; lds_seeds=${LDS_SEEDS_TEXT}; das_lambdas=${DAS_DAMPING_SWEEP_VALUES}"
 echo "eval_algorithms=${EVAL_ALGORITHMS[*]}; logs=${LOG_ROOT}"
+echo "eval_device_mode=${LDS_EVAL_DEVICE_MODE:-gpu_then_cpu}"
+echo "eval_slot_shards=${EVAL_SLOT_SHARD_COUNT:-1}"
+
+run_eval_slot_once() {
+  local slot="$1"
+  local launch_slot="$2"
+  local shard_index="$3"
+  local shard_count="$4"
+  local attempt="$5"
+  local device="$6"
+  local gpu="${7:-}"
+  shift 7
+  local -a device_env
+  if [[ "${device}" == "gpu" ]]; then
+    device_env=(
+      CUDA_VISIBLE_DEVICES="${gpu}"
+      GPU_IDS="${gpu}"
+      LDS_DEVICE="${LDS_GPU_DEVICE:-gpu}"
+    )
+  else
+    device_env=(
+      CUDA_VISIBLE_DEVICES=""
+      GPU_IDS=""
+      JAX_PLATFORMS=cpu
+      LDS_DEVICE=cpu
+    )
+  fi
+  echo "[eval-slot] slot=${slot} shard=${shard_index}/${shard_count} attempt=${attempt} device=${device} gpu=${gpu:-none}"
+  run_gpu_slot "${launch_slot}" env \
+    "${device_env[@]}" \
+    JAX_NUM_DEVICES=1 \
+    CIFAR2_ROOT="${CIFAR2_ROOT}" \
+    REPO_ROOT="${REPO_ROOT}" \
+    PYTHON_BIN="${PYTHON_BIN}" \
+    EXPERIMENT_TAG="${EXPERIMENT_TAG}" \
+    TRAIN_SEED="${TRAIN_SEED}" \
+    SLOT_INDEX="${slot}" \
+    EVAL_SLOT_SHARD_INDEX="${shard_index}" \
+    EVAL_SLOT_SHARD_COUNT="${shard_count}" \
+    LDS_M="${LDS_M}" \
+    LDS_K="${LDS_K}" \
+    LDS_DATASET_PERCENTAGE="${LDS_DATASET_PERCENTAGE}" \
+    LDS_PREDICTION_SUBSET="${LDS_PREDICTION_SUBSET}" \
+    LDS_PREDICTION_SIGN="${LDS_PREDICTION_SIGN}" \
+    PRED_TAG="${PRED_TAG}" \
+    LDS_NUM_DEVICES=1 \
+    LDS_SIMPLE_LOSS_NUM_MC=10 \
+    bash "${SCRIPT_DIR}/03_das_lds_eval_slot_stampede3.sh"
+}
+
+run_eval_slot_with_fallback() {
+  local slot="$1"
+  local launch_slot="$2"
+  local shard_index="$3"
+  local shard_count="$4"
+  local mode="${LDS_EVAL_DEVICE_MODE:-gpu_then_cpu}"
+  local gpu=$((launch_slot % 4))
+  case "${mode}" in
+    gpu)
+      run_eval_slot_once "${slot}" "${launch_slot}" "${shard_index}" "${shard_count}" "gpu-only" gpu "${gpu}"
+      ;;
+    cpu)
+      run_eval_slot_once "${slot}" "${launch_slot}" "${shard_index}" "${shard_count}" "cpu-only" cpu
+      ;;
+    gpu_then_cpu)
+      if run_eval_slot_once "${slot}" "${launch_slot}" "${shard_index}" "${shard_count}" "1/2" gpu "${gpu}"; then
+        return 0
+      fi
+      echo "[eval-slot] slot=${slot} shard=${shard_index}/${shard_count} GPU attempt failed; retrying missing work on CPU"
+      run_eval_slot_once "${slot}" "${launch_slot}" "${shard_index}" "${shard_count}" "2/2" cpu
+      ;;
+    *)
+      echo "Unknown LDS_EVAL_DEVICE_MODE=${mode}; expected gpu, cpu, or gpu_then_cpu" >&2
+      return 2
+      ;;
+  esac
+}
 
 pids=()
 launch_offset=0
 for slot in ${SLOT_LIST}; do
-  log="${LOG_ROOT}/slot_${slot}.log"
-  echo "Launch eval slot=${slot}; handles query indices ${slot}, $((slot + 16)), $((slot + 32)) -> ${log}"
-  (
-    run_gpu_slot "${launch_offset}" env \
-      CUDA_VISIBLE_DEVICES="" \
-      GPU_IDS="" \
-      JAX_NUM_DEVICES=1 \
-      CIFAR2_ROOT="${CIFAR2_ROOT}" \
-      REPO_ROOT="${REPO_ROOT}" \
-      PYTHON_BIN="${PYTHON_BIN}" \
-      EXPERIMENT_TAG="${EXPERIMENT_TAG}" \
-      TRAIN_SEED="${TRAIN_SEED}" \
-      SLOT_INDEX="${slot}" \
-      LDS_M="${LDS_M}" \
-      LDS_K="${LDS_K}" \
-      LDS_DATASET_PERCENTAGE="${LDS_DATASET_PERCENTAGE}" \
-      LDS_PREDICTION_SUBSET="${LDS_PREDICTION_SUBSET}" \
-      LDS_PREDICTION_SIGN="${LDS_PREDICTION_SIGN}" \
-      PRED_TAG="${PRED_TAG}" \
-      LDS_DEVICE="${LDS_DEVICE:-cpu}" \
-      LDS_NUM_DEVICES=1 \
-      LDS_SIMPLE_LOSS_NUM_MC=10 \
-      bash "${SCRIPT_DIR}/03_das_lds_eval_slot_stampede3.sh"
-  ) >"${log}" 2>&1 &
-  pids+=("$!")
-  launch_offset=$((launch_offset + 1))
+  shard_count="${EVAL_SLOT_SHARD_COUNT:-1}"
+  for ((shard_index = 0; shard_index < shard_count; shard_index++)); do
+    if (( shard_count == 1 )); then
+      log="${LOG_ROOT}/slot_${slot}.log"
+    else
+      log="${LOG_ROOT}/slot_${slot}_shard_${shard_index}.log"
+    fi
+    echo "Launch eval slot=${slot} shard=${shard_index}/${shard_count}; handles query indices ${slot}, $((slot + 16)), $((slot + 32)) -> ${log}"
+    (
+      run_eval_slot_with_fallback "${slot}" "${launch_offset}" "${shard_index}" "${shard_count}"
+    ) >"${log}" 2>&1 &
+    pids+=("$!")
+    launch_offset=$((launch_offset + 1))
+  done
 done
 
 wait_all "${pids[@]}"
