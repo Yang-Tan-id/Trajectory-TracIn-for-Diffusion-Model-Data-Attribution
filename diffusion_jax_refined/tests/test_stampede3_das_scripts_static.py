@@ -20,11 +20,16 @@ class TestStampede3DasScriptsStatic(unittest.TestCase):
             "02_smoke_das_attribution_rtx_small.sh",
             "02_full_das_attribution_rtx_small.sh",
             "02_das_attribution_array_stampede3.sh",
+            "02_dtrak_endtracin_attribution_chunk_stampede3.sh",
+            "02_dtrak_endtracin_attribution_stampede3.sh",
+            "02_dtrak_endtracin_attribution_task_stampede3.sh",
             "02a_das_attribution_stampede3.sh",
             "02b_das_attribution_stampede3.sh",
             "02c_das_attribution_stampede3.sh",
             "03_das_lds_eval_report_stampede3.sh",
             "03_das_lds_eval_slot_stampede3.sh",
+            "03_dtrak_endtracin_lds_eval_report_stampede3.sh",
+            "03_dtrak_endtracin_lds_eval_slot_stampede3.sh",
             "03_retry_slot_aggregate_stampede3.sh",
             "submit_stampede3_das_pipeline.sh",
             "README.md",
@@ -106,6 +111,24 @@ class TestStampede3DasScriptsStatic(unittest.TestCase):
         array_text = (STAMPEDE3_DAS / "02_das_attribution_array_stampede3.sh").read_text()
         self.assertIn("#SBATCH --array=0-2%1", array_text)
 
+    def test_stampede3_dtrak_endtracin_attribution_uses_mc100_defaults(self):
+        text = (STAMPEDE3_DAS / "02_dtrak_endtracin_attribution_chunk_stampede3.sh").read_text()
+        self.assertIn("#SBATCH -N 4", text)
+        self.assertIn("#SBATCH -n 16", text)
+        self.assertIn("#SBATCH -t 48:00:00", text)
+        self.assertIn('ATTR_ALGORITHMS_TEXT="${ATTR_ALGORITHMS:-dtrak end_tracin}"', text)
+        self.assertIn('DTRAK_TRAIN_EXPECTATION_SAMPLES="${DTRAK_TRAIN_EXPECTATION_SAMPLES:-100}"', text)
+        self.assertIn('DTRAK_QUERY_EXPECTATION_SAMPLES="${DTRAK_QUERY_EXPECTATION_SAMPLES:-100}"', text)
+        self.assertIn('END_TRACIN_ENDPOINT_MC_SAMPLES="${END_TRACIN_ENDPOINT_MC_SAMPLES:-100}"', text)
+        self.assertIn('END_TRACIN_TRAIN_MC_SAMPLES="${END_TRACIN_TRAIN_MC_SAMPLES:-100}"', text)
+        self.assertIn("expected_score_file()", text)
+        self.assertIn("02_dtrak_endtracin_attribution_task_stampede3.sh", text)
+        task_text = (STAMPEDE3_DAS / "02_dtrak_endtracin_attribution_task_stampede3.sh").read_text()
+        self.assertIn("bash scripts/00_sample_for_attribution.sh", task_text)
+        self.assertIn("run_original_attribution_config.py", task_text)
+        array_text = (STAMPEDE3_DAS / "02_dtrak_endtracin_attribution_stampede3.sh").read_text()
+        self.assertIn("#SBATCH --array=0-5%1", array_text)
+
     def test_stampede3_smoke_attribution_uses_one_node_one_lambda_and_checks_score(self):
         text = (STAMPEDE3_DAS / "02_smoke_das_attribution_stampede3.sh").read_text()
         self.assertIn("#SBATCH -N 1", text)
@@ -146,7 +169,7 @@ class TestStampede3DasScriptsStatic(unittest.TestCase):
         self.assertIn("#SBATCH -N 4", text)
         self.assertIn("#SBATCH -n 16", text)
         self.assertIn("#SBATCH -t 24:00:00", text)
-        self.assertIn("TARGETS=(simple_loss noise_trajectory)", text)
+        self.assertIn("TARGETS=(${LDS_TARGETS:-simple_loss noise_trajectory})", text)
         self.assertIn('SLOT_LIST="$(seq -s \' \' 0 15)"', text)
         self.assertIn("for slot in ${SLOT_LIST}", text)
         self.assertIn('EVAL_SLOT_ONLY', text)
@@ -180,6 +203,25 @@ class TestStampede3DasScriptsStatic(unittest.TestCase):
         self.assertIn("[lds-eval-skip]", slot_text)
         self.assertIn("lds_summary.json", slot_text)
         self.assertIn('--algorithms "${EVAL_ALGORITHMS[@]}"', text)
+
+    def test_stampede3_dtrak_endtracin_eval_uses_simple_loss_grid(self):
+        text = (STAMPEDE3_DAS / "03_dtrak_endtracin_lds_eval_report_stampede3.sh").read_text()
+        self.assertIn("#SBATCH -N 4", text)
+        self.assertIn("#SBATCH -n 16", text)
+        self.assertIn("#SBATCH -t 24:00:00", text)
+        self.assertIn("TARGETS=(${LDS_TARGETS:-simple_loss noise_trajectory})", text)
+        self.assertIn("EVAL_ALGORITHMS=(${EVAL_ALGORITHMS:-dtrak end_tracin})", text)
+        self.assertIn('LDS_SIMPLE_LOSS_TIMESTEPS="${LDS_SIMPLE_LOSS_TIMESTEPS:-$(seq -s \' \' 0 999)}"', text)
+        self.assertIn('LDS_SIMPLE_LOSS_NOISE_SEEDS="${LDS_SIMPLE_LOSS_NOISE_SEEDS:-0}"', text)
+        self.assertIn('LDS_SIMPLE_LOSS_NUM_MC="${LDS_SIMPLE_LOSS_NUM_MC:-1000}"', text)
+        self.assertIn('FORCE_LDS_EVAL="${FORCE_LDS_EVAL:-0}"', text)
+        self.assertIn("03_dtrak_endtracin_lds_eval_slot_stampede3.sh", text)
+        self.assertIn('--algorithms "${EVAL_ALGORITHMS[@]}"', text)
+        slot_text = (STAMPEDE3_DAS / "03_dtrak_endtracin_lds_eval_slot_stampede3.sh").read_text()
+        self.assertIn("eval_summary_for_call()", slot_text)
+        self.assertIn("[lds-eval-skip]", slot_text)
+        self.assertIn("FORCE_LDS_EVAL", slot_text)
+        self.assertIn("--algorithm \"${algorithm}\"", slot_text)
 
     def test_stampede3_retry_slot_aggregate_uses_one_node_slot_only(self):
         text = (STAMPEDE3_DAS / "03_retry_slot_aggregate_stampede3.sh").read_text()

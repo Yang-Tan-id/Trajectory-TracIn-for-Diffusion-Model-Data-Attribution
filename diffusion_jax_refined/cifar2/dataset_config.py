@@ -224,12 +224,16 @@ ATTRIBUTION_CONFIGS = {
         "attribution_use_trajectory_endpoint": True,
         "timesteps": 1000,
         "ddim_steps": 1000,
-        "proj_dim": 4096,
-        "damping": 1e-3,
-        "num_samples": 1,
+        "proj_dim": int(os.environ.get("DTRAK_PROJ_DIM", "4096")),
+        "damping": float(os.environ.get("DTRAK_DAMPING", "1e-3")),
+        "num_samples": int(os.environ.get("DTRAK_NUM_SAMPLES", "1")),
         "batch_size": int(os.environ.get("DTRAK_BATCH_SIZE", "64")),
-        "train_expectation_samples": 10,
-        "query_expectation_samples": 10,
+        "train_expectation_samples": int(
+            os.environ.get("DTRAK_TRAIN_EXPECTATION_SAMPLES", "10")
+        ),
+        "query_expectation_samples": int(
+            os.environ.get("DTRAK_QUERY_EXPECTATION_SAMPLES", "10")
+        ),
     },
     "end_tracin": {
         **COMMON_CIFAR,
@@ -243,9 +247,11 @@ ATTRIBUTION_CONFIGS = {
         "attribution_use_trajectory_endpoint": True,
         "timesteps": 1000,
         "ddim_steps": 1000,
-        "endpoint_mc_samples": 10,
-        "train_mc_samples": 10,
-        "score_batch_size": 32,
+        "endpoint_mc_samples": int(
+            os.environ.get("END_TRACIN_ENDPOINT_MC_SAMPLES", "10")
+        ),
+        "train_mc_samples": int(os.environ.get("END_TRACIN_TRAIN_MC_SAMPLES", "10")),
+        "score_batch_size": int(os.environ.get("END_TRACIN_SCORE_BATCH_SIZE", "32")),
     },
     "journey_trak": {
         **COMMON_CIFAR,
