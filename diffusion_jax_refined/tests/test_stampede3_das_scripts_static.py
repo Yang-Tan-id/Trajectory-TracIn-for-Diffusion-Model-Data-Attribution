@@ -25,6 +25,7 @@ class TestStampede3DasScriptsStatic(unittest.TestCase):
             "02c_das_attribution_stampede3.sh",
             "03_das_lds_eval_report_stampede3.sh",
             "03_das_lds_eval_slot_stampede3.sh",
+            "03_retry_slot_aggregate_stampede3.sh",
             "submit_stampede3_das_pipeline.sh",
             "README.md",
         )
@@ -146,8 +147,13 @@ class TestStampede3DasScriptsStatic(unittest.TestCase):
         self.assertIn("#SBATCH -n 16", text)
         self.assertIn("#SBATCH -t 24:00:00", text)
         self.assertIn("TARGETS=(simple_loss noise_trajectory)", text)
-        self.assertIn("for slot in $(seq 0 15)", text)
-        self.assertIn("queries_per_gpu=3", text)
+        self.assertIn('SLOT_LIST="$(seq -s \' \' 0 15)"', text)
+        self.assertIn("for slot in ${SLOT_LIST}", text)
+        self.assertIn('EVAL_SLOT_ONLY', text)
+        self.assertIn("queries_per_slot=3", text)
+        self.assertIn('CUDA_VISIBLE_DEVICES=""', text)
+        self.assertIn('LDS_DEVICE="${LDS_DEVICE:-cpu}"', text)
+        self.assertIn('PRED_TAG="${PRED_TAG}"', text)
         self.assertIn("das_lambda_$(damping_tag", text)
         self.assertIn("export PROMPTED_SEEDS_TEXT UNPROMPTED_SEEDS_TEXT LDS_SEEDS_TEXT TARGETS_TEXT DAS_DAMPING_SWEEP_VALUES", text)
         self.assertNotIn('TARGETS_TEXT="${TARGETS[*]}" \\\n      DAS_DAMPING_SWEEP_VALUES="${DAS_DAMPING_SWEEP_VALUES}"', text)
@@ -160,7 +166,19 @@ class TestStampede3DasScriptsStatic(unittest.TestCase):
         self.assertIn("das_unprompted*/lambda_%s", slot_text)
         self.assertIn("das*/lambda_%s", slot_text)
         self.assertIn("Expected exactly one DAS score dir for pattern", slot_text)
+        self.assertIn("eval_summary_for_call()", slot_text)
+        self.assertIn("[lds-eval-skip]", slot_text)
+        self.assertIn("lds_summary.json", slot_text)
         self.assertIn('--algorithms "${EVAL_ALGORITHMS[@]}"', text)
+
+    def test_stampede3_retry_slot_aggregate_uses_one_node_slot_only(self):
+        text = (STAMPEDE3_DAS / "03_retry_slot_aggregate_stampede3.sh").read_text()
+        self.assertIn("#SBATCH -p h100", text)
+        self.assertIn("#SBATCH -N 1", text)
+        self.assertIn("#SBATCH -n 1", text)
+        self.assertIn('EVAL_SLOT_ONLY="${EVAL_SLOT_ONLY:-3}"', text)
+        self.assertIn('LDS_DEVICE="${LDS_DEVICE:-cpu}"', text)
+        self.assertIn('exec bash "${SCRIPT_DIR}/03_das_lds_eval_report_stampede3.sh"', text)
 
     def test_stampede3_submit_uses_staged_submission_for_h100_limits(self):
         text = (STAMPEDE3_DAS / "submit_stampede3_das_pipeline.sh").read_text()

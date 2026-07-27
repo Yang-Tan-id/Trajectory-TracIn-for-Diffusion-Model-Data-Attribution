@@ -55,6 +55,23 @@ score_dir_for_das_lambda() {
   printf "%s" "${matches[0]}"
 }
 
+eval_summary_for_call() {
+  local lambda_tag="$1"
+  local target="$2"
+  local model_dir="$3"
+  local eval_kind
+  local query_dir
+  eval_kind="lds"
+  query_dir="query_$(tag_value "${QUERY}")"
+  if [[ "${UNPROMPTED}" == "1" ]]; then
+    eval_kind="lds_unprompted"
+    query_dir="unprompted"
+  fi
+  printf "%s/result/%s/eval/%s/%s/initial_seed_%s/%s/das_lambda_%s/%s/%s/%s/lds_summary.json" \
+    "${CIFAR2_ROOT}" "${EXPERIMENT_TAG}" "${SAMPLE_MODEL_MODE}" "${query_dir}" "${INITIAL_SEED}" \
+    "${eval_kind}" "${lambda_tag}" "${target}" "${PRED_TAG:-pred_kept_sign_m1}" "$(basename "${model_dir}")"
+}
+
 mapfile -t specs < <(query_specs_inner)
 for ((idx = SLOT_INDEX; idx < ${#specs[@]}; idx += 16)); do
   IFS="|" read -r score_mode _query query_env seed unprompted_flag <<<"${specs[$idx]}"
@@ -79,6 +96,11 @@ for ((idx = SLOT_INDEX; idx < ${#specs[@]}; idx += 16)); do
       for lambda in ${DAS_DAMPING_SWEEP_VALUES}; do
         lambda_tag="$(damping_tag_inner "${lambda}")"
         score_dir="$(score_dir_for_das_lambda "${lambda}")"
+        eval_summary="$(eval_summary_for_call "${lambda_tag}" "${target}" "${model_dir}")"
+        if [[ -f "${eval_summary}" ]]; then
+          echo "[lds-eval-skip] idx=${idx} mode=${SAMPLE_MODEL_MODE} query=${QUERY} initial_seed=${INITIAL_SEED} target=${target} lambda=${lambda} lds_seed=${lds_seed} existing=${eval_summary}"
+          continue
+        fi
         echo "[lds-eval] idx=${idx} mode=${SAMPLE_MODEL_MODE} query=${QUERY} initial_seed=${INITIAL_SEED} target=${target} lambda=${lambda} lds_seed=${lds_seed}"
         if [[ "${UNPROMPTED}" == "1" ]]; then
           ATTRIBUTION_RESULT_DIRS="${score_dir}" LDS_MODEL_DIRS="${model_dir}" "${PYTHON_BIN}" lds/run_eval.py --unprompted --algorithm "das_lambda_${lambda_tag}" --lds-model-dirs "${model_dir}" --target-function "${target}"

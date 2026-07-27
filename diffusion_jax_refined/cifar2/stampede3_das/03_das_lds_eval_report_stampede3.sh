@@ -62,21 +62,26 @@ query_specs() {
 }
 
 mapfile -t SPECS < <(query_specs)
+if [[ -n "${EVAL_SLOT_ONLY:-}" ]]; then
+  SLOT_LIST="${EVAL_SLOT_ONLY}"
+else
+  SLOT_LIST="$(seq -s ' ' 0 15)"
+fi
 
 echo "Job 03 Stampede3 DAS: LDS eval + aggregate/report"
-echo "experiment=${EXPERIMENT_TAG}; train_seed=${TRAIN_SEED}; query_tasks=${#SPECS[@]}; nodes=4; gpu_slots=16; queries_per_gpu=3"
+echo "experiment=${EXPERIMENT_TAG}; train_seed=${TRAIN_SEED}; query_tasks=${#SPECS[@]}; eval_slots=${SLOT_LIST}; queries_per_slot=3"
 echo "targets=${TARGETS[*]}; lds_seeds=${LDS_SEEDS_TEXT}; das_lambdas=${DAS_DAMPING_SWEEP_VALUES}"
 echo "eval_algorithms=${EVAL_ALGORITHMS[*]}; logs=${LOG_ROOT}"
 
 pids=()
-for slot in $(seq 0 15); do
-  gpu=$((slot % 4))
+launch_offset=0
+for slot in ${SLOT_LIST}; do
   log="${LOG_ROOT}/slot_${slot}.log"
-  echo "Launch eval slot=${slot} gpu=${gpu}; handles query indices ${slot}, $((slot + 16)), $((slot + 32)) -> ${log}"
+  echo "Launch eval slot=${slot}; handles query indices ${slot}, $((slot + 16)), $((slot + 32)) -> ${log}"
   (
-    run_gpu_slot "${slot}" env \
-      CUDA_VISIBLE_DEVICES="${gpu}" \
-      GPU_IDS="${gpu}" \
+    run_gpu_slot "${launch_offset}" env \
+      CUDA_VISIBLE_DEVICES="" \
+      GPU_IDS="" \
       JAX_NUM_DEVICES=1 \
       CIFAR2_ROOT="${CIFAR2_ROOT}" \
       REPO_ROOT="${REPO_ROOT}" \
@@ -89,12 +94,14 @@ for slot in $(seq 0 15); do
       LDS_DATASET_PERCENTAGE="${LDS_DATASET_PERCENTAGE}" \
       LDS_PREDICTION_SUBSET="${LDS_PREDICTION_SUBSET}" \
       LDS_PREDICTION_SIGN="${LDS_PREDICTION_SIGN}" \
-      LDS_DEVICE=gpu \
+      PRED_TAG="${PRED_TAG}" \
+      LDS_DEVICE="${LDS_DEVICE:-cpu}" \
       LDS_NUM_DEVICES=1 \
       LDS_SIMPLE_LOSS_NUM_MC=10 \
       bash "${SCRIPT_DIR}/03_das_lds_eval_slot_stampede3.sh"
   ) >"${log}" 2>&1 &
   pids+=("$!")
+  launch_offset=$((launch_offset + 1))
 done
 
 wait_all "${pids[@]}"
