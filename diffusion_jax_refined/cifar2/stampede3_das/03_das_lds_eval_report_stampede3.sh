@@ -28,7 +28,7 @@ fi
 source "${SCRIPT_DIR}/_stampede3_das_lib.sh"
 stampede3_das_init
 
-TARGETS=(simple_loss noise_trajectory)
+TARGETS=(${LDS_TARGETS:-simple_loss noise_trajectory})
 LDS_SEEDS_TEXT="${LDS_SEEDS:-$(seq -s ' ' 0 7)}"
 LDS_M="${LDS_M:-64}"
 LDS_K="${LDS_K:-5000}"
@@ -118,7 +118,10 @@ run_eval_slot_once() {
     LDS_PREDICTION_SIGN="${LDS_PREDICTION_SIGN}" \
     PRED_TAG="${PRED_TAG}" \
     LDS_NUM_DEVICES=1 \
-    LDS_SIMPLE_LOSS_NUM_MC=10 \
+    LDS_SIMPLE_LOSS_NUM_MC="${LDS_SIMPLE_LOSS_NUM_MC:-10}" \
+    LDS_SIMPLE_LOSS_MC_SEED="${LDS_SIMPLE_LOSS_MC_SEED:-0}" \
+    LDS_SIMPLE_LOSS_TIMESTEPS="${LDS_SIMPLE_LOSS_TIMESTEPS:-}" \
+    LDS_SIMPLE_LOSS_NOISE_SEEDS="${LDS_SIMPLE_LOSS_NOISE_SEEDS:-}" \
     bash "${SCRIPT_DIR}/03_das_lds_eval_slot_stampede3.sh"
 }
 

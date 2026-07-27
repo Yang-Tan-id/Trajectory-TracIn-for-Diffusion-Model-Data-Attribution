@@ -20,6 +20,13 @@ def _paths(text: str) -> list[Path]:
     return [Path(part.strip()).expanduser().resolve() for part in text.split(",") if part.strip()]
 
 
+def _int_list_env(name: str) -> list[int] | None:
+    text = os.environ.get(name)
+    if text is None or not text.strip():
+        return None
+    return [int(part) for part in text.replace(",", " ").split()]
+
+
 def _compact_model_group_name(model_dirs: list[Path], *, max_len: int = 96) -> str:
     names = [path.name for path in model_dirs]
     joined = "__".join(names)
@@ -151,6 +158,10 @@ def main() -> None:
     )
     sample_index = int(score_run_config.get("attribution_sample_index", 0))
     reduction = args.trajectory_reduction or "snapshot_mean"
+    simple_loss_timesteps = _int_list_env("LDS_SIMPLE_LOSS_TIMESTEPS") or list(
+        range(diffusion_timesteps)
+    )
+    simple_loss_noise_seeds = _int_list_env("LDS_SIMPLE_LOSS_NOISE_SEEDS")
 
     evaluator = CifarTargetEvaluator(
         code_file=str(legacy_root / "DM__training_CIFAR10_pixel.py"),
@@ -165,8 +176,8 @@ def main() -> None:
         max_trajectory_steps=None,
         trajectory_reduction=reduction,
         trajectory_projection=score_meta.get("trajectory_projection"),
-        simple_loss_timesteps=list(range(diffusion_timesteps)),
-        simple_loss_noise_seeds=None,
+        simple_loss_timesteps=simple_loss_timesteps,
+        simple_loss_noise_seeds=simple_loss_noise_seeds,
         simple_loss_num_mc=int(os.environ.get("LDS_SIMPLE_LOSS_NUM_MC", "10")),
         simple_loss_mc_seed=int(os.environ.get("LDS_SIMPLE_LOSS_MC_SEED", "0")),
     )
