@@ -35,14 +35,24 @@ query_specs_inner() {
 score_dir_for_das_lambda() {
   local lambda="$1"
   local tag
+  local pattern
   tag="$(damping_tag_inner "${lambda}")"
   if [[ "${UNPROMPTED}" == "1" ]]; then
-    printf "%s/result/%s/attribution_score/%s/train_seed_%s/unprompted/initial_seed_%s/das_unprompted/lambda_%s" \
+    pattern=$(printf "%s/result/%s/attribution_score/%s/train_seed_%s/unprompted/initial_seed_%s/das_unprompted*/lambda_%s" \
       "${CIFAR2_ROOT}" "${EXPERIMENT_TAG}" "${SAMPLE_MODEL_MODE}" "${TRAIN_SEED}" "${INITIAL_SEED}" "${tag}"
+    )
   else
-    printf "%s/result/%s/attribution_score/%s/train_seed_%s/query_%s/initial_seed_%s/das/lambda_%s" \
+    pattern=$(printf "%s/result/%s/attribution_score/%s/train_seed_%s/query_%s/initial_seed_%s/das*/lambda_%s" \
       "${CIFAR2_ROOT}" "${EXPERIMENT_TAG}" "${SAMPLE_MODEL_MODE}" "${TRAIN_SEED}" "$(tag_value "${QUERY}")" "${INITIAL_SEED}" "${tag}"
+    )
   fi
+  mapfile -t matches < <(compgen -G "${pattern}" | sort)
+  if [[ "${#matches[@]}" -ne 1 ]]; then
+    echo "Expected exactly one DAS score dir for pattern ${pattern}, found ${#matches[@]}" >&2
+    printf "  %s\n" "${matches[@]}" >&2
+    exit 1
+  fi
+  printf "%s" "${matches[0]}"
 }
 
 mapfile -t specs < <(query_specs_inner)

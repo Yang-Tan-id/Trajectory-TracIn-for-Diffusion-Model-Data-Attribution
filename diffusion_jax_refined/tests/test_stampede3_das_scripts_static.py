@@ -157,8 +157,9 @@ class TestStampede3DasScriptsStatic(unittest.TestCase):
         self.assertIn("query_specs_inner()", slot_text)
         self.assertIn("score_dir_for_das_lambda()", slot_text)
         self.assertIn("idx += 16", slot_text)
-        self.assertIn("das_unprompted/lambda_%s", slot_text)
-        self.assertIn("das/lambda_%s", slot_text)
+        self.assertIn("das_unprompted*/lambda_%s", slot_text)
+        self.assertIn("das*/lambda_%s", slot_text)
+        self.assertIn("Expected exactly one DAS score dir for pattern", slot_text)
         self.assertIn('--algorithms "${EVAL_ALGORITHMS[@]}"', text)
 
     def test_stampede3_submit_uses_staged_submission_for_h100_limits(self):
