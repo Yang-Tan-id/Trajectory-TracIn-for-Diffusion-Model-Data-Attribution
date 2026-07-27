@@ -14,6 +14,7 @@ SCRIPT_DIR="${STAMPEDE3_DAS_DIR:-}"
 if [[ -z "${SCRIPT_DIR}" || ! -f "${SCRIPT_DIR}/_stampede3_das_lib.sh" ]]; then
   for candidate in \
     "${SLURM_SUBMIT_DIR:-}" \
+    "${SLURM_SUBMIT_DIR:-}/stampede3_das" \
     "${SLURM_SUBMIT_DIR:-}/diffusion_jax_refined/cifar2/stampede3_das"; do
     if [[ -n "${candidate}" && -f "${candidate}/_stampede3_das_lib.sh" ]]; then
       SCRIPT_DIR="${candidate}"

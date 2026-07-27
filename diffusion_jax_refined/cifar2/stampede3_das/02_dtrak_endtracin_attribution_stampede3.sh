@@ -12,7 +12,7 @@
 set -euo pipefail
 SCRIPT_DIR="${STAMPEDE3_DAS_DIR:-}"
 if [[ -z "${SCRIPT_DIR}" || ! -f "${SCRIPT_DIR}/02_dtrak_endtracin_attribution_chunk_stampede3.sh" ]]; then
-  for candidate in "${SLURM_SUBMIT_DIR:-}" "${SLURM_SUBMIT_DIR:-}/diffusion_jax_refined/cifar2/stampede3_das"; do
+  for candidate in "${SLURM_SUBMIT_DIR:-}" "${SLURM_SUBMIT_DIR:-}/stampede3_das" "${SLURM_SUBMIT_DIR:-}/diffusion_jax_refined/cifar2/stampede3_das"; do
     if [[ -n "${candidate}" && -f "${candidate}/02_dtrak_endtracin_attribution_chunk_stampede3.sh" ]]; then SCRIPT_DIR="${candidate}"; break; fi
   done
 fi
