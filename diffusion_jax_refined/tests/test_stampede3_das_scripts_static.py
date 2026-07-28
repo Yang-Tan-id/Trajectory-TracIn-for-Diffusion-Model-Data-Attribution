@@ -22,6 +22,7 @@ class TestStampede3DasScriptsStatic(unittest.TestCase):
             "02_das_attribution_array_stampede3.sh",
             "02_dtrak_endtracin_attribution_chunk_stampede3.sh",
             "02_dtrak_endtracin_attribution_stampede3.sh",
+            "02_dtrak_endtracin_attribution_all_stampede3.sh",
             "02_dtrak_endtracin_attribution_task_stampede3.sh",
             "02a_das_attribution_stampede3.sh",
             "02b_das_attribution_stampede3.sh",
@@ -128,6 +129,18 @@ class TestStampede3DasScriptsStatic(unittest.TestCase):
         self.assertIn("run_original_attribution_config.py", task_text)
         array_text = (STAMPEDE3_DAS / "02_dtrak_endtracin_attribution_stampede3.sh").read_text()
         self.assertIn("#SBATCH --array=0-5%1", array_text)
+        all_text = (STAMPEDE3_DAS / "02_dtrak_endtracin_attribution_all_stampede3.sh").read_text()
+        self.assertIn("#SBATCH -N 4", all_text)
+        self.assertIn("#SBATCH -n 16", all_text)
+        self.assertIn("#SBATCH -t 48:00:00", all_text)
+        self.assertIn('ATTR_NUM_SLOTS="${ATTR_NUM_SLOTS:-16}"', all_text)
+        self.assertIn('ATTR_ALGORITHMS_TEXT="${ATTR_ALGORITHMS:-dtrak end_tracin}"', all_text)
+        self.assertIn('DTRAK_TRAIN_EXPECTATION_SAMPLES="${DTRAK_TRAIN_EXPECTATION_SAMPLES:-100}"', all_text)
+        self.assertIn('DTRAK_QUERY_EXPECTATION_SAMPLES="${DTRAK_QUERY_EXPECTATION_SAMPLES:-100}"', all_text)
+        self.assertIn('END_TRACIN_ENDPOINT_MC_SAMPLES="${END_TRACIN_ENDPOINT_MC_SAMPLES:-100}"', all_text)
+        self.assertIn('END_TRACIN_TRAIN_MC_SAMPLES="${END_TRACIN_TRAIN_MC_SAMPLES:-100}"', all_text)
+        self.assertIn("for ((i = slot; i < total_tasks; i += ATTR_NUM_SLOTS))", all_text)
+        self.assertIn("02_dtrak_endtracin_attribution_task_stampede3.sh", all_text)
 
     def test_stampede3_smoke_attribution_uses_one_node_one_lambda_and_checks_score(self):
         text = (STAMPEDE3_DAS / "02_smoke_das_attribution_stampede3.sh").read_text()
@@ -211,7 +224,7 @@ class TestStampede3DasScriptsStatic(unittest.TestCase):
         self.assertIn("#SBATCH -t 24:00:00", text)
         self.assertIn("TARGETS=(${LDS_TARGETS:-simple_loss noise_trajectory})", text)
         self.assertIn("EVAL_ALGORITHMS=(${EVAL_ALGORITHMS:-dtrak end_tracin})", text)
-        self.assertIn('LDS_SIMPLE_LOSS_TIMESTEPS="${LDS_SIMPLE_LOSS_TIMESTEPS:-$(seq -s \' \' 0 999)}"', text)
+        self.assertIn('LDS_SIMPLE_LOSS_TIMESTEPS="${LDS_SIMPLE_LOSS_TIMESTEPS:-$(seq -s, 0 999)}"', text)
         self.assertIn('LDS_SIMPLE_LOSS_NOISE_SEEDS="${LDS_SIMPLE_LOSS_NOISE_SEEDS:-0}"', text)
         self.assertIn('LDS_SIMPLE_LOSS_NUM_MC="${LDS_SIMPLE_LOSS_NUM_MC:-1000}"', text)
         self.assertIn('FORCE_LDS_EVAL="${FORCE_LDS_EVAL:-0}"', text)
