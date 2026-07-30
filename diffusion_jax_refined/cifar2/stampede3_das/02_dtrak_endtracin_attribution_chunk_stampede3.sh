@@ -137,7 +137,7 @@ for ((i = start; i < end; i++)); do
       DTRAK_BATCH_SIZE="${DTRAK_BATCH_SIZE:-8}" \
       END_TRACIN_ENDPOINT_MC_SAMPLES="${END_TRACIN_ENDPOINT_MC_SAMPLES:-100}" \
       END_TRACIN_TRAIN_MC_SAMPLES="${END_TRACIN_TRAIN_MC_SAMPLES:-100}" \
-      END_TRACIN_SCORE_BATCH_SIZE="${END_TRACIN_SCORE_BATCH_SIZE:-32}" \
+      END_TRACIN_SCORE_BATCH_SIZE="${END_TRACIN_SCORE_BATCH_SIZE:-8}" \
       bash "${SCRIPT_DIR}/02_dtrak_endtracin_attribution_task_stampede3.sh"
   ) >"${log}" 2>&1 &
   pids+=("$!")

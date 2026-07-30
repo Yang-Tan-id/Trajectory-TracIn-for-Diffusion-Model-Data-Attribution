@@ -123,6 +123,7 @@ class TestStampede3DasScriptsStatic(unittest.TestCase):
         self.assertIn('DTRAK_BATCH_SIZE="${DTRAK_BATCH_SIZE:-8}"', text)
         self.assertIn('END_TRACIN_ENDPOINT_MC_SAMPLES="${END_TRACIN_ENDPOINT_MC_SAMPLES:-100}"', text)
         self.assertIn('END_TRACIN_TRAIN_MC_SAMPLES="${END_TRACIN_TRAIN_MC_SAMPLES:-100}"', text)
+        self.assertIn('END_TRACIN_SCORE_BATCH_SIZE="${END_TRACIN_SCORE_BATCH_SIZE:-8}"', text)
         self.assertIn("expected_score_file()", text)
         self.assertIn("02_dtrak_endtracin_attribution_task_stampede3.sh", text)
         task_text = (STAMPEDE3_DAS / "02_dtrak_endtracin_attribution_task_stampede3.sh").read_text()
@@ -141,6 +142,7 @@ class TestStampede3DasScriptsStatic(unittest.TestCase):
         self.assertIn('DTRAK_BATCH_SIZE="${DTRAK_BATCH_SIZE:-8}"', all_text)
         self.assertIn('END_TRACIN_ENDPOINT_MC_SAMPLES="${END_TRACIN_ENDPOINT_MC_SAMPLES:-100}"', all_text)
         self.assertIn('END_TRACIN_TRAIN_MC_SAMPLES="${END_TRACIN_TRAIN_MC_SAMPLES:-100}"', all_text)
+        self.assertIn('END_TRACIN_SCORE_BATCH_SIZE="${END_TRACIN_SCORE_BATCH_SIZE:-8}"', all_text)
         self.assertIn("for ((i = slot; i < total_tasks; i += ATTR_NUM_SLOTS))", all_text)
         self.assertIn("02_dtrak_endtracin_attribution_task_stampede3.sh", all_text)
 
