@@ -75,7 +75,7 @@ echo "experiment=${EXPERIMENT_TAG}; train_seed=${TRAIN_SEED}; query_tasks=${#SPE
 echo "targets=${TARGETS[*]}; algorithms=${EVAL_ALGORITHMS[*]}; lds_seeds=${LDS_SEEDS_TEXT}"
 echo "simple_loss_terms=${LDS_SIMPLE_LOSS_NUM_MC}; simple_loss_noise_seeds=${LDS_SIMPLE_LOSS_NOISE_SEEDS}; logs=${LOG_ROOT}"
 echo "eval_device_mode=${LDS_EVAL_DEVICE_MODE:-gpu_then_cpu}"
-echo "eval_slot_shards=${EVAL_SLOT_SHARD_COUNT:-1}; serial_slots=${EVAL_SERIAL_SLOTS:-0}; force=${FORCE_LDS_EVAL:-0}"
+echo "eval_slot_shards=${EVAL_SLOT_SHARD_COUNT:-1}; serial_slots=${EVAL_SERIAL_SLOTS:-0}; local_parallel_slots=${EVAL_LOCAL_PARALLEL_SLOTS:-0}; force=${FORCE_LDS_EVAL:-0}"
 
 run_eval_slot_once() {
   local slot="$1"
@@ -157,6 +157,7 @@ run_eval_slot_with_fallback() {
 
 pids=()
 launch_offset=0
+local_parallel_slots="${EVAL_LOCAL_PARALLEL_SLOTS:-0}"
 for slot in ${SLOT_LIST}; do
   shard_count="${EVAL_SLOT_SHARD_COUNT:-1}"
   for ((shard_index = 0; shard_index < shard_count; shard_index++)); do
@@ -175,6 +176,10 @@ for slot in ${SLOT_LIST}; do
         run_eval_slot_with_fallback "${slot}" "${launch_offset}" "${shard_index}" "${shard_count}"
       ) >"${log}" 2>&1 &
       pids+=("$!")
+      if (( local_parallel_slots > 0 && ${#pids[@]} >= local_parallel_slots )); then
+        wait_all "${pids[@]}"
+        pids=()
+      fi
     fi
     launch_offset=$((launch_offset + 1))
   done
