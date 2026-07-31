@@ -24,6 +24,7 @@ class TestStampede3DasScriptsStatic(unittest.TestCase):
             "02_dtrak_endtracin_attribution_stampede3.sh",
             "02_dtrak_endtracin_attribution_all_stampede3.sh",
             "02_dtrak_endtracin_attribution_task_stampede3.sh",
+            "02_traj_tracin_one_query_rtx_small.sh",
             "02a_das_attribution_stampede3.sh",
             "02b_das_attribution_stampede3.sh",
             "02c_das_attribution_stampede3.sh",
@@ -49,6 +50,11 @@ class TestStampede3DasScriptsStatic(unittest.TestCase):
                     self.assertNotIn("--gpus-per-task", text)
                     continue
                 if path.name == "02_full_das_attribution_rtx_small.sh":
+                    self.assertIn("#SBATCH -p rtx-small", text)
+                    self.assertNotIn("--gres", text)
+                    self.assertNotIn("--gpus-per-task", text)
+                    continue
+                if path.name == "02_traj_tracin_one_query_rtx_small.sh":
                     self.assertIn("#SBATCH -p rtx-small", text)
                     self.assertNotIn("--gres", text)
                     self.assertNotIn("--gpus-per-task", text)
@@ -180,6 +186,24 @@ class TestStampede3DasScriptsStatic(unittest.TestCase):
         self.assertIn("0.01 0.02 0.05 0.1 0.2 0.5 1 2 5 10 20 50 100 200 500 1000 2000 5000 10000 20000 50000", text)
         self.assertIn("unset SCORE_INDEX_RANGES ATTRIBUTION_RANGES DAS_PROJ_DIM DAS_TIMESTEPS DAS_NUM_MC_NOISE", text)
         self.assertIn('exec bash "${SCRIPT_DIR}/02_das_attribution_chunk_stampede3.sh"', text)
+
+    def test_stampede3_traj_tracin_one_query_rtx_splits_four_ranges_and_skips_existing(self):
+        text = (STAMPEDE3_DAS / "02_traj_tracin_one_query_rtx_small.sh").read_text()
+        self.assertIn("#SBATCH -p rtx-small", text)
+        self.assertIn("#SBATCH -N 1", text)
+        self.assertIn("#SBATCH -n 4", text)
+        self.assertIn("#SBATCH -t 24:00:00", text)
+        self.assertIn('TRAJ_RANGES_TEXT="${TRAJ_RANGES:-1-2500 2501-5000 5001-7500 7501-10000}"', text)
+        self.assertIn('TRAJ_SCORE_BATCH_SIZE="${TRAJ_SCORE_BATCH_SIZE:-8}"', text)
+        self.assertIn('TRAJ_SNAPSHOT_CHUNK_SIZE="${TRAJ_SNAPSHOT_CHUNK_SIZE:-4}"', text)
+        self.assertIn('score_file_for_range()', text)
+        self.assertIn('[traj-skip] range=${range} existing=${score_file}', text)
+        self.assertIn('SCORE_INDEX_RANGES="${range}"', text)
+        self.assertIn('ATTRIBUTION_RANGES="${range}"', text)
+        self.assertIn('ALGORITHM=traj_tracin', text)
+        self.assertIn('02_dtrak_endtracin_attribution_task_stampede3.sh', text)
+        self.assertIn('traj_tracin_%s/scores.npy', text)
+        self.assertIn('traj_tracin_unprompted_%s/scores.npy', text)
 
     def test_stampede3_eval_runs_sixteen_slots_three_queries_each(self):
         text = (STAMPEDE3_DAS / "03_das_lds_eval_report_stampede3.sh").read_text()
