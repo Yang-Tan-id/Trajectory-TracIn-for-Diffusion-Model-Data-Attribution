@@ -46,6 +46,8 @@ JAX_EPOCHS="${JAX_EPOCHS:-200}"
 TRAJ_RANGES_TEXT="${TRAJ_RANGES:-1-2500 2501-5000 5001-7500 7501-10000}"
 TRAJ_SCORE_BATCH_SIZE="${TRAJ_SCORE_BATCH_SIZE:-8}"
 TRAJ_SNAPSHOT_CHUNK_SIZE="${TRAJ_SNAPSHOT_CHUNK_SIZE:-4}"
+TRAJ_SAVE_QUERY_NORMALIZED_SCORES="${TRAJ_SAVE_QUERY_NORMALIZED_SCORES:-1}"
+TRAJ_QUERY_NORMALIZE_EPS="${TRAJ_QUERY_NORMALIZE_EPS:-1e-8}"
 LOG_ROOT="${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/stampede3_das_logs/02_traj_tracin_one_query_rtx_small/${SLURM_JOB_ID:-local}"
 mkdir -p "${LOG_ROOT}"
 
@@ -67,14 +69,25 @@ range_tag() {
 
 score_file_for_range() {
   local range="$1"
+  local variant="${2:-raw}"
   local tag
   tag="$(range_tag "${range}")"
   if [[ "${TRAJ_UNPROMPTED}" == "1" || "${TRAJ_SCORE_MODE}" == unprompted_* ]]; then
-    printf '%s/result/%s/attribution_score/%s/train_seed_%s/unprompted/initial_seed_%s/traj_tracin_unprompted_%s/scores.npy' \
-      "${CIFAR2_ROOT}" "${EXPERIMENT_TAG}" "${TRAJ_SCORE_MODE}" "${TRAIN_SEED}" "${TRAJ_INITIAL_SEED}" "${tag}"
+    if [[ "${variant}" == "normalized" ]]; then
+      printf '%s/result/%s/attribution_score/%s/train_seed_%s/unprompted/initial_seed_%s/traj_tracin_normalized_unprompted_%s/scores.npy' \
+        "${CIFAR2_ROOT}" "${EXPERIMENT_TAG}" "${TRAJ_SCORE_MODE}" "${TRAIN_SEED}" "${TRAJ_INITIAL_SEED}" "${tag}"
+    else
+      printf '%s/result/%s/attribution_score/%s/train_seed_%s/unprompted/initial_seed_%s/traj_tracin_unprompted_%s/scores.npy' \
+        "${CIFAR2_ROOT}" "${EXPERIMENT_TAG}" "${TRAJ_SCORE_MODE}" "${TRAIN_SEED}" "${TRAJ_INITIAL_SEED}" "${tag}"
+    fi
   else
-    printf '%s/result/%s/attribution_score/%s/train_seed_%s/query_%s/initial_seed_%s/traj_tracin_%s/scores.npy' \
-      "${CIFAR2_ROOT}" "${EXPERIMENT_TAG}" "${TRAJ_SCORE_MODE}" "${TRAIN_SEED}" "$(path_tag "${TRAJ_QUERY}")" "${TRAJ_INITIAL_SEED}" "${tag}"
+    if [[ "${variant}" == "normalized" ]]; then
+      printf '%s/result/%s/attribution_score/%s/train_seed_%s/query_%s/initial_seed_%s/traj_tracin_normalized_%s/scores.npy' \
+        "${CIFAR2_ROOT}" "${EXPERIMENT_TAG}" "${TRAJ_SCORE_MODE}" "${TRAIN_SEED}" "$(path_tag "${TRAJ_QUERY}")" "${TRAJ_INITIAL_SEED}" "${tag}"
+    else
+      printf '%s/result/%s/attribution_score/%s/train_seed_%s/query_%s/initial_seed_%s/traj_tracin_%s/scores.npy' \
+        "${CIFAR2_ROOT}" "${EXPERIMENT_TAG}" "${TRAJ_SCORE_MODE}" "${TRAIN_SEED}" "$(path_tag "${TRAJ_QUERY}")" "${TRAJ_INITIAL_SEED}" "${tag}"
+    fi
   fi
 }
 
@@ -82,11 +95,15 @@ run_range() {
   local slot="$1"
   local gpu="$2"
   local range="$3"
-  local score_file log
+  local score_file normalized_score_file log
   score_file="$(score_file_for_range "${range}")"
+  normalized_score_file="$(score_file_for_range "${range}" normalized)"
   log="${LOG_ROOT}/traj_tracin__${TRAJ_SCORE_MODE}__$(path_tag "${TRAJ_QUERY}")__seed_${TRAJ_INITIAL_SEED}__$(range_tag "${range}").log"
-  if [[ -f "${score_file}" ]]; then
-    echo "[traj-skip] range=${range} existing=${score_file}" >"${log}"
+  if [[ -f "${score_file}" && ( "${TRAJ_SAVE_QUERY_NORMALIZED_SCORES}" != "1" || -f "${normalized_score_file}" ) ]]; then
+    {
+      echo "[traj-skip] range=${range} existing_raw=${score_file}"
+      echo "[traj-skip] range=${range} existing_query_normalized=${normalized_score_file}"
+    } >"${log}"
     return 0
   fi
   echo "[traj-run] range=${range} gpu=${gpu} log=${log}"
@@ -101,6 +118,8 @@ run_range() {
     ATTRIBUTION_RANGES="${range}" \
     TRAJ_SCORE_BATCH_SIZE="${TRAJ_SCORE_BATCH_SIZE}" \
     TRAJ_SNAPSHOT_CHUNK_SIZE="${TRAJ_SNAPSHOT_CHUNK_SIZE}" \
+    TRAJ_SAVE_QUERY_NORMALIZED_SCORES="${TRAJ_SAVE_QUERY_NORMALIZED_SCORES}" \
+    TRAJ_QUERY_NORMALIZE_EPS="${TRAJ_QUERY_NORMALIZE_EPS}" \
     CIFAR2_ROOT="${CIFAR2_ROOT}" \
     REFINE_ROOT="${REFINE_ROOT}" \
     PYTHON_BIN="${PYTHON_BIN}" \
@@ -128,7 +147,7 @@ mapfile -t ranges < <(printf '%s\n' ${TRAJ_RANGES_TEXT})
 
 echo "Job 02 RTX-small TrajTracIn one query"
 echo "experiment=${EXPERIMENT_TAG}; train_seed=${TRAIN_SEED}; sample_mode=${TRAJ_SAMPLE_MODE}; score_mode=${TRAJ_SCORE_MODE}; query=${TRAJ_QUERY}; seed=${TRAJ_INITIAL_SEED}"
-echo "ranges=${TRAJ_RANGES_TEXT}; array_task=${SLURM_ARRAY_TASK_ID:-none}; score_batch_size=${TRAJ_SCORE_BATCH_SIZE}; snapshot_chunk_size=${TRAJ_SNAPSHOT_CHUNK_SIZE}; logs=${LOG_ROOT}"
+echo "ranges=${TRAJ_RANGES_TEXT}; array_task=${SLURM_ARRAY_TASK_ID:-none}; score_batch_size=${TRAJ_SCORE_BATCH_SIZE}; snapshot_chunk_size=${TRAJ_SNAPSHOT_CHUNK_SIZE}; save_query_normalized=${TRAJ_SAVE_QUERY_NORMALIZED_SCORES}; logs=${LOG_ROOT}"
 
 pids=()
 if [[ -n "${SLURM_ARRAY_TASK_ID:-}" ]]; then
@@ -151,11 +170,20 @@ if [[ -n "${range_index:-}" ]]; then
 fi
 for range in "${check_ranges[@]}"; do
   score_file="$(score_file_for_range "${range}")"
+  normalized_score_file="$(score_file_for_range "${range}" normalized)"
   if [[ -f "${score_file}" ]]; then
     echo "Found TrajTracIn range artifact: ${score_file}"
   else
     echo "Missing TrajTracIn range artifact: ${score_file}" >&2
     missing=$((missing + 1))
+  fi
+  if [[ "${TRAJ_SAVE_QUERY_NORMALIZED_SCORES}" == "1" ]]; then
+    if [[ -f "${normalized_score_file}" ]]; then
+      echo "Found TrajTracIn query-normalized range artifact: ${normalized_score_file}"
+    else
+      echo "Missing TrajTracIn query-normalized range artifact: ${normalized_score_file}" >&2
+      missing=$((missing + 1))
+    fi
   fi
 done
 if (( missing > 0 )); then

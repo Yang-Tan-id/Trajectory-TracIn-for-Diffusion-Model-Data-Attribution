@@ -133,13 +133,13 @@ def _load_scores_for_algorithm(base: Path, query: str, initial_seed: int, algori
         / f"query_{_path_tag(query)}"
         / f"initial_seed_{initial_seed}"
     )
-    if algorithm == "traj_tracin":
+    if algorithm.startswith("traj_tracin"):
         names = [
-            "traj_tracin_range_1_2000",
-            "traj_tracin_range_2001_4000",
-            "traj_tracin_range_4001_6000",
-            "traj_tracin_range_6001_8000",
-            "traj_tracin_range_8001_10000",
+            f"{algorithm}_range_1_2000",
+            f"{algorithm}_range_2001_4000",
+            f"{algorithm}_range_4001_6000",
+            f"{algorithm}_range_6001_8000",
+            f"{algorithm}_range_8001_10000",
         ]
     else:
         names = [f"{algorithm}_range_1_10000"]

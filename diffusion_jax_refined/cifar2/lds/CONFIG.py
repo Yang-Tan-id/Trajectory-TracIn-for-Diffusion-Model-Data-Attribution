@@ -29,7 +29,7 @@ def _attribution_result_dirs(algorithm: str) -> list[str]:
     if explicit:
         return _split_paths(explicit)
     ranges = os.environ.get("ATTRIBUTION_RANGES") or os.environ.get("SCORE_INDEX_RANGES")
-    if algorithm == "traj_tracin" and ranges:
+    if algorithm.startswith("traj_tracin") and ranges:
         base = str(ATTRIBUTION_RUN_ROOT / algorithm)
         return [f"{base}_{_range_suffix(part)}" for part in _split_list(ranges)]
     matches = sorted(path for path in ATTRIBUTION_RUN_ROOT.glob(f"{algorithm}*") if path.is_dir())

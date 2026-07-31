@@ -40,6 +40,15 @@ def tree_vdot(a, b):
     return out
 
 
+def tree_l2_norm(a):
+    return jnp.sqrt(jnp.maximum(tree_vdot(a, a), jnp.array(0.0, dtype=jnp.float32)))
+
+
+def tree_l2_normalize(a, eps: float):
+    denom = tree_l2_norm(a) + jnp.asarray(eps, dtype=jnp.float32)
+    return jax.tree_util.tree_map(lambda x: x / denom.astype(x.dtype), a)
+
+
 def format_seconds(sec: float) -> str:
     sec = int(sec)
     h = sec // 3600
@@ -841,6 +850,18 @@ def apply_score_subset_suffix_to_out_dir(cfg):
     return suffix
 
 
+def query_normalized_out_dir(out_dir: str) -> str:
+    parent = os.path.dirname(os.path.normpath(out_dir))
+    name = os.path.basename(os.path.normpath(out_dir))
+    if name.startswith("traj_tracin_unprompted"):
+        name = name.replace("traj_tracin_unprompted", "traj_tracin_normalized_unprompted", 1)
+    elif name.startswith("traj_tracin"):
+        name = name.replace("traj_tracin", "traj_tracin_normalized", 1)
+    else:
+        name = f"{name}_query_normalized"
+    return os.path.join(parent, name)
+
+
 # ============================================================
 # Attribution core
 # ============================================================
@@ -894,6 +915,8 @@ class TrajAttributionConfig:
     tracin_learning_rate: Optional[float] = None
     tracin_lr_schedule: str = "cosine_warmup"  # "constant", "cosine_warmup", or "none"
     tracin_warmup_ratio: float = 0.1
+    save_query_normalized_scores: bool = False
+    query_normalize_eps: float = 1e-8
 
     # save
     out_dir: str = "./traj_attr_out"
@@ -1256,6 +1279,8 @@ def make_score_snapshot_chunk_batch_fn(
     schedule,
     *,
     train_mc_samples: int,
+    return_query_normalized: bool = False,
+    query_normalize_eps: float = 1e-8,
 ):
     def score_one_snapshot(params, query_grad, x0_batch, cond_batch, rng, t_scalar):
         def losses_fn(p):
@@ -1270,6 +1295,13 @@ def make_score_snapshot_chunk_batch_fn(
                 num_mc_samples=train_mc_samples,
                 rng=rng,
             )
+
+        if return_query_normalized:
+            _losses, pushfwd = jax.linearize(losses_fn, params)
+            raw_scores = pushfwd(query_grad)
+            normalized_query_grad = tree_l2_normalize(query_grad, query_normalize_eps)
+            normalized_scores = pushfwd(normalized_query_grad)
+            return raw_scores, normalized_scores
 
         _, directional_scores = jax.jvp(losses_fn, (params,), (query_grad,))
         return directional_scores
@@ -1589,6 +1621,11 @@ def run_attribution(cfg: TrajAttributionConfig):
         return
 
     scores = np.zeros((len(picked),), dtype=np.float64)
+    query_normalized_scores = (
+        np.zeros((len(picked),), dtype=np.float64)
+        if cfg.save_query_normalized_scores
+        else None
+    )
 
     snapshot_positions_used = None
     timestep_values_used = None
@@ -1697,6 +1734,8 @@ def run_attribution(cfg: TrajAttributionConfig):
             model=model,
             schedule=schedule,
             train_mc_samples=cfg.train_mc_samples,
+            return_query_normalized=bool(cfg.save_query_normalized_scores),
+            query_normalize_eps=float(cfg.query_normalize_eps),
         )
 
         running_sum = 0.0
@@ -1759,7 +1798,7 @@ def run_attribution(cfg: TrajAttributionConfig):
                     ),
                     device,
                 )
-                chunk_scores = score_snapshot_chunk_fn(
+                chunk_scores_out = score_snapshot_chunk_fn(
                     params,
                     query_grads,
                     x_batch,
@@ -1767,9 +1806,24 @@ def run_attribution(cfg: TrajAttributionConfig):
                     rng,
                     t_chunk,
                 )
-                chunk_scores.block_until_ready()
-                batch_scores = np.asarray(jax.device_get(chunk_scores))[:, : len(real_indices)]
+                if cfg.save_query_normalized_scores:
+                    raw_chunk_scores, normalized_chunk_scores = chunk_scores_out
+                    raw_chunk_scores.block_until_ready()
+                    normalized_chunk_scores.block_until_ready()
+                    batch_scores = np.asarray(jax.device_get(raw_chunk_scores))[:, : len(real_indices)]
+                    batch_query_normalized_scores = np.asarray(
+                        jax.device_get(normalized_chunk_scores)
+                    )[:, : len(real_indices)]
+                else:
+                    chunk_scores_out.block_until_ready()
+                    batch_scores = np.asarray(jax.device_get(chunk_scores_out))[:, : len(real_indices)]
+                    batch_query_normalized_scores = None
                 scores[start:end] += snap_weight * batch_scores.sum(axis=0).astype(np.float64)
+                if query_normalized_scores is not None and batch_query_normalized_scores is not None:
+                    query_normalized_scores[start:end] += (
+                        snap_weight
+                        * batch_query_normalized_scores.sum(axis=0).astype(np.float64)
+                    )
 
                 if chunk_end == len(t_seq):
                     running_sum += float(scores[start:end].sum())
@@ -1862,22 +1916,70 @@ def run_attribution(cfg: TrajAttributionConfig):
         "elapsed_sec": time.time() - t_start,
     }
 
-    print("[save] writing traj_attr_result.json ...")
-    with open(os.path.join(cfg.out_dir, "traj_attr_result.json"), "w") as f:
+    def write_score_artifact(out_dir: str, score_values: np.ndarray, variant: str, normalization: Dict[str, Any]):
         import json
-        json.dump(out, f, indent=2)
-    print("[save] traj_attr_result.json written")
 
-    print("[save] writing scores.npy ...")
-    np.save(os.path.join(cfg.out_dir, "scores.npy"), scores)
-    print("[save] scores.npy written")
+        ensure_dir(out_dir)
+        order_variant = np.argsort(-score_values)[:topk]
+        top_variant = [
+            {
+                "idx": int(picked[i]),
+                "idx_1based": int(picked[i]) + 1,
+                "score": float(score_values[i]),
+            }
+            for i in order_variant
+        ]
+        out_variant = dict(out)
+        out_variant["topk"] = top_variant
+        out_variant["score_variant"] = variant
+        out_variant["gradient_normalization"] = normalization
 
-    print("[save] writing score_indices.npy ...")
-    np.save(os.path.join(cfg.out_dir, "score_indices.npy"), np.asarray(picked, dtype=np.int64))
-    print("[save] score_indices.npy written")
+        print(f"[save:{variant}] writing traj_attr_result.json ...")
+        with open(os.path.join(out_dir, "traj_attr_result.json"), "w") as f:
+            json.dump(out_variant, f, indent=2)
+        print(f"[save:{variant}] traj_attr_result.json written")
+
+        print(f"[save:{variant}] writing scores.npy ...")
+        np.save(os.path.join(out_dir, "scores.npy"), score_values)
+        print(f"[save:{variant}] scores.npy written")
+
+        print(f"[save:{variant}] writing score_indices.npy ...")
+        np.save(os.path.join(out_dir, "score_indices.npy"), np.asarray(picked, dtype=np.int64))
+        print(f"[save:{variant}] score_indices.npy written")
+
+    write_score_artifact(
+        cfg.out_dir,
+        scores,
+        "raw",
+        {
+            "query_gradient": "none",
+            "train_gradient": "none",
+        },
+    )
+
+    normalized_dir = None
+    if query_normalized_scores is not None:
+        normalized_dir = query_normalized_out_dir(cfg.out_dir)
+        write_score_artifact(
+            normalized_dir,
+            query_normalized_scores,
+            "query_gradient_l2_normalized",
+            {
+                "query_gradient": "l2",
+                "query_normalize_eps": float(cfg.query_normalize_eps),
+                "train_gradient": "none",
+                "note": (
+                    "This paired score reuses the raw TrajTracIn pass and normalizes "
+                    "the query-gradient tangent before the train-loss JVP. It does not "
+                    "materialize or L2-normalize each train datapoint gradient."
+                ),
+            },
+        )
 
     print("=" * 90)
     print(f"Saved to {cfg.out_dir}")
+    if normalized_dir is not None:
+        print(f"Saved query-normalized scores to {normalized_dir}")
     print(f"Total elapsed: {format_seconds(time.time() - t_start)}")
     print("=" * 90)
     return out

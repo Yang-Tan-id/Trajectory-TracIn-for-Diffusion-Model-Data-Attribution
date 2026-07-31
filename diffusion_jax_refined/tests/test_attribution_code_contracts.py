@@ -20,7 +20,7 @@ class TestAttributionCodeContracts(unittest.TestCase):
         text = (LEGACY / "traj_tracin" / "algorithm.py").read_text()
         self.assertIn("trajectory_noise_squared_deviation", text)
         self.assertIn("eps_theta(x_ref_k,k)-eps_theta_ref(x_ref_k,k)", text)
-        self.assertIn('np.save(os.path.join(cfg.out_dir, "score_indices.npy")', text)
+        self.assertIn('np.save(os.path.join(out_dir, "score_indices.npy")', text)
 
     def test_cifar_jax_training_uses_cosine_warmup_lr_by_default(self):
         text = (LEGACY / "DM__training_CIFAR10_pixel.py").read_text()
@@ -55,10 +55,25 @@ class TestAttributionCodeContracts(unittest.TestCase):
         self.assertIn("jnp.mean(diff ** 2)", text)
         self.assertIn('"trajectory_noise_squared_deviation_normalized"', text)
 
+    def test_traj_tracin_can_write_paired_query_normalized_scores(self):
+        text = (LEGACY / "traj_tracin" / "algorithm.py").read_text()
+        self.assertIn("save_query_normalized_scores: bool = False", text)
+        self.assertIn("tree_l2_normalize(query_grad, query_normalize_eps)", text)
+        self.assertIn("query_normalized_out_dir(cfg.out_dir)", text)
+        self.assertIn('"score_variant"', text)
+        self.assertIn('"query_gradient_l2_normalized"', text)
+        self.assertIn('"train_gradient": "none"', text)
+
     def test_nondefault_traj_objective_gets_distinct_score_folder(self):
         text = (ROOT / "common" / "algorithm_runner.py").read_text()
         self.assertIn('if algorithm == "traj_tracin"', text)
         self.assertIn('output_algorithm = f"{algorithm}_{_safe_tag(objective)}"', text)
+
+    def test_traj_tracin_normalized_eval_uses_range_inputs(self):
+        cifar_eval = (ROOT / "cifar2" / "lds" / "CONFIG.py").read_text()
+        common_eval = (ROOT / "common" / "lds_model_eval.py").read_text()
+        self.assertIn('algorithm.startswith("traj_tracin") and ranges', cifar_eval)
+        self.assertIn('args.algorithm.startswith("traj_tracin") and ranges', common_eval)
 
     def test_stage_runner_does_not_call_full_attribution_entrypoint(self):
         text = (ROOT / "common" / "stage_runner.py").read_text()
@@ -229,11 +244,12 @@ class TestAttributionCodeContracts(unittest.TestCase):
 
     def test_cifar2_algorithm_sample_counts_are_pinned(self):
         text = (ROOT / "cifar2" / "dataset_config.py").read_text()
-        self.assertIn('"endpoint_mc_samples": 10', text)
+        self.assertIn('os.environ.get("END_TRACIN_ENDPOINT_MC_SAMPLES", "10")', text)
+        self.assertIn('os.environ.get("END_TRACIN_TRAIN_MC_SAMPLES", "10")', text)
         self.assertIn('"train_mc_samples": 10', text)
         self.assertIn('"num_mc_noise": int(os.environ.get("DAS_NUM_MC_NOISE", "10"))', text)
-        self.assertIn('"query_expectation_samples": 10', text)
-        self.assertIn('"train_expectation_samples": 10', text)
+        self.assertIn('os.environ.get("DTRAK_QUERY_EXPECTATION_SAMPLES", "10")', text)
+        self.assertIn('os.environ.get("DTRAK_TRAIN_EXPECTATION_SAMPLES", "10")', text)
 
     def test_batch_sizes_are_tunable_for_gpu_utilization(self):
         for dataset in ("cifar2", "cifar10", "artbench"):

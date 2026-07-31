@@ -211,6 +211,10 @@ ATTRIBUTION_CONFIGS = {
         ) not in ("0", "false", "False"),
         "tracin_lr_schedule": os.environ.get("TRACIN_LR_SCHEDULE", "cosine_warmup"),
         "tracin_warmup_ratio": float(os.environ.get("TRACIN_WARMUP_RATIO", "0.1")),
+        "save_query_normalized_scores": os.environ.get(
+            "TRAJ_SAVE_QUERY_NORMALIZED_SCORES", "0"
+        ) in ("1", "true", "True", "yes"),
+        "query_normalize_eps": float(os.environ.get("TRAJ_QUERY_NORMALIZE_EPS", "1e-8")),
         "score_batch_size": int(os.environ.get("TRAJ_SCORE_BATCH_SIZE", "32")),
         "progress_every": 512,
     },
