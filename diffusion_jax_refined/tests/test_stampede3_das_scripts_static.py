@@ -24,6 +24,7 @@ class TestStampede3DasScriptsStatic(unittest.TestCase):
             "02_dtrak_endtracin_attribution_stampede3.sh",
             "02_dtrak_endtracin_attribution_all_stampede3.sh",
             "02_dtrak_endtracin_attribution_task_stampede3.sh",
+            "02_traj_tracin_attribution_all_stampede3.sh",
             "02_traj_tracin_one_query_rtx_small.sh",
             "02a_das_attribution_stampede3.sh",
             "02b_das_attribution_stampede3.sh",
@@ -215,6 +216,25 @@ class TestStampede3DasScriptsStatic(unittest.TestCase):
         self.assertIn('check_ranges=("${ranges[$range_index]}")', text)
         self.assertIn('ALGORITHM=traj_tracin', text)
         self.assertIn('02_dtrak_endtracin_attribution_task_stampede3.sh', text)
+        self.assertIn('traj_tracin_%s/scores.npy', text)
+        self.assertIn('traj_tracin_unprompted_%s/scores.npy', text)
+        self.assertIn('traj_tracin_normalized_%s/scores.npy', text)
+        self.assertIn('traj_tracin_normalized_unprompted_%s/scores.npy', text)
+
+    def test_stampede3_traj_tracin_h100_all_runs_192_range_tasks_and_two_score_variants(self):
+        text = (STAMPEDE3_DAS / "02_traj_tracin_attribution_all_stampede3.sh").read_text()
+        self.assertIn("#SBATCH -p h100", text)
+        self.assertIn("#SBATCH -N 4", text)
+        self.assertIn("#SBATCH -n 16", text)
+        self.assertIn("#SBATCH -t 48:00:00", text)
+        self.assertIn('ATTR_NUM_SLOTS="${ATTR_NUM_SLOTS:-16}"', text)
+        self.assertIn('TRAJ_RANGES_TEXT="${TRAJ_RANGES:-1-2500 2501-5000 5001-7500 7501-10000}"', text)
+        self.assertIn('TRAJ_SAVE_QUERY_NORMALIZED_SCORES="${TRAJ_SAVE_QUERY_NORMALIZED_SCORES:-1}"', text)
+        self.assertIn('for ((i = slot; i < total_tasks; i += ATTR_NUM_SLOTS))', text)
+        self.assertIn("expected_tasks=192", text)
+        self.assertIn('SCORE_INDEX_RANGES="${range}"', text)
+        self.assertIn('ATTRIBUTION_RANGES="${range}"', text)
+        self.assertIn('ALGORITHM=traj_tracin', text)
         self.assertIn('traj_tracin_%s/scores.npy', text)
         self.assertIn('traj_tracin_unprompted_%s/scores.npy', text)
         self.assertIn('traj_tracin_normalized_%s/scores.npy', text)
