@@ -31,6 +31,7 @@ class TestStampede3DasScriptsStatic(unittest.TestCase):
             "03_das_lds_eval_report_stampede3.sh",
             "03_das_lds_eval_slot_stampede3.sh",
             "03_dtrak_endtracin_lds_eval_report_stampede3.sh",
+            "03_dtrak_endtracin_lds_eval_report_rtx_small.sh",
             "03_dtrak_endtracin_lds_eval_slot_stampede3.sh",
             "03_retry_slot_aggregate_stampede3.sh",
             "submit_stampede3_das_pipeline.sh",
@@ -55,6 +56,11 @@ class TestStampede3DasScriptsStatic(unittest.TestCase):
                     self.assertNotIn("--gpus-per-task", text)
                     continue
                 if path.name == "02_traj_tracin_one_query_rtx_small.sh":
+                    self.assertIn("#SBATCH -p rtx-small", text)
+                    self.assertNotIn("--gres", text)
+                    self.assertNotIn("--gpus-per-task", text)
+                    continue
+                if path.name == "03_dtrak_endtracin_lds_eval_report_rtx_small.sh":
                     self.assertIn("#SBATCH -p rtx-small", text)
                     self.assertNotIn("--gres", text)
                     self.assertNotIn("--gpus-per-task", text)
@@ -255,6 +261,9 @@ class TestStampede3DasScriptsStatic(unittest.TestCase):
         self.assertIn("#SBATCH -t 24:00:00", text)
         self.assertIn("TARGETS=(${LDS_TARGETS:-simple_loss noise_trajectory})", text)
         self.assertIn("EVAL_ALGORITHMS=(${EVAL_ALGORITHMS:-dtrak end_tracin})", text)
+        self.assertIn("serial_slots=${EVAL_SERIAL_SLOTS:-0}", text)
+        self.assertIn('if [[ "${EVAL_SERIAL_SLOTS:-0}" == "1" ]]', text)
+        self.assertIn('if [[ "${EVAL_SERIAL_SLOTS:-0}" != "1" ]]', text)
         self.assertIn('LDS_SIMPLE_LOSS_TIMESTEPS="${LDS_SIMPLE_LOSS_TIMESTEPS:-$(seq -s, 0 999)}"', text)
         self.assertIn('LDS_SIMPLE_LOSS_NOISE_SEEDS="${LDS_SIMPLE_LOSS_NOISE_SEEDS:-0}"', text)
         self.assertIn('LDS_SIMPLE_LOSS_NUM_MC="${LDS_SIMPLE_LOSS_NUM_MC:-1000}"', text)
@@ -266,6 +275,18 @@ class TestStampede3DasScriptsStatic(unittest.TestCase):
         self.assertIn("[lds-eval-skip]", slot_text)
         self.assertIn("FORCE_LDS_EVAL", slot_text)
         self.assertIn("--algorithm \"${algorithm}\"", slot_text)
+
+    def test_stampede3_dtrak_endtracin_rtx_eval_runs_serial_local_slots(self):
+        text = (STAMPEDE3_DAS / "03_dtrak_endtracin_lds_eval_report_rtx_small.sh").read_text()
+        self.assertIn("#SBATCH -p rtx-small", text)
+        self.assertIn("#SBATCH -N 1", text)
+        self.assertIn("#SBATCH -n 1", text)
+        self.assertIn("#SBATCH -t 12:00:00", text)
+        self.assertIn('STAMPEDE3_SLOT_BACKEND="${STAMPEDE3_SLOT_BACKEND:-local}"', text)
+        self.assertIn('EVAL_SERIAL_SLOTS="${EVAL_SERIAL_SLOTS:-1}"', text)
+        self.assertIn('EVAL_SLOT_SHARD_COUNT="${EVAL_SLOT_SHARD_COUNT:-1}"', text)
+        self.assertIn('LDS_EVAL_DEVICE_MODE="${LDS_EVAL_DEVICE_MODE:-gpu_then_cpu}"', text)
+        self.assertIn('exec bash "${SCRIPT_DIR}/03_dtrak_endtracin_lds_eval_report_stampede3.sh"', text)
 
     def test_stampede3_retry_slot_aggregate_uses_one_node_slot_only(self):
         text = (STAMPEDE3_DAS / "03_retry_slot_aggregate_stampede3.sh").read_text()

@@ -75,7 +75,7 @@ echo "experiment=${EXPERIMENT_TAG}; train_seed=${TRAIN_SEED}; query_tasks=${#SPE
 echo "targets=${TARGETS[*]}; algorithms=${EVAL_ALGORITHMS[*]}; lds_seeds=${LDS_SEEDS_TEXT}"
 echo "simple_loss_terms=${LDS_SIMPLE_LOSS_NUM_MC}; simple_loss_noise_seeds=${LDS_SIMPLE_LOSS_NOISE_SEEDS}; logs=${LOG_ROOT}"
 echo "eval_device_mode=${LDS_EVAL_DEVICE_MODE:-gpu_then_cpu}"
-echo "eval_slot_shards=${EVAL_SLOT_SHARD_COUNT:-1}; force=${FORCE_LDS_EVAL:-0}"
+echo "eval_slot_shards=${EVAL_SLOT_SHARD_COUNT:-1}; serial_slots=${EVAL_SERIAL_SLOTS:-0}; force=${FORCE_LDS_EVAL:-0}"
 
 run_eval_slot_once() {
   local slot="$1"
@@ -166,15 +166,23 @@ for slot in ${SLOT_LIST}; do
       log="${LOG_ROOT}/slot_${slot}_shard_${shard_index}.log"
     fi
     echo "Launch eval slot=${slot} shard=${shard_index}/${shard_count}; handles query indices ${slot}, $((slot + 16)), $((slot + 32)) -> ${log}"
-    (
-      run_eval_slot_with_fallback "${slot}" "${launch_offset}" "${shard_index}" "${shard_count}"
-    ) >"${log}" 2>&1 &
-    pids+=("$!")
+    if [[ "${EVAL_SERIAL_SLOTS:-0}" == "1" ]]; then
+      (
+        run_eval_slot_with_fallback "${slot}" "${launch_offset}" "${shard_index}" "${shard_count}"
+      ) >"${log}" 2>&1
+    else
+      (
+        run_eval_slot_with_fallback "${slot}" "${launch_offset}" "${shard_index}" "${shard_count}"
+      ) >"${log}" 2>&1 &
+      pids+=("$!")
+    fi
     launch_offset=$((launch_offset + 1))
   done
 done
 
-wait_all "${pids[@]}"
+if [[ "${EVAL_SERIAL_SLOTS:-0}" != "1" ]]; then
+  wait_all "${pids[@]}"
+fi
 
 echo "Aggregating Stampede3 dtrak/end_tracin LDS evals and writing reports"
 for target in "${TARGETS[@]}"; do
