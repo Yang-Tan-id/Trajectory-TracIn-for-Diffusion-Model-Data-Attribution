@@ -4,9 +4,10 @@
 #SBATCH -e cifar2-s3-traj-one-rtx-%j.err
 #SBATCH -p rtx-small
 #SBATCH -N 1
-#SBATCH -n 4
+#SBATCH -n 1
 #SBATCH --cpus-per-task=8
 #SBATCH -t 24:00:00
+#SBATCH --array=0-3%4
 
 set -euo pipefail
 
@@ -127,21 +128,28 @@ mapfile -t ranges < <(printf '%s\n' ${TRAJ_RANGES_TEXT})
 
 echo "Job 02 RTX-small TrajTracIn one query"
 echo "experiment=${EXPERIMENT_TAG}; train_seed=${TRAIN_SEED}; sample_mode=${TRAJ_SAMPLE_MODE}; score_mode=${TRAJ_SCORE_MODE}; query=${TRAJ_QUERY}; seed=${TRAJ_INITIAL_SEED}"
-echo "ranges=${TRAJ_RANGES_TEXT}; score_batch_size=${TRAJ_SCORE_BATCH_SIZE}; snapshot_chunk_size=${TRAJ_SNAPSHOT_CHUNK_SIZE}; logs=${LOG_ROOT}"
+echo "ranges=${TRAJ_RANGES_TEXT}; array_task=${SLURM_ARRAY_TASK_ID:-none}; score_batch_size=${TRAJ_SCORE_BATCH_SIZE}; snapshot_chunk_size=${TRAJ_SNAPSHOT_CHUNK_SIZE}; logs=${LOG_ROOT}"
 
 pids=()
-for i in "${!ranges[@]}"; do
-  gpu=$((i % 4))
-  (
-    run_range "${i}" "${gpu}" "${ranges[$i]}"
-  ) &
-  pids+=("$!")
-done
-
-wait_all "${pids[@]}"
+if [[ -n "${SLURM_ARRAY_TASK_ID:-}" ]]; then
+  range_index="${TRAJ_RANGE_INDEX:-${SLURM_ARRAY_TASK_ID}}"
+  if (( range_index < 0 || range_index >= ${#ranges[@]} )); then
+    echo "TRAJ range index ${range_index} is outside [0, ${#ranges[@]})." >&2
+    exit 1
+  fi
+  run_range 0 0 "${ranges[$range_index]}"
+else
+  for i in "${!ranges[@]}"; do
+    run_range 0 0 "${ranges[$i]}"
+  done
+fi
 
 missing=0
-for range in "${ranges[@]}"; do
+check_ranges=("${ranges[@]}")
+if [[ -n "${range_index:-}" ]]; then
+  check_ranges=("${ranges[$range_index]}")
+fi
+for range in "${check_ranges[@]}"; do
   score_file="$(score_file_for_range "${range}")"
   if [[ -f "${score_file}" ]]; then
     echo "Found TrajTracIn range artifact: ${score_file}"
