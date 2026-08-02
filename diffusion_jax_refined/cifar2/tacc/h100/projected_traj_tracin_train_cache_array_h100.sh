@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 #SBATCH -J cifar2-proj-traj-train
+#SBATCH -p h100
 #SBATCH -N 4
 #SBATCH -n 16
 #SBATCH -t 24:00:00
