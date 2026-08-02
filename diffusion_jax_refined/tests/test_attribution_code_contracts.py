@@ -64,6 +64,17 @@ class TestAttributionCodeContracts(unittest.TestCase):
         self.assertIn('"query_gradient_l2_normalized"', text)
         self.assertIn('"train_gradient": "none"', text)
 
+    def test_cifar2_traj_tracin_saved_trajectory_is_env_tunable_for_projected_cache(self):
+        text = (ROOT / "cifar2" / "dataset_config.py").read_text()
+        self.assertIn("TRAJ_USE_SAVED_TRAJECTORY", text)
+        self.assertIn('"use_saved_trajectory": os.environ.get("TRAJ_USE_SAVED_TRAJECTORY", "1")', text)
+
+        projected_text = (
+            ROOT / "cifar2" / "tacc" / "h100" / "projected_traj_tracin_score_sweep.sh"
+        ).read_text()
+        self.assertIn("TRAJ_USE_SAVED_TRAJECTORY=0", projected_text)
+        self.assertIn('run_original_config_with_stage train "${artifact_path}"', projected_text)
+
     def test_nondefault_traj_objective_gets_distinct_score_folder(self):
         text = (ROOT / "common" / "algorithm_runner.py").read_text()
         self.assertIn('if algorithm == "traj_tracin"', text)

@@ -200,7 +200,8 @@ ATTRIBUTION_CONFIGS = {
         "attribution_sample_dir": ATTRIBUTION_SAMPLE_DIR,
         "attribution_sample_seed": INITIAL_SEED,
         "attribution_sample_index": 0,
-        "use_saved_trajectory": True,
+        "use_saved_trajectory": os.environ.get("TRAJ_USE_SAVED_TRAJECTORY", "1")
+        not in ("0", "false", "False"),
         "sync_config_from_checkpoint": True,
         "ddim_steps": 1000,
         "num_traj_snapshots": 100,

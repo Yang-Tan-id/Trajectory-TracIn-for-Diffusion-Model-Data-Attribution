@@ -129,6 +129,7 @@ run_train_stage_with_lock() {
     echo "[stage train] acquired lock: ${lock_dir}"
     DATAPOINT_MODEL_MODE="${TRAIN_MODE_CANONICAL}" \
     ATTRIBUTION_SAMPLE_DIR="${SAMPLE_DIR}" \
+    TRAJ_USE_SAVED_TRAJECTORY=0 \
     SCORE_INDEX_RANGES="${TRAIN_COMPUTE_RANGE}" \
     run_original_config_with_stage train "${artifact_path}"
     rm -rf "${lock_dir}"
