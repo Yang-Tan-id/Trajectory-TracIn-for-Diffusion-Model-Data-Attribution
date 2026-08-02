@@ -9,9 +9,24 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR_CANDIDATE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -f "${SCRIPT_DIR_CANDIDATE}/projected_traj_tracin_score_sweep.sh" ]]; then
+  SCRIPT_DIR="${SCRIPT_DIR_CANDIDATE}"
+elif [[ -n "${SLURM_SUBMIT_DIR:-}" && -f "${SLURM_SUBMIT_DIR}/diffusion_jax_refined/cifar2/tacc/h100/projected_traj_tracin_score_sweep.sh" ]]; then
+  SCRIPT_DIR="$(cd "${SLURM_SUBMIT_DIR}/diffusion_jax_refined/cifar2/tacc/h100" && pwd)"
+else
+  echo "Could not locate projected_traj_tracin_score_sweep.sh from ${SCRIPT_DIR_CANDIDATE} or SLURM_SUBMIT_DIR=${SLURM_SUBMIT_DIR:-unset}." >&2
+  exit 2
+fi
 CIFAR2_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 REFINE_ROOT="$(cd "${CIFAR2_ROOT}/.." && pwd)"
+REPO_ROOT="$(cd "${REFINE_ROOT}/.." && pwd)"
+
+# Reuse the same Stampede3 runtime setup as the existing CIFAR2 DAS/Traj jobs.
+# This activates ${SCRATCH}/conda-envs/trajectory-tracin unless ENV_SETUP or
+# CONDA_ENV_PATH overrides it.
+source "${CIFAR2_ROOT}/stampede3_das/_stampede3_das_lib.sh"
+stampede3_das_init
 
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 GPU_SLOTS="${GPU_SLOTS:-16}"
@@ -20,9 +35,10 @@ PROJECTED_TRAIN_SHARD_RANGES="${PROJECTED_TRAIN_SHARD_RANGES:-1-625 626-1250 125
 PROJECTED_CACHE_DIM="${PROJECTED_CACHE_DIM:-32768}"
 TRAIN_SCORE_INDEX_RANGES="${TRAIN_SCORE_INDEX_RANGES:-1-10000}"
 TRAIN_CACHE_TASK_SET="${TRAIN_CACHE_TASK_SET:-all}"
+DRY_RUN="${DRY_RUN:-0}"
 
 export PYTHON_BIN PROJECTED_TRAIN_SHARD_RANGES PROJECTED_CACHE_DIM TRAIN_SCORE_INDEX_RANGES
-export RUN_QUERY_STAGE=0 RUN_SCORE_SWEEP=0 RUN_TRAIN_STAGE=1
+export RUN_QUERY_STAGE="${RUN_QUERY_STAGE:-0}" RUN_SCORE_SWEEP="${RUN_SCORE_SWEEP:-0}" RUN_TRAIN_STAGE="${RUN_TRAIN_STAGE:-1}"
 
 split_words() {
   local text="$1"
@@ -105,6 +121,12 @@ run_one_score_mode() {
   dry_output="$(dry_train_paths "${score_mode}")"
   train_artifact="$(printf '%s\n' "${dry_output}" | awk -F= '/^train_artifact=/{print $2; exit}')"
   train_artifact_root="$(dirname "${train_artifact}")"
+
+  if [[ "${DRY_RUN}" == "1" ]]; then
+    echo "[dry-run] merged train artifact: ${train_artifact}"
+    echo "[dry-run] shard root: ${train_artifact_root}/shards"
+    return
+  fi
 
   if [[ -f "${train_artifact}" ]]; then
     echo "[skip] merged train artifact already exists: ${train_artifact}"

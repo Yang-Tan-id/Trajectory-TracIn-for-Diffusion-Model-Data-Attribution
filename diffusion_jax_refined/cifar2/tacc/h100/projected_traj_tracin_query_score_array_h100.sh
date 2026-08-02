@@ -9,7 +9,22 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR_CANDIDATE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -f "${SCRIPT_DIR_CANDIDATE}/projected_traj_tracin_score_sweep.sh" ]]; then
+  SCRIPT_DIR="${SCRIPT_DIR_CANDIDATE}"
+elif [[ -n "${SLURM_SUBMIT_DIR:-}" && -f "${SLURM_SUBMIT_DIR}/diffusion_jax_refined/cifar2/tacc/h100/projected_traj_tracin_score_sweep.sh" ]]; then
+  SCRIPT_DIR="$(cd "${SLURM_SUBMIT_DIR}/diffusion_jax_refined/cifar2/tacc/h100" && pwd)"
+else
+  echo "Could not locate projected_traj_tracin_score_sweep.sh from ${SCRIPT_DIR_CANDIDATE} or SLURM_SUBMIT_DIR=${SLURM_SUBMIT_DIR:-unset}." >&2
+  exit 2
+fi
+CIFAR2_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+REFINE_ROOT="$(cd "${CIFAR2_ROOT}/.." && pwd)"
+REPO_ROOT="$(cd "${REFINE_ROOT}/.." && pwd)"
+
+# Reuse the same Stampede3 runtime setup as the existing CIFAR2 DAS/Traj jobs.
+source "${CIFAR2_ROOT}/stampede3_das/_stampede3_das_lib.sh"
+stampede3_das_init
 
 GPU_SLOTS="${GPU_SLOTS:-16}"
 GPU_PER_NODE="${GPU_PER_NODE:-4}"
