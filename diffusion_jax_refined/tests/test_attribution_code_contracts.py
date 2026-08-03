@@ -69,6 +69,11 @@ class TestAttributionCodeContracts(unittest.TestCase):
         self.assertIn("TRAJ_USE_SAVED_TRAJECTORY", text)
         self.assertIn('"use_saved_trajectory": os.environ.get("TRAJ_USE_SAVED_TRAJECTORY", "1")', text)
 
+        traj_text = (LEGACY / "traj_tracin" / "algorithm.py").read_text()
+        self.assertIn("def ensure_dir(path: str) -> None:", traj_text)
+        self.assertIn("os.makedirs(path, exist_ok=True)", traj_text)
+        self.assertIn("ensure_dir(os.path.dirname(stage_artifact_path))", traj_text)
+
         projected_text = (
             ROOT / "cifar2" / "tacc" / "h100" / "projected_traj_tracin_score_sweep.sh"
         ).read_text()
