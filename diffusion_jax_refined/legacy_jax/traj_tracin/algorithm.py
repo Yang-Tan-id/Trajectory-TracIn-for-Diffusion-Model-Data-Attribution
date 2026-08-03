@@ -23,6 +23,18 @@ except Exception:
 # Utilities
 # ============================================================
 
+def ensure_dir(path: str) -> None:
+    if path:
+        os.makedirs(path, exist_ok=True)
+
+
+def save_npz_compressed_atomic(path: str, **arrays) -> None:
+    ensure_dir(os.path.dirname(path))
+    tmp_path = f"{path}.tmp.npz"
+    np.savez_compressed(tmp_path, **arrays)
+    os.replace(tmp_path, path)
+
+
 def tree_scalar_mul(tree, c):
     return jax.tree_util.tree_map(lambda x: x * c, tree)
 
@@ -1476,8 +1488,20 @@ def run_attribution(cfg: TrajAttributionConfig):
         stage_ckpt_paths = []
         stage_term_weights = []
         used_ckpts_for_stage = []
+        stage_part_dir = f"{stage_artifact_path}.parts" if stage_mode == "train" else None
 
         for ckpt_i, ckpt_path in enumerate(ckpts):
+            stage_part_path = (
+                os.path.join(stage_part_dir, f"ckpt_{ckpt_i:04d}.npz")
+                if stage_part_dir is not None
+                else None
+            )
+            if stage_part_path is not None and os.path.isfile(stage_part_path):
+                print(
+                    f"[stage:{stage_mode}] skip existing checkpoint part "
+                    f"{ckpt_i + 1}/{len(ckpts)}: {stage_part_path}"
+                )
+                continue
             ckpt_lr_weight = tracin_checkpoint_lr_weight(cfg, ckpt_path, ckpt_i, len(ckpts), len(ds))
             print(
                 f"[stage:{stage_mode}] TrajTracIn checkpoint {ckpt_i + 1}/{len(ckpts)} | "
@@ -1534,6 +1558,11 @@ def run_attribution(cfg: TrajAttributionConfig):
                         stage_term_weights.append(ckpt_lr_weight / float(max(1, len(t_seq))))
             else:
                 train_phi_terms = []
+                train_ckpt_indices = []
+                train_timesteps = []
+                train_snapshot_positions = []
+                train_ckpt_paths = []
+                train_term_weights = []
 
                 def train_phi_one(p, x0_one, cond_one, rng_one, t_scalar):
                     x0_one = x0_one[None, ...]
@@ -1582,20 +1611,94 @@ def run_attribution(cfg: TrajAttributionConfig):
                         phi_batch.block_until_ready()
                         term_features[start:end] = np.asarray(phi_batch[: end - start], dtype=np.float32)
                     train_phi_terms.append(term_features)
-                    stage_ckpt_indices.append(int(ckpt_i))
-                    stage_timesteps.append(int(t_value))
-                    stage_snapshot_positions.append(int(pos_seq[snap_id]))
-                    stage_ckpt_paths.append(str(ckpt_path))
-                    stage_term_weights.append(ckpt_lr_weight / float(max(1, len(t_seq))))
+                    train_ckpt_indices.append(int(ckpt_i))
+                    train_timesteps.append(int(t_value))
+                    train_snapshot_positions.append(int(pos_seq[snap_id]))
+                    train_ckpt_paths.append(str(ckpt_path))
+                    train_term_weights.append(ckpt_lr_weight / float(max(1, len(t_seq))))
                     print(f"[stage:train] TrajTracIn ckpt={ckpt_i + 1} snapshot={snap_id + 1}/{len(t_seq)}")
-                stage_features.extend(train_phi_terms)
+                if stage_part_path is None:
+                    stage_features.extend(train_phi_terms)
+                    stage_ckpt_indices.extend(train_ckpt_indices)
+                    stage_timesteps.extend(train_timesteps)
+                    stage_snapshot_positions.extend(train_snapshot_positions)
+                    stage_ckpt_paths.extend(train_ckpt_paths)
+                    stage_term_weights.extend(train_term_weights)
+                else:
+                    save_npz_compressed_atomic(
+                        stage_part_path,
+                        train_features=np.stack(train_phi_terms, axis=0).astype(np.float32),
+                        score_indices=np.asarray(picked, dtype=np.int64),
+                        ckpt_indices=np.asarray(train_ckpt_indices, dtype=np.int32),
+                        timesteps=np.asarray(train_timesteps, dtype=np.int32),
+                        snapshot_positions=np.asarray(train_snapshot_positions, dtype=np.int32),
+                        term_weights=np.asarray(train_term_weights, dtype=np.float32),
+                        ckpt_paths=np.asarray(train_ckpt_paths),
+                        proj_dim=np.asarray(proj_dim, dtype=np.int32),
+                    )
+                    print(
+                        f"[stage:train] saved checkpoint part "
+                        f"{ckpt_i + 1}/{len(ckpts)}: {stage_part_path}"
+                    )
             used_ckpts_for_stage.append(ckpt_path)
+
+        if stage_mode == "train" and stage_part_dir is not None:
+            part_paths = [
+                os.path.join(stage_part_dir, f"ckpt_{ckpt_i:04d}.npz")
+                for ckpt_i in range(len(ckpts))
+                if os.path.isfile(os.path.join(stage_part_dir, f"ckpt_{ckpt_i:04d}.npz"))
+            ]
+            if not part_paths:
+                raise RuntimeError(f"No TrajTracIn train checkpoint parts were produced under {stage_part_dir}.")
+            if len(part_paths) != len(ckpts):
+                missing_parts = [
+                    os.path.join(stage_part_dir, f"ckpt_{ckpt_i:04d}.npz")
+                    for ckpt_i in range(len(ckpts))
+                    if not os.path.isfile(os.path.join(stage_part_dir, f"ckpt_{ckpt_i:04d}.npz"))
+                ]
+                raise RuntimeError(
+                    "TrajTracIn train checkpoint parts are incomplete: "
+                    f"{len(part_paths)}/{len(ckpts)} present. First missing: {missing_parts[:3]}"
+                )
+            print(f"[stage:train] merging {len(part_paths)} checkpoint parts into {stage_artifact_path}")
+            train_features_parts = []
+            ckpt_indices_parts = []
+            timesteps_parts = []
+            snapshot_positions_parts = []
+            ckpt_paths_parts = []
+            term_weights_parts = []
+            score_indices = None
+            for part_path in part_paths:
+                with np.load(part_path, allow_pickle=True) as part:
+                    part_score_indices = np.asarray(part["score_indices"], dtype=np.int64)
+                    if score_indices is None:
+                        score_indices = part_score_indices
+                    elif not np.array_equal(score_indices, part_score_indices):
+                        raise ValueError(f"score_indices mismatch in checkpoint part: {part_path}")
+                    train_features_parts.append(np.asarray(part["train_features"], dtype=np.float32))
+                    ckpt_indices_parts.append(np.asarray(part["ckpt_indices"], dtype=np.int32))
+                    timesteps_parts.append(np.asarray(part["timesteps"], dtype=np.int32))
+                    snapshot_positions_parts.append(np.asarray(part["snapshot_positions"], dtype=np.int32))
+                    ckpt_paths_parts.append(np.asarray(part["ckpt_paths"]))
+                    term_weights_parts.append(np.asarray(part["term_weights"], dtype=np.float32))
+            save_npz_compressed_atomic(
+                stage_artifact_path,
+                train_features=np.concatenate(train_features_parts, axis=0).astype(np.float32),
+                score_indices=np.asarray(score_indices, dtype=np.int64),
+                ckpt_indices=np.concatenate(ckpt_indices_parts, axis=0).astype(np.int32),
+                timesteps=np.concatenate(timesteps_parts, axis=0).astype(np.int32),
+                snapshot_positions=np.concatenate(snapshot_positions_parts, axis=0).astype(np.int32),
+                term_weights=np.concatenate(term_weights_parts, axis=0).astype(np.float32),
+                ckpt_paths=np.concatenate(ckpt_paths_parts, axis=0),
+                proj_dim=np.asarray(proj_dim, dtype=np.int32),
+            )
+            print(f"[saved] TrajTracIn train artifact: {stage_artifact_path}")
+            return
 
         if not stage_features:
             raise RuntimeError(f"No TrajTracIn {stage_mode} stage features were produced.")
-        ensure_dir(os.path.dirname(stage_artifact_path))
         if stage_mode == "query":
-            np.savez_compressed(
+            save_npz_compressed_atomic(
                 stage_artifact_path,
                 query_features=np.stack(stage_features, axis=0).astype(np.float32),
                 ckpt_indices=np.asarray(stage_ckpt_indices, dtype=np.int32),
@@ -1606,7 +1709,7 @@ def run_attribution(cfg: TrajAttributionConfig):
                 proj_dim=np.asarray(proj_dim, dtype=np.int32),
             )
         else:
-            np.savez_compressed(
+            save_npz_compressed_atomic(
                 stage_artifact_path,
                 train_features=np.stack(stage_features, axis=0).astype(np.float32),
                 score_indices=np.asarray(picked, dtype=np.int64),

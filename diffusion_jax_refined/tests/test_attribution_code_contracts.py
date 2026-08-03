@@ -71,8 +71,17 @@ class TestAttributionCodeContracts(unittest.TestCase):
 
         traj_text = (LEGACY / "traj_tracin" / "algorithm.py").read_text()
         self.assertIn("def ensure_dir(path: str) -> None:", traj_text)
+        self.assertIn("def save_npz_compressed_atomic(path: str, **arrays) -> None:", traj_text)
         self.assertIn("os.makedirs(path, exist_ok=True)", traj_text)
-        self.assertIn("ensure_dir(os.path.dirname(stage_artifact_path))", traj_text)
+        self.assertIn('tmp_path = f"{path}.tmp.npz"', traj_text)
+        self.assertIn("os.replace(tmp_path, path)", traj_text)
+        self.assertIn("ensure_dir(os.path.dirname(path))", traj_text)
+        self.assertIn('stage_part_dir = f"{stage_artifact_path}.parts"', traj_text)
+        self.assertIn('f"ckpt_{ckpt_i:04d}.npz"', traj_text)
+        self.assertIn("skip existing checkpoint part", traj_text)
+        self.assertIn("[stage:train] saved checkpoint part", traj_text)
+        self.assertIn("TrajTracIn train checkpoint parts are incomplete", traj_text)
+        self.assertIn("np.concatenate(train_features_parts, axis=0)", traj_text)
 
         projected_text = (
             ROOT / "cifar2" / "tacc" / "h100" / "projected_traj_tracin_score_sweep.sh"
