@@ -325,6 +325,19 @@ class TestAttributionCodeContracts(unittest.TestCase):
                 for name in names:
                     self.assertIn(name, text)
 
+    def test_fast_lds_score_eval_reuses_cached_targets(self):
+        text = (ROOT / "common" / "fast_lds_score_eval.py").read_text()
+        self.assertIn("--target-results", text)
+        self.assertIn("Existing lds_results.csv with true_f and subset_dir", text)
+        self.assertIn('source_row["subset_dir"]', text)
+        self.assertIn('row["pred_sum_tau"] = sum_scores(', text)
+        self.assertIn('float(row["true_f"])', text)
+        self.assertIn('"target_cache": str(target_path)', text)
+        self.assertIn("combine_attribution_scores(", text)
+        self.assertIn("plot_scatter(", text)
+        self.assertNotIn("CifarTargetEvaluator", text)
+        self.assertNotIn("evaluator.evaluate", text)
+
 
 if __name__ == "__main__":
     unittest.main()
