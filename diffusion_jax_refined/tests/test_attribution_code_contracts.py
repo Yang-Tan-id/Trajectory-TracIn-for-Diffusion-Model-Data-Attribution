@@ -3,6 +3,9 @@ from __future__ import annotations
 import unittest
 import importlib.util
 from pathlib import Path
+import subprocess
+import sys
+import tempfile
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -88,6 +91,67 @@ class TestAttributionCodeContracts(unittest.TestCase):
         ).read_text()
         self.assertIn("TRAJ_USE_SAVED_TRAJECTORY=0", projected_text)
         self.assertIn('run_original_config_with_stage train "${artifact_path}"', projected_text)
+
+    def test_traj_tracin_has_query_cached_stream_score_stage(self):
+        traj_text = (LEGACY / "traj_tracin" / "algorithm.py").read_text()
+        self.assertIn('"score_stream"', traj_text)
+        self.assertIn("load_stream_query_bank", traj_text)
+        self.assertIn("TRAJ_TRACIN_STREAM_QUERY_ARTIFACTS", traj_text)
+        self.assertIn("TRAJ_TRACIN_STREAM_PROJ_DIMS", traj_text)
+        self.assertIn("scores_raw = np.zeros((num_dims, num_queries, len(picked))", traj_text)
+        self.assertIn("phi = train_phi_batch(params, x_batch, cond_batch, rngs, t_scalar)", traj_text)
+        self.assertIn("raw = phi_dim @ q_raw_by_dim[dim_i].T", traj_text)
+        self.assertIn("scores_query_train_l2_normalized", traj_text)
+
+        h100_script = ROOT / "cifar2" / "tacc" / "h100" / "projected_traj_tracin_stream_score_array_h100.sh"
+        self.assertTrue(h100_script.is_file())
+        script_text = h100_script.read_text()
+        self.assertIn("#SBATCH -J cifar2-proj-traj-stream", script_text)
+        self.assertIn("STREAM_PROJ_DIMS", script_text)
+        self.assertIn("TRAJ_TRACIN_STAGE_MODE=score_stream", script_text)
+        self.assertIn("TRAJ_TRACIN_STREAM_QUERY_ARTIFACTS", script_text)
+        self.assertIn("merge_stream_score_shards.py", script_text)
+
+    def test_merge_stream_score_shards_orders_indices_and_preserves_dims(self):
+        try:
+            import numpy as np
+        except Exception as exc:
+            self.skipTest(f"numpy cannot be imported: {exc}")
+
+        merge_script = ROOT / "common" / "merge_stream_score_shards.py"
+        self.assertTrue(merge_script.is_file())
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            query_artifacts = np.asarray(["q0.npz", "q1.npz"])
+            for shard_id, indices in enumerate((np.asarray([3, 4]), np.asarray([1, 2]))):
+                base = np.full((2, 2, 2), float(shard_id), dtype=np.float64)
+                np.savez_compressed(
+                    tmp / f"shard_{shard_id}.npz",
+                    scores_raw=base,
+                    scores_query_l2_normalized=base + 10.0,
+                    scores_train_l2_normalized=base + 20.0,
+                    scores_query_train_l2_normalized=base + 30.0,
+                    score_indices=indices,
+                    query_artifacts=query_artifacts,
+                    proj_dims=np.asarray([256, 512], dtype=np.int32),
+                )
+            out = tmp / "merged.npz"
+            subprocess.check_call(
+                [
+                    sys.executable,
+                    str(merge_script),
+                    "--output",
+                    str(out),
+                    str(tmp / "shard_0.npz"),
+                    str(tmp / "shard_1.npz"),
+                ]
+            )
+            with np.load(out, allow_pickle=False) as merged:
+                np.testing.assert_array_equal(merged["score_indices"], np.asarray([1, 2, 3, 4]))
+                np.testing.assert_array_equal(merged["proj_dims"], np.asarray([256, 512], dtype=np.int32))
+                self.assertEqual(tuple(merged["scores_raw"].shape), (2, 2, 4))
+                np.testing.assert_allclose(merged["scores_raw"][:, :, :2], 1.0)
+                np.testing.assert_allclose(merged["scores_raw"][:, :, 2:], 0.0)
 
     def test_nondefault_traj_objective_gets_distinct_score_folder(self):
         text = (ROOT / "common" / "algorithm_runner.py").read_text()
