@@ -35,6 +35,53 @@ def save_npz_compressed_atomic(path: str, **arrays) -> None:
     os.replace(tmp_path, path)
 
 
+def load_stream_query_bank(paths_text: str, *, expected_proj_dim: int) -> Dict[str, Any]:
+    paths = [p for p in str(paths_text).split(os.pathsep) if p]
+    if not paths:
+        raise ValueError("TRAJ_TRACIN_STREAM_QUERY_ARTIFACTS is empty.")
+
+    query_features = []
+    query_labels = []
+    reference_meta = None
+    for path in paths:
+        if not os.path.isfile(path):
+            raise FileNotFoundError(f"Missing query artifact: {path}")
+        with np.load(path, allow_pickle=False) as data:
+            features = np.asarray(data["query_features"], dtype=np.float32)
+            if features.ndim != 2:
+                raise ValueError(f"{path} query_features must be rank 2, got {features.shape}")
+            if features.shape[1] < expected_proj_dim:
+                raise ValueError(
+                    f"{path} cached dim {features.shape[1]} is smaller than requested {expected_proj_dim}"
+                )
+            meta = {
+                "ckpt_indices": np.asarray(data["ckpt_indices"], dtype=np.int32),
+                "timesteps": np.asarray(data["timesteps"], dtype=np.int32),
+                "snapshot_positions": np.asarray(data["snapshot_positions"], dtype=np.int32),
+                "term_weights": np.asarray(data["term_weights"], dtype=np.float32),
+            }
+            if features.shape[0] != meta["ckpt_indices"].shape[0]:
+                raise ValueError(f"{path} feature/metadata term count mismatch")
+            if reference_meta is None:
+                reference_meta = meta
+            else:
+                for key in ("ckpt_indices", "timesteps", "snapshot_positions"):
+                    if not np.array_equal(reference_meta[key], meta[key]):
+                        raise ValueError(f"{path} has different {key}; query artifacts are not aligned")
+                if not np.allclose(reference_meta["term_weights"], meta["term_weights"], rtol=1e-5, atol=1e-12):
+                    raise ValueError(f"{path} has different term_weights")
+            query_features.append(features[:, :expected_proj_dim])
+            query_labels.append(path)
+
+    assert reference_meta is not None
+    return {
+        "paths": paths,
+        "labels": query_labels,
+        "query_features": np.stack(query_features, axis=0).astype(np.float32),
+        **reference_meta,
+    }
+
+
 def tree_scalar_mul(tree, c):
     return jax.tree_util.tree_map(lambda x: x * c, tree)
 
@@ -1334,8 +1381,8 @@ def make_score_snapshot_chunk_batch_fn(
 def run_attribution(cfg: TrajAttributionConfig):
     stage_mode = os.environ.get("TRAJ_TRACIN_STAGE_MODE", "").strip().lower()
     stage_artifact_path = os.environ.get("TRAJ_TRACIN_STAGE_ARTIFACT_PATH")
-    if stage_mode and stage_mode not in ("train", "query"):
-        raise ValueError("TRAJ_TRACIN_STAGE_MODE must be unset, 'train', or 'query'.")
+    if stage_mode and stage_mode not in ("train", "query", "score_stream"):
+        raise ValueError("TRAJ_TRACIN_STAGE_MODE must be unset, 'train', 'query', or 'score_stream'.")
     if stage_mode and not stage_artifact_path:
         raise ValueError("TRAJ_TRACIN_STAGE_ARTIFACT_PATH is required when TRAJ_TRACIN_STAGE_MODE is set.")
     cfg.query_objective = normalize_query_objective_name(cfg.query_objective)
@@ -1476,6 +1523,180 @@ def run_attribution(cfg: TrajAttributionConfig):
     if len(picked) > 0:
         preview = picked[: min(10, len(picked))]
         print(f"[setup] first picked indices: {preview}")
+
+    if stage_mode == "score_stream":
+        from dtrak.algorithm import build_countsketch_projector_jax
+
+        cache_dim = int(os.environ.get("TRAJ_TRACIN_STREAM_CACHE_DIM", os.environ.get("TRAJ_TRACIN_PROJ_DIM", "4096")))
+        proj_dims_text = os.environ.get("TRAJ_TRACIN_STREAM_PROJ_DIMS", os.environ.get("TRAJ_TRACIN_STREAM_PROJ_DIM", str(cache_dim)))
+        proj_dims = tuple(int(part.strip()) for part in proj_dims_text.replace(",", " ").split() if part.strip())
+        if not proj_dims:
+            raise ValueError("TRAJ_TRACIN_STREAM_PROJ_DIMS is empty.")
+        if any(dim <= 0 for dim in proj_dims):
+            raise ValueError(f"Projection dims must be positive, got {proj_dims}")
+        if any(dim > cache_dim for dim in proj_dims):
+            raise ValueError(f"Projection dims {proj_dims} exceed cache dim {cache_dim}")
+        max_score_dim = max(proj_dims)
+        query_bank = load_stream_query_bank(
+            os.environ.get("TRAJ_TRACIN_STREAM_QUERY_ARTIFACTS", ""),
+            expected_proj_dim=max_score_dim,
+        )
+        query_features = np.asarray(query_bank["query_features"], dtype=np.float32)
+        term_ckpt_indices = np.asarray(query_bank["ckpt_indices"], dtype=np.int32)
+        term_timesteps = np.asarray(query_bank["timesteps"], dtype=np.int32)
+        term_weights = np.asarray(query_bank["term_weights"], dtype=np.float64)
+        num_queries = int(query_features.shape[0])
+        num_dims = len(proj_dims)
+
+        print("=" * 90)
+        print("[stage:score_stream] query-cached streaming Traj-TracIn scorer")
+        print(f"[stage:score_stream] query_artifacts={num_queries}")
+        print(f"[stage:score_stream] terms={query_features.shape[1]} | cache_dim={cache_dim} | proj_dims={proj_dims}")
+        print(f"[stage:score_stream] scored_points={len(picked)}")
+        print(f"[stage:score_stream] artifact_path={stage_artifact_path}")
+        print("=" * 90)
+
+        scores_raw = np.zeros((num_dims, num_queries, len(picked)), dtype=np.float64)
+        scores_query_l2 = np.zeros_like(scores_raw)
+        scores_train_l2 = np.zeros_like(scores_raw)
+        scores_query_train_l2 = np.zeros_like(scores_raw)
+
+        def train_phi_one(p, x0_one, cond_one, rng_one, t_scalar):
+            x0_one = x0_one[None, ...]
+            if cond_one.ndim == 0:
+                cond_one = cond_one[None]
+            else:
+                cond_one = cond_one[None, ...]
+
+            def loss_fn(pp):
+                return train_losses_at_dynamic_t_mc_vectorized(
+                    adapter=adapter,
+                    model=model,
+                    params=pp,
+                    schedule=schedule,
+                    x0_batch=x0_one,
+                    cond_batch=cond_one,
+                    t_scalar=t_scalar,
+                    num_mc_samples=cfg.train_mc_samples,
+                    rng=rng_one,
+                )[0]
+
+            _loss, grads = jax.value_and_grad(loss_fn)(p)
+            return projector(grads)
+
+        batch_size_stream = max(1, int(cfg.score_batch_size))
+        batch_starts = list(range(0, len(picked), batch_size_stream))
+        stream_start = time.time()
+
+        for ckpt_i, ckpt_path in enumerate(ckpts):
+            term_ids = np.where(term_ckpt_indices == int(ckpt_i))[0]
+            if term_ids.size == 0:
+                continue
+            ckpt_start = time.time()
+            print(
+                f"[stage:score_stream] checkpoint {ckpt_i + 1}/{len(ckpts)} | "
+                f"terms={len(term_ids)} | {os.path.basename(ckpt_path)}"
+            )
+            try:
+                state, _payload = adapter.restore_state(ckpt_path, state_template)
+            except Exception as exc:
+                if cfg.skip_unreadable_checkpoints:
+                    print(f"[warning] skipping unreadable checkpoint: {ckpt_path}: {exc}")
+                    continue
+                raise
+            params = tree_to_device(state.ema_params, device)
+            projector = build_countsketch_projector_jax(
+                params,
+                cache_dim,
+                seed_parts=(cfg.seed, "traj_tracin_projection", ckpt_i),
+                device=device,
+            )
+            train_phi_batch = jax.jit(jax.vmap(train_phi_one, in_axes=(None, 0, 0, 0, None)))
+
+            for local_term_no, term_id in enumerate(term_ids, start=1):
+                t_scalar = array_to_device(jnp.asarray(int(term_timesteps[term_id]), dtype=jnp.int32), device)
+                q_raw_by_dim = []
+                q_norm_by_dim = []
+                for dim in proj_dims:
+                    q_np = query_features[:, term_id, :dim]
+                    q_norm_np = q_np / np.maximum(
+                        np.linalg.norm(q_np, axis=-1, keepdims=True),
+                        float(cfg.query_normalize_eps),
+                    )
+                    q_raw_by_dim.append(array_to_device(jnp.asarray(q_np, dtype=jnp.float32), device))
+                    q_norm_by_dim.append(array_to_device(jnp.asarray(q_norm_np, dtype=jnp.float32), device))
+                term_weight = float(term_weights[term_id])
+
+                for start in batch_starts:
+                    end = min(start + batch_size_stream, len(picked))
+                    real_indices = picked[start:end]
+                    padded_indices = pad_indices_to_batch(real_indices, batch_size_stream)
+                    x_batch, cond_batch = make_train_batch(adapter, ds, padded_indices, device)
+                    rngs = array_to_device(
+                        jnp.stack(
+                            [
+                                jax.random.PRNGKey(
+                                    cfg.seed + 700_000 * (ckpt_i + 1) + 10_000 * int(term_id) + start + j
+                                )
+                                for j in range(batch_size_stream)
+                            ],
+                            axis=0,
+                        ),
+                        device,
+                    )
+                    phi = train_phi_batch(params, x_batch, cond_batch, rngs, t_scalar)
+                    phi = phi[: len(real_indices), :max_score_dim]
+                    for dim_i, dim in enumerate(proj_dims):
+                        phi_dim = phi[:, :dim]
+                        phi_norm = phi_dim / jnp.maximum(
+                            jnp.linalg.norm(phi_dim, axis=-1, keepdims=True),
+                            jnp.asarray(float(cfg.query_normalize_eps), dtype=jnp.float32),
+                        )
+
+                        raw = phi_dim @ q_raw_by_dim[dim_i].T
+                        query_l2 = phi_dim @ q_norm_by_dim[dim_i].T
+                        train_l2 = phi_norm @ q_raw_by_dim[dim_i].T
+                        both_l2 = phi_norm @ q_norm_by_dim[dim_i].T
+                        raw.block_until_ready()
+                        scores_raw[dim_i, :, start:end] += term_weight * np.asarray(jax.device_get(raw), dtype=np.float64).T
+                        scores_query_l2[dim_i, :, start:end] += term_weight * np.asarray(jax.device_get(query_l2), dtype=np.float64).T
+                        scores_train_l2[dim_i, :, start:end] += term_weight * np.asarray(jax.device_get(train_l2), dtype=np.float64).T
+                        scores_query_train_l2[dim_i, :, start:end] += term_weight * np.asarray(jax.device_get(both_l2), dtype=np.float64).T
+
+                if (
+                    local_term_no == 1
+                    or local_term_no == len(term_ids)
+                    or local_term_no % max(1, int(cfg.progress_every)) == 0
+                ):
+                    elapsed = time.time() - ckpt_start
+                    print(
+                        f"[stage:score_stream] ckpt {ckpt_i + 1}/{len(ckpts)} "
+                        f"term {local_term_no}/{len(term_ids)} | "
+                        f"elapsed={format_seconds(elapsed)}"
+                    )
+
+            print(
+                f"[stage:score_stream] checkpoint {ckpt_i + 1}/{len(ckpts)} done | "
+                f"elapsed={format_seconds(time.time() - ckpt_start)}"
+            )
+
+        save_npz_compressed_atomic(
+            stage_artifact_path,
+            scores_raw=scores_raw,
+            scores_query_l2_normalized=scores_query_l2,
+            scores_train_l2_normalized=scores_train_l2,
+            scores_query_train_l2_normalized=scores_query_train_l2,
+            score_indices=np.asarray(picked, dtype=np.int64),
+            query_artifacts=np.asarray(query_bank["paths"]),
+            proj_dims=np.asarray(proj_dims, dtype=np.int32),
+            cache_dim=np.asarray(cache_dim, dtype=np.int32),
+            term_ckpt_indices=term_ckpt_indices,
+            term_timesteps=term_timesteps,
+            term_weights=np.asarray(term_weights, dtype=np.float32),
+            elapsed_sec=np.asarray(time.time() - stream_start, dtype=np.float64),
+        )
+        print(f"[saved] TrajTracIn stream score artifact: {stage_artifact_path}")
+        return
 
     if stage_mode:
         from dtrak.algorithm import build_countsketch_projector_jax
