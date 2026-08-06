@@ -256,7 +256,7 @@ class TestAttributionCodeContracts(unittest.TestCase):
                 score_indices=np.asarray([10, 11], dtype=np.int64),
                 term_ckpt_indices=np.asarray([0, 1, 1], dtype=np.int32),
                 term_timesteps=np.asarray([999, 989, 979], dtype=np.int32),
-                term_snapshot_positions=np.asarray([0, 1, 2], dtype=np.int32),
+                term_snapshot_positions=np.asarray([0, 500, 999], dtype=np.int32),
                 scores_by_term_raw=np.asarray(
                     [
                         [1.0, 2.0],

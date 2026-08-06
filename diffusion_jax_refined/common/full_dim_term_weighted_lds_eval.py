@@ -178,15 +178,26 @@ def expand_ckpt_snapshot_weights(
 
     max_ckpt = int(np.max(ckpt_indices))
     max_snapshot = int(np.max(snapshot_positions))
-    if table.shape[1] <= max_snapshot:
-        raise ValueError(f"Weight table has {table.shape[1]} snapshots but term metadata needs {max_snapshot + 1}")
     if table.shape[0] <= max_ckpt:
         if table.shape[0] == max_ckpt:
             padded = np.concatenate([table, table[-1:, :]], axis=0)
             table = padded
         else:
             raise ValueError(f"Weight table has {table.shape[0]} checkpoints but term metadata needs {max_ckpt + 1}")
-    return table[ckpt_indices.astype(np.int64), snapshot_positions.astype(np.int64)].astype(np.float64)
+
+    if table.shape[1] > max_snapshot:
+        snapshot_columns = snapshot_positions.astype(np.int64)
+    else:
+        unique_positions = np.unique(snapshot_positions.astype(np.int64))
+        if table.shape[1] != len(unique_positions):
+            raise ValueError(
+                f"Weight table has {table.shape[1]} snapshot columns, but term metadata has "
+                f"{len(unique_positions)} unique positions and max position {max_snapshot}."
+            )
+        position_to_column = {int(pos): col for col, pos in enumerate(unique_positions.tolist())}
+        snapshot_columns = np.asarray([position_to_column[int(pos)] for pos in snapshot_positions], dtype=np.int64)
+
+    return table[ckpt_indices.astype(np.int64), snapshot_columns].astype(np.float64)
 
 
 def score_map_from_term_artifacts(
