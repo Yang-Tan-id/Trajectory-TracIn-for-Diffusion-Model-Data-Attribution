@@ -289,6 +289,14 @@ class TestAttributionCodeContracts(unittest.TestCase):
         self.assertIn("normalize_per_timestamp", text)
         self.assertIn("eps_delta_mse_by_transition", text)
 
+    def test_full_dim_term_lds_analyzer_reports_sign_and_term_ablation(self):
+        text = (ROOT / "common" / "analyze_full_dim_term_lds.py").read_text()
+        self.assertIn("all_terms_sign_m1", text)
+        self.assertIn("all_terms_sign_p1", text)
+        self.assertIn("checkpoint_lds.csv", text)
+        self.assertIn("snapshot_lds.csv", text)
+        self.assertIn("checkpoint_snapshot_lds.csv", text)
+
     def test_nondefault_traj_objective_gets_distinct_score_folder(self):
         text = (ROOT / "common" / "algorithm_runner.py").read_text()
         self.assertIn('if algorithm == "traj_tracin"', text)
