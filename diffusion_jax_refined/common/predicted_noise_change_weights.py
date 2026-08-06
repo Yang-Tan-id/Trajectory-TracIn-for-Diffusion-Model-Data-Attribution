@@ -6,6 +6,8 @@ For a saved query trajectory (x_s, t_s), this computes
 
     delta[c, s] = mean((eps_{theta_{c+1}}(x_s, t_s) - eps_{theta_c}(x_s, t_s)) ** 2)
     ref_mse[c, s] = mean((eps_{theta_c}(x_s, t_s) - eps_{theta_ref}(x_s, t_s)) ** 2)
+    cosine[c, s] = cos(eps_{theta_{c+1}} - eps_{theta_c}, eps_{theta_ref} - eps_{theta_c})
+    progress[c, s] = ref_mse[c, s] - ref_mse[c + 1, s]
 
 and stores both the raw deltas and simple normalized weight tables. The output
 is intentionally small: 49x100/50x100 floats for the usual CIFAR2 setup.
@@ -175,7 +177,10 @@ def main() -> None:
     print("[reference] eps chunks ready")
 
     previous_eps_chunks: list[np.ndarray] | None = None
+    previous_ref_mse_row: np.ndarray | None = None
     delta_rows: list[np.ndarray] = []
+    cosine_rows: list[np.ndarray] = []
+    progress_rows: list[np.ndarray] = []
     ref_mse_rows: list[np.ndarray] = []
     started = time.time()
 
@@ -204,15 +209,35 @@ def main() -> None:
 
         if previous_eps_chunks is not None:
             deltas = []
-            for prev, curr in zip(previous_eps_chunks, current_eps_chunks):
-                mse = np.mean((curr.astype(np.float64) - prev.astype(np.float64)) ** 2, axis=tuple(range(1, curr.ndim)))
+            cosines = []
+            for chunk_id, (prev, curr) in enumerate(zip(previous_eps_chunks, current_eps_chunks)):
+                move = curr.astype(np.float64) - prev.astype(np.float64)
+                to_ref = reference_eps_chunks[chunk_id].astype(np.float64) - prev.astype(np.float64)
+                reduce_axes = tuple(range(1, curr.ndim))
+                mse = np.mean(move ** 2, axis=reduce_axes)
+                dot = np.sum(move * to_ref, axis=reduce_axes)
+                move_norm = np.sqrt(np.sum(move ** 2, axis=reduce_axes))
+                ref_norm = np.sqrt(np.sum(to_ref ** 2, axis=reduce_axes))
+                cosine = dot / np.maximum(move_norm * ref_norm, 1e-30)
                 deltas.append(mse.astype(np.float64))
+                cosines.append(cosine.astype(np.float64))
             delta_row = np.concatenate(deltas, axis=0)
+            cosine_row = np.concatenate(cosines, axis=0)
+            assert previous_ref_mse_row is not None
+            progress_row = previous_ref_mse_row - ref_mse_row
             delta_rows.append(delta_row)
+            cosine_rows.append(cosine_row)
+            progress_rows.append(progress_row)
             print(
                 f"[delta] transition {ckpt_i}/{len(ckpts) - 1} | "
                 f"mean={float(np.mean(delta_row)):.6g} | "
                 f"min={float(np.min(delta_row)):.6g} | max={float(np.max(delta_row)):.6g}"
+            )
+            print(
+                f"[direction] transition {ckpt_i}/{len(ckpts) - 1} | "
+                f"cos_mean={float(np.mean(cosine_row)):.6g} | "
+                f"cos_pos_frac={float(np.mean(cosine_row > 0.0)):.3f} | "
+                f"progress_pos_frac={float(np.mean(progress_row > 0.0)):.3f}"
             )
         print(
             f"[ref-mse] ckpt {ckpt_i + 1}/{len(ckpts)} | "
@@ -221,6 +246,7 @@ def main() -> None:
         )
 
         previous_eps_chunks = current_eps_chunks
+        previous_ref_mse_row = ref_mse_row
         elapsed = time.time() - started
         print(
             f"[ckpt] {ckpt_i + 1}/{len(ckpts)} done | "
@@ -229,8 +255,12 @@ def main() -> None:
         )
 
     delta_transition = np.stack(delta_rows, axis=0).astype(np.float64)
+    cosine_transition = np.stack(cosine_rows, axis=0).astype(np.float64)
+    progress_transition = np.stack(progress_rows, axis=0).astype(np.float64)
     ref_mse_by_ckpt_snapshot = np.stack(ref_mse_rows, axis=0).astype(np.float64)
     delta_by_ckpt_snapshot = pad_last_checkpoint_transition(delta_transition, len(ckpts))
+    cosine_by_ckpt_snapshot = pad_last_checkpoint_transition(cosine_transition, len(ckpts))
+    progress_by_ckpt_snapshot = pad_last_checkpoint_transition(progress_transition, len(ckpts))
     weight_per_timestamp = normalize_per_timestamp(delta_by_ckpt_snapshot)
     weight_global = normalize_global(delta_by_ckpt_snapshot)
 
@@ -239,8 +269,12 @@ def main() -> None:
     np.savez_compressed(
         out_path,
         eps_delta_mse_by_transition=delta_transition.astype(np.float32),
+        eps_to_ref_cosine_by_transition=cosine_transition.astype(np.float32),
+        eps_to_ref_progress_by_transition=progress_transition.astype(np.float32),
         eps_ref_mse_by_ckpt_snapshot=ref_mse_by_ckpt_snapshot.astype(np.float32),
         delta_by_ckpt_snapshot=delta_by_ckpt_snapshot.astype(np.float32),
+        eps_to_ref_cosine_by_ckpt_snapshot=cosine_by_ckpt_snapshot.astype(np.float32),
+        eps_to_ref_progress_by_ckpt_snapshot=progress_by_ckpt_snapshot.astype(np.float32),
         change_weight_by_ckpt_snapshot=weight_per_timestamp.astype(np.float32),
         change_weight_global_linear=weight_global.astype(np.float32),
         ckpt_paths=np.asarray(ckpts),
@@ -260,6 +294,8 @@ def main() -> None:
         f"delta_mean={float(np.mean(delta_by_ckpt_snapshot)):.6g} | "
         f"ref_mse_start={float(np.mean(ref_mse_by_ckpt_snapshot[0])):.6g} | "
         f"ref_mse_end={float(np.mean(ref_mse_by_ckpt_snapshot[-1])):.6g} | "
+        f"cos_mean={float(np.mean(cosine_transition)):.6g} | "
+        f"progress_pos_frac={float(np.mean(progress_transition > 0.0)):.3f} | "
         f"per_ts_weight_mean={float(np.mean(weight_per_timestamp)):.6g} | "
         f"elapsed={format_seconds(time.time() - started)}"
     )

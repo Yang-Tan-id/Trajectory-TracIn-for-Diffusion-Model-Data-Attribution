@@ -289,6 +289,8 @@ class TestAttributionCodeContracts(unittest.TestCase):
         self.assertIn("change_weight_by_ckpt_snapshot", text)
         self.assertIn("normalize_per_timestamp", text)
         self.assertIn("eps_delta_mse_by_transition", text)
+        self.assertIn("eps_to_ref_cosine_by_transition", text)
+        self.assertIn("eps_to_ref_progress_by_transition", text)
 
     def test_full_dim_term_lds_analyzer_reports_sign_and_term_ablation(self):
         text = (ROOT / "common" / "analyze_full_dim_term_lds.py").read_text()
@@ -320,6 +322,9 @@ class TestAttributionCodeContracts(unittest.TestCase):
         self.assertIn("checkpoint_ref_mse.csv", text)
         self.assertIn("snapshot_ref_mse_trends.csv", text)
         self.assertIn("eps_ref_mse_heatmap.svg", text)
+        self.assertIn("transition_direction_summary.csv", text)
+        self.assertIn("snapshot_direction_summary.csv", text)
+        self.assertIn("eps_to_ref_cosine_heatmap.svg", text)
         self.assertIn("end_over_start", text)
 
     def test_nondefault_traj_objective_gets_distinct_score_folder(self):
