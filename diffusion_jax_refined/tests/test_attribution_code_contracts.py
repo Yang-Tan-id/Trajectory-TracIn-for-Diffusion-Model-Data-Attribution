@@ -305,6 +305,14 @@ class TestAttributionCodeContracts(unittest.TestCase):
         self.assertIn("term_spearman_lds_weight", text)
         self.assertIn("mean_weight_negative_term_lds", text)
 
+    def test_term_sign_pattern_summary_reports_checkpoint_snapshot_quadrants(self):
+        text = (ROOT / "common" / "summarize_term_sign_patterns.py").read_text()
+        self.assertIn("quadrant_summary.csv", text)
+        self.assertIn("checkpoint_cross_snapshot_sign_summary.csv", text)
+        self.assertIn("snapshot_cross_checkpoint_sign_summary.csv", text)
+        self.assertIn("checkpoint_snapshot_lds_heatmap.svg", text)
+        self.assertIn("positive_snapshot_runs", text)
+
     def test_nondefault_traj_objective_gets_distinct_score_folder(self):
         text = (ROOT / "common" / "algorithm_runner.py").read_text()
         self.assertIn('if algorithm == "traj_tracin"', text)
