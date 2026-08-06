@@ -236,6 +236,51 @@ class TestAttributionCodeContracts(unittest.TestCase):
                 )
             self.assertEqual(score_map, {20: 15.0, 21: 16.0})
 
+    def test_full_dim_term_weighted_eval_applies_ckpt_snapshot_weights(self):
+        if importlib.util.find_spec("numpy") is None:
+            self.skipTest("numpy is not installed for this Python")
+        np = __import__("numpy")
+
+        script_path = ROOT / "common" / "full_dim_term_weighted_lds_eval.py"
+        self.assertTrue(script_path.is_file())
+        spec = importlib.util.spec_from_file_location("full_dim_term_weighted_lds_eval", script_path)
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp = Path(tmpdir)
+            shard = tmp / "full_dim_term_scores.npz"
+            np.savez_compressed(
+                shard,
+                score_indices=np.asarray([10, 11], dtype=np.int64),
+                term_ckpt_indices=np.asarray([0, 1, 1], dtype=np.int32),
+                term_timesteps=np.asarray([999, 989, 979], dtype=np.int32),
+                term_snapshot_positions=np.asarray([0, 1, 2], dtype=np.int32),
+                scores_by_term_raw=np.asarray(
+                    [
+                        [1.0, 2.0],
+                        [10.0, 20.0],
+                        [100.0, 200.0],
+                    ],
+                    dtype=np.float32,
+                ),
+            )
+            weights = np.asarray(
+                [
+                    [2.0, 1.0, 1.0],
+                    [1.0, 3.0, 4.0],
+                ],
+                dtype=np.float64,
+            )
+            score_map, meta = module.score_map_from_term_artifacts(
+                [shard],
+                score_key="scores_by_term_raw",
+                term_weight=weights,
+            )
+            self.assertEqual(meta["num_terms"], 3)
+            self.assertEqual(score_map, {10: 432.0, 11: 864.0})
+
     def test_nondefault_traj_objective_gets_distinct_score_folder(self):
         text = (ROOT / "common" / "algorithm_runner.py").read_text()
         self.assertIn('if algorithm == "traj_tracin"', text)

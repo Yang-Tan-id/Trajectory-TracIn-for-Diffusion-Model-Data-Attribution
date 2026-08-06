@@ -37,6 +37,7 @@ TRAJ_TRACIN_FULL_SAVE_TERM_SCORE_VARIANTS="${TRAJ_TRACIN_FULL_SAVE_TERM_SCORE_VA
 FULL_SCORE_RANGES="${FULL_SCORE_RANGES:-1-2500 2501-5000 5001-7500 7501-10000}"
 FULL_QUERY_SPECS="${FULL_QUERY_SPECS:-prompted_solo:horse prompted_solo:automobile prompted_solo:horse,automobile unprompted_solo:unconditional}"
 GPU_PER_NODE="${GPU_PER_NODE:-4}"
+FULL_TERM_LOG_ROOT="${FULL_TERM_LOG_ROOT:-${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/logs/full_traj_term/job_${SLURM_JOB_ID:-manual}}"
 DRY_RUN="${DRY_RUN:-0}"
 
 export PYTHON_BIN EXPERIMENT_TAG TRAIN_SEED INITIAL_SEED
@@ -110,6 +111,10 @@ run_one() {
   alg="$(algorithm_dir "${mode}" "${range}")"
   local out_dir="${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/attribution_score/${mode}/train_seed_${TRAIN_SEED}/${qcomp}/initial_seed_${INITIAL_SEED}/${alg}"
   local term_artifact="${out_dir}/full_dim_term_scores.npz"
+  local task_tag
+  task_tag="slot_$(printf '%02d' "${slot}")__${mode}__$(path_tag "${query}")__range_$(range_tag "${range}")"
+  local task_log="${FULL_TERM_LOG_ROOT}/${task_tag}.log"
+  mkdir -p "${FULL_TERM_LOG_ROOT}"
 
   if [[ -f "${out_dir}/scores.npy" && -f "${out_dir}/score_indices.npy" && -f "${term_artifact}" ]]; then
     echo "[skip] mode=${mode} query=${query} range=${range} existing ${out_dir}"
@@ -117,6 +122,7 @@ run_one() {
   fi
 
   echo "[full-term] slot=${slot} gpu=${gpu} mode=${mode} query=${query} range=${range} -> ${out_dir}"
+  echo "[full-term-log] slot=${slot} log=${task_log}"
   local cmd=(
     env
     CUDA_VISIBLE_DEVICES="${gpu}"
@@ -137,11 +143,17 @@ run_one() {
     "${PYTHON_BIN}" "${REFINE_ROOT}/common/run_original_attribution_config.py"
     "${CIFAR2_ROOT}/data_attribution/traj_tracin/CONFIG.py"
   )
-  if [[ "${TACC_SLOT_BACKEND:-ibrun}" == "ibrun" && -n "${SLURM_JOB_ID:-}" ]] && command -v ibrun >/dev/null; then
-    ibrun -n 1 -o "${slot}" "${cmd[@]}"
-  else
-    "${cmd[@]}"
-  fi
+  {
+    echo "[task-start] $(date) slot=${slot} gpu=${gpu} mode=${mode} query=${query} range=${range}"
+    echo "[task-out-dir] ${out_dir}"
+    echo "[task-term-artifact] ${term_artifact}"
+    if [[ "${TACC_SLOT_BACKEND:-ibrun}" == "ibrun" && -n "${SLURM_JOB_ID:-}" ]] && command -v ibrun >/dev/null; then
+      ibrun -n 1 -o "${slot}" "${cmd[@]}"
+    else
+      "${cmd[@]}"
+    fi
+    echo "[task-done] $(date) slot=${slot} mode=${mode} query=${query} range=${range}"
+  } >"${task_log}" 2>&1
 }
 
 mapfile -t ranges < <(split_words "${FULL_SCORE_RANGES}")
@@ -153,6 +165,7 @@ echo "queries=${FULL_QUERY_SPECS}"
 echo "ranges=${FULL_SCORE_RANGES}"
 echo "term_score_variants=${TRAJ_TRACIN_FULL_SAVE_TERM_SCORE_VARIANTS}"
 echo "score_batch_size=${TRAJ_SCORE_BATCH_SIZE}; snapshot_chunk_size=${TRAJ_SNAPSHOT_CHUNK_SIZE}"
+echo "task_log_root=${FULL_TERM_LOG_ROOT}"
 
 if [[ "${DRY_RUN}" == "1" ]]; then
   slot=0
