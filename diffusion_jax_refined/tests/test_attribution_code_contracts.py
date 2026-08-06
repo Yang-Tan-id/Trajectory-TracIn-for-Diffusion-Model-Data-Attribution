@@ -316,6 +316,14 @@ class TestAttributionCodeContracts(unittest.TestCase):
         self.assertIn("checkpoint_snapshot_lds_heatmap.svg", text)
         self.assertIn("positive_snapshot_runs", text)
 
+    def test_lds_pred_true_mismatch_diagnostic_reports_rank_errors(self):
+        text = (ROOT / "common" / "diagnose_lds_pred_true_mismatch.py").read_text()
+        self.assertIn("subset_pred_true_mismatch.csv", text)
+        self.assertIn("true_f_quartile_summary.csv", text)
+        self.assertIn("pred_true_scatter.svg", text)
+        self.assertIn("pred_std_over_true_f_std", text)
+        self.assertIn("worst_rank_mismatches", text)
+
     def test_predicted_noise_ref_process_analyzer_reports_convergence(self):
         text = (ROOT / "common" / "analyze_predicted_noise_ref_process.py").read_text()
         self.assertIn("eps_ref_mse_by_ckpt_snapshot", text)
