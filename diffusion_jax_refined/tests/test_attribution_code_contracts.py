@@ -284,6 +284,7 @@ class TestAttributionCodeContracts(unittest.TestCase):
     def test_predicted_noise_change_weight_script_outputs_reusable_tables(self):
         text = (ROOT / "common" / "predicted_noise_change_weights.py").read_text()
         self.assertIn("eps_{theta_{c+1}}(x_s, t_s)", text)
+        self.assertIn("eps_ref_mse_by_ckpt_snapshot", text)
         self.assertIn("delta_by_ckpt_snapshot", text)
         self.assertIn("change_weight_by_ckpt_snapshot", text)
         self.assertIn("normalize_per_timestamp", text)
@@ -312,6 +313,14 @@ class TestAttributionCodeContracts(unittest.TestCase):
         self.assertIn("snapshot_cross_checkpoint_sign_summary.csv", text)
         self.assertIn("checkpoint_snapshot_lds_heatmap.svg", text)
         self.assertIn("positive_snapshot_runs", text)
+
+    def test_predicted_noise_ref_process_analyzer_reports_convergence(self):
+        text = (ROOT / "common" / "analyze_predicted_noise_ref_process.py").read_text()
+        self.assertIn("eps_ref_mse_by_ckpt_snapshot", text)
+        self.assertIn("checkpoint_ref_mse.csv", text)
+        self.assertIn("snapshot_ref_mse_trends.csv", text)
+        self.assertIn("eps_ref_mse_heatmap.svg", text)
+        self.assertIn("end_over_start", text)
 
     def test_nondefault_traj_objective_gets_distinct_score_folder(self):
         text = (ROOT / "common" / "algorithm_runner.py").read_text()

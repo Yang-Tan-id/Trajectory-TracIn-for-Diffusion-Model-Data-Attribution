@@ -5,6 +5,7 @@ from __future__ import annotations
 For a saved query trajectory (x_s, t_s), this computes
 
     delta[c, s] = mean((eps_{theta_{c+1}}(x_s, t_s) - eps_{theta_c}(x_s, t_s)) ** 2)
+    ref_mse[c, s] = mean((eps_{theta_c}(x_s, t_s) - eps_{theta_ref}(x_s, t_s)) ** 2)
 
 and stores both the raw deltas and simple normalized weight tables. The output
 is intentionally small: 49x100/50x100 floats for the usual CIFAR2 setup.
@@ -159,8 +160,23 @@ def main() -> None:
 
     eps_chunk_jit = jax.jit(eps_chunk)
 
+    print(f"[reference] loading {reference_ckpt}")
+    reference_state, _reference_payload = adapter.restore_state(reference_ckpt, state_template)
+    reference_params = tree_to_device(reference_state.ema_params, device)
+    print(f"[device-check] reference_params={first_leaf_device_str(reference_params)}")
+    reference_eps_chunks = []
+    for chunk_start in range(0, len(t_seq), chunk_size):
+        chunk_end = min(chunk_start + chunk_size, len(t_seq))
+        xt_chunk = array_to_device(jnp.stack([xt_refs[i] for i in range(chunk_start, chunk_end)], axis=0), device)
+        t_chunk = array_to_device(jnp.asarray([int(t_seq[i]) for i in range(chunk_start, chunk_end)], dtype=jnp.int32), device)
+        eps = eps_chunk_jit(reference_params, xt_chunk, t_chunk, query_cond)
+        eps.block_until_ready()
+        reference_eps_chunks.append(np.asarray(jax.device_get(eps), dtype=np.float32))
+    print("[reference] eps chunks ready")
+
     previous_eps_chunks: list[np.ndarray] | None = None
     delta_rows: list[np.ndarray] = []
+    ref_mse_rows: list[np.ndarray] = []
     started = time.time()
 
     for ckpt_i, ckpt_path in enumerate(ckpts):
@@ -179,6 +195,13 @@ def main() -> None:
             eps.block_until_ready()
             current_eps_chunks.append(np.asarray(jax.device_get(eps), dtype=np.float32))
 
+        ref_mses = []
+        for ref, curr in zip(reference_eps_chunks, current_eps_chunks):
+            mse = np.mean((curr.astype(np.float64) - ref.astype(np.float64)) ** 2, axis=tuple(range(1, curr.ndim)))
+            ref_mses.append(mse.astype(np.float64))
+        ref_mse_row = np.concatenate(ref_mses, axis=0)
+        ref_mse_rows.append(ref_mse_row)
+
         if previous_eps_chunks is not None:
             deltas = []
             for prev, curr in zip(previous_eps_chunks, current_eps_chunks):
@@ -191,6 +214,11 @@ def main() -> None:
                 f"mean={float(np.mean(delta_row)):.6g} | "
                 f"min={float(np.min(delta_row)):.6g} | max={float(np.max(delta_row)):.6g}"
             )
+        print(
+            f"[ref-mse] ckpt {ckpt_i + 1}/{len(ckpts)} | "
+            f"mean={float(np.mean(ref_mse_row)):.6g} | "
+            f"min={float(np.min(ref_mse_row)):.6g} | max={float(np.max(ref_mse_row)):.6g}"
+        )
 
         previous_eps_chunks = current_eps_chunks
         elapsed = time.time() - started
@@ -201,6 +229,7 @@ def main() -> None:
         )
 
     delta_transition = np.stack(delta_rows, axis=0).astype(np.float64)
+    ref_mse_by_ckpt_snapshot = np.stack(ref_mse_rows, axis=0).astype(np.float64)
     delta_by_ckpt_snapshot = pad_last_checkpoint_transition(delta_transition, len(ckpts))
     weight_per_timestamp = normalize_per_timestamp(delta_by_ckpt_snapshot)
     weight_global = normalize_global(delta_by_ckpt_snapshot)
@@ -210,6 +239,7 @@ def main() -> None:
     np.savez_compressed(
         out_path,
         eps_delta_mse_by_transition=delta_transition.astype(np.float32),
+        eps_ref_mse_by_ckpt_snapshot=ref_mse_by_ckpt_snapshot.astype(np.float32),
         delta_by_ckpt_snapshot=delta_by_ckpt_snapshot.astype(np.float32),
         change_weight_by_ckpt_snapshot=weight_per_timestamp.astype(np.float32),
         change_weight_global_linear=weight_global.astype(np.float32),
@@ -228,6 +258,8 @@ def main() -> None:
     print(
         "[summary] "
         f"delta_mean={float(np.mean(delta_by_ckpt_snapshot)):.6g} | "
+        f"ref_mse_start={float(np.mean(ref_mse_by_ckpt_snapshot[0])):.6g} | "
+        f"ref_mse_end={float(np.mean(ref_mse_by_ckpt_snapshot[-1])):.6g} | "
         f"per_ts_weight_mean={float(np.mean(weight_per_timestamp)):.6g} | "
         f"elapsed={format_seconds(time.time() - started)}"
     )
