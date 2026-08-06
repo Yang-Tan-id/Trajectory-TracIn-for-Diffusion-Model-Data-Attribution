@@ -2001,6 +2001,42 @@ def run_attribution(cfg: TrajAttributionConfig):
         if cfg.save_query_normalized_scores
         else None
     )
+    full_term_score_variants_text = os.environ.get("TRAJ_TRACIN_FULL_SAVE_TERM_SCORE_VARIANTS", "").strip()
+    full_term_score_variant_aliases = {
+        "raw": "scores_by_term_raw",
+        "query_l2": "scores_by_term_query_l2_normalized",
+        "query_l2_normalized": "scores_by_term_query_l2_normalized",
+    }
+    full_term_score_keys = []
+    if full_term_score_variants_text:
+        for part in full_term_score_variants_text.replace(",", " ").split():
+            key = full_term_score_variant_aliases.get(part.strip())
+            if key is None:
+                raise ValueError(
+                    "Unknown TRAJ_TRACIN_FULL_SAVE_TERM_SCORE_VARIANTS entry "
+                    f"{part!r}; expected one of {sorted(full_term_score_variant_aliases)}"
+                )
+            if key == "scores_by_term_query_l2_normalized" and not cfg.save_query_normalized_scores:
+                raise ValueError(
+                    "TRAJ_TRACIN_FULL_SAVE_TERM_SCORE_VARIANTS includes query_l2_normalized, "
+                    "but cfg.save_query_normalized_scores is False."
+                )
+            if key not in full_term_score_keys:
+                full_term_score_keys.append(key)
+    full_term_scores_by_key = {
+        key: np.zeros((len(ckpts) * int(cfg.num_traj_snapshots), len(picked)), dtype=np.float32)
+        for key in full_term_score_keys
+    }
+    full_term_ckpt_indices: List[int] = []
+    full_term_timesteps: List[int] = []
+    full_term_snapshot_positions: List[int] = []
+    full_term_weights: List[float] = []
+    full_term_ckpt_paths: List[str] = []
+    if full_term_scores_by_key:
+        print(
+            "[setup] saving full-dim per-term score contributions for variants="
+            f"{tuple(key.replace('scores_by_term_', '') for key in full_term_score_keys)}"
+        )
 
     snapshot_positions_used = None
     timestep_values_used = None
@@ -2133,6 +2169,14 @@ def run_attribution(cfg: TrajAttributionConfig):
         for chunk_start in range(0, len(t_seq), snapshot_chunk_size):
             chunk_end = min(chunk_start + snapshot_chunk_size, len(t_seq))
             chunk_ids = list(range(chunk_start, chunk_end))
+            term_base = len(full_term_ckpt_indices)
+            if full_term_scores_by_key:
+                for local_snapshot_idx in chunk_ids:
+                    full_term_ckpt_indices.append(int(ckpt_i))
+                    full_term_timesteps.append(int(t_seq[local_snapshot_idx]))
+                    full_term_snapshot_positions.append(int(pos_seq[local_snapshot_idx]))
+                    full_term_weights.append(float(snap_weight))
+                    full_term_ckpt_paths.append(str(ckpt_path))
             xt_chunk = array_to_device(jnp.stack([xt_refs[i] for i in chunk_ids], axis=0), device)
             t_chunk = array_to_device(
                 jnp.asarray([int(t_seq[i]) for i in chunk_ids], dtype=jnp.int32),
@@ -2193,12 +2237,21 @@ def run_attribution(cfg: TrajAttributionConfig):
                     chunk_scores_out.block_until_ready()
                     batch_scores = np.asarray(jax.device_get(chunk_scores_out))[:, : len(real_indices)]
                     batch_query_normalized_scores = None
-                scores[start:end] += snap_weight * batch_scores.sum(axis=0).astype(np.float64)
+                batch_contrib = snap_weight * batch_scores.astype(np.float64)
+                scores[start:end] += batch_contrib.sum(axis=0)
+                if "scores_by_term_raw" in full_term_scores_by_key:
+                    full_term_scores_by_key["scores_by_term_raw"][
+                        term_base : term_base + len(chunk_ids),
+                        start:end,
+                    ] = batch_contrib.astype(np.float32)
                 if query_normalized_scores is not None and batch_query_normalized_scores is not None:
-                    query_normalized_scores[start:end] += (
-                        snap_weight
-                        * batch_query_normalized_scores.sum(axis=0).astype(np.float64)
-                    )
+                    query_normalized_contrib = snap_weight * batch_query_normalized_scores.astype(np.float64)
+                    query_normalized_scores[start:end] += query_normalized_contrib.sum(axis=0)
+                    if "scores_by_term_query_l2_normalized" in full_term_scores_by_key:
+                        full_term_scores_by_key["scores_by_term_query_l2_normalized"][
+                            term_base : term_base + len(chunk_ids),
+                            start:end,
+                        ] = query_normalized_contrib.astype(np.float32)
 
                 if chunk_end == len(t_seq):
                     running_sum += float(scores[start:end].sum())
@@ -2239,6 +2292,10 @@ def run_attribution(cfg: TrajAttributionConfig):
 
         if hasattr(score_iter, "close"):
             score_iter.close()
+
+        expected_terms = len(full_term_ckpt_indices)
+        if full_term_scores_by_key and expected_terms > next(iter(full_term_scores_by_key.values())).shape[0]:
+            raise RuntimeError("Full-dim term score buffer was too small for the number of scored terms.")
 
         print(
             f"[checkpoint {ckpt_i + 1}/{len(ckpts)}] {ckpt_name} done | "
@@ -2350,6 +2407,27 @@ def run_attribution(cfg: TrajAttributionConfig):
                 ),
             },
         )
+
+    if full_term_scores_by_key:
+        term_count = len(full_term_ckpt_indices)
+        term_artifact_path = os.environ.get("TRAJ_TRACIN_FULL_TERM_SCORE_ARTIFACT_PATH")
+        if not term_artifact_path:
+            term_artifact_path = os.path.join(cfg.out_dir, "full_dim_term_scores.npz")
+        term_payload = dict(
+            score_indices=np.asarray(picked, dtype=np.int64),
+            term_ckpt_indices=np.asarray(full_term_ckpt_indices, dtype=np.int32),
+            term_timesteps=np.asarray(full_term_timesteps, dtype=np.int32),
+            term_snapshot_positions=np.asarray(full_term_snapshot_positions, dtype=np.int32),
+            term_weights=np.asarray(full_term_weights, dtype=np.float32),
+            term_ckpt_paths=np.asarray(full_term_ckpt_paths),
+            term_score_variants=np.asarray(
+                [key.replace("scores_by_term_", "") for key in full_term_score_keys]
+            ),
+        )
+        for key, values in full_term_scores_by_key.items():
+            term_payload[key] = values[:term_count].astype(np.float32)
+        save_npz_compressed_atomic(term_artifact_path, **term_payload)
+        print(f"[saved] full-dim per-term TrajTracIn score artifact: {term_artifact_path}")
 
     print("=" * 90)
     print(f"Saved to {cfg.out_dir}")

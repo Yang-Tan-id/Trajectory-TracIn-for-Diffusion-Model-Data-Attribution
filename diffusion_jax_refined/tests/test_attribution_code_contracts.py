@@ -120,6 +120,25 @@ class TestAttributionCodeContracts(unittest.TestCase):
         self.assertIn("TRAJ_TRACIN_STREAM_QUERY_ARTIFACTS", script_text)
         self.assertIn("merge_stream_score_shards.py", script_text)
 
+    def test_traj_tracin_can_save_full_dim_term_scores(self):
+        traj_text = (LEGACY / "traj_tracin" / "algorithm.py").read_text()
+        self.assertIn("TRAJ_TRACIN_FULL_SAVE_TERM_SCORE_VARIANTS", traj_text)
+        self.assertIn("TRAJ_TRACIN_FULL_TERM_SCORE_ARTIFACT_PATH", traj_text)
+        self.assertIn("scores_by_term_raw", traj_text)
+        self.assertIn("full-dim per-term TrajTracIn score artifact", traj_text)
+        self.assertIn("term_ckpt_indices", traj_text)
+        self.assertIn("term_timesteps", traj_text)
+
+        h100_script = ROOT / "cifar2" / "tacc" / "h100" / "full_traj_tracin_4query_term_scores_h100.sh"
+        self.assertTrue(h100_script.is_file())
+        script_text = h100_script.read_text()
+        self.assertIn("#SBATCH -J cifar2-full-traj-term", script_text)
+        self.assertIn("FULL_QUERY_SPECS", script_text)
+        self.assertIn("FULL_SCORE_RANGES", script_text)
+        self.assertIn("TRAJ_TRACIN_FULL_SAVE_TERM_SCORE_VARIANTS", script_text)
+        self.assertIn("full_dim_term_scores.npz", script_text)
+        self.assertIn("run_original_attribution_config.py", script_text)
+
     def test_merge_stream_score_shards_orders_indices_and_preserves_dims(self):
         try:
             import numpy as np
