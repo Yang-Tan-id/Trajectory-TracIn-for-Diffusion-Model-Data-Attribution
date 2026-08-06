@@ -351,6 +351,17 @@ class TestAttributionCodeContracts(unittest.TestCase):
         self.assertIn("path_straightness_mean", text)
         self.assertIn("end_over_start", text)
 
+    def test_lds_eval_supports_trajectory_state_mse_target(self):
+        lds_text = (LEGACY / "LDS" / "DM_cifar_lds.py").read_text()
+        self.assertIn('"trajectory_state_mse"', lds_text)
+        self.assertIn("def _sample_model_space_trajectory", lds_text)
+        self.assertIn("def _trajectory_state_mse", lds_text)
+        self.assertIn("per_snapshot_mean", lds_text)
+        self.assertIn("Generated trajectory shape", lds_text)
+
+        common_eval = (ROOT / "common" / "lds_model_eval.py").read_text()
+        self.assertIn('"trajectory_state_mse"', common_eval)
+
     def test_nondefault_traj_objective_gets_distinct_score_folder(self):
         text = (ROOT / "common" / "algorithm_runner.py").read_text()
         self.assertIn('if algorithm == "traj_tracin"', text)

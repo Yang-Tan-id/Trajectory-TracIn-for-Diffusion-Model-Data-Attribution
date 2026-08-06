@@ -108,7 +108,7 @@ def infer_target_function(rows: list[dict[str, str]], default: str) -> str:
         return default
     source_dir = rows[0].get("source_dir") or ""
     parts = Path(source_dir).parts
-    for target in ("noise_trajectory", "projected_trajectory", "simple_loss"):
+    for target in ("noise_trajectory", "projected_trajectory", "simple_loss", "trajectory_state_mse"):
         if target in parts:
             return target
     return default

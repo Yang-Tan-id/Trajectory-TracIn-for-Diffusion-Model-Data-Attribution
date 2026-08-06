@@ -74,7 +74,11 @@ def main() -> None:
         default=float(os.environ.get("LDS_PREDICTION_SIGN", "-1")),
     )
     parser.add_argument("--duplicate-policy", choices=["max", "sum", "mean"], default="max")
-    parser.add_argument("--target-function", choices=["noise_trajectory", "projected_trajectory", "simple_loss"], default="noise_trajectory")
+    parser.add_argument(
+        "--target-function",
+        choices=["noise_trajectory", "projected_trajectory", "simple_loss", "trajectory_state_mse"],
+        default="noise_trajectory",
+    )
     parser.add_argument("--trajectory-reduction", choices=["mean", "sum", "snapshot_mean"], default=None)
     parser.add_argument("--out-dir", default=None)
     args = parser.parse_args()

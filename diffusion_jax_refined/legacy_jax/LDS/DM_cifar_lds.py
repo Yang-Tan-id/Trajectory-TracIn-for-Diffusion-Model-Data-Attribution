@@ -669,7 +669,7 @@ class CifarTargetEvaluator:
         self.xt_ref = None
         self.t_seq = None
         self.target_meta: Dict[str, object] = {}
-        if target_function in ("noise_trajectory", "projected_trajectory", "simple_loss"):
+        if target_function in ("noise_trajectory", "projected_trajectory", "simple_loss", "trajectory_state_mse"):
             if sample_root is None:
                 raise ValueError("--attribution-sample-dir is required for target function evaluation.")
             self.xt_ref, self.t_seq, self.target_meta = load_trajectory_target(
@@ -789,6 +789,102 @@ class CifarTargetEvaluator:
         losses = jax.vmap(one_loss)(t_values, rng_keys)
         return jnp.mean(losses)
 
+    def _sample_model_space_trajectory(self, adapter: CIFARAdapter, seed: int, timesteps_to_save: Sequence[int]) -> np.ndarray:
+        """Generate model-space x_t snapshots for the target checkpoint without saving them."""
+        rng = jax.random.PRNGKey(int(seed))
+        shape = adapter.sample_shape(batch_size=1)
+        cond_y = self.cond if getattr(adapter.cfg, "class_cond", True) else None
+        betas = adapter.schedule.betas
+        alphas = adapter.schedule.alphas
+        alphas_cumprod = adapter.schedule.alphas_cumprod
+        t_seq = jnp.arange(adapter.cfg.timesteps - 1, -1, -1, dtype=jnp.int32)
+
+        @jax.jit
+        def sample_scan(init_rng):
+            init_x = jax.random.normal(init_rng, shape, dtype=jnp.float32)
+
+            def body_fn(carry, i):
+                x, loop_rng = carry
+                t = jnp.full((shape[0],), i, dtype=jnp.int32)
+                pred = adapter.model.apply(
+                    {"params": adapter.state.ema_params},
+                    x,
+                    t,
+                    cond_y,
+                    train=False,
+                )
+                x0_pred = pred if adapter.cfg.predict_x0 else adapter.predict_x0_from_eps(x, t, pred)
+                eps = pred if not adapter.cfg.predict_x0 else (
+                    x - jnp.sqrt(alphas_cumprod[i]) * x0_pred
+                ) / jnp.sqrt(1.0 - alphas_cumprod[i])
+
+                alpha_t = alphas[i]
+                abar_t = alphas_cumprod[i]
+                beta_t = betas[i]
+                coef1 = 1.0 / jnp.sqrt(alpha_t)
+                coef2 = beta_t / jnp.sqrt(1.0 - abar_t)
+                mean = coef1 * (x - coef2 * eps)
+
+                loop_rng, step_rng = jax.random.split(loop_rng)
+                noise = jax.random.normal(step_rng, shape, dtype=x.dtype)
+                next_x = jax.lax.cond(
+                    i > 0,
+                    lambda _: mean + jnp.sqrt(beta_t) * noise,
+                    lambda _: mean,
+                    operand=None,
+                )
+                return (next_x, loop_rng), x
+
+            (_final_x, _), xt_seq = jax.lax.scan(body_fn, (init_x, init_rng), t_seq)
+            return xt_seq
+
+        xt_seq_np = np.asarray(sample_scan(rng), dtype=np.float32)
+        saved = []
+        for timestep in timesteps_to_save:
+            t_value = int(timestep)
+            if t_value < 0 or t_value >= int(adapter.cfg.timesteps):
+                raise ValueError(f"Cannot save timestep {t_value}; valid range is [0, {int(adapter.cfg.timesteps) - 1}]")
+            seq_idx = int(adapter.cfg.timesteps) - 1 - t_value
+            saved.append(xt_seq_np[seq_idx])
+        return np.stack(saved, axis=0).astype(np.float32)
+
+    def _trajectory_state_mse(self, target_adapter: CIFARAdapter) -> Tuple[float, Dict[str, object]]:
+        if self.sample_seed is None:
+            raise ValueError("trajectory_state_mse requires --attribution-sample-seed/seed metadata.")
+        assert self.xt_ref is not None
+        assert self.t_seq is not None
+        target_xt = self._sample_model_space_trajectory(
+            target_adapter,
+            seed=int(self.sample_seed),
+            timesteps_to_save=self.t_seq,
+        )
+        ref_xt = np.asarray(jax.device_get(self.xt_ref), dtype=np.float32)
+        if target_xt.shape != ref_xt.shape:
+            raise ValueError(f"Generated trajectory shape {target_xt.shape} does not match reference {ref_xt.shape}")
+        sq = (target_xt.astype(np.float64) - ref_xt.astype(np.float64)) ** 2
+        per_snapshot_mean = np.mean(sq, axis=tuple(range(1, sq.ndim)))
+        per_snapshot_sum = np.sum(sq, axis=tuple(range(1, sq.ndim)))
+        if self.trajectory_reduction == "sum":
+            value = float(np.sum(per_snapshot_sum))
+        elif self.trajectory_reduction == "snapshot_mean":
+            value = float(np.mean(per_snapshot_sum))
+        else:
+            value = float(np.mean(per_snapshot_mean))
+        details = {
+            "target_function": "trajectory_state_mse",
+            "num_trajectory_steps": int(len(self.t_seq)),
+            "trajectory_reduction": self.trajectory_reduction,
+            "definition": "Generate target-checkpoint trajectory from the same seed and average x_t MSE to the saved reference trajectory.",
+            "sample_seed": int(self.sample_seed),
+            "per_snapshot_mean_min": float(np.min(per_snapshot_mean)),
+            "per_snapshot_mean_mean": float(np.mean(per_snapshot_mean)),
+            "per_snapshot_mean_max": float(np.max(per_snapshot_mean)),
+            "per_snapshot_sum_min": float(np.min(per_snapshot_sum)),
+            "per_snapshot_sum_mean": float(np.mean(per_snapshot_sum)),
+            "per_snapshot_sum_max": float(np.max(per_snapshot_sum)),
+        }
+        return value, details
+
     def evaluate(self, checkpoint: str) -> Tuple[float, Dict[str, object]]:
         target_adapter = self._make_adapter(checkpoint)
         # Store the target adapter for the jitted closures. The module/model structure is
@@ -854,6 +950,9 @@ class CifarTargetEvaluator:
                 "simple_loss_mc_seed": int(self.simple_loss_mc_seed),
                 "simple_loss_manual_grid": self.simple_loss_noise_seeds is not None,
             }
+        elif self.target_function == "trajectory_state_mse":
+            value_float, details = self._trajectory_state_mse(target_adapter)
+            return value_float, details
         else:
             raise ValueError(f"Unknown target_function={self.target_function!r}")
 
@@ -879,7 +978,7 @@ def main():
     parser.add_argument("--max-trajectory-steps", type=int, default=None)
     parser.add_argument(
         "--target-function",
-        choices=["noise_trajectory", "projected_trajectory", "simple_loss"],
+        choices=["noise_trajectory", "projected_trajectory", "simple_loss", "trajectory_state_mse"],
         default="noise_trajectory",
     )
     parser.add_argument(
@@ -1011,7 +1110,7 @@ def main():
     if prompt is None:
         raise ValueError("--prompt was not provided and could not be inferred from the score file.")
     sample_dir = args.attribution_sample_dir or infer_attribution_sample_dir(score_inputs)
-    if args.target_function in ("noise_trajectory", "projected_trajectory", "simple_loss") and sample_dir is None:
+    if args.target_function in ("noise_trajectory", "projected_trajectory", "simple_loss", "trajectory_state_mse") and sample_dir is None:
         raise ValueError(
             "--attribution-sample-dir was not provided and could not be inferred from the score file."
         )
