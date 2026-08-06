@@ -99,6 +99,8 @@ class TestAttributionCodeContracts(unittest.TestCase):
         self.assertIn("TRAJ_TRACIN_STREAM_QUERY_ARTIFACTS", traj_text)
         self.assertIn("TRAJ_TRACIN_STREAM_PROJ_DIMS", traj_text)
         self.assertIn("scores_raw = np.zeros((num_dims, num_queries, len(picked))", traj_text)
+        self.assertIn("TRAJ_TRACIN_STREAM_SAVE_TERM_SCORE_VARIANTS", traj_text)
+        self.assertIn("scores_by_term_train_l2_normalized", traj_text)
         self.assertIn("phi = train_phi_batch(params, x_batch, cond_batch, rngs, t_scalar)", traj_text)
         self.assertIn("raw = phi_dim @ q_raw_by_dim[dim_i].T", traj_text)
         self.assertIn("scores_query_train_l2_normalized", traj_text)
@@ -111,6 +113,9 @@ class TestAttributionCodeContracts(unittest.TestCase):
         self.assertIn("SCRIPT_DIR_CANDIDATE", script_text)
         self.assertIn("Could not locate projected_traj_tracin_score_sweep.sh", script_text)
         self.assertIn("STREAM_PROJ_DIMS", script_text)
+        self.assertIn("STREAM_QUERY_FILTERS", script_text)
+        self.assertIn("STREAM_SAVE_TERM_SCORE_VARIANTS", script_text)
+        self.assertIn("stream_term_scores", script_text)
         self.assertIn("TRAJ_TRACIN_STAGE_MODE=score_stream", script_text)
         self.assertIn("TRAJ_TRACIN_STREAM_QUERY_ARTIFACTS", script_text)
         self.assertIn("merge_stream_score_shards.py", script_text)
@@ -134,9 +139,13 @@ class TestAttributionCodeContracts(unittest.TestCase):
                     scores_query_l2_normalized=base + 10.0,
                     scores_train_l2_normalized=base + 20.0,
                     scores_query_train_l2_normalized=base + 30.0,
+                    scores_by_term_train_l2_normalized=np.full((3, 2, 2, 2), float(shard_id), dtype=np.float32),
                     score_indices=indices,
                     query_artifacts=query_artifacts,
                     proj_dims=np.asarray([256, 512], dtype=np.int32),
+                    term_ckpt_indices=np.asarray([0, 0, 1], dtype=np.int32),
+                    term_timesteps=np.asarray([1, 2, 3], dtype=np.int32),
+                    term_score_variants=np.asarray(["train_l2_normalized"]),
                 )
             out = tmp / "merged.npz"
             subprocess.check_call(
@@ -153,8 +162,12 @@ class TestAttributionCodeContracts(unittest.TestCase):
                 np.testing.assert_array_equal(merged["score_indices"], np.asarray([1, 2, 3, 4]))
                 np.testing.assert_array_equal(merged["proj_dims"], np.asarray([256, 512], dtype=np.int32))
                 self.assertEqual(tuple(merged["scores_raw"].shape), (2, 2, 4))
+                self.assertEqual(tuple(merged["scores_by_term_train_l2_normalized"].shape), (3, 2, 2, 4))
                 np.testing.assert_allclose(merged["scores_raw"][:, :, :2], 1.0)
                 np.testing.assert_allclose(merged["scores_raw"][:, :, 2:], 0.0)
+                np.testing.assert_allclose(merged["scores_by_term_train_l2_normalized"][:, :, :, :2], 1.0)
+                np.testing.assert_allclose(merged["scores_by_term_train_l2_normalized"][:, :, :, 2:], 0.0)
+                np.testing.assert_array_equal(merged["term_ckpt_indices"], np.asarray([0, 0, 1], dtype=np.int32))
 
     def test_fast_lds_stream_score_eval_selects_query_and_rewrites_subset_dirs(self):
         if importlib.util.find_spec("numpy") is None:

@@ -13,6 +13,13 @@ SCORE_KEYS = (
     "scores_query_train_l2_normalized",
 )
 
+TERM_SCORE_KEYS = (
+    "scores_by_term_raw",
+    "scores_by_term_query_l2_normalized",
+    "scores_by_term_train_l2_normalized",
+    "scores_by_term_query_train_l2_normalized",
+)
+
 
 def load_npz(path: Path) -> dict[str, np.ndarray]:
     if not path.is_file():
@@ -46,11 +53,23 @@ def main() -> None:
         "query_artifacts": query_artifacts,
         "proj_dims": proj_dims.astype(np.int32),
     }
+    for meta_key in ("cache_dim", "term_ckpt_indices", "term_timesteps", "term_weights", "term_score_variants"):
+        if meta_key in first:
+            arrays[meta_key] = first[meta_key]
+
     for key in SCORE_KEYS:
         parts = [payload[key] for payload in payloads]
         axis = 2 if parts[0].ndim == 3 else 1
         merged = np.concatenate(parts, axis=axis)
         arrays[key] = (merged[:, :, order] if axis == 2 else merged[:, order]).astype(np.float64)
+    for key in TERM_SCORE_KEYS:
+        if key not in first:
+            continue
+        if any(key not in payload for payload in payloads):
+            raise ValueError(f"{key} is present in some stream shards but missing in others")
+        parts = [payload[key] for payload in payloads]
+        merged = np.concatenate(parts, axis=3)
+        arrays[key] = merged[:, :, :, order].astype(np.float32)
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
     tmp = args.output.with_name(args.output.name + ".tmp.npz")

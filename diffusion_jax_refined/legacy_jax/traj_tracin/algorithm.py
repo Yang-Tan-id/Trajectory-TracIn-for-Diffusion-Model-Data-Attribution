@@ -1560,6 +1560,36 @@ def run_attribution(cfg: TrajAttributionConfig):
         scores_query_l2 = np.zeros_like(scores_raw)
         scores_train_l2 = np.zeros_like(scores_raw)
         scores_query_train_l2 = np.zeros_like(scores_raw)
+        term_score_variants_text = os.environ.get("TRAJ_TRACIN_STREAM_SAVE_TERM_SCORE_VARIANTS", "").strip()
+        term_score_variant_aliases = {
+            "raw": "scores_by_term_raw",
+            "query_l2": "scores_by_term_query_l2_normalized",
+            "query_l2_normalized": "scores_by_term_query_l2_normalized",
+            "train_l2": "scores_by_term_train_l2_normalized",
+            "train_l2_normalized": "scores_by_term_train_l2_normalized",
+            "query_train_l2": "scores_by_term_query_train_l2_normalized",
+            "query_train_l2_normalized": "scores_by_term_query_train_l2_normalized",
+        }
+        term_score_keys = []
+        if term_score_variants_text:
+            for part in term_score_variants_text.replace(",", " ").split():
+                key = term_score_variant_aliases.get(part.strip())
+                if key is None:
+                    raise ValueError(
+                        "Unknown TRAJ_TRACIN_STREAM_SAVE_TERM_SCORE_VARIANTS entry "
+                        f"{part!r}; expected one of {sorted(term_score_variant_aliases)}"
+                    )
+                if key not in term_score_keys:
+                    term_score_keys.append(key)
+        term_scores_by_key = {
+            key: np.zeros((query_features.shape[1], num_dims, num_queries, len(picked)), dtype=np.float32)
+            for key in term_score_keys
+        }
+        if term_scores_by_key:
+            print(
+                "[stage:score_stream] saving per-term score contributions for variants="
+                f"{tuple(key.replace('scores_by_term_', '') for key in term_score_keys)}"
+            )
 
         def train_phi_one(p, x0_one, cond_one, rng_one, t_scalar):
             x0_one = x0_one[None, ...]
@@ -1658,10 +1688,26 @@ def run_attribution(cfg: TrajAttributionConfig):
                         train_l2 = phi_norm @ q_raw_by_dim[dim_i].T
                         both_l2 = phi_norm @ q_norm_by_dim[dim_i].T
                         raw.block_until_ready()
-                        scores_raw[dim_i, :, start:end] += term_weight * np.asarray(jax.device_get(raw), dtype=np.float64).T
-                        scores_query_l2[dim_i, :, start:end] += term_weight * np.asarray(jax.device_get(query_l2), dtype=np.float64).T
-                        scores_train_l2[dim_i, :, start:end] += term_weight * np.asarray(jax.device_get(train_l2), dtype=np.float64).T
-                        scores_query_train_l2[dim_i, :, start:end] += term_weight * np.asarray(jax.device_get(both_l2), dtype=np.float64).T
+                        raw_np = np.asarray(jax.device_get(raw), dtype=np.float64).T
+                        query_l2_np = np.asarray(jax.device_get(query_l2), dtype=np.float64).T
+                        train_l2_np = np.asarray(jax.device_get(train_l2), dtype=np.float64).T
+                        both_l2_np = np.asarray(jax.device_get(both_l2), dtype=np.float64).T
+                        raw_contrib = term_weight * raw_np
+                        query_l2_contrib = term_weight * query_l2_np
+                        train_l2_contrib = term_weight * train_l2_np
+                        both_l2_contrib = term_weight * both_l2_np
+                        scores_raw[dim_i, :, start:end] += raw_contrib
+                        scores_query_l2[dim_i, :, start:end] += query_l2_contrib
+                        scores_train_l2[dim_i, :, start:end] += train_l2_contrib
+                        scores_query_train_l2[dim_i, :, start:end] += both_l2_contrib
+                        if "scores_by_term_raw" in term_scores_by_key:
+                            term_scores_by_key["scores_by_term_raw"][term_id, dim_i, :, start:end] = raw_contrib.astype(np.float32)
+                        if "scores_by_term_query_l2_normalized" in term_scores_by_key:
+                            term_scores_by_key["scores_by_term_query_l2_normalized"][term_id, dim_i, :, start:end] = query_l2_contrib.astype(np.float32)
+                        if "scores_by_term_train_l2_normalized" in term_scores_by_key:
+                            term_scores_by_key["scores_by_term_train_l2_normalized"][term_id, dim_i, :, start:end] = train_l2_contrib.astype(np.float32)
+                        if "scores_by_term_query_train_l2_normalized" in term_scores_by_key:
+                            term_scores_by_key["scores_by_term_query_train_l2_normalized"][term_id, dim_i, :, start:end] = both_l2_contrib.astype(np.float32)
 
                 if (
                     local_term_no == 1
@@ -1680,8 +1726,7 @@ def run_attribution(cfg: TrajAttributionConfig):
                 f"elapsed={format_seconds(time.time() - ckpt_start)}"
             )
 
-        save_npz_compressed_atomic(
-            stage_artifact_path,
+        stream_payload = dict(
             scores_raw=scores_raw,
             scores_query_l2_normalized=scores_query_l2,
             scores_train_l2_normalized=scores_train_l2,
@@ -1695,6 +1740,12 @@ def run_attribution(cfg: TrajAttributionConfig):
             term_weights=np.asarray(term_weights, dtype=np.float32),
             elapsed_sec=np.asarray(time.time() - stream_start, dtype=np.float64),
         )
+        if term_scores_by_key:
+            stream_payload["term_score_variants"] = np.asarray(
+                [key.replace("scores_by_term_", "") for key in term_score_keys]
+            )
+            stream_payload.update(term_scores_by_key)
+        save_npz_compressed_atomic(stage_artifact_path, **stream_payload)
         print(f"[saved] TrajTracIn stream score artifact: {stage_artifact_path}")
         return
 

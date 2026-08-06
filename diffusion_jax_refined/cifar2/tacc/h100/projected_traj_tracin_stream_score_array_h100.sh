@@ -33,11 +33,13 @@ STREAM_PROJ_DIM="${STREAM_PROJ_DIM:-${PROJECTED_CACHE_DIM}}"
 STREAM_PROJ_DIMS="${STREAM_PROJ_DIMS:-${STREAM_PROJ_DIM}}"
 STREAM_SCORE_RANGES="${STREAM_SCORE_RANGES:-1-625 626-1250 1251-1875 1876-2500 2501-3125 3126-3750 3751-4375 4376-5000 5001-5625 5626-6250 6251-6875 6876-7500 7501-8125 8126-8750 8751-9375 9376-10000}"
 STREAM_TASK_SET="${STREAM_TASK_SET:-all}"
+STREAM_QUERY_FILTERS="${STREAM_QUERY_FILTERS:-}"
+STREAM_SAVE_TERM_SCORE_VARIANTS="${STREAM_SAVE_TERM_SCORE_VARIANTS:-}"
 TRAJ_SCORE_BATCH_SIZE="${TRAJ_SCORE_BATCH_SIZE:-8}"
 TRAJ_QUERY_NORMALIZE_EPS="${TRAJ_QUERY_NORMALIZE_EPS:-1e-8}"
 DRY_RUN="${DRY_RUN:-0}"
 
-export PYTHON_BIN PROJECTED_CACHE_DIM STREAM_PROJ_DIM STREAM_PROJ_DIMS TRAJ_SCORE_BATCH_SIZE TRAJ_QUERY_NORMALIZE_EPS
+export PYTHON_BIN PROJECTED_CACHE_DIM STREAM_PROJ_DIM STREAM_PROJ_DIMS STREAM_SAVE_TERM_SCORE_VARIANTS TRAJ_SCORE_BATCH_SIZE TRAJ_QUERY_NORMALIZE_EPS
 
 split_words() {
   local text="$1"
@@ -86,10 +88,28 @@ query_artifacts_for_score_mode() {
   local score_mode="$1"
   local artifact_base="${PROJECTED_ARTIFACT_BASE:-${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/projected_traj_tracin_artifacts/${score_mode}/train_seed_${TRAIN_SEED}}"
   [[ -d "${artifact_base}" ]] || return 0
-  find "${artifact_base}" \
+  mapfile -t all_paths < <(find "${artifact_base}" \
     -path "*/shared_query/proj_${PROJECTED_CACHE_DIM}/query_gradient_artifact.npz" \
     -type f \
-    | sort
+    | sort)
+  if [[ -z "${STREAM_QUERY_FILTERS}" ]]; then
+    printf '%s\n' "${all_paths[@]}"
+    return
+  fi
+  mapfile -t filters < <(split_words "${STREAM_QUERY_FILTERS}")
+  local path filter matched
+  for path in "${all_paths[@]}"; do
+    matched=0
+    for filter in "${filters[@]}"; do
+      if [[ "${path}" == *"${filter}"* ]]; then
+        matched=1
+        break
+      fi
+    done
+    if [[ "${matched}" == "1" ]]; then
+      printf '%s\n' "${path}"
+    fi
+  done
 }
 
 run_stream_shard() {
@@ -104,7 +124,13 @@ run_stream_shard() {
   local artifact_base="${PROJECTED_ARTIFACT_BASE:-${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/projected_traj_tracin_artifacts/${score_mode}/train_seed_${TRAIN_SEED}}"
   local dims_tag
   dims_tag="$(path_tag "${STREAM_PROJ_DIMS}")"
-  local stream_root="${STREAM_SCORE_ROOT:-${artifact_base}/stream_scores/cache_${PROJECTED_CACHE_DIM}/proj_${dims_tag}}"
+  local default_stream_root
+  if [[ -n "${STREAM_SAVE_TERM_SCORE_VARIANTS}" ]]; then
+    default_stream_root="${artifact_base}/stream_term_scores/cache_${PROJECTED_CACHE_DIM}/proj_${dims_tag}/variants_$(path_tag "${STREAM_SAVE_TERM_SCORE_VARIANTS}")"
+  else
+    default_stream_root="${artifact_base}/stream_scores/cache_${PROJECTED_CACHE_DIM}/proj_${dims_tag}"
+  fi
+  local stream_root="${STREAM_SCORE_ROOT:-${default_stream_root}}"
   local rtag
   rtag="$(range_tag "${range}")"
   local out_path="${stream_root}/shards/range_${rtag}/stream_scores.npz"
@@ -133,6 +159,7 @@ run_stream_shard() {
     TRAJ_TRACIN_STREAM_CACHE_DIM="${PROJECTED_CACHE_DIM}"
     TRAJ_TRACIN_STREAM_PROJ_DIMS="${STREAM_PROJ_DIMS}"
     TRAJ_TRACIN_STREAM_QUERY_ARTIFACTS="${query_paths}"
+    TRAJ_TRACIN_STREAM_SAVE_TERM_SCORE_VARIANTS="${STREAM_SAVE_TERM_SCORE_VARIANTS}"
     "${PYTHON_BIN}" "${REFINE_ROOT}/common/run_original_attribution_config.py"
     "${CIFAR2_ROOT}/data_attribution/traj_tracin/CONFIG.py"
   )
@@ -156,6 +183,8 @@ run_one_score_mode() {
 
   echo "Projected Traj-TracIn query-cached stream scoring"
   echo "score_mode=${score_mode}; cache_dim=${PROJECTED_CACHE_DIM}; proj_dims=${STREAM_PROJ_DIMS}; queries=${#query_paths_array[@]}"
+  echo "query_filters=${STREAM_QUERY_FILTERS:-<none>}"
+  echo "term_score_variants=${STREAM_SAVE_TERM_SCORE_VARIANTS:-<none>}"
   echo "ranges=${STREAM_SCORE_RANGES}"
 
   if [[ "${DRY_RUN}" == "1" ]]; then
@@ -180,7 +209,12 @@ run_one_score_mode() {
 
   artifact_base="${PROJECTED_ARTIFACT_BASE:-${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/projected_traj_tracin_artifacts/${score_mode}/train_seed_${TRAIN_SEED}}"
   dims_tag="$(path_tag "${STREAM_PROJ_DIMS}")"
-  stream_root="${STREAM_SCORE_ROOT:-${artifact_base}/stream_scores/cache_${PROJECTED_CACHE_DIM}/proj_${dims_tag}}"
+  if [[ -n "${STREAM_SAVE_TERM_SCORE_VARIANTS}" ]]; then
+    default_stream_root="${artifact_base}/stream_term_scores/cache_${PROJECTED_CACHE_DIM}/proj_${dims_tag}/variants_$(path_tag "${STREAM_SAVE_TERM_SCORE_VARIANTS}")"
+  else
+    default_stream_root="${artifact_base}/stream_scores/cache_${PROJECTED_CACHE_DIM}/proj_${dims_tag}"
+  fi
+  stream_root="${STREAM_SCORE_ROOT:-${default_stream_root}}"
   shard_paths=()
   for range in "${RANGES[@]}"; do
     rtag="$(range_tag "${range}")"
