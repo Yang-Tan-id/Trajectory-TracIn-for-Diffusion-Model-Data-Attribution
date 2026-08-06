@@ -326,6 +326,18 @@ class TestAttributionCodeContracts(unittest.TestCase):
         self.assertIn("pred_std_over_true_f_std", text)
         self.assertIn("worst_rank_mismatches", text)
 
+    def test_query_update_alignment_reports_parameter_space_direction(self):
+        text = (ROOT / "common" / "query_update_alignment.py").read_text()
+        self.assertIn("theta_c - theta_{c+1}", text)
+        self.assertIn("query_update_alignment_by_transition", text)
+        self.assertIn("make_query_grad_chunk_fn", text)
+        self.assertIn("descent_update = tree_sub(current_params, next_params)", text)
+
+        analysis_text = (ROOT / "common" / "analyze_query_update_alignment.py").read_text()
+        self.assertIn("transition_alignment_summary.csv", analysis_text)
+        self.assertIn("snapshot_alignment_summary.csv", analysis_text)
+        self.assertIn("query_update_alignment_summary.json", analysis_text)
+
     def test_predicted_noise_ref_process_analyzer_reports_convergence(self):
         text = (ROOT / "common" / "analyze_predicted_noise_ref_process.py").read_text()
         self.assertIn("eps_ref_mse_by_ckpt_snapshot", text)
