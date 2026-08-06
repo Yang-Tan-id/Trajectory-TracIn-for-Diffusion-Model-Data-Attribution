@@ -281,6 +281,14 @@ class TestAttributionCodeContracts(unittest.TestCase):
             self.assertEqual(meta["num_terms"], 3)
             self.assertEqual(score_map, {10: 432.0, 11: 864.0})
 
+    def test_predicted_noise_change_weight_script_outputs_reusable_tables(self):
+        text = (ROOT / "common" / "predicted_noise_change_weights.py").read_text()
+        self.assertIn("eps_{theta_{c+1}}(x_s, t_s)", text)
+        self.assertIn("delta_by_ckpt_snapshot", text)
+        self.assertIn("change_weight_by_ckpt_snapshot", text)
+        self.assertIn("normalize_per_timestamp", text)
+        self.assertIn("eps_delta_mse_by_transition", text)
+
     def test_nondefault_traj_objective_gets_distinct_score_folder(self):
         text = (ROOT / "common" / "algorithm_runner.py").read_text()
         self.assertIn('if algorithm == "traj_tracin"', text)
