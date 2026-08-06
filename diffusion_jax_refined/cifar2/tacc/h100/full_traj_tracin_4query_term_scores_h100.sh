@@ -35,7 +35,7 @@ TRAJ_USE_SAVED_TRAJECTORY="${TRAJ_USE_SAVED_TRAJECTORY:-0}"
 TRAJ_SAVE_QUERY_NORMALIZED_SCORES="${TRAJ_SAVE_QUERY_NORMALIZED_SCORES:-0}"
 TRAJ_TRACIN_FULL_SAVE_TERM_SCORE_VARIANTS="${TRAJ_TRACIN_FULL_SAVE_TERM_SCORE_VARIANTS:-raw}"
 FULL_SCORE_RANGES="${FULL_SCORE_RANGES:-1-2500 2501-5000 5001-7500 7501-10000}"
-FULL_QUERY_SPECS="${FULL_QUERY_SPECS:-prompted_solo:horse prompted_solo:automobile prompted_solo:horse_automobile unprompted_solo:unconditional}"
+FULL_QUERY_SPECS="${FULL_QUERY_SPECS:-prompted_solo:horse prompted_solo:automobile prompted_solo:horse,automobile unprompted_solo:unconditional}"
 GPU_PER_NODE="${GPU_PER_NODE:-4}"
 DRY_RUN="${DRY_RUN:-0}"
 
@@ -46,6 +46,11 @@ export TRAJ_SAVE_QUERY_NORMALIZED_SCORES TRAJ_TRACIN_FULL_SAVE_TERM_SCORE_VARIAN
 split_words() {
   local text="$1"
   text="${text//,/ }"
+  printf '%s\n' ${text}
+}
+
+split_space_words() {
+  local text="$1"
   printf '%s\n' ${text}
 }
 
@@ -140,7 +145,7 @@ run_one() {
 }
 
 mapfile -t ranges < <(split_words "${FULL_SCORE_RANGES}")
-mapfile -t query_specs < <(split_words "${FULL_QUERY_SPECS}")
+mapfile -t query_specs < <(split_space_words "${FULL_QUERY_SPECS}")
 
 echo "Full-dim Traj-TracIn term-score run"
 echo "experiment=${EXPERIMENT_TAG}; train_seed=${TRAIN_SEED}; initial_seed=${INITIAL_SEED}"
