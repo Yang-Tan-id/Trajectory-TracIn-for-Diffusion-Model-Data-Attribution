@@ -290,6 +290,8 @@ class TestAttributionCodeContracts(unittest.TestCase):
         self.assertIn("normalize_per_timestamp", text)
         self.assertIn("eps_delta_mse_by_transition", text)
         self.assertIn("eps_to_ref_cosine_by_transition", text)
+        self.assertIn("eps_initial_to_ref_cosine_by_transition", text)
+        self.assertIn("eps_path_straightness_by_snapshot", text)
         self.assertIn("eps_to_ref_progress_by_transition", text)
 
     def test_full_dim_term_lds_analyzer_reports_sign_and_term_ablation(self):
@@ -333,6 +335,8 @@ class TestAttributionCodeContracts(unittest.TestCase):
         self.assertIn("transition_direction_summary.csv", text)
         self.assertIn("snapshot_direction_summary.csv", text)
         self.assertIn("eps_to_ref_cosine_heatmap.svg", text)
+        self.assertIn("eps_initial_to_ref_cosine_heatmap.svg", text)
+        self.assertIn("path_straightness_mean", text)
         self.assertIn("end_over_start", text)
 
     def test_nondefault_traj_objective_gets_distinct_score_folder(self):

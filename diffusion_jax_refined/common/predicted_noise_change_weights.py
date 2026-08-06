@@ -180,8 +180,11 @@ def main() -> None:
     previous_ref_mse_row: np.ndarray | None = None
     delta_rows: list[np.ndarray] = []
     cosine_rows: list[np.ndarray] = []
+    global_cosine_rows: list[np.ndarray] = []
     progress_rows: list[np.ndarray] = []
     ref_mse_rows: list[np.ndarray] = []
+    initial_eps_chunks: list[np.ndarray] | None = None
+    path_length_row: np.ndarray | None = None
     started = time.time()
 
     for ckpt_i, ckpt_path in enumerate(ckpts):
@@ -210,24 +213,35 @@ def main() -> None:
         if previous_eps_chunks is not None:
             deltas = []
             cosines = []
+            global_cosines = []
             for chunk_id, (prev, curr) in enumerate(zip(previous_eps_chunks, current_eps_chunks)):
                 move = curr.astype(np.float64) - prev.astype(np.float64)
                 to_ref = reference_eps_chunks[chunk_id].astype(np.float64) - prev.astype(np.float64)
+                assert initial_eps_chunks is not None
+                initial_to_ref = reference_eps_chunks[chunk_id].astype(np.float64) - initial_eps_chunks[chunk_id].astype(np.float64)
                 reduce_axes = tuple(range(1, curr.ndim))
                 mse = np.mean(move ** 2, axis=reduce_axes)
                 dot = np.sum(move * to_ref, axis=reduce_axes)
                 move_norm = np.sqrt(np.sum(move ** 2, axis=reduce_axes))
                 ref_norm = np.sqrt(np.sum(to_ref ** 2, axis=reduce_axes))
                 cosine = dot / np.maximum(move_norm * ref_norm, 1e-30)
+                global_dot = np.sum(move * initial_to_ref, axis=reduce_axes)
+                global_norm = np.sqrt(np.sum(initial_to_ref ** 2, axis=reduce_axes))
+                global_cosine = global_dot / np.maximum(move_norm * global_norm, 1e-30)
                 deltas.append(mse.astype(np.float64))
                 cosines.append(cosine.astype(np.float64))
+                global_cosines.append(global_cosine.astype(np.float64))
             delta_row = np.concatenate(deltas, axis=0)
             cosine_row = np.concatenate(cosines, axis=0)
+            global_cosine_row = np.concatenate(global_cosines, axis=0)
             assert previous_ref_mse_row is not None
             progress_row = previous_ref_mse_row - ref_mse_row
             delta_rows.append(delta_row)
             cosine_rows.append(cosine_row)
+            global_cosine_rows.append(global_cosine_row)
             progress_rows.append(progress_row)
+            step_length_row = np.sqrt(delta_row)
+            path_length_row = step_length_row if path_length_row is None else path_length_row + step_length_row
             print(
                 f"[delta] transition {ckpt_i}/{len(ckpts) - 1} | "
                 f"mean={float(np.mean(delta_row)):.6g} | "
@@ -237,6 +251,8 @@ def main() -> None:
                 f"[direction] transition {ckpt_i}/{len(ckpts) - 1} | "
                 f"cos_mean={float(np.mean(cosine_row)):.6g} | "
                 f"cos_pos_frac={float(np.mean(cosine_row > 0.0)):.3f} | "
+                f"global_cos_mean={float(np.mean(global_cosine_row)):.6g} | "
+                f"global_cos_pos_frac={float(np.mean(global_cosine_row > 0.0)):.3f} | "
                 f"progress_pos_frac={float(np.mean(progress_row > 0.0)):.3f}"
             )
         print(
@@ -246,6 +262,8 @@ def main() -> None:
         )
 
         previous_eps_chunks = current_eps_chunks
+        if initial_eps_chunks is None:
+            initial_eps_chunks = current_eps_chunks
         previous_ref_mse_row = ref_mse_row
         elapsed = time.time() - started
         print(
@@ -256,10 +274,15 @@ def main() -> None:
 
     delta_transition = np.stack(delta_rows, axis=0).astype(np.float64)
     cosine_transition = np.stack(cosine_rows, axis=0).astype(np.float64)
+    global_cosine_transition = np.stack(global_cosine_rows, axis=0).astype(np.float64)
     progress_transition = np.stack(progress_rows, axis=0).astype(np.float64)
     ref_mse_by_ckpt_snapshot = np.stack(ref_mse_rows, axis=0).astype(np.float64)
+    if path_length_row is None:
+        raise ValueError("No transition path length was computed")
+    straightness_by_snapshot = np.sqrt(ref_mse_by_ckpt_snapshot[0]) / np.maximum(path_length_row, 1e-30)
     delta_by_ckpt_snapshot = pad_last_checkpoint_transition(delta_transition, len(ckpts))
     cosine_by_ckpt_snapshot = pad_last_checkpoint_transition(cosine_transition, len(ckpts))
+    global_cosine_by_ckpt_snapshot = pad_last_checkpoint_transition(global_cosine_transition, len(ckpts))
     progress_by_ckpt_snapshot = pad_last_checkpoint_transition(progress_transition, len(ckpts))
     weight_per_timestamp = normalize_per_timestamp(delta_by_ckpt_snapshot)
     weight_global = normalize_global(delta_by_ckpt_snapshot)
@@ -270,10 +293,13 @@ def main() -> None:
         out_path,
         eps_delta_mse_by_transition=delta_transition.astype(np.float32),
         eps_to_ref_cosine_by_transition=cosine_transition.astype(np.float32),
+        eps_initial_to_ref_cosine_by_transition=global_cosine_transition.astype(np.float32),
         eps_to_ref_progress_by_transition=progress_transition.astype(np.float32),
         eps_ref_mse_by_ckpt_snapshot=ref_mse_by_ckpt_snapshot.astype(np.float32),
+        eps_path_straightness_by_snapshot=straightness_by_snapshot.astype(np.float32),
         delta_by_ckpt_snapshot=delta_by_ckpt_snapshot.astype(np.float32),
         eps_to_ref_cosine_by_ckpt_snapshot=cosine_by_ckpt_snapshot.astype(np.float32),
+        eps_initial_to_ref_cosine_by_ckpt_snapshot=global_cosine_by_ckpt_snapshot.astype(np.float32),
         eps_to_ref_progress_by_ckpt_snapshot=progress_by_ckpt_snapshot.astype(np.float32),
         change_weight_by_ckpt_snapshot=weight_per_timestamp.astype(np.float32),
         change_weight_global_linear=weight_global.astype(np.float32),
@@ -295,6 +321,8 @@ def main() -> None:
         f"ref_mse_start={float(np.mean(ref_mse_by_ckpt_snapshot[0])):.6g} | "
         f"ref_mse_end={float(np.mean(ref_mse_by_ckpt_snapshot[-1])):.6g} | "
         f"cos_mean={float(np.mean(cosine_transition)):.6g} | "
+        f"global_cos_mean={float(np.mean(global_cosine_transition)):.6g} | "
+        f"straightness_mean={float(np.mean(straightness_by_snapshot)):.6g} | "
         f"progress_pos_frac={float(np.mean(progress_transition > 0.0)):.3f} | "
         f"per_ts_weight_mean={float(np.mean(weight_per_timestamp)):.6g} | "
         f"elapsed={format_seconds(time.time() - started)}"

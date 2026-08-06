@@ -213,9 +213,19 @@ def main() -> None:
             if "eps_to_ref_cosine_by_transition" in payload
             else None
         )
+        global_cosine_transition = (
+            np.asarray(payload["eps_initial_to_ref_cosine_by_transition"], dtype=np.float64)
+            if "eps_initial_to_ref_cosine_by_transition" in payload
+            else None
+        )
         progress_transition = (
             np.asarray(payload["eps_to_ref_progress_by_transition"], dtype=np.float64)
             if "eps_to_ref_progress_by_transition" in payload
+            else None
+        )
+        straightness_by_snapshot = (
+            np.asarray(payload["eps_path_straightness_by_snapshot"], dtype=np.float64)
+            if "eps_path_straightness_by_snapshot" in payload
             else None
         )
 
@@ -271,38 +281,56 @@ def main() -> None:
         assert progress_transition is not None
         for c in range(cosine_transition.shape[0]):
             cos_row = cosine_transition[c]
+            global_cos_row = global_cosine_transition[c] if global_cosine_transition is not None else None
             progress_row = progress_transition[c]
-            transition_direction_rows.append(
-                {
-                    "transition_index": c,
-                    "from_ckpt_index": c,
-                    "to_ckpt_index": c + 1,
-                    "from_epoch": 4 * (c + 1),
-                    "to_epoch": 4 * (c + 2),
-                    "cosine_mean": float(np.mean(cos_row)),
-                    "cosine_median": float(np.median(cos_row)),
-                    "cosine_positive_fraction": float(np.mean(cos_row > 0.0)),
-                    "progress_mean": float(np.mean(progress_row)),
-                    "progress_median": float(np.median(progress_row)),
-                    "progress_positive_fraction": float(np.mean(progress_row > 0.0)),
-                }
-            )
+            row = {
+                "transition_index": c,
+                "from_ckpt_index": c,
+                "to_ckpt_index": c + 1,
+                "from_epoch": 4 * (c + 1),
+                "to_epoch": 4 * (c + 2),
+                "cosine_mean": float(np.mean(cos_row)),
+                "cosine_median": float(np.median(cos_row)),
+                "cosine_positive_fraction": float(np.mean(cos_row > 0.0)),
+                "progress_mean": float(np.mean(progress_row)),
+                "progress_median": float(np.median(progress_row)),
+                "progress_positive_fraction": float(np.mean(progress_row > 0.0)),
+            }
+            if global_cos_row is not None:
+                row.update(
+                    {
+                        "global_cosine_mean": float(np.mean(global_cos_row)),
+                        "global_cosine_median": float(np.median(global_cos_row)),
+                        "global_cosine_positive_fraction": float(np.mean(global_cos_row > 0.0)),
+                    }
+                )
+            transition_direction_rows.append(row)
         for s in range(cosine_transition.shape[1]):
             cos_col = cosine_transition[:, s]
+            global_cos_col = global_cosine_transition[:, s] if global_cosine_transition is not None else None
             progress_col = progress_transition[:, s]
-            snapshot_direction_rows.append(
-                {
-                    "snapshot_column": s,
-                    "snapshot_position": int(positions[s]) if s < len(positions) else s,
-                    "timestep": int(timesteps[s]) if s < len(timesteps) else -1,
-                    "cosine_mean": float(np.mean(cos_col)),
-                    "cosine_median": float(np.median(cos_col)),
-                    "cosine_positive_fraction": float(np.mean(cos_col > 0.0)),
-                    "progress_mean": float(np.mean(progress_col)),
-                    "progress_median": float(np.median(progress_col)),
-                    "progress_positive_fraction": float(np.mean(progress_col > 0.0)),
-                }
-            )
+            row = {
+                "snapshot_column": s,
+                "snapshot_position": int(positions[s]) if s < len(positions) else s,
+                "timestep": int(timesteps[s]) if s < len(timesteps) else -1,
+                "cosine_mean": float(np.mean(cos_col)),
+                "cosine_median": float(np.median(cos_col)),
+                "cosine_positive_fraction": float(np.mean(cos_col > 0.0)),
+                "progress_mean": float(np.mean(progress_col)),
+                "progress_median": float(np.median(progress_col)),
+                "progress_positive_fraction": float(np.mean(progress_col > 0.0)),
+            }
+            if global_cos_col is not None:
+                row.update(
+                    {
+                        "global_cosine_mean": float(np.mean(global_cos_col)),
+                        "global_cosine_median": float(np.median(global_cos_col)),
+                        "global_cosine_positive_fraction": float(np.mean(global_cos_col > 0.0)),
+                    }
+                )
+            if straightness_by_snapshot is not None:
+                row["path_straightness"] = float(straightness_by_snapshot[s])
+            snapshot_direction_rows.append(row)
         write_csv(out_dir / "transition_direction_summary.csv", transition_direction_rows)
         write_csv(out_dir / "snapshot_direction_summary.csv", snapshot_direction_rows)
         write_signed_heatmap_svg(
@@ -317,6 +345,13 @@ def main() -> None:
             timesteps,
             title="Ref-MSE progress by checkpoint transition",
         )
+        if global_cosine_transition is not None:
+            write_signed_heatmap_svg(
+                out_dir / "eps_initial_to_ref_cosine_heatmap.svg",
+                global_cosine_transition,
+                timesteps,
+                title="Cosine of checkpoint eps update along initial-to-reference direction",
+            )
 
     summary = {
         "weights_npz": str(Path(args.weights_npz).expanduser()),
@@ -361,6 +396,28 @@ def main() -> None:
                 )[:10],
             }
         )
+        if global_cosine_transition is not None:
+            summary.update(
+                {
+                    "global_cosine_mean": float(np.mean(global_cosine_transition)),
+                    "global_cosine_median": float(np.median(global_cosine_transition)),
+                    "global_cosine_positive_fraction": float(np.mean(global_cosine_transition > 0.0)),
+                    "num_snapshots_global_cosine_positive_fraction_ge_0p75": int(
+                        sum(float(r["global_cosine_positive_fraction"]) >= 0.75 for r in snapshot_direction_rows)
+                    ),
+                }
+            )
+        if straightness_by_snapshot is not None:
+            summary.update(
+                {
+                    "path_straightness_mean": float(np.mean(straightness_by_snapshot)),
+                    "path_straightness_median": float(np.median(straightness_by_snapshot)),
+                    "path_straightness_min": float(np.min(straightness_by_snapshot)),
+                    "path_straightness_max": float(np.max(straightness_by_snapshot)),
+                    "num_snapshots_straightness_ge_0p75": int(np.sum(straightness_by_snapshot >= 0.75)),
+                    "num_snapshots_straightness_ge_0p9": int(np.sum(straightness_by_snapshot >= 0.9)),
+                }
+            )
     (out_dir / "ref_process_summary.json").write_text(json.dumps(summary, indent=2))
     print(f"[saved] {out_dir}")
     print(
@@ -379,6 +436,16 @@ def main() -> None:
             f"cos_pos_frac={summary['cosine_positive_fraction']:.3f} | "
             f"progress_pos_frac={summary['progress_positive_fraction']:.3f}"
         )
+        if "global_cosine_mean" in summary:
+            print(
+                f"global direction cos_mean={summary['global_cosine_mean']:.4f} "
+                f"global_cos_pos_frac={summary['global_cosine_positive_fraction']:.3f}"
+            )
+        if "path_straightness_mean" in summary:
+            print(
+                f"path straightness mean={summary['path_straightness_mean']:.4f} "
+                f"median={summary['path_straightness_median']:.4f}"
+            )
 
 
 if __name__ == "__main__":
