@@ -156,6 +156,54 @@ class TestAttributionCodeContracts(unittest.TestCase):
                 np.testing.assert_allclose(merged["scores_raw"][:, :, :2], 1.0)
                 np.testing.assert_allclose(merged["scores_raw"][:, :, 2:], 0.0)
 
+    def test_fast_lds_stream_score_eval_selects_query_and_rewrites_subset_dirs(self):
+        if importlib.util.find_spec("numpy") is None:
+            self.skipTest("numpy is not installed for this Python")
+        np = __import__("numpy")
+
+        script_path = ROOT / "common" / "fast_lds_stream_score_eval.py"
+        self.assertTrue(script_path.is_file())
+        spec = importlib.util.spec_from_file_location("fast_lds_stream_score_eval", script_path)
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        sys.path.insert(0, str(ROOT))
+        spec.loader.exec_module(module)
+
+        query_artifacts = np.asarray(
+            [
+                "/cache/query_horse/initial_seed_0/shared_query/proj_4096/query_gradient_artifact.npz",
+                "/cache/query_automobile/initial_seed_0/shared_query/proj_4096/query_gradient_artifact.npz",
+            ]
+        )
+        self.assertEqual(module.select_query_index(query_artifacts, "query_horse/initial_seed_0"), 0)
+        self.assertEqual(
+            module.rewrite_path(
+                "/work2/user/repo/result/lds_model/models/subset_0000",
+                [("/work2/user/repo", "/tmp/local/repo")],
+            ),
+            "/tmp/local/repo/result/lds_model/models/subset_0000",
+        )
+        with tempfile.TemporaryDirectory() as tmpdir:
+            merged_path = Path(tmpdir) / "stream_scores_merged.npz"
+            np.savez_compressed(
+                merged_path,
+                scores_raw=np.asarray([[[1.0, 2.0], [3.0, 4.0]]]),
+                scores_query_l2_normalized=np.asarray([[[5.0, 6.0], [7.0, 8.0]]]),
+                scores_train_l2_normalized=np.asarray([[[9.0, 10.0], [11.0, 12.0]]]),
+                scores_query_train_l2_normalized=np.asarray([[[13.0, 14.0], [15.0, 16.0]]]),
+                score_indices=np.asarray([20, 21], dtype=np.int64),
+                query_artifacts=query_artifacts,
+                proj_dims=np.asarray([1024], dtype=np.int32),
+            )
+            with np.load(merged_path, allow_pickle=True) as payload:
+                score_map = module.score_map_from_stream(
+                    payload,
+                    query_index=1,
+                    proj_dim=1024,
+                    variant="query_train_l2_normalized",
+                )
+            self.assertEqual(score_map, {20: 15.0, 21: 16.0})
+
     def test_nondefault_traj_objective_gets_distinct_score_folder(self):
         text = (ROOT / "common" / "algorithm_runner.py").read_text()
         self.assertIn('if algorithm == "traj_tracin"', text)
