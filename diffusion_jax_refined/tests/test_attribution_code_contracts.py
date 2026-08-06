@@ -297,6 +297,14 @@ class TestAttributionCodeContracts(unittest.TestCase):
         self.assertIn("snapshot_lds.csv", text)
         self.assertIn("checkpoint_snapshot_lds.csv", text)
 
+    def test_term_weight_lds_comparison_reports_correlations(self):
+        text = (ROOT / "common" / "compare_term_weight_with_lds.py").read_text()
+        self.assertIn("checkpoint_lds_with_weight.csv", text)
+        self.assertIn("snapshot_lds_with_weight.csv", text)
+        self.assertIn("checkpoint_snapshot_lds_with_weight.csv", text)
+        self.assertIn("term_spearman_lds_weight", text)
+        self.assertIn("mean_weight_negative_term_lds", text)
+
     def test_nondefault_traj_objective_gets_distinct_score_folder(self):
         text = (ROOT / "common" / "algorithm_runner.py").read_text()
         self.assertIn('if algorithm == "traj_tracin"', text)
