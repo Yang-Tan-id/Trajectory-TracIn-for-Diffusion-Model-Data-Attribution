@@ -114,6 +114,61 @@ def infer_target_function(rows: list[dict[str, str]], default: str) -> str:
     return default
 
 
+def rankdata_average(values: np.ndarray) -> np.ndarray:
+    order = np.argsort(values, kind="mergesort")
+    ranks = np.empty(len(values), dtype=np.float64)
+    sorted_values = values[order]
+    start = 0
+    while start < len(values):
+        end = start + 1
+        while end < len(values) and sorted_values[end] == sorted_values[start]:
+            end += 1
+        ranks[order[start:end]] = 0.5 * (start + end - 1) + 1.0
+        start = end
+    return ranks
+
+
+def spearman_corr(pred: np.ndarray, true: np.ndarray) -> float:
+    pred = np.asarray(pred, dtype=np.float64).reshape(-1)
+    true = np.asarray(true, dtype=np.float64).reshape(-1)
+    mask = np.isfinite(pred) & np.isfinite(true)
+    if int(mask.sum()) < 2:
+        return float("nan")
+    pred_rank = rankdata_average(pred[mask])
+    true_rank = rankdata_average(true[mask])
+    pred_std = float(pred_rank.std())
+    true_std = float(true_rank.std())
+    if pred_std == 0.0 or true_std == 0.0:
+        return float("nan")
+    return float(np.corrcoef(pred_rank, true_rank)[0, 1])
+
+
+def sum_scores(indices: np.ndarray, score_map: dict[int, float], sign: float) -> float:
+    total = 0.0
+    for idx in np.asarray(indices, dtype=np.int64).reshape(-1):
+        total += score_map.get(int(idx), 0.0)
+    return float(sign) * total
+
+
+def plot_scatter(path: str, pred: np.ndarray, true: np.ndarray, title: str) -> None:
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except Exception:
+        return
+
+    fig, ax = plt.subplots(figsize=(5, 4), dpi=160)
+    ax.scatter(pred, true, s=16, alpha=0.8)
+    ax.set_xlabel("pred_sum_tau")
+    ax.set_ylabel("true_f")
+    ax.set_title(title)
+    fig.tight_layout()
+    fig.savefig(path)
+    plt.close(fig)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Fast LDS eval directly from stream_scores_merged.npz.")
     parser.add_argument("config", help="Dataset dataset_config.py")
@@ -140,8 +195,6 @@ def main() -> None:
     legacy_root = Path(require_attr(dataset_cfg, "LEGACY_JAX_ROOT"))
     if str(legacy_root) not in sys.path:
         sys.path.insert(0, str(legacy_root))
-
-    from LDS.DM_cifar_lds import plot_scatter, spearman_corr, sum_scores
 
     target_path = Path(args.target_results).expanduser().resolve()
     target_rows = read_rows(target_path)
