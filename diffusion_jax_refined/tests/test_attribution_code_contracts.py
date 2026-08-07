@@ -362,6 +362,24 @@ class TestAttributionCodeContracts(unittest.TestCase):
         common_eval = (ROOT / "common" / "lds_model_eval.py").read_text()
         self.assertIn('"trajectory_state_mse"', common_eval)
 
+        stream_eval = (ROOT / "common" / "fast_lds_stream_score_eval.py").read_text()
+        self.assertIn('"trajectory_state_mse"', stream_eval)
+
+        full_eval = (ROOT / "common" / "full_dim_term_weighted_lds_eval.py").read_text()
+        self.assertIn('"trajectory_state_mse"', full_eval)
+
+    def test_cached_lds_seed_runner_evaluates_projected_and_full_traj_tracin(self):
+        text = (ROOT / "common" / "eval_traj_tracin_cached_lds_seeds.py").read_text()
+        self.assertIn("fast_lds_stream_score_eval.py", text)
+        self.assertIn("full_dim_term_weighted_lds_eval.py", text)
+        self.assertIn("projected_stream_cached_lds", text)
+        self.assertIn("full_dim_cached_lds", text)
+        self.assertIn("lds_seed_", text)
+        self.assertIn("stream_scores_merged.npz", text)
+        self.assertIn("full_dim_term_scores.npz", text)
+        self.assertIn("--skip-missing", text)
+        self.assertIn("--queries", text)
+
     def test_nondefault_traj_objective_gets_distinct_score_folder(self):
         text = (ROOT / "common" / "algorithm_runner.py").read_text()
         self.assertIn('if algorithm == "traj_tracin"', text)
