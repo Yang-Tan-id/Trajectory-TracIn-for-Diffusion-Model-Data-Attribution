@@ -66,6 +66,11 @@ class TestStampede3DasScriptsStatic(unittest.TestCase):
                     self.assertNotIn("--gres", text)
                     self.assertNotIn("--gpus-per-task", text)
                     continue
+                if path.name == "03_das_lds_eval_report_rtx_small.sh":
+                    self.assertIn("#SBATCH -p rtx-small", text)
+                    self.assertNotIn("--gres", text)
+                    self.assertNotIn("--gpus-per-task", text)
+                    continue
                 if path.name.startswith("_") or path.name.startswith("submit") or "_task_" in path.name or "_slot_" in path.name:
                     continue
                 self.assertIn("#SBATCH -p h100", text)
@@ -252,6 +257,12 @@ class TestStampede3DasScriptsStatic(unittest.TestCase):
         self.assertIn("queries_per_slot=3", text)
         self.assertIn('LDS_EVAL_DEVICE_MODE:-gpu_then_cpu', text)
         self.assertIn('EVAL_SLOT_SHARD_COUNT:-1', text)
+        self.assertIn("serial_slots=${EVAL_SERIAL_SLOTS:-0}", text)
+        self.assertIn("local_parallel_slots=${EVAL_LOCAL_PARALLEL_SLOTS:-0}", text)
+        self.assertIn('if [[ "${EVAL_SERIAL_SLOTS:-0}" == "1" ]]', text)
+        self.assertIn('if [[ "${EVAL_SERIAL_SLOTS:-0}" != "1" ]]', text)
+        self.assertIn('local_parallel_slots="${EVAL_LOCAL_PARALLEL_SLOTS:-0}"', text)
+        self.assertIn('local_parallel_slots > 0', text)
         self.assertIn('EVAL_SLOT_SHARD_INDEX="${shard_index}"', text)
         self.assertIn('EVAL_SLOT_SHARD_COUNT="${shard_count}"', text)
         self.assertIn('slot_${slot}_shard_${shard_index}.log', text)
@@ -279,6 +290,19 @@ class TestStampede3DasScriptsStatic(unittest.TestCase):
         self.assertIn("[lds-eval-skip]", slot_text)
         self.assertIn("lds_summary.json", slot_text)
         self.assertIn('--algorithms "${EVAL_ALGORITHMS[@]}"', text)
+
+    def test_stampede3_das_rtx_eval_runs_four_local_slots(self):
+        text = (STAMPEDE3_DAS / "03_das_lds_eval_report_rtx_small.sh").read_text()
+        self.assertIn("#SBATCH -p rtx-small", text)
+        self.assertIn("#SBATCH -N 1", text)
+        self.assertIn("#SBATCH -n 1", text)
+        self.assertIn("#SBATCH -t 04:00:00", text)
+        self.assertIn('STAMPEDE3_SLOT_BACKEND="${STAMPEDE3_SLOT_BACKEND:-local}"', text)
+        self.assertIn('EVAL_SERIAL_SLOTS="${EVAL_SERIAL_SLOTS:-0}"', text)
+        self.assertIn('EVAL_LOCAL_PARALLEL_SLOTS="${EVAL_LOCAL_PARALLEL_SLOTS:-4}"', text)
+        self.assertIn('EVAL_SLOT_SHARD_COUNT="${EVAL_SLOT_SHARD_COUNT:-1}"', text)
+        self.assertIn('LDS_EVAL_DEVICE_MODE="${LDS_EVAL_DEVICE_MODE:-gpu_then_cpu}"', text)
+        self.assertIn('exec bash "${SCRIPT_DIR}/03_das_lds_eval_report_stampede3.sh"', text)
 
     def test_stampede3_dtrak_endtracin_eval_uses_simple_loss_grid(self):
         text = (STAMPEDE3_DAS / "03_dtrak_endtracin_lds_eval_report_stampede3.sh").read_text()
