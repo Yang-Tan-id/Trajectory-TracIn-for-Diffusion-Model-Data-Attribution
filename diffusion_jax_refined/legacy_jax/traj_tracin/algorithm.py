@@ -1095,6 +1095,10 @@ def normalize_query_objective_name(name: str) -> str:
         "trajectory_noise_squared_deviation": "trajectory_noise_squared_deviation",
         "noise_squared_deviation": "trajectory_noise_squared_deviation",
         "sum_l2_sq": "trajectory_noise_squared_deviation",
+        "trajectory_next_checkpoint_noise_mse": "trajectory_next_checkpoint_noise_mse",
+        "next_checkpoint_noise_mse": "trajectory_next_checkpoint_noise_mse",
+        "next_ckpt_noise_mse": "trajectory_next_checkpoint_noise_mse",
+        "next_checkpoint_predicted_noise_mse": "trajectory_next_checkpoint_noise_mse",
         "trajectory_noise_squared_deviation_normalized": "eps_deviation_l2_sq_mean",
         "normalized_trajectory_noise_squared_deviation": "eps_deviation_l2_sq_mean",
         "eps_deviation_l1_mean": "eps_deviation_l1_mean",
@@ -1109,16 +1113,22 @@ def normalize_query_objective_name(name: str) -> str:
     except KeyError as exc:
         raise ValueError(
             "query_objective must be one of "
-            "trajectory_noise_squared_deviation, eps_deviation_l1_mean, "
-            "eps_deviation_l2_sq_mean, "
+            "trajectory_noise_squared_deviation, trajectory_next_checkpoint_noise_mse, "
+            "eps_deviation_l1_mean, eps_deviation_l2_sq_mean, "
             "trajectory_noise_squared_deviation_normalized"
         ) from exc
+
+
+def query_objective_uses_next_checkpoint(name: str) -> bool:
+    return normalize_query_objective_name(name) == "trajectory_next_checkpoint_noise_mse"
 
 
 def query_objective_formula(name: str) -> str:
     name = normalize_query_objective_name(name)
     if name == "trajectory_noise_squared_deviation":
         return "sum_k w_k ||eps_theta(x_ref_k,k)-eps_theta_ref(x_ref_k,k)||_2^2"
+    if name == "trajectory_next_checkpoint_noise_mse":
+        return "sum_k w_k mean((eps_theta_c(x_c_k,k)-stopgrad(eps_theta_c_plus_1(x_c_k,k)))^2)"
     if name == "eps_deviation_l1_mean":
         return "sum_k w_k mean(|eps_theta(x_ref_k,k)-eps_theta_ref(x_ref_k,k)|)"
     if name == "eps_deviation_l2_sq_mean":
@@ -1127,7 +1137,7 @@ def query_objective_formula(name: str) -> str:
 
 
 def query_scalar(adapter, model, params, reference_params, xt_ref, t, cond, objective: str):
-    """Per-snapshot target scalar f(theta) comparing theta to theta_ref on the reference trajectory."""
+    """Per-snapshot target scalar f(theta) comparing theta to a stop-grad target model."""
     objective = normalize_query_objective_name(objective)
     eps = adapter.eps_apply(model, params, xt_ref, t, cond)
     eps_ref = jax.lax.stop_gradient(
@@ -1136,6 +1146,8 @@ def query_scalar(adapter, model, params, reference_params, xt_ref, t, cond, obje
     diff = eps - eps_ref
     if objective == "trajectory_noise_squared_deviation":
         return jnp.sum(diff ** 2)
+    if objective == "trajectory_next_checkpoint_noise_mse":
+        return jnp.mean(diff ** 2)
     if objective == "eps_deviation_l1_mean":
         return jnp.mean(jnp.abs(diff))
     if objective == "eps_deviation_l2_sq_mean":
@@ -1386,6 +1398,7 @@ def run_attribution(cfg: TrajAttributionConfig):
     if stage_mode and not stage_artifact_path:
         raise ValueError("TRAJ_TRACIN_STAGE_ARTIFACT_PATH is required when TRAJ_TRACIN_STAGE_MODE is set.")
     cfg.query_objective = normalize_query_objective_name(cfg.query_objective)
+    uses_next_checkpoint_target = query_objective_uses_next_checkpoint(cfg.query_objective)
     subset_suffix = apply_score_subset_suffix_to_out_dir(cfg)
     os.makedirs(cfg.out_dir, exist_ok=True)
     t_start = time.time()
@@ -1442,6 +1455,10 @@ def run_attribution(cfg: TrajAttributionConfig):
     print(f"checkpoint_dir       : {cfg.checkpoint_dir}")
     print(f"reference_ckpt       : {cfg.reference_ckpt}")
     print(f"query_objective      : {cfg.query_objective}")
+    print(
+        "query_target         : "
+        + ("next_checkpoint_predicted_noise" if uses_next_checkpoint_target else "reference_checkpoint_predicted_noise")
+    )
     print(f"query                : {cfg.query}")
     print(f"seed                 : {cfg.seed}")
     print(f"timesteps            : {cfg.timesteps}")
@@ -1458,6 +1475,11 @@ def run_attribution(cfg: TrajAttributionConfig):
     print(f"out_dir              : {cfg.out_dir}")
     print(f"subset_suffix        : {subset_suffix}")
     print("=" * 90)
+    if uses_next_checkpoint_target:
+        print(
+            "[setup] next-checkpoint query target enabled; "
+            "final checkpoint has no c+1 target and will be skipped."
+        )
 
     print("[setup] importing adapter and selecting device...")
     adapter = get_adapter(cfg)
@@ -1488,6 +1510,18 @@ def run_attribution(cfg: TrajAttributionConfig):
     reference_params = tree_to_device(reference_state.ema_params, device)
     cfg.reference_ckpt = reference_ckpt
     print(f"[device-check] reference_params={first_leaf_device_str(reference_params)}")
+
+    def query_target_params_for_checkpoint(ckpt_i: int):
+        if not uses_next_checkpoint_target:
+            return reference_params
+        next_ckpt_path = ckpts[ckpt_i + 1]
+        next_state, _ = adapter.restore_state(next_ckpt_path, state_template)
+        next_params = tree_to_device(next_state.ema_params, device)
+        print(
+            f"[checkpoint {ckpt_i + 1}/{len(ckpts)}] "
+            f"query target is next checkpoint: {os.path.basename(next_ckpt_path)}"
+        )
+        return next_params
 
     example_x, _ = adapter.get_example_batch(ds)
     print(f"[setup] example input shape={tuple(example_x.shape)}")
@@ -1763,6 +1797,12 @@ def run_attribution(cfg: TrajAttributionConfig):
         stage_part_dir = f"{stage_artifact_path}.parts" if stage_mode == "train" else None
 
         for ckpt_i, ckpt_path in enumerate(ckpts):
+            if uses_next_checkpoint_target and ckpt_i + 1 >= len(ckpts):
+                print(
+                    f"[stage:{stage_mode}] skipping final checkpoint "
+                    f"{ckpt_i + 1}/{len(ckpts)}: no next-checkpoint query target"
+                )
+                continue
             stage_part_path = (
                 os.path.join(stage_part_dir, f"ckpt_{ckpt_i:04d}.npz")
                 if stage_part_dir is not None
@@ -1814,12 +1854,13 @@ def run_attribution(cfg: TrajAttributionConfig):
 
             if stage_mode == "query":
                 query_grad_chunk_fn = make_query_grad_chunk_fn(adapter, model, cfg.query_objective)
+                query_target_params = query_target_params_for_checkpoint(ckpt_i)
                 for chunk_start in range(0, len(t_seq), max(1, int(cfg.snapshot_chunk_size))):
                     chunk_end = min(chunk_start + max(1, int(cfg.snapshot_chunk_size)), len(t_seq))
                     chunk_ids = list(range(chunk_start, chunk_end))
                     xt_chunk = array_to_device(jnp.stack([xt_refs[i] for i in chunk_ids], axis=0), device)
                     t_chunk = array_to_device(jnp.asarray([int(t_seq[i]) for i in chunk_ids], dtype=jnp.int32), device)
-                    query_grads = query_grad_chunk_fn(params, reference_params, xt_chunk, t_chunk, query_cond)
+                    query_grads = query_grad_chunk_fn(params, query_target_params, xt_chunk, t_chunk, query_cond)
                     for local_i, snap_id in enumerate(chunk_ids):
                         one_grad = jax.tree_util.tree_map(lambda x: x[local_i], query_grads)
                         stage_features.append(np.asarray(projector(one_grad), dtype=np.float32))
@@ -1922,15 +1963,16 @@ def run_attribution(cfg: TrajAttributionConfig):
             ]
             if not part_paths:
                 raise RuntimeError(f"No TrajTracIn train checkpoint parts were produced under {stage_part_dir}.")
-            if len(part_paths) != len(ckpts):
+            expected_stage_parts = len(ckpts) - 1 if uses_next_checkpoint_target else len(ckpts)
+            if len(part_paths) != expected_stage_parts:
                 missing_parts = [
                     os.path.join(stage_part_dir, f"ckpt_{ckpt_i:04d}.npz")
-                    for ckpt_i in range(len(ckpts))
+                    for ckpt_i in range(expected_stage_parts)
                     if not os.path.isfile(os.path.join(stage_part_dir, f"ckpt_{ckpt_i:04d}.npz"))
                 ]
                 raise RuntimeError(
                     "TrajTracIn train checkpoint parts are incomplete: "
-                    f"{len(part_paths)}/{len(ckpts)} present. First missing: {missing_parts[:3]}"
+                    f"{len(part_paths)}/{expected_stage_parts} present. First missing: {missing_parts[:3]}"
                 )
             print(f"[stage:train] merging {len(part_paths)} checkpoint parts into {stage_artifact_path}")
             train_features_parts = []
@@ -1963,6 +2005,10 @@ def run_attribution(cfg: TrajAttributionConfig):
                 term_weights=np.concatenate(term_weights_parts, axis=0).astype(np.float32),
                 ckpt_paths=np.concatenate(ckpt_paths_parts, axis=0),
                 proj_dim=np.asarray(proj_dim, dtype=np.int32),
+                query_objective=np.asarray(cfg.query_objective),
+                query_target_checkpoint=np.asarray(
+                    "next_checkpoint" if uses_next_checkpoint_target else "reference_checkpoint"
+                ),
             )
             print(f"[saved] TrajTracIn train artifact: {stage_artifact_path}")
             return
@@ -1979,6 +2025,10 @@ def run_attribution(cfg: TrajAttributionConfig):
                 term_weights=np.asarray(stage_term_weights, dtype=np.float32),
                 ckpt_paths=np.asarray(stage_ckpt_paths),
                 proj_dim=np.asarray(proj_dim, dtype=np.int32),
+                query_objective=np.asarray(cfg.query_objective),
+                query_target_checkpoint=np.asarray(
+                    "next_checkpoint" if uses_next_checkpoint_target else "reference_checkpoint"
+                ),
             )
         else:
             save_npz_compressed_atomic(
@@ -1991,6 +2041,10 @@ def run_attribution(cfg: TrajAttributionConfig):
                 term_weights=np.asarray(stage_term_weights, dtype=np.float32),
                 ckpt_paths=np.asarray(stage_ckpt_paths),
                 proj_dim=np.asarray(proj_dim, dtype=np.int32),
+                query_objective=np.asarray(cfg.query_objective),
+                query_target_checkpoint=np.asarray(
+                    "next_checkpoint" if uses_next_checkpoint_target else "reference_checkpoint"
+                ),
             )
         print(f"[saved] TrajTracIn {stage_mode} artifact: {stage_artifact_path}")
         return
@@ -2023,8 +2077,9 @@ def run_attribution(cfg: TrajAttributionConfig):
                 )
             if key not in full_term_score_keys:
                 full_term_score_keys.append(key)
+    num_term_ckpts = len(ckpts) - 1 if uses_next_checkpoint_target else len(ckpts)
     full_term_scores_by_key = {
-        key: np.zeros((len(ckpts) * int(cfg.num_traj_snapshots), len(picked)), dtype=np.float32)
+        key: np.zeros((num_term_ckpts * int(cfg.num_traj_snapshots), len(picked)), dtype=np.float32)
         for key in full_term_score_keys
     }
     full_term_ckpt_indices: List[int] = []
@@ -2049,12 +2104,18 @@ def run_attribution(cfg: TrajAttributionConfig):
             "If the first progress bar stays at 0 with BFC allocator warnings, use 2 or 4."
         )
     total_batches_per_ckpt = int(math.ceil(len(picked) / batch_size))
-    total_points_all_ckpts = len(ckpts) * len(picked)
+    total_points_all_ckpts = num_term_ckpts * len(picked)
     processed_points_all_ckpts = 0
     used_ckpts = []
     skipped_ckpts = []
 
     for ckpt_i, ckpt_path in enumerate(ckpts):
+        if uses_next_checkpoint_target and ckpt_i + 1 >= len(ckpts):
+            print(
+                f"[checkpoint {ckpt_i + 1}/{len(ckpts)}] skipping final checkpoint: "
+                "no next-checkpoint query target"
+            )
+            continue
         ckpt_start = time.time()
         ckpt_name = os.path.basename(ckpt_path)
         ckpt_lr_weight = tracin_checkpoint_lr_weight(cfg, ckpt_path, ckpt_i, len(ckpts), len(ds))
@@ -2139,6 +2200,7 @@ def run_attribution(cfg: TrajAttributionConfig):
         score_loop_start = time.time()
         print(f"[checkpoint {ckpt_i + 1}/{len(ckpts)}] preparing jitted query-gradient chunk function...")
         query_grad_chunk_fn = make_query_grad_chunk_fn(adapter, model, cfg.query_objective)
+        query_target_params = query_target_params_for_checkpoint(ckpt_i)
         print(f"[checkpoint {ckpt_i + 1}/{len(ckpts)}] preparing jitted snapshot chunk scorer...")
         score_snapshot_chunk_fn = make_score_snapshot_chunk_batch_fn(
             adapter=adapter,
@@ -2184,7 +2246,7 @@ def run_attribution(cfg: TrajAttributionConfig):
             )
             query_grads = query_grad_chunk_fn(
                 params,
-                reference_params,
+                query_target_params,
                 xt_chunk,
                 t_chunk,
                 query_cond,
@@ -2336,6 +2398,9 @@ def run_attribution(cfg: TrajAttributionConfig):
             "name": cfg.query_objective,
             "formula": query_objective_formula(cfg.query_objective),
             "reference_ckpt": reference_ckpt,
+            "target_checkpoint": (
+                "next_checkpoint" if uses_next_checkpoint_target else "reference_checkpoint"
+            ),
             "snapshot_reduction": "mean",
             "checkpoint_reduction": "sum",
         },
@@ -2422,6 +2487,10 @@ def run_attribution(cfg: TrajAttributionConfig):
             term_ckpt_paths=np.asarray(full_term_ckpt_paths),
             term_score_variants=np.asarray(
                 [key.replace("scores_by_term_", "") for key in full_term_score_keys]
+            ),
+            query_objective=np.asarray(cfg.query_objective),
+            query_target_checkpoint=np.asarray(
+                "next_checkpoint" if uses_next_checkpoint_target else "reference_checkpoint"
             ),
         )
         for key, values in full_term_scores_by_key.items():

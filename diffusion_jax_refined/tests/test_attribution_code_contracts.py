@@ -58,6 +58,14 @@ class TestAttributionCodeContracts(unittest.TestCase):
         self.assertIn("jnp.mean(diff ** 2)", text)
         self.assertIn('"trajectory_noise_squared_deviation_normalized"', text)
 
+    def test_traj_tracin_has_next_checkpoint_noise_target(self):
+        text = (LEGACY / "traj_tracin" / "algorithm.py").read_text()
+        self.assertIn('"trajectory_next_checkpoint_noise_mse"', text)
+        self.assertIn("eps_theta_c_plus_1", text)
+        self.assertIn("query_objective_uses_next_checkpoint", text)
+        self.assertIn("no next-checkpoint query target", text)
+        self.assertIn('"target_checkpoint"', text)
+
     def test_traj_tracin_can_write_paired_query_normalized_scores(self):
         text = (LEGACY / "traj_tracin" / "algorithm.py").read_text()
         self.assertIn("save_query_normalized_scores: bool = False", text)
