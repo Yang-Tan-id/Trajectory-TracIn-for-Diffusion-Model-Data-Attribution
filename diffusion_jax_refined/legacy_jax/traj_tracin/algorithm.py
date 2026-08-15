@@ -1795,12 +1795,18 @@ def run_attribution(cfg: TrajAttributionConfig):
         stage_term_weights = []
         used_ckpts_for_stage = []
         stage_part_dir = f"{stage_artifact_path}.parts" if stage_mode == "train" else None
+        stage_total_terms = (len(ckpts) - 1 if uses_next_checkpoint_target else len(ckpts)) * int(
+            cfg.num_traj_snapshots
+        )
+        stage_terms_done = 0
+        stage_start_time = time.time()
 
         for ckpt_i, ckpt_path in enumerate(ckpts):
             if uses_next_checkpoint_target and ckpt_i + 1 >= len(ckpts):
                 print(
                     f"[stage:{stage_mode}] skipping final checkpoint "
-                    f"{ckpt_i + 1}/{len(ckpts)}: no next-checkpoint query target"
+                    f"{ckpt_i + 1}/{len(ckpts)}: no next-checkpoint query target",
+                    flush=True,
                 )
                 continue
             stage_part_path = (
@@ -1811,23 +1817,27 @@ def run_attribution(cfg: TrajAttributionConfig):
             if stage_part_path is not None and os.path.isfile(stage_part_path):
                 print(
                     f"[stage:{stage_mode}] skip existing checkpoint part "
-                    f"{ckpt_i + 1}/{len(ckpts)}: {stage_part_path}"
+                    f"{ckpt_i + 1}/{len(ckpts)}: {stage_part_path}",
+                    flush=True,
                 )
                 continue
             ckpt_lr_weight = tracin_checkpoint_lr_weight(cfg, ckpt_path, ckpt_i, len(ckpts), len(ds))
             print(
                 f"[stage:{stage_mode}] TrajTracIn checkpoint {ckpt_i + 1}/{len(ckpts)} | "
                 f"{os.path.basename(ckpt_path)} | lr_weight={ckpt_lr_weight:.8g} "
-                f"schedule={cfg.tracin_lr_schedule}"
+                f"schedule={cfg.tracin_lr_schedule}",
+                flush=True,
             )
+            stage_ckpt_start = time.time()
             try:
                 state, _payload = adapter.restore_state(ckpt_path, state_template)
             except Exception as exc:
                 if cfg.skip_unreadable_checkpoints:
-                    print(f"[warning] skipping unreadable checkpoint: {ckpt_path}: {exc}")
+                    print(f"[warning] skipping unreadable checkpoint: {ckpt_path}: {exc}", flush=True)
                     continue
                 raise
             params = tree_to_device(state.ema_params, device)
+            print(f"[stage:{stage_mode}] checkpoint {ckpt_i + 1}/{len(ckpts)} restored", flush=True)
             projector = build_countsketch_projector_jax(
                 params,
                 proj_dim,
@@ -1851,12 +1861,18 @@ def run_attribution(cfg: TrajAttributionConfig):
                     snapshot_positions=cfg.traj_snapshot_positions,
                 )
                 xt_refs = [array_to_device(x, device) for x in xt_refs]
+            print(
+                f"[stage:{stage_mode}] checkpoint {ckpt_i + 1}/{len(ckpts)} trajectory ready | "
+                f"snapshots={len(t_seq)}",
+                flush=True,
+            )
 
             if stage_mode == "query":
                 query_grad_chunk_fn = make_query_grad_chunk_fn(adapter, model, cfg.query_objective)
                 query_target_params = query_target_params_for_checkpoint(ckpt_i)
-                for chunk_start in range(0, len(t_seq), max(1, int(cfg.snapshot_chunk_size))):
-                    chunk_end = min(chunk_start + max(1, int(cfg.snapshot_chunk_size)), len(t_seq))
+                snapshot_chunk_size = max(1, int(cfg.snapshot_chunk_size))
+                for chunk_start in range(0, len(t_seq), snapshot_chunk_size):
+                    chunk_end = min(chunk_start + snapshot_chunk_size, len(t_seq))
                     chunk_ids = list(range(chunk_start, chunk_end))
                     xt_chunk = array_to_device(jnp.stack([xt_refs[i] for i in chunk_ids], axis=0), device)
                     t_chunk = array_to_device(jnp.asarray([int(t_seq[i]) for i in chunk_ids], dtype=jnp.int32), device)
@@ -1869,6 +1885,14 @@ def run_attribution(cfg: TrajAttributionConfig):
                         stage_snapshot_positions.append(int(pos_seq[snap_id]))
                         stage_ckpt_paths.append(str(ckpt_path))
                         stage_term_weights.append(ckpt_lr_weight / float(max(1, len(t_seq))))
+                    stage_terms_done += len(chunk_ids)
+                    print(
+                        f"[stage:query] checkpoint {ckpt_i + 1}/{len(ckpts)} "
+                        f"snapshot {chunk_start + 1}-{chunk_end}/{len(t_seq)} | "
+                        f"terms={stage_terms_done}/{stage_total_terms} | "
+                        f"elapsed={format_seconds(time.time() - stage_start_time)}",
+                        flush=True,
+                    )
             else:
                 train_phi_terms = []
                 train_ckpt_indices = []
@@ -1929,7 +1953,13 @@ def run_attribution(cfg: TrajAttributionConfig):
                     train_snapshot_positions.append(int(pos_seq[snap_id]))
                     train_ckpt_paths.append(str(ckpt_path))
                     train_term_weights.append(ckpt_lr_weight / float(max(1, len(t_seq))))
-                    print(f"[stage:train] TrajTracIn ckpt={ckpt_i + 1} snapshot={snap_id + 1}/{len(t_seq)}")
+                    stage_terms_done += 1
+                    print(
+                        f"[stage:train] TrajTracIn ckpt={ckpt_i + 1} snapshot={snap_id + 1}/{len(t_seq)} | "
+                        f"terms={stage_terms_done}/{stage_total_terms} | "
+                        f"elapsed={format_seconds(time.time() - stage_start_time)}",
+                        flush=True,
+                    )
                 if stage_part_path is None:
                     stage_features.extend(train_phi_terms)
                     stage_ckpt_indices.extend(train_ckpt_indices)
@@ -1951,9 +1981,16 @@ def run_attribution(cfg: TrajAttributionConfig):
                     )
                     print(
                         f"[stage:train] saved checkpoint part "
-                        f"{ckpt_i + 1}/{len(ckpts)}: {stage_part_path}"
+                        f"{ckpt_i + 1}/{len(ckpts)}: {stage_part_path}",
+                        flush=True,
                     )
             used_ckpts_for_stage.append(ckpt_path)
+            print(
+                f"[stage:{stage_mode}] checkpoint {ckpt_i + 1}/{len(ckpts)} done | "
+                f"elapsed={format_seconds(time.time() - stage_ckpt_start)} | "
+                f"total_elapsed={format_seconds(time.time() - stage_start_time)}",
+                flush=True,
+            )
 
         if stage_mode == "train" and stage_part_dir is not None:
             part_paths = [
