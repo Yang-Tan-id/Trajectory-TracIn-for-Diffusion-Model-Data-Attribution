@@ -1099,6 +1099,10 @@ def normalize_query_objective_name(name: str) -> str:
         "next_checkpoint_noise_mse": "trajectory_next_checkpoint_noise_mse",
         "next_ckpt_noise_mse": "trajectory_next_checkpoint_noise_mse",
         "next_checkpoint_predicted_noise_mse": "trajectory_next_checkpoint_noise_mse",
+        "trajectory_next_checkpoint_ref_projection": "trajectory_next_checkpoint_ref_projection",
+        "next_checkpoint_ref_projection": "trajectory_next_checkpoint_ref_projection",
+        "next_ckpt_ref_projection": "trajectory_next_checkpoint_ref_projection",
+        "next_checkpoint_reference_projection": "trajectory_next_checkpoint_ref_projection",
         "trajectory_noise_squared_deviation_normalized": "eps_deviation_l2_sq_mean",
         "normalized_trajectory_noise_squared_deviation": "eps_deviation_l2_sq_mean",
         "eps_deviation_l1_mean": "eps_deviation_l1_mean",
@@ -1114,13 +1118,17 @@ def normalize_query_objective_name(name: str) -> str:
         raise ValueError(
             "query_objective must be one of "
             "trajectory_noise_squared_deviation, trajectory_next_checkpoint_noise_mse, "
+            "trajectory_next_checkpoint_ref_projection, "
             "eps_deviation_l1_mean, eps_deviation_l2_sq_mean, "
             "trajectory_noise_squared_deviation_normalized"
         ) from exc
 
 
 def query_objective_uses_next_checkpoint(name: str) -> bool:
-    return normalize_query_objective_name(name) == "trajectory_next_checkpoint_noise_mse"
+    return normalize_query_objective_name(name) in {
+        "trajectory_next_checkpoint_noise_mse",
+        "trajectory_next_checkpoint_ref_projection",
+    }
 
 
 def query_objective_formula(name: str) -> str:
@@ -1129,6 +1137,8 @@ def query_objective_formula(name: str) -> str:
         return "sum_k w_k ||eps_theta(x_ref_k,k)-eps_theta_ref(x_ref_k,k)||_2^2"
     if name == "trajectory_next_checkpoint_noise_mse":
         return "sum_k w_k mean((eps_theta_c(x_c_k,k)-stopgrad(eps_theta_c_plus_1(x_c_k,k)))^2)"
+    if name == "trajectory_next_checkpoint_ref_projection":
+        return "sum_k w_k mean((stopgrad(eps_theta_c_plus_1)-eps_theta_c)*(stopgrad(eps_theta_ref)-eps_theta_c))"
     if name == "eps_deviation_l1_mean":
         return "sum_k w_k mean(|eps_theta(x_ref_k,k)-eps_theta_ref(x_ref_k,k)|)"
     if name == "eps_deviation_l2_sq_mean":
@@ -1136,18 +1146,21 @@ def query_objective_formula(name: str) -> str:
     raise AssertionError(name)
 
 
-def query_scalar(adapter, model, params, reference_params, xt_ref, t, cond, objective: str):
+def query_scalar(adapter, model, params, query_target_params, reference_params, xt_ref, t, cond, objective: str):
     """Per-snapshot target scalar f(theta) comparing theta to a stop-grad target model."""
     objective = normalize_query_objective_name(objective)
     eps = adapter.eps_apply(model, params, xt_ref, t, cond)
-    eps_ref = jax.lax.stop_gradient(
-        adapter.eps_apply(model, reference_params, xt_ref, t, cond)
+    eps_query_target = jax.lax.stop_gradient(
+        adapter.eps_apply(model, query_target_params, xt_ref, t, cond)
     )
-    diff = eps - eps_ref
+    eps_ref = jax.lax.stop_gradient(adapter.eps_apply(model, reference_params, xt_ref, t, cond))
+    diff = eps - eps_query_target
     if objective == "trajectory_noise_squared_deviation":
         return jnp.sum(diff ** 2)
     if objective == "trajectory_next_checkpoint_noise_mse":
         return jnp.mean(diff ** 2)
+    if objective == "trajectory_next_checkpoint_ref_projection":
+        return jnp.mean((eps_query_target - eps) * (eps_ref - eps))
     if objective == "eps_deviation_l1_mean":
         return jnp.mean(jnp.abs(diff))
     if objective == "eps_deviation_l2_sq_mean":
@@ -1158,12 +1171,13 @@ def query_scalar(adapter, model, params, reference_params, xt_ref, t, cond, obje
 def make_query_grad_fn(adapter, model, objective: str):
     objective = normalize_query_objective_name(objective)
 
-    def scalar_fn(params, reference_params, xt_ref, t_scalar, cond):
+    def scalar_fn(params, query_target_params, reference_params, xt_ref, t_scalar, cond):
         t = jnp.full((xt_ref.shape[0],), t_scalar, dtype=jnp.int32)
         return query_scalar(
             adapter=adapter,
             model=model,
             params=params,
+            query_target_params=query_target_params,
             reference_params=reference_params,
             xt_ref=xt_ref,
             t=t,
@@ -1177,9 +1191,10 @@ def make_query_grad_fn(adapter, model, objective: str):
 def make_query_grad_chunk_fn(adapter, model, objective: str):
     grad_fn = make_query_grad_fn(adapter, model, objective)
 
-    def grad_chunk(params, reference_params, xt_refs_chunk, t_scalars, cond):
-        return jax.vmap(grad_fn, in_axes=(None, None, 0, 0, None))(
+    def grad_chunk(params, query_target_params, reference_params, xt_refs_chunk, t_scalars, cond):
+        return jax.vmap(grad_fn, in_axes=(None, None, None, 0, 0, None))(
             params,
+            query_target_params,
             reference_params,
             xt_refs_chunk,
             t_scalars,
@@ -1198,7 +1213,7 @@ def compute_query_grads(adapter, model, params, reference_params, xt_refs, t_seq
 
     for snap_i, (xt_ref, t_int) in enumerate(zip(xt_refs, t_seq)):
         t_scalar = array_to_device(jnp.asarray(int(t_int), dtype=jnp.int32), device)
-        g = grad_fn(params, reference_params, xt_ref, t_scalar, cond)
+        g = grad_fn(params, reference_params, reference_params, xt_ref, t_scalar, cond)
         out.append(g)
 
         done = snap_i + 1
@@ -1876,7 +1891,14 @@ def run_attribution(cfg: TrajAttributionConfig):
                     chunk_ids = list(range(chunk_start, chunk_end))
                     xt_chunk = array_to_device(jnp.stack([xt_refs[i] for i in chunk_ids], axis=0), device)
                     t_chunk = array_to_device(jnp.asarray([int(t_seq[i]) for i in chunk_ids], dtype=jnp.int32), device)
-                    query_grads = query_grad_chunk_fn(params, query_target_params, xt_chunk, t_chunk, query_cond)
+                    query_grads = query_grad_chunk_fn(
+                        params,
+                        query_target_params,
+                        reference_params,
+                        xt_chunk,
+                        t_chunk,
+                        query_cond,
+                    )
                     for local_i, snap_id in enumerate(chunk_ids):
                         one_grad = jax.tree_util.tree_map(lambda x: x[local_i], query_grads)
                         stage_features.append(np.asarray(projector(one_grad), dtype=np.float32))
@@ -2284,6 +2306,7 @@ def run_attribution(cfg: TrajAttributionConfig):
             query_grads = query_grad_chunk_fn(
                 params,
                 query_target_params,
+                reference_params,
                 xt_chunk,
                 t_chunk,
                 query_cond,
