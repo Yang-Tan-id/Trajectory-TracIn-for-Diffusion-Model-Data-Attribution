@@ -1103,6 +1103,10 @@ def normalize_query_objective_name(name: str) -> str:
         "next_checkpoint_ref_projection": "trajectory_next_checkpoint_ref_projection",
         "next_ckpt_ref_projection": "trajectory_next_checkpoint_ref_projection",
         "next_checkpoint_reference_projection": "trajectory_next_checkpoint_ref_projection",
+        "trajectory_future_residual_mixture": "trajectory_future_residual_mixture",
+        "future_residual_mixture": "trajectory_future_residual_mixture",
+        "future_residual_mix": "trajectory_future_residual_mixture",
+        "future_checkpoint_residual_mixture": "trajectory_future_residual_mixture",
         "trajectory_noise_squared_deviation_normalized": "eps_deviation_l2_sq_mean",
         "normalized_trajectory_noise_squared_deviation": "eps_deviation_l2_sq_mean",
         "eps_deviation_l1_mean": "eps_deviation_l1_mean",
@@ -1118,7 +1122,7 @@ def normalize_query_objective_name(name: str) -> str:
         raise ValueError(
             "query_objective must be one of "
             "trajectory_noise_squared_deviation, trajectory_next_checkpoint_noise_mse, "
-            "trajectory_next_checkpoint_ref_projection, "
+            "trajectory_next_checkpoint_ref_projection, trajectory_future_residual_mixture, "
             "eps_deviation_l1_mean, eps_deviation_l2_sq_mean, "
             "trajectory_noise_squared_deviation_normalized"
         ) from exc
@@ -1128,6 +1132,7 @@ def query_objective_uses_next_checkpoint(name: str) -> bool:
     return normalize_query_objective_name(name) in {
         "trajectory_next_checkpoint_noise_mse",
         "trajectory_next_checkpoint_ref_projection",
+        "trajectory_future_residual_mixture",
     }
 
 
@@ -1139,6 +1144,11 @@ def query_objective_formula(name: str) -> str:
         return "sum_k w_k mean((eps_theta_c(x_c_k,k)-stopgrad(eps_theta_c_plus_1(x_c_k,k)))^2)"
     if name == "trajectory_next_checkpoint_ref_projection":
         return "sum_k w_k mean((stopgrad(eps_theta_c_plus_1)-eps_theta_c)*(stopgrad(eps_theta_ref)-eps_theta_c))"
+    if name == "trajectory_future_residual_mixture":
+        return (
+            "sum_k w_k mean(stopgrad(sum_j alpha_j normalize(eps_theta_c-eps_theta_j)) * "
+            "eps_theta_c), with alpha_next=1 and other alpha_j from residual disagreement"
+        )
     if name == "eps_deviation_l1_mean":
         return "sum_k w_k mean(|eps_theta(x_ref_k,k)-eps_theta_ref(x_ref_k,k)|)"
     if name == "eps_deviation_l2_sq_mean":
@@ -1199,6 +1209,59 @@ def make_query_grad_chunk_fn(adapter, model, objective: str):
             xt_refs_chunk,
             t_scalars,
             cond,
+        )
+
+    return jax.jit(grad_chunk)
+
+
+def future_residual_mixture_vector(eps: jnp.ndarray, future_eps: jnp.ndarray) -> jnp.ndarray:
+    """Build a normalized future-residual mixture for one snapshot.
+
+    future_eps[0] is treated as the next-checkpoint prediction and receives
+    raw alpha 1. Other rows receive alpha from disagreement with the next
+    residual. All residuals are RMS-normalized before mixing.
+    """
+    eps = jnp.asarray(eps)
+    future_eps = jnp.asarray(future_eps)
+    eps_float = eps.astype(jnp.float32)
+    future_float = future_eps.astype(jnp.float32)
+    residuals = eps_float[None, ...] - future_float
+    reduce_axes = tuple(range(1, residuals.ndim))
+    rms = jnp.sqrt(jnp.mean(jnp.square(residuals), axis=reduce_axes, keepdims=True))
+    eps_denom = jnp.asarray(float(os.environ.get("TRAJ_TRACIN_FUTURE_MIX_EPS", "1e-8")), dtype=jnp.float32)
+    normalized = residuals / jnp.maximum(rms, eps_denom)
+
+    gamma = jnp.asarray(float(os.environ.get("TRAJ_TRACIN_FUTURE_MIX_GAMMA", "1.0")), dtype=jnp.float32)
+    next_vec = normalized[0]
+    flat_next = jnp.ravel(next_vec)
+    flat_all = normalized.reshape((normalized.shape[0], -1))
+    next_norm = jnp.linalg.norm(flat_next)
+    all_norm = jnp.linalg.norm(flat_all, axis=1)
+    cos = (flat_all @ flat_next) / jnp.maximum(all_norm * next_norm, jnp.asarray(1e-12, dtype=jnp.float32))
+    novelty = jnp.clip((1.0 - cos) / 2.0, 0.0, 1.0)
+    raw_alpha = gamma * novelty
+    raw_alpha = raw_alpha.at[0].set(1.0)
+    alpha = raw_alpha / jnp.maximum(jnp.sum(raw_alpha), jnp.asarray(1e-12, dtype=jnp.float32))
+    mix = jnp.sum(alpha.reshape((-1,) + (1,) * (normalized.ndim - 1)) * normalized, axis=0)
+    return mix.astype(eps.dtype)
+
+
+def make_future_residual_mixture_grad_chunk_fn(adapter, model):
+    def scalar_fn(params, xt_ref, t_scalar, cond, future_eps_one):
+        t = jnp.full((xt_ref.shape[0],), t_scalar, dtype=jnp.int32)
+        eps = adapter.eps_apply(model, params, xt_ref, t, cond)
+        r_mix = jax.lax.stop_gradient(future_residual_mixture_vector(eps, future_eps_one))
+        return jnp.mean(eps * r_mix)
+
+    grad_fn = jax.grad(scalar_fn)
+
+    def grad_chunk(params, xt_refs_chunk, t_scalars, cond, future_eps_chunk):
+        return jax.vmap(grad_fn, in_axes=(None, 0, 0, None, 0))(
+            params,
+            xt_refs_chunk,
+            t_scalars,
+            cond,
+            future_eps_chunk,
         )
 
     return jax.jit(grad_chunk)
@@ -1553,6 +1616,121 @@ def run_attribution(cfg: TrajAttributionConfig):
         f"schedule_betas={array_device_str(schedule.betas)}"
     )
 
+    future_noise_cache = None
+    future_noise_cache_path = None
+
+    def future_noise_cache_default_path() -> str:
+        if stage_artifact_path:
+            return f"{stage_artifact_path}.future_noise_cache.npz"
+        return os.path.join(cfg.out_dir, "future_noise_cache.npz")
+
+    def load_or_build_future_noise_cache(xt_refs, t_seq, pos_seq):
+        nonlocal future_noise_cache, future_noise_cache_path
+        if future_noise_cache is not None:
+            return future_noise_cache
+        cache_path = os.environ.get("TRAJ_TRACIN_FUTURE_NOISE_CACHE_PATH", "").strip()
+        if not cache_path:
+            cache_dir = os.environ.get("TRAJ_TRACIN_FUTURE_NOISE_CACHE_DIR", "").strip()
+            cache_path = (
+                os.path.join(cache_dir, os.path.basename(future_noise_cache_default_path()))
+                if cache_dir
+                else future_noise_cache_default_path()
+            )
+        future_noise_cache_path = cache_path
+        ckpt_paths_np = np.asarray([str(p) for p in ckpts])
+        t_seq_np = np.asarray([int(t) for t in t_seq], dtype=np.int32)
+        pos_seq_np = np.asarray([int(p) for p in pos_seq], dtype=np.int32)
+
+        if os.path.isfile(cache_path):
+            try:
+                with np.load(cache_path, allow_pickle=False) as payload:
+                    cached_ckpts = np.asarray(payload["ckpt_paths"]).astype(str)
+                    cached_t = np.asarray(payload["timesteps"], dtype=np.int32)
+                    cached_pos = np.asarray(payload["snapshot_positions"], dtype=np.int32)
+                    if (
+                        np.array_equal(cached_ckpts, ckpt_paths_np.astype(str))
+                        and np.array_equal(cached_t, t_seq_np)
+                        and np.array_equal(cached_pos, pos_seq_np)
+                    ):
+                        future_noise_cache = np.asarray(payload["eps_predictions"])
+                        print(
+                            "[future-cache] loaded predicted-noise cache "
+                            f"{cache_path} | shape={future_noise_cache.shape} dtype={future_noise_cache.dtype}",
+                            flush=True,
+                        )
+                        return future_noise_cache
+                    print("[future-cache] existing cache metadata mismatch; rebuilding", flush=True)
+            except Exception as exc:
+                print(f"[future-cache] could not read existing cache {cache_path}: {exc}; rebuilding", flush=True)
+
+        print(
+            "[future-cache] building predicted-noise cache for future residual mixture | "
+            f"checkpoints={len(ckpts)} snapshots={len(t_seq)} -> {cache_path}",
+            flush=True,
+        )
+
+        def eps_chunk(params_for_eps, xt_chunk, t_chunk):
+            return jax.vmap(
+                lambda x_one, t_one: adapter.eps_apply(
+                    model,
+                    params_for_eps,
+                    x_one,
+                    jnp.full((x_one.shape[0],), t_one, dtype=jnp.int32),
+                    query_cond,
+                )
+            )(xt_chunk, t_chunk)
+
+        eps_chunk_jit = jax.jit(eps_chunk)
+        cache_dtype_name = os.environ.get("TRAJ_TRACIN_FUTURE_NOISE_CACHE_DTYPE", "float16").strip().lower()
+        cache_dtype = np.float32 if cache_dtype_name in ("float32", "fp32") else np.float16
+        chunk_size = max(1, int(cfg.snapshot_chunk_size))
+        eps_by_ckpt = []
+        cache_start = time.time()
+        for cache_ckpt_i, cache_ckpt_path in enumerate(ckpts):
+            ckpt_start = time.time()
+            print(
+                f"[future-cache] checkpoint {cache_ckpt_i + 1}/{len(ckpts)} "
+                f"{os.path.basename(cache_ckpt_path)}",
+                flush=True,
+            )
+            state, _payload = adapter.restore_state(cache_ckpt_path, state_template)
+            params_for_eps = tree_to_device(state.ema_params, device)
+            chunks = []
+            for chunk_start in range(0, len(t_seq), chunk_size):
+                chunk_end = min(chunk_start + chunk_size, len(t_seq))
+                xt_chunk = array_to_device(jnp.stack([xt_refs[i] for i in range(chunk_start, chunk_end)], axis=0), device)
+                t_chunk = array_to_device(
+                    jnp.asarray([int(t_seq[i]) for i in range(chunk_start, chunk_end)], dtype=jnp.int32),
+                    device,
+                )
+                eps = eps_chunk_jit(params_for_eps, xt_chunk, t_chunk)
+                eps.block_until_ready()
+                chunks.append(np.asarray(jax.device_get(eps), dtype=cache_dtype))
+            eps_by_ckpt.append(np.concatenate(chunks, axis=0))
+            print(
+                f"[future-cache] checkpoint {cache_ckpt_i + 1}/{len(ckpts)} done | "
+                f"elapsed={format_seconds(time.time() - ckpt_start)} | "
+                f"total={format_seconds(time.time() - cache_start)}",
+                flush=True,
+            )
+        future_noise_cache = np.stack(eps_by_ckpt, axis=0)
+        save_npz_compressed_atomic(
+            cache_path,
+            eps_predictions=future_noise_cache,
+            ckpt_paths=ckpt_paths_np,
+            timesteps=t_seq_np,
+            snapshot_positions=pos_seq_np,
+            query=np.asarray(str(cfg.query)),
+            attribution_sample_dir=np.asarray(str(cfg.attribution_sample_dir)),
+            attribution_sample_seed=np.asarray(-1 if cfg.attribution_sample_seed is None else int(cfg.attribution_sample_seed)),
+        )
+        print(
+            "[future-cache] saved predicted-noise cache "
+            f"{cache_path} | shape={future_noise_cache.shape} dtype={future_noise_cache.dtype}",
+            flush=True,
+        )
+        return future_noise_cache
+
     print(f"[setup] found {len(ckpts)} checkpoint(s)")
     for i, ck in enumerate(ckpts[:10]):
         print(f"  - ckpt[{i}] = {os.path.basename(ck)}")
@@ -1883,22 +2061,53 @@ def run_attribution(cfg: TrajAttributionConfig):
             )
 
             if stage_mode == "query":
-                query_grad_chunk_fn = make_query_grad_chunk_fn(adapter, model, cfg.query_objective)
-                query_target_params = query_target_params_for_checkpoint(ckpt_i)
+                use_future_residual_mixture = cfg.query_objective == "trajectory_future_residual_mixture"
+                if use_future_residual_mixture:
+                    query_grad_chunk_fn = make_future_residual_mixture_grad_chunk_fn(adapter, model)
+                    eps_cache = load_or_build_future_noise_cache(xt_refs, t_seq, pos_seq)
+                    future_count = len(ckpts) - ckpt_i - 1
+                    if future_count <= 0:
+                        raise RuntimeError("future residual mixture reached a checkpoint with no future targets")
+                    print(
+                        f"[stage:query] future residual mixture targets={future_count} "
+                        f"(next + {max(0, future_count - 1)} later/ref checkpoints) | "
+                        f"cache={future_noise_cache_path}",
+                        flush=True,
+                    )
+                else:
+                    query_grad_chunk_fn = make_query_grad_chunk_fn(adapter, model, cfg.query_objective)
+                    query_target_params = query_target_params_for_checkpoint(ckpt_i)
                 snapshot_chunk_size = max(1, int(cfg.snapshot_chunk_size))
                 for chunk_start in range(0, len(t_seq), snapshot_chunk_size):
                     chunk_end = min(chunk_start + snapshot_chunk_size, len(t_seq))
                     chunk_ids = list(range(chunk_start, chunk_end))
                     xt_chunk = array_to_device(jnp.stack([xt_refs[i] for i in chunk_ids], axis=0), device)
                     t_chunk = array_to_device(jnp.asarray([int(t_seq[i]) for i in chunk_ids], dtype=jnp.int32), device)
-                    query_grads = query_grad_chunk_fn(
-                        params,
-                        query_target_params,
-                        reference_params,
-                        xt_chunk,
-                        t_chunk,
-                        query_cond,
-                    )
+                    if use_future_residual_mixture:
+                        future_eps_chunk_np = np.stack(
+                            [
+                                eps_cache[ckpt_i + 1 :, snap_id].astype(np.float32, copy=False)
+                                for snap_id in chunk_ids
+                            ],
+                            axis=0,
+                        )
+                        future_eps_chunk = array_to_device(jnp.asarray(future_eps_chunk_np), device)
+                        query_grads = query_grad_chunk_fn(
+                            params,
+                            xt_chunk,
+                            t_chunk,
+                            query_cond,
+                            future_eps_chunk,
+                        )
+                    else:
+                        query_grads = query_grad_chunk_fn(
+                            params,
+                            query_target_params,
+                            reference_params,
+                            xt_chunk,
+                            t_chunk,
+                            query_cond,
+                        )
                     for local_i, snap_id in enumerate(chunk_ids):
                         one_grad = jax.tree_util.tree_map(lambda x: x[local_i], query_grads)
                         stage_features.append(np.asarray(projector(one_grad), dtype=np.float32))
@@ -2075,8 +2284,7 @@ def run_attribution(cfg: TrajAttributionConfig):
         if not stage_features:
             raise RuntimeError(f"No TrajTracIn {stage_mode} stage features were produced.")
         if stage_mode == "query":
-            save_npz_compressed_atomic(
-                stage_artifact_path,
+            query_payload = dict(
                 query_features=np.stack(stage_features, axis=0).astype(np.float32),
                 ckpt_indices=np.asarray(stage_ckpt_indices, dtype=np.int32),
                 timesteps=np.asarray(stage_timesteps, dtype=np.int32),
@@ -2089,6 +2297,17 @@ def run_attribution(cfg: TrajAttributionConfig):
                     "next_checkpoint" if uses_next_checkpoint_target else "reference_checkpoint"
                 ),
             )
+            if cfg.query_objective == "trajectory_future_residual_mixture":
+                query_payload.update(
+                    future_noise_cache_path=np.asarray("" if future_noise_cache_path is None else future_noise_cache_path),
+                    future_mix_gamma=np.asarray(float(os.environ.get("TRAJ_TRACIN_FUTURE_MIX_GAMMA", "1.0")), dtype=np.float32),
+                    future_mix_eps=np.asarray(float(os.environ.get("TRAJ_TRACIN_FUTURE_MIX_EPS", "1e-8")), dtype=np.float32),
+                    future_mix_rule=np.asarray(
+                        "alpha_next=1; alpha_future=gamma*clip((1-cos(normalized_next,normalized_future))/2,0,1); "
+                        "alphas normalized to sum 1; residuals RMS-normalized"
+                    ),
+                )
+            save_npz_compressed_atomic(stage_artifact_path, **query_payload)
         else:
             save_npz_compressed_atomic(
                 stage_artifact_path,
