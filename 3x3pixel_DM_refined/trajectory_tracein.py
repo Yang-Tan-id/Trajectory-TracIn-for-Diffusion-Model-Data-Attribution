@@ -1,4 +1,4 @@
-# trajectory_tracein_main.py
+import argparse
 import os
 import glob
 import json
@@ -54,60 +54,6 @@ def should_print_item(idx: int, total: int, every: int = 100) -> bool:
 
 
 # ============================================================
-# LoRA wrapper (same as your training file)
-# ============================================================
-class LoRAConv2d(nn.Module):
-    def __init__(self, base_conv: nn.Conv2d, r: int = 4, alpha: float = 1.0):
-        super().__init__()
-        if not isinstance(base_conv, nn.Conv2d):
-            raise TypeError("LoRAConv2d expects nn.Conv2d")
-        if r <= 0:
-            raise ValueError("LoRA rank r must be > 0")
-
-        self.base = base_conv
-        self.r = int(r)
-        self.alpha = float(alpha)
-        self.scale = self.alpha / self.r
-
-        in_ch = base_conv.in_channels
-        out_ch = base_conv.out_channels
-        k = base_conv.kernel_size
-        s = base_conv.stride
-        p = base_conv.padding
-        d = base_conv.dilation
-        g = base_conv.groups
-
-        self.lora_down = nn.Conv2d(in_ch, self.r, kernel_size=1, bias=False)
-        self.lora_up = nn.Conv2d(
-            self.r,
-            out_ch,
-            kernel_size=k,
-            stride=s,
-            padding=p,
-            dilation=d,
-            groups=g,
-            bias=False,
-        )
-
-        nn.init.kaiming_uniform_(self.lora_down.weight, a=5**0.5)
-        nn.init.zeros_(self.lora_up.weight)
-
-    def forward(self, x):
-        return self.base(x) + self.scale * self.lora_up(self.lora_down(x))
-
-
-def inject_lora_into_selected_convs(model: nn.Module, r: int, alpha: float, target_names):
-    target_names = set(target_names) if target_names is not None else {"out_conv"}
-    for full_name, module in list(model.named_modules()):
-        if full_name in target_names and isinstance(module, nn.Conv2d):
-            parent = model
-            parts = full_name.split(".")
-            for p in parts[:-1]:
-                parent = getattr(parent, p)
-            setattr(parent, parts[-1], LoRAConv2d(module, r=r, alpha=alpha))
-
-
-# ============================================================
 # Helpers: checkpoint discovery
 # ============================================================
 def list_checkpoints_sorted(dir_path: str, pattern: str = "*.pt") -> List[str]:
@@ -148,16 +94,16 @@ def labels_to_cond(labels: List[str], vocab: Any, cond_dim: int, device: torch.d
 
 
 # ============================================================
-# Load baseline OR LoRA-only ckpt into a ready-to-run model
+# Load checkpoint into a ready-to-run model
 # ============================================================
-def build_model_from_baseline_ckpt(
-    baseline_ckpt_path: str, device: torch.device
+def build_model_from_ckpt(
+    ckpt_path: str, device: torch.device
 ) -> Tuple[nn.Module, Dict[str, Any]]:
-    ckpt = torch.load(baseline_ckpt_path, map_location=str(device))
+    ckpt = torch.load(ckpt_path, map_location=str(device))
     need = ["model_state", "T", "cond_dim"]
     for k in need:
         if k not in ckpt:
-            raise KeyError(f"Baseline ckpt missing {k}: {baseline_ckpt_path}")
+            raise KeyError(f"Checkpoint missing {k}: {ckpt_path}")
 
     cond_dim = int(ckpt["cond_dim"])
     base_ch = int(ckpt.get("base_ch", 64))
@@ -181,59 +127,14 @@ def build_model_from_baseline_ckpt(
     return model, meta
 
 
-def build_model_from_lora_ckpt(
-    lora_ckpt_path: str, device: torch.device
-) -> Tuple[nn.Module, Dict[str, Any]]:
-    payload = torch.load(lora_ckpt_path, map_location="cpu")
-    lora_sd = payload.get("lora_state", payload)
-
-    baseline_ckpt_path = payload.get("baseline_ckpt", None)
-    if baseline_ckpt_path is None:
-        raise KeyError(f"LoRA ckpt missing baseline_ckpt: {lora_ckpt_path}")
-
-    base_model, meta = build_model_from_baseline_ckpt(baseline_ckpt_path, device=device)
-
-    r = int(payload.get("lora_r", 4))
-    alpha = float(payload.get("lora_alpha", 4.0))
-    targets = payload.get("lora_targets", ["out_conv"])
-
-    inject_lora_into_selected_convs(base_model, r=r, alpha=alpha, target_names=targets)
-    base_model.load_state_dict(lora_sd, strict=False)
-    base_model.eval()
-
-    meta = dict(meta)
-    meta.update({"lora_r": r, "lora_alpha": alpha, "lora_targets": list(targets)})
-    return base_model, meta
-
-
 # ============================================================
 # Active-parameter switching
 # ============================================================
-def set_active_params_baseline(model: nn.Module) -> List[nn.Parameter]:
-    """
-    baseline checkpoint: differentiate non-LoRA params; freeze LoRA params
-    """
+def set_active_params(model: nn.Module) -> List[nn.Parameter]:
     active = []
-    for name, p in model.named_parameters():
-        if ".lora_" in name:
-            p.requires_grad_(False)
-        else:
-            p.requires_grad_(True)
-            active.append(p)
-    return active
-
-
-def set_active_params_lora(model: nn.Module) -> List[nn.Parameter]:
-    """
-    LoRA checkpoint: differentiate only LoRA params; freeze base params
-    """
-    active = []
-    for name, p in model.named_parameters():
-        if ".lora_" in name:
-            p.requires_grad_(True)
-            active.append(p)
-        else:
-            p.requires_grad_(False)
+    for p in model.parameters():
+        p.requires_grad_(True)
+        active.append(p)
     return active
 
 
@@ -361,21 +262,21 @@ def build_xtref_dict_by_snapid(traj_use: List[torch.Tensor], snap_ids: List[int]
 
 
 @torch.no_grad()
-def compute_reference_eps_by_snapid(
-    ref_model: nn.Module,
+def compute_target_eps_by_snapid(
+    target_model: nn.Module,
     xt_ref_dict: Dict[int, torch.Tensor],
     query_cond: torch.Tensor,
     snap_ids: List[int],
     t_seq: np.ndarray,
 ) -> Dict[int, torch.Tensor]:
-    """Cache eps_theta_ref once; it is shared by every baseline/LoRA checkpoint."""
-    ref_model.eval()
+    """Cache stop-grad eps predictions for a query target checkpoint."""
+    target_model.eval()
     out: Dict[int, torch.Tensor] = {}
     for sid in snap_ids:
         sid = int(sid)
         xt_ref = xt_ref_dict[sid]
         t = torch.tensor([int(t_seq[sid])], device=xt_ref.device, dtype=torch.long)
-        out[sid] = ref_model(xt_ref, t, query_cond).detach()
+        out[sid] = target_model(xt_ref, t, query_cond).detach()
     return out
 
 
@@ -386,7 +287,7 @@ def compute_g_traj(
     model: nn.Module,
     active_params: List[nn.Parameter],
     xt_ref_dict: Dict[int, torch.Tensor],   # key=snap_id
-    eps_ref_dict: Dict[int, torch.Tensor],  # theta_ref prediction per snap_id
+    target_eps_dict: Dict[int, torch.Tensor],  # stop-grad target prediction per snap_id
     query_cond: torch.Tensor,
     snap_ids: List[int],                    # list of snap_id
     t_seq: np.ndarray,                      # diffusion timestep per snap_id
@@ -412,7 +313,7 @@ def compute_g_traj(
             xt_ref=xt_ref,
             t=t,
             cond_q=query_cond,
-            eps_ref=eps_ref_dict[sid],
+            eps_ref=target_eps_dict[sid],
         )
         g = torch.autograd.grad(f, active_params, retain_graph=False, create_graph=False, allow_unused=True)
         gq[sid] = g
@@ -498,40 +399,72 @@ def save_json(path: str, obj):
         json.dump(obj, f, indent=2)
 
 
-def infer_run_tag(use_baseline_ckpts: bool, use_lora_ckpts: bool) -> str:
-    if use_baseline_ckpts and use_lora_ckpts:
-        return "combine"
-    if use_baseline_ckpts and (not use_lora_ckpts):
-        return "baseline"
-    if (not use_baseline_ckpts) and use_lora_ckpts:
-        return "lora"
-    raise ValueError("Invalid: both use_baseline_ckpts and use_lora_ckpts are False.")
+def parse_csv_list(text: str) -> List[str]:
+    return [x.strip() for x in str(text).split(",") if x.strip()]
+
+
+def target_mode_out_name(mode: str) -> str:
+    mode = str(mode).strip().lower()
+    if mode in {"ref", "reference"}:
+        return "ref"
+    if mode in {"next", "next_ckpt", "next_checkpoint"}:
+        return "next"
+    raise ValueError(f"Unsupported query target mode: {mode!r}. Expected 'ref' or 'next'.")
 
 
 # ============================================================
 # main
 # ============================================================
 def main():
-    MODEL = "model_109900"
-    LORA = "y"
-    CUR_MODEL = f"{MODEL}_{LORA}"
-    MAX_TRAIN_POINTS = 2000
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    os.chdir(script_dir)
 
-    # which checkpoints to use
-    USE_BASELINE = True
-    USE_LORA = False
+    parser = argparse.ArgumentParser(
+        description="Trajectory TracIn attribution over full model parameters (no LoRA)."
+    )
+    parser.add_argument("--model", default="model_109900")
+    parser.add_argument(
+        "--variant",
+        default="y",
+        help="Model variant under models_checkpoints/<variant>/<model>, e.g. b/by/r/rb/y/yr.",
+    )
+    parser.add_argument(
+        "--target-modes",
+        default="ref,next",
+        help="Comma-separated query targets to run: ref,next.",
+    )
+    parser.add_argument("--max-train-points", type=int, default=2000)
+    parser.add_argument("--topk", type=int, default=2000)
+    parser.add_argument("--csv-path", default="generated_database/49_100000.csv")
+    parser.add_argument("--grid-size", type=int, default=3)
+    parser.add_argument("--ddim-steps", type=int, default=2000)
+    parser.add_argument("--num-traj-t", type=int, default=50)
+    parser.add_argument("--train-mc-samples", type=int, default=8)
+    parser.add_argument("--checkpoint-limit", type=int, default=-1)
+    parser.add_argument("--checkpoint-stride", type=int, default=1)
+    parser.add_argument("--reference-ckpt", default=None)
+    parser.add_argument("--out-root", default="tracein_traj_runs")
+    args = parser.parse_args()
 
-    run_tag = infer_run_tag(USE_BASELINE, USE_LORA)
+    MODEL = args.model
+    MODEL_VARIANT = args.variant
+    CUR_MODEL = f"{MODEL}_{MODEL_VARIANT}"
+    MAX_TRAIN_POINTS = int(args.max_train_points)
+    target_modes = [target_mode_out_name(x) for x in parse_csv_list(args.target_modes)]
+    if not target_modes:
+        raise ValueError("--target-modes must include at least one of: ref,next")
 
     CONFIG = dict(
         device="cuda" if torch.cuda.is_available() else "cpu",
         seed=808,
-        csv_path="generated_database/49_100000.csv",
-        grid_size=3,
+        csv_path=args.csv_path,
+        grid_size=int(args.grid_size),
 
-        model_root=f"models_checkpoints/{LORA}/{MODEL}",
-        baseline_dir=f"models_checkpoints/{LORA}/{MODEL}/baseline",
-        lora_update_dir=f"models_checkpoints/{LORA}/{MODEL}/{LORA}",
+        model_root=f"models_checkpoints/{MODEL_VARIANT}/{MODEL}",
+        checkpoint_dir=f"models_checkpoints/{MODEL_VARIANT}/{MODEL}/baseline",
+        checkpoint_pattern="*.pt",
+        checkpoint_limit=int(args.checkpoint_limit),
+        checkpoint_stride=int(args.checkpoint_stride),
 
         # query
         query_labels=[
@@ -539,24 +472,25 @@ def main():
             "background_color_blue",
             "background_color_yellow",
         ],
-        ddim_steps=2000,
+        ddim_steps=int(args.ddim_steps),
         eta=0.0,
 
         # trajectory subset
-        num_traj_t=50,
+        num_traj_t=int(args.num_traj_t),
 
         # Monte Carlo expectation controls
-        train_mc_samples=8,
+        train_mc_samples=int(args.train_mc_samples),
 
         # scoring
         max_train_points=MAX_TRAIN_POINTS,
-        topk=2000,
+        topk=int(args.topk),
 
-        # which checkpoints to use
-        use_baseline_ckpts=USE_BASELINE,
-        use_lora_ckpts=USE_LORA,
+        # query target modes:
+        #   ref  -> target eps comes from reference_ckpt
+        #   next -> target eps comes from the next full-model checkpoint
+        query_target_modes=target_modes,
 
-        reference_ckpt=None,
+        reference_ckpt=args.reference_ckpt,
         random_subset=True,
 
         use_two_index_lists=False,
@@ -569,7 +503,7 @@ def main():
         idx_list_6="generated_database/RBY/subset/yellow_B_idx.csv",
         idx_col_name="idx",
 
-        out_dir=f"tracein_traj_runs/{CUR_MODEL}_traj_objective{MAX_TRAIN_POINTS}/{run_tag}",
+        out_root=os.path.join(args.out_root, f"{CUR_MODEL}_full_model_traj_attribution{MAX_TRAIN_POINTS}"),
     )
 
     t0 = time.perf_counter()
@@ -595,12 +529,14 @@ def main():
 
     # ---- reference ckpt ----
     print("[setup] Locating reference checkpoint...", flush=True)
-    ref_ckpt = CONFIG["reference_ckpt"] or latest_checkpoint_in_dir(CONFIG["baseline_dir"])
+    ref_ckpt = CONFIG["reference_ckpt"] or latest_checkpoint_in_dir(
+        CONFIG["checkpoint_dir"], pattern=CONFIG["checkpoint_pattern"]
+    )
     if ref_ckpt is None:
-        raise FileNotFoundError("No reference baseline checkpoint found in baseline_dir.")
+        raise FileNotFoundError("No reference full-model checkpoint found in checkpoint_dir.")
 
     print(f"[setup] Reference checkpoint: {os.path.basename(ref_ckpt)}", flush=True)
-    ref_model, ref_meta = build_model_from_baseline_ckpt(ref_ckpt, device=device)
+    ref_model, ref_meta = build_model_from_ckpt(ref_ckpt, device=device)
     T = int(ref_meta["T"])
     sched = base.make_linear_schedule(T, device=device)
     print(f"[setup] Diffusion steps T={T}", flush=True)
@@ -628,8 +564,8 @@ def main():
     K = len(traj_use)
     snap_ids = pick_snapshot_ids(K, num_pick=int(CONFIG["num_traj_t"]))
     xt_ref_dict = build_xtref_dict_by_snapid(traj_use, snap_ids)
-    eps_ref_dict = compute_reference_eps_by_snapid(
-        ref_model=ref_model,
+    ref_target_eps_dict = compute_target_eps_by_snapid(
+        target_model=ref_model,
         xt_ref_dict=xt_ref_dict,
         query_cond=query_cond,
         snap_ids=snap_ids,
@@ -638,9 +574,19 @@ def main():
     print(f"[setup] Reference trajectory ready: K={K} | selected_snapshots={len(snap_ids)}", flush=True)
 
     # ---- collect checkpoints ----
-    baseline_ckpts = list_checkpoints_sorted(CONFIG["baseline_dir"]) if CONFIG["use_baseline_ckpts"] else []
-    lora_ckpts = list_checkpoints_sorted(CONFIG["lora_update_dir"]) if CONFIG["use_lora_ckpts"] else []
-    print(f"[setup] baseline_ckpts={len(baseline_ckpts)} | lora_ckpts={len(lora_ckpts)}", flush=True)
+    ckpts = list_checkpoints_sorted(CONFIG["checkpoint_dir"], pattern=CONFIG["checkpoint_pattern"])
+    stride = max(1, int(CONFIG.get("checkpoint_stride", 1)))
+    if stride > 1:
+        ckpts = ckpts[::stride]
+    limit = int(CONFIG.get("checkpoint_limit", -1))
+    if limit > 0:
+        ckpts = ckpts[:limit]
+    if not ckpts:
+        raise FileNotFoundError(f"No full-model checkpoints found in {CONFIG['checkpoint_dir']}")
+    print(
+        f"[setup] full_model_ckpts={len(ckpts)} | target_modes={','.join(CONFIG['query_target_modes'])}",
+        flush=True,
+    )
 
     # ---- choose training points to score ----
     print("[setup] Building candidate set...", flush=True)
@@ -779,167 +725,6 @@ def main():
         cond = cond.unsqueeze(0).to(device) if cond.dim() == 1 else cond.to(device)
         return x0, cond
 
-    run_info = {
-        "ref_ckpt": ref_ckpt,
-        "T": int(T),
-        "ddim_steps": int(CONFIG["ddim_steps"]),
-        "num_snap_used": int(len(snap_ids)),
-        "snap_ids": [int(x) for x in snap_ids],
-        "save_steps": [int(x) for x in save_steps],
-        "t_seq": [int(x) for x in t_seq.tolist()],
-        "M_requested": int(M_req),
-        "M_eff": int(M_eff),
-        "device": str(device),
-        "seed": int(CONFIG["seed"]),
-        "time_started": float(t0),
-        "query_objective": {
-            "name": "trajectory_noise_squared_deviation",
-            "formula": "mean_k ||eps_theta(x_ref_k,k)-eps_theta_ref(x_ref_k,k)||_2^2",
-            "reference_ckpt": ref_ckpt,
-            "snapshot_reduction": "mean",
-            "checkpoint_reduction": "sum",
-        },
-        "train_mc_samples": int(CONFIG["train_mc_samples"]),
-    }
-
-    # -----------------------------
-    # baseline ckpts
-    # -----------------------------
-    for ckpt_idx, ckpt_path in enumerate(baseline_ckpts):
-        ckpt_t0 = time.perf_counter()
-        print(f"\n[baseline checkpoint] {ckpt_idx+1}/{len(baseline_ckpts)} | {os.path.basename(ckpt_path)}", flush=True)
-
-        model_k, _ = build_model_from_baseline_ckpt(ckpt_path, device=device)
-        active = set_active_params_baseline(model_k)
-        eta_k = 1.0
-
-        if os.path.abspath(ckpt_path) == os.path.abspath(ref_ckpt):
-            print(
-                "[warning] checkpoint equals theta_ref; f_noise and its query "
-                "gradient are exactly zero for this checkpoint.",
-                flush=True,
-            )
-        print("[baseline] computing f_noise trajectory query gradients...", flush=True)
-        gq = compute_g_traj(
-            model=model_k,
-            active_params=active,
-            xt_ref_dict=xt_ref_dict,
-            eps_ref_dict=eps_ref_dict,
-            query_cond=query_cond,
-            snap_ids=snap_ids,
-            t_seq=t_seq,
-        )
-
-        for j, (src, idx) in enumerate(score_items):
-            if should_print_item(j, M_eff):
-                print_item_progress(
-                    "baseline score",
-                    j,
-                    M_eff,
-                    extra=f"ckpt={ckpt_idx+1}/{len(baseline_ckpts)}",
-                )
-
-            x0_train, cond_train = get_one(src, idx)
-            sc = score_one_trainpoint_given_gtraj(
-                model=model_k,
-                active_params=active,
-                sched=sched,
-                gq=gq,
-                snap_ids=snap_ids,
-                t_seq=t_seq,
-                x0_train=x0_train,
-                train_cond=cond_train,
-                eta_k=eta_k,
-                train_mc_samples=int(CONFIG["train_mc_samples"]),
-            )
-            scores[j] += float(sc.item())
-
-        print(
-            f"[baseline] done: {os.path.basename(ckpt_path)} |snap|={len(snap_ids)} "
-            f"| elapsed={format_seconds(time.perf_counter() - ckpt_t0)}",
-            flush=True,
-        )
-
-    # -----------------------------
-    # lora ckpts
-    # -----------------------------
-    for ckpt_idx, ckpt_path in enumerate(lora_ckpts):
-        ckpt_t0 = time.perf_counter()
-        print(f"\n[lora checkpoint] {ckpt_idx+1}/{len(lora_ckpts)} | {os.path.basename(ckpt_path)}", flush=True)
-
-        model_k, _ = build_model_from_lora_ckpt(ckpt_path, device=device)
-        active = set_active_params_lora(model_k)
-        eta_k = 1.0
-
-        print("[lora] computing f_noise trajectory query gradients...", flush=True)
-        gq = compute_g_traj(
-            model=model_k,
-            active_params=active,
-            xt_ref_dict=xt_ref_dict,
-            eps_ref_dict=eps_ref_dict,
-            query_cond=query_cond,
-            snap_ids=snap_ids,
-            t_seq=t_seq,
-        )
-
-        for j, (src, idx) in enumerate(score_items):
-            if should_print_item(j, M_eff):
-                print_item_progress(
-                    "lora score",
-                    j,
-                    M_eff,
-                    extra=f"ckpt={ckpt_idx+1}/{len(lora_ckpts)}",
-                )
-
-            x0_train, cond_train = get_one(src, idx)
-            sc = score_one_trainpoint_given_gtraj(
-                model=model_k,
-                active_params=active,
-                sched=sched,
-                gq=gq,
-                snap_ids=snap_ids,
-                t_seq=t_seq,
-                x0_train=x0_train,
-                train_cond=cond_train,
-                eta_k=eta_k,
-                train_mc_samples=int(CONFIG["train_mc_samples"]),
-            )
-            scores[j] += float(sc.item())
-
-        print(
-            f"[lora] done: {os.path.basename(ckpt_path)} |snap|={len(snap_ids)} "
-            f"| elapsed={format_seconds(time.perf_counter() - ckpt_t0)}",
-            flush=True,
-        )
-
-    # ---- top-k ----
-    topk = min(int(CONFIG["topk"]), M_eff)
-    vals, ord_idx = torch.topk(scores, k=topk, largest=True)
-
-    top = []
-    for r in range(topk):
-        j = int(ord_idx[r].item())
-        src, train_idx = score_items[j]
-        src = int(src)
-        train_idx = int(train_idx)
-        idx_tag = f"{train_idx}_{src}" if src != 0 else str(train_idx)
-
-        top.append({
-            "idx": train_idx,
-            "src": src,
-            "idx_tag": idx_tag,
-            "score": float(vals[r].item()),
-        })
-
-    # ---- save ----
-    print("[save] Writing outputs...", flush=True)
-    ensure_dir(CONFIG["out_dir"])
-
-    run_info["elapsed_sec"] = float(time.perf_counter() - t0)
-
-    save_json(os.path.join(CONFIG["out_dir"], "run_config.json"), CONFIG)
-    save_json(os.path.join(CONFIG["out_dir"], "run_info.json"), run_info)
-
     score_indices_payload = {
         "N_eff": int(M_eff),
         "items": [{"src": int(s), "idx": int(i)} for (s, i) in score_items],
@@ -952,20 +737,190 @@ def main():
         "idx_col_name": CONFIG.get("idx_col_name", "idx"),
         "use_six_index_lists": bool(CONFIG.get("use_six_index_lists", False)),
     }
-    save_json(os.path.join(CONFIG["out_dir"], "score_indices.json"), score_indices_payload)
 
-    save_json(
-        os.path.join(CONFIG["out_dir"], "result_topk.json"),
-        {"N_eff": int(M_eff), "topk": int(topk), "top": top},
-    )
-    np.save(os.path.join(CONFIG["out_dir"], "scores.npy"), scores.cpu().numpy())
+    base_run_info = {
+        "ref_ckpt": ref_ckpt,
+        "T": int(T),
+        "ddim_steps": int(CONFIG["ddim_steps"]),
+        "num_snap_used": int(len(snap_ids)),
+        "snap_ids": [int(x) for x in snap_ids],
+        "save_steps": [int(x) for x in save_steps],
+        "t_seq": [int(x) for x in t_seq.tolist()],
+        "M_requested": int(M_req),
+        "M_eff": int(M_eff),
+        "device": str(device),
+        "seed": int(CONFIG["seed"]),
+        "time_started": float(t0),
+        "train_mc_samples": int(CONFIG["train_mc_samples"]),
+        "parameter_scope": "full_model",
+        "lora": False,
+        "trajectory_source": {
+            "name": "reference_checkpoint_ddim_trajectory",
+            "checkpoint": ref_ckpt,
+        },
+        "checkpoint_reduction": "sum",
+        "snapshot_reduction": "mean",
+        "candidate_set": score_indices_payload,
+    }
+
+    for target_mode in CONFIG["query_target_modes"]:
+        mode_t0 = time.perf_counter()
+        mode = target_mode_out_name(target_mode)
+        mode_out_dir = os.path.join(CONFIG["out_root"], mode)
+        scores = torch.zeros(M_eff, dtype=torch.float64)
+        used_ckpts: List[Dict[str, Any]] = []
+        skipped_ckpts: List[Dict[str, Any]] = []
+
+        print(f"\n[target mode] {mode} | output={mode_out_dir}", flush=True)
+
+        for ckpt_idx, ckpt_path in enumerate(ckpts):
+            ckpt_t0 = time.perf_counter()
+            target_ckpt = ref_ckpt
+            target_eps_dict = ref_target_eps_dict
+
+            if mode == "next":
+                if ckpt_idx + 1 >= len(ckpts):
+                    skipped_ckpts.append({
+                        "checkpoint": ckpt_path,
+                        "reason": "no next-checkpoint query target",
+                    })
+                    print(
+                        f"[next checkpoint] skipping {os.path.basename(ckpt_path)}: no next checkpoint",
+                        flush=True,
+                    )
+                    continue
+                target_ckpt = ckpts[ckpt_idx + 1]
+                target_model, _ = build_model_from_ckpt(target_ckpt, device=device)
+                target_eps_dict = compute_target_eps_by_snapid(
+                    target_model=target_model,
+                    xt_ref_dict=xt_ref_dict,
+                    query_cond=query_cond,
+                    snap_ids=snap_ids,
+                    t_seq=t_seq,
+                )
+                del target_model
+
+            print(
+                f"\n[full checkpoint] {ckpt_idx+1}/{len(ckpts)} | "
+                f"{os.path.basename(ckpt_path)} | target={os.path.basename(target_ckpt)}",
+                flush=True,
+            )
+
+            model_k, _ = build_model_from_ckpt(ckpt_path, device=device)
+            active = set_active_params(model_k)
+            eta_k = 1.0
+
+            if mode == "ref" and os.path.abspath(ckpt_path) == os.path.abspath(ref_ckpt):
+                print(
+                    "[warning] checkpoint equals theta_ref; query gradient is exactly zero.",
+                    flush=True,
+                )
+
+            print("[full-model] computing trajectory query gradients...", flush=True)
+            gq = compute_g_traj(
+                model=model_k,
+                active_params=active,
+                xt_ref_dict=xt_ref_dict,
+                target_eps_dict=target_eps_dict,
+                query_cond=query_cond,
+                snap_ids=snap_ids,
+                t_seq=t_seq,
+            )
+
+            for j, (src, idx) in enumerate(score_items):
+                if should_print_item(j, M_eff):
+                    print_item_progress(
+                        f"{mode} score",
+                        j,
+                        M_eff,
+                        extra=f"ckpt={ckpt_idx+1}/{len(ckpts)}",
+                    )
+
+                x0_train, cond_train = get_one(src, idx)
+                sc = score_one_trainpoint_given_gtraj(
+                    model=model_k,
+                    active_params=active,
+                    sched=sched,
+                    gq=gq,
+                    snap_ids=snap_ids,
+                    t_seq=t_seq,
+                    x0_train=x0_train,
+                    train_cond=cond_train,
+                    eta_k=eta_k,
+                    train_mc_samples=int(CONFIG["train_mc_samples"]),
+                )
+                scores[j] += float(sc.item())
+
+            used_ckpts.append({
+                "checkpoint": ckpt_path,
+                "query_target_checkpoint": target_ckpt,
+            })
+            print(
+                f"[full-model] done: {os.path.basename(ckpt_path)} |snap|={len(snap_ids)} "
+                f"| elapsed={format_seconds(time.perf_counter() - ckpt_t0)}",
+                flush=True,
+            )
+            del model_k
+
+        topk = min(int(CONFIG["topk"]), M_eff)
+        vals, ord_idx = torch.topk(scores, k=topk, largest=True)
+
+        top = []
+        for r in range(topk):
+            j = int(ord_idx[r].item())
+            src, train_idx = score_items[j]
+            src = int(src)
+            train_idx = int(train_idx)
+            idx_tag = f"{train_idx}_{src}" if src != 0 else str(train_idx)
+
+            top.append({
+                "idx": train_idx,
+                "src": src,
+                "idx_tag": idx_tag,
+                "score": float(vals[r].item()),
+            })
+
+        run_info = dict(base_run_info)
+        run_info["elapsed_sec"] = float(time.perf_counter() - mode_t0)
+        run_info["query_objective"] = {
+            "name": (
+                "trajectory_noise_squared_deviation"
+                if mode == "ref"
+                else "trajectory_next_checkpoint_noise_mse"
+            ),
+            "target_mode": mode,
+            "formula": (
+                "mean_k ||eps_theta(x_ref_k,k)-eps_theta_ref(x_ref_k,k)||_2^2"
+                if mode == "ref"
+                else "mean_k mean((eps_theta_c(x_ref_k,k)-stopgrad(eps_theta_c_plus_1(x_ref_k,k)))^2)"
+            ),
+            "reference_ckpt": ref_ckpt,
+        }
+        run_info["used_checkpoints"] = used_ckpts
+        run_info["skipped_checkpoints"] = skipped_ckpts
+
+        print(f"[save] Writing {mode} outputs...", flush=True)
+        ensure_dir(mode_out_dir)
+        mode_config = dict(CONFIG)
+        mode_config["out_dir"] = mode_out_dir
+        mode_config["query_target_mode"] = mode
+
+        save_json(os.path.join(mode_out_dir, "run_config.json"), mode_config)
+        save_json(os.path.join(mode_out_dir, "run_info.json"), run_info)
+        save_json(os.path.join(mode_out_dir, "score_indices.json"), score_indices_payload)
+        save_json(
+            os.path.join(mode_out_dir, "result_topk.json"),
+            {"N_eff": int(M_eff), "topk": int(topk), "top": top},
+        )
+        np.save(os.path.join(mode_out_dir, "scores.npy"), scores.cpu().numpy())
+
+        print(f"[saved] {mode_out_dir}/run_config.json", flush=True)
+        print(f"[saved] {mode_out_dir}/run_info.json", flush=True)
+        print(f"[saved] {mode_out_dir}/score_indices.json", flush=True)
+        print(f"[saved] {mode_out_dir}/result_topk.json", flush=True)
+        print(f"[saved] {mode_out_dir}/scores.npy", flush=True)
 
     dt = time.perf_counter() - t0
-    print(f"\n[saved] {CONFIG['out_dir']}/run_config.json", flush=True)
-    print(f"[saved] {CONFIG['out_dir']}/run_info.json", flush=True)
-    print(f"[saved] {CONFIG['out_dir']}/score_indices.json", flush=True)
-    print(f"[saved] {CONFIG['out_dir']}/result_topk.json", flush=True)
-    print(f"[saved] {CONFIG['out_dir']}/scores.npy", flush=True)
     print(f"\n(done) elapsed={format_seconds(dt)}", flush=True)
 
 
