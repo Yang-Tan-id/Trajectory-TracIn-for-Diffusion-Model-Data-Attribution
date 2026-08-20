@@ -112,6 +112,9 @@ def run_algorithm_config(config_path: str | Path) -> Any:
             output_algorithm = f"{algorithm}_{_safe_tag(objective)}"
             if unprompted:
                 output_algorithm = f"{output_algorithm}_unprompted"
+        parameter_source = str(config_values.get("parameter_source", "ema")).strip().lower()
+        if parameter_source not in ("", "ema", "ema_params"):
+            output_algorithm = f"{output_algorithm}_{_safe_tag(parameter_source)}"
         range_suffix = _range_suffix_from_env()
         if range_suffix is not None:
             output_algorithm = f"{output_algorithm}_{range_suffix}"

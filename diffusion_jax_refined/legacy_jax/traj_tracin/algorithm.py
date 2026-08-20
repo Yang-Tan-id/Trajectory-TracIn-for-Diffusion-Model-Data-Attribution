@@ -141,6 +141,17 @@ def tree_to_device(tree, device):
     return jax.tree_util.tree_map(lambda x: jax.device_put(x, device), tree)
 
 
+def select_state_params(state, parameter_source: str):
+    source = str(parameter_source or "ema").strip().lower()
+    if source in ("ema", "ema_params"):
+        return state.ema_params
+    if source in ("raw", "params", "model", "train"):
+        return state.params
+    raise ValueError(
+        f"Unknown parameter_source={parameter_source!r}; expected 'ema' or 'raw'."
+    )
+
+
 def array_to_device(x, device):
     return jax.device_put(x, device)
 
@@ -937,6 +948,7 @@ class TrajAttributionConfig:
     query: Any = None
     seed: int = 0
     query_objective: str = "trajectory_noise_squared_deviation"
+    parameter_source: str = "ema"  # "ema" for historical behavior, "raw" for TrainState.params
 
     # optional precomputed sampler trajectory
     # Accepts either:
@@ -1533,6 +1545,7 @@ def run_attribution(cfg: TrajAttributionConfig):
     print(f"checkpoint_dir       : {cfg.checkpoint_dir}")
     print(f"reference_ckpt       : {cfg.reference_ckpt}")
     print(f"query_objective      : {cfg.query_objective}")
+    print(f"parameter_source     : {cfg.parameter_source}")
     print(
         "query_target         : "
         + ("next_checkpoint_predicted_noise" if uses_next_checkpoint_target else "reference_checkpoint_predicted_noise")
@@ -1585,7 +1598,7 @@ def run_attribution(cfg: TrajAttributionConfig):
         raise FileNotFoundError(f"Reference checkpoint not found: {reference_ckpt}")
     print(f"[setup] restoring f_noise reference checkpoint: {reference_ckpt}")
     reference_state, _ = adapter.restore_state(reference_ckpt, state_template)
-    reference_params = tree_to_device(reference_state.ema_params, device)
+    reference_params = tree_to_device(select_state_params(reference_state, cfg.parameter_source), device)
     cfg.reference_ckpt = reference_ckpt
     print(f"[device-check] reference_params={first_leaf_device_str(reference_params)}")
 
@@ -1594,7 +1607,7 @@ def run_attribution(cfg: TrajAttributionConfig):
             return reference_params
         next_ckpt_path = ckpts[ckpt_i + 1]
         next_state, _ = adapter.restore_state(next_ckpt_path, state_template)
-        next_params = tree_to_device(next_state.ema_params, device)
+        next_params = tree_to_device(select_state_params(next_state, cfg.parameter_source), device)
         print(
             f"[checkpoint {ckpt_i + 1}/{len(ckpts)}] "
             f"query target is next checkpoint: {os.path.basename(next_ckpt_path)}"
@@ -1694,7 +1707,7 @@ def run_attribution(cfg: TrajAttributionConfig):
                 flush=True,
             )
             state, _payload = adapter.restore_state(cache_ckpt_path, state_template)
-            params_for_eps = tree_to_device(state.ema_params, device)
+            params_for_eps = tree_to_device(select_state_params(state, cfg.parameter_source), device)
             chunks = []
             for chunk_start in range(0, len(t_seq), chunk_size):
                 chunk_end = min(chunk_start + chunk_size, len(t_seq))
@@ -1861,7 +1874,7 @@ def run_attribution(cfg: TrajAttributionConfig):
                     print(f"[warning] skipping unreadable checkpoint: {ckpt_path}: {exc}")
                     continue
                 raise
-            params = tree_to_device(state.ema_params, device)
+            params = tree_to_device(select_state_params(state, cfg.parameter_source), device)
             projector = build_countsketch_projector_jax(
                 params,
                 cache_dim,
@@ -2029,7 +2042,7 @@ def run_attribution(cfg: TrajAttributionConfig):
                     print(f"[warning] skipping unreadable checkpoint: {ckpt_path}: {exc}", flush=True)
                     continue
                 raise
-            params = tree_to_device(state.ema_params, device)
+            params = tree_to_device(select_state_params(state, cfg.parameter_source), device)
             print(f"[stage:{stage_mode}] checkpoint {ckpt_i + 1}/{len(ckpts)} restored", flush=True)
             projector = build_countsketch_projector_jax(
                 params,
@@ -2421,7 +2434,7 @@ def run_attribution(cfg: TrajAttributionConfig):
                 print(f"[warning] skipping unreadable checkpoint: {msg}")
                 continue
             raise
-        params = tree_to_device(state.ema_params, device)
+        params = tree_to_device(select_state_params(state, cfg.parameter_source), device)
         used_ckpts.append(ckpt_path)
 
         print(f"[checkpoint {ckpt_i + 1}/{len(ckpts)}] state restored")

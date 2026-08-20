@@ -48,6 +48,10 @@ TRAJ_QUERY_OBJECTIVE = os.environ.get(
     "TRAJ_QUERY_OBJECTIVE",
     os.environ.get("QUERY_OBJECTIVE", "trajectory_noise_squared_deviation"),
 )
+TRAJ_PARAMETER_SOURCE = os.environ.get(
+    "TRAJ_PARAMETER_SOURCE",
+    os.environ.get("TRACIN_PARAMETER_SOURCE", "ema"),
+)
 DATASET_DISPLAY_NAME = "CIFAR2 horse/automobile"
 EXPERIMENTS = ("experiment1", "experiment2", "experiment3")
 EXPERIMENT_TAG = os.environ.get("EXPERIMENT_TAG", "experiment1")
@@ -197,6 +201,7 @@ ATTRIBUTION_CONFIGS = {
         "checkpoint_dir": CHECKPOINT_DIR,
         "reference_ckpt": REFERENCE_CKPT,
         "query_objective": TRAJ_QUERY_OBJECTIVE,
+        "parameter_source": TRAJ_PARAMETER_SOURCE,
         "attribution_sample_dir": ATTRIBUTION_SAMPLE_DIR,
         "attribution_sample_seed": INITIAL_SEED,
         "attribution_sample_index": 0,

@@ -15,6 +15,17 @@ import numpy as np
 
 from common.config_loader import load_config, require_attr
 
+TARGET_FUNCTION_CHOICES = (
+    "noise_trajectory",
+    "projected_trajectory",
+    "simple_loss",
+    "trajectory_state_mse",
+    "endpoint_contarfactual",
+    "traj_contarfactual",
+    "endpoint_counterfactual",
+    "traj_counterfactual",
+)
+
 
 def _paths(text: str) -> list[Path]:
     return [Path(part.strip()).expanduser().resolve() for part in text.split(",") if part.strip()]
@@ -76,7 +87,7 @@ def main() -> None:
     parser.add_argument("--duplicate-policy", choices=["max", "sum", "mean"], default="max")
     parser.add_argument(
         "--target-function",
-        choices=["noise_trajectory", "projected_trajectory", "simple_loss", "trajectory_state_mse"],
+        choices=TARGET_FUNCTION_CHOICES,
         default="noise_trajectory",
     )
     parser.add_argument("--trajectory-reduction", choices=["mean", "sum", "snapshot_mean"], default=None)
@@ -100,7 +111,9 @@ def main() -> None:
         spearman_corr,
         sum_scores,
         write_csv,
+        normalize_target_function,
     )
+    args.target_function = normalize_target_function(args.target_function)
 
     model_dirs = _paths(args.lds_model_dirs)
     if not model_dirs:

@@ -176,6 +176,25 @@ from DM_counterfactual_retrain_from_attribution import (
     selected_indices_to_exclude_indices,
 )
 
+TARGET_FUNCTION_CHOICES = (
+    "noise_trajectory",
+    "projected_trajectory",
+    "simple_loss",
+    "trajectory_state_mse",
+    "endpoint_contarfactual",
+    "traj_contarfactual",
+    "endpoint_counterfactual",
+    "traj_counterfactual",
+)
+
+
+def normalize_target_function(name: str) -> str:
+    aliases = {
+        "endpoint_counterfactual": "endpoint_contarfactual",
+        "traj_counterfactual": "traj_contarfactual",
+    }
+    return aliases.get(str(name), str(name))
+
 
 def sanitize_tag(text: Optional[str], default: str = "unknown") -> str:
     if text is None or str(text).strip() == "":
@@ -640,7 +659,7 @@ class CifarTargetEvaluator:
         self.prompt = prompt
         self.prefer_device = prefer_device
         self.data_root = data_root
-        self.target_function = target_function
+        self.target_function = normalize_target_function(target_function)
         self.sample_root = sample_root
         self.sample_seed = sample_seed
         self.sample_index = sample_index
@@ -669,16 +688,23 @@ class CifarTargetEvaluator:
         self.xt_ref = None
         self.t_seq = None
         self.target_meta: Dict[str, object] = {}
-        if target_function in ("noise_trajectory", "projected_trajectory", "simple_loss", "trajectory_state_mse"):
+        if self.target_function in (
+            "noise_trajectory",
+            "projected_trajectory",
+            "simple_loss",
+            "trajectory_state_mse",
+            "endpoint_contarfactual",
+            "traj_contarfactual",
+        ):
             if sample_root is None:
                 raise ValueError("--attribution-sample-dir is required for target function evaluation.")
             self.xt_ref, self.t_seq, self.target_meta = load_trajectory_target(
                 sample_root=sample_root,
                 sample_seed=sample_seed,
                 sample_index=sample_index,
-                max_steps=max_trajectory_steps if target_function != "simple_loss" else None,
+                max_steps=max_trajectory_steps if self.target_function != "simple_loss" else None,
             )
-            if target_function == "simple_loss":
+            if self.target_function == "simple_loss":
                 self.xt_ref = self.xt_ref[-1:]
                 self.t_seq = self.t_seq[-1:]
             self.xt_ref = jax.device_put(jnp.asarray(self.xt_ref, dtype=jnp.float32), self.device)
@@ -688,7 +714,7 @@ class CifarTargetEvaluator:
         self._projected_fn = jax.jit(self._projected_trajectory_objective)
         self._simple_loss_fn = jax.jit(self._simple_loss_objective)
 
-        if target_function == "projected_trajectory":
+        if self.target_function == "projected_trajectory":
             if not trajectory_projection:
                 raise ValueError(
                     "projected_trajectory requires Traj TracIn metadata from "
@@ -885,6 +911,42 @@ class CifarTargetEvaluator:
         }
         return value, details
 
+    def _trajectory_counterfactual(self, target_adapter: CIFARAdapter, *, endpoint_only: bool) -> Tuple[float, Dict[str, object]]:
+        if self.sample_seed is None:
+            raise ValueError("trajectory counterfactual targets require --attribution-sample-seed/seed metadata.")
+        assert self.xt_ref is not None
+        assert self.t_seq is not None
+        timesteps = self.t_seq[-1:] if endpoint_only else self.t_seq
+        target_xt = self._sample_model_space_trajectory(
+            target_adapter,
+            seed=int(self.sample_seed),
+            timesteps_to_save=timesteps,
+        )
+        ref_xt_all = np.asarray(jax.device_get(self.xt_ref), dtype=np.float32)
+        ref_xt = ref_xt_all[-1:] if endpoint_only else ref_xt_all
+        if target_xt.shape != ref_xt.shape:
+            raise ValueError(f"Generated trajectory shape {target_xt.shape} does not match reference {ref_xt.shape}")
+        sq = (target_xt.astype(np.float64) - ref_xt.astype(np.float64)) ** 2
+        per_snapshot_mean = np.mean(sq, axis=tuple(range(1, sq.ndim)))
+        value = float(np.mean(per_snapshot_mean))
+        target_name = "endpoint_contarfactual" if endpoint_only else "traj_contarfactual"
+        details = {
+            "target_function": target_name,
+            "canonical_spelling": "endpoint_counterfactual" if endpoint_only else "traj_counterfactual",
+            "num_trajectory_steps": int(len(timesteps)),
+            "trajectory_reduction": "mean_per_state_mse",
+            "definition": (
+                "Generate target-checkpoint trajectory from the same seed and compare the endpoint to the saved reference endpoint."
+                if endpoint_only
+                else "Generate target-checkpoint trajectory from the same seed and average per-state MSE to the saved reference trajectory."
+            ),
+            "sample_seed": int(self.sample_seed),
+            "per_snapshot_mean_min": float(np.min(per_snapshot_mean)),
+            "per_snapshot_mean_mean": float(np.mean(per_snapshot_mean)),
+            "per_snapshot_mean_max": float(np.max(per_snapshot_mean)),
+        }
+        return value, details
+
     def evaluate(self, checkpoint: str) -> Tuple[float, Dict[str, object]]:
         target_adapter = self._make_adapter(checkpoint)
         # Store the target adapter for the jitted closures. The module/model structure is
@@ -953,6 +1015,12 @@ class CifarTargetEvaluator:
         elif self.target_function == "trajectory_state_mse":
             value_float, details = self._trajectory_state_mse(target_adapter)
             return value_float, details
+        elif self.target_function == "endpoint_contarfactual":
+            value_float, details = self._trajectory_counterfactual(target_adapter, endpoint_only=True)
+            return value_float, details
+        elif self.target_function == "traj_contarfactual":
+            value_float, details = self._trajectory_counterfactual(target_adapter, endpoint_only=False)
+            return value_float, details
         else:
             raise ValueError(f"Unknown target_function={self.target_function!r}")
 
@@ -978,7 +1046,7 @@ def main():
     parser.add_argument("--max-trajectory-steps", type=int, default=None)
     parser.add_argument(
         "--target-function",
-        choices=["noise_trajectory", "projected_trajectory", "simple_loss", "trajectory_state_mse"],
+        choices=TARGET_FUNCTION_CHOICES,
         default="noise_trajectory",
     )
     parser.add_argument(
@@ -1110,7 +1178,15 @@ def main():
     if prompt is None:
         raise ValueError("--prompt was not provided and could not be inferred from the score file.")
     sample_dir = args.attribution_sample_dir or infer_attribution_sample_dir(score_inputs)
-    if args.target_function in ("noise_trajectory", "projected_trajectory", "simple_loss", "trajectory_state_mse") and sample_dir is None:
+    args.target_function = normalize_target_function(args.target_function)
+    if args.target_function in (
+        "noise_trajectory",
+        "projected_trajectory",
+        "simple_loss",
+        "trajectory_state_mse",
+        "endpoint_contarfactual",
+        "traj_contarfactual",
+    ) and sample_dir is None:
         raise ValueError(
             "--attribution-sample-dir was not provided and could not be inferred from the score file."
         )

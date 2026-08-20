@@ -67,3 +67,26 @@ Scores are stored under lambda-specific folders, for example:
 result/experiment_67/attribution_score/prompted_solo/train_seed_67/query_horse/initial_seed_0/das/lambda_2/scores.npy
 result/experiment_67/attribution_score/unprompted_solo/train_seed_67/unprompted/initial_seed_0/das_unprompted/lambda_2/scores.npy
 ```
+
+## Raw Traj-TracIn next-checkpoint run
+
+These scripts are independent `sbatch` jobs. Submit them manually in this order
+after the base `prompted_solo` / `unprompted_solo` models exist:
+
+```bash
+sbatch -A IRI26004 diffusion_jax_refined/cifar2/stampede3_das/10_train_lds_25pct_h100_stampede3.sh
+sbatch -A IRI26004 diffusion_jax_refined/cifar2/stampede3_das/11_traj_tracin_raw_nextckpt_h100_stampede3.sh
+sbatch -A IRI26004 diffusion_jax_refined/cifar2/stampede3_das/12_eval_traj_raw_nextckpt_lds25_targets_stampede3.sh
+```
+
+Defaults:
+
+```text
+LDS: M=64, 25%, subset seeds 0-7, h100 4 nodes / 16 GPUs, 12h
+Traj-TracIn: raw TrainState.params, trajectory_next_checkpoint_noise_mse target, h100 4 nodes / 16 GPUs, 24h
+Eval targets: endpoint_contarfactual, traj_contarfactual, simple_loss, trajectory_state_mse
+Eval algorithm folder: traj_tracin_trajectory_next_checkpoint_noise_mse_raw
+```
+
+Override `EXPERIMENT_TAG`, `TRAIN_SEED`, `LDS_SEEDS`, `PROMPTED_INITIAL_SEEDS`,
+or `UNPROMPTED_INITIAL_SEEDS` in the `sbatch` environment if needed.
