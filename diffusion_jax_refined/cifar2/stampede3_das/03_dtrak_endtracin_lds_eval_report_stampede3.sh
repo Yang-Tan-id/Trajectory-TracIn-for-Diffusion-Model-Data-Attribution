@@ -77,7 +77,7 @@ echo "experiment=${EXPERIMENT_TAG}; train_seed=${TRAIN_SEED}; query_tasks=${#SPE
 echo "targets=${TARGETS[*]}; algorithms=${EVAL_ALGORITHMS[*]}; unprompted_algorithms=${UNPROMPTED_EVAL_ALGORITHMS[*]}; lds_seeds=${LDS_SEEDS_TEXT}"
 echo "simple_loss_terms=${LDS_SIMPLE_LOSS_NUM_MC}; simple_loss_noise_seeds=${LDS_SIMPLE_LOSS_NOISE_SEEDS}; logs=${LOG_ROOT}"
 echo "eval_device_mode=${LDS_EVAL_DEVICE_MODE:-gpu_then_cpu}"
-echo "eval_slot_shards=${EVAL_SLOT_SHARD_COUNT:-1}; serial_slots=${EVAL_SERIAL_SLOTS:-0}; local_parallel_slots=${EVAL_LOCAL_PARALLEL_SLOTS:-0}; force=${FORCE_LDS_EVAL:-0}"
+echo "eval_slot_shards=${EVAL_SLOT_SHARD_COUNT:-1}; serial_slots=${EVAL_SERIAL_SLOTS:-0}; local_parallel_slots=${EVAL_LOCAL_PARALLEL_SLOTS:-0}; gpu_per_node=${GPU_PER_NODE:-4}; force=${FORCE_LDS_EVAL:-0}"
 
 run_eval_slot_once() {
   local slot="$1"
@@ -135,7 +135,7 @@ run_eval_slot_with_fallback() {
   local shard_index="$3"
   local shard_count="$4"
   local mode="${LDS_EVAL_DEVICE_MODE:-gpu_then_cpu}"
-  local gpu=$((launch_slot % 4))
+  local gpu=$((launch_slot % ${GPU_PER_NODE:-4}))
   case "${mode}" in
     gpu)
       run_eval_slot_once "${slot}" "${launch_slot}" "${shard_index}" "${shard_count}" "gpu-only" gpu "${gpu}"
