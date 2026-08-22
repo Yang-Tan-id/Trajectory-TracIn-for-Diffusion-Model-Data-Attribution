@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-#SBATCH -J cifar2-s3-traj-proj-h100
-#SBATCH -o cifar2-s3-traj-proj-h100-%j.out
-#SBATCH -e cifar2-s3-traj-proj-h100-%j.err
-#SBATCH -p h100
-#SBATCH -N 4
-#SBATCH -n 16
-#SBATCH --cpus-per-task=24
-#SBATCH -t 24:00:00
+#SBATCH -J cifar2-s3-traj-proj-rtx
+#SBATCH -o cifar2-s3-traj-proj-rtx-%j.out
+#SBATCH -e cifar2-s3-traj-proj-rtx-%j.err
+#SBATCH -p rtx-small
+#SBATCH -N 1
+#SBATCH -n 2
+#SBATCH --cpus-per-task=8
+#SBATCH -t 48:00:00
 
 set -euo pipefail
 
-export ATTR_NUM_SLOTS="${ATTR_NUM_SLOTS:-16}"
-export GPU_PER_NODE="${GPU_PER_NODE:-4}"
+export ATTR_NUM_SLOTS="${ATTR_NUM_SLOTS:-2}"
+export GPU_PER_NODE="${GPU_PER_NODE:-2}"
 
 SCRIPT_DIR="${STAMPEDE3_DAS_DIR:-}"
 if [[ -z "${SCRIPT_DIR}" || ! -f "${SCRIPT_DIR}/11_traj_tracin_raw_nextckpt_projected_body.sh" ]]; then
