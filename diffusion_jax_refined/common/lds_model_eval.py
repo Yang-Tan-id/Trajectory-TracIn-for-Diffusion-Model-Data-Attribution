@@ -148,7 +148,10 @@ def main() -> None:
         )
         attribution_root = Path(require_attr(dataset_cfg, root_attr))
         ranges = os.environ.get("ATTRIBUTION_RANGES") or os.environ.get("SCORE_INDEX_RANGES")
-        algorithm_dir = f"{args.algorithm}_unprompted" if args.unprompted else args.algorithm
+        if args.unprompted:
+            algorithm_dir = args.algorithm if "_unprompted" in args.algorithm else f"{args.algorithm}_unprompted"
+        else:
+            algorithm_dir = args.algorithm
         if args.algorithm.startswith("traj_tracin") and ranges:
             score_file = ",".join(
                 str(attribution_root / f"{algorithm_dir}_range_{part.replace(':', '-').replace('-', '_')}")

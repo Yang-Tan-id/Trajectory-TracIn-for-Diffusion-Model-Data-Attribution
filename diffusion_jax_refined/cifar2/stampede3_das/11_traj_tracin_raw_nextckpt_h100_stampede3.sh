@@ -10,6 +10,9 @@
 
 set -euo pipefail
 
+export EXPERIMENT_TAG="${EXPERIMENT_TAG:-experiment1_67}"
+export TRAIN_SEED="${TRAIN_SEED:-67}"
+
 SCRIPT_DIR="${STAMPEDE3_DAS_DIR:-}"
 if [[ -z "${SCRIPT_DIR}" || ! -f "${SCRIPT_DIR}/_stampede3_das_lib.sh" ]]; then
   for candidate in \

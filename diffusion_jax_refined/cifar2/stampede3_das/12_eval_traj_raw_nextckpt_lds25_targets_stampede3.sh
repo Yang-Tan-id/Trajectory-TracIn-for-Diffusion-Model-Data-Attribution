@@ -10,6 +10,9 @@
 
 set -euo pipefail
 
+export EXPERIMENT_TAG="${EXPERIMENT_TAG:-experiment1_67}"
+export TRAIN_SEED="${TRAIN_SEED:-67}"
+
 SCRIPT_DIR="${STAMPEDE3_DAS_DIR:-}"
 if [[ -z "${SCRIPT_DIR}" || ! -f "${SCRIPT_DIR}/_stampede3_das_lib.sh" ]]; then
   for candidate in \
@@ -32,6 +35,7 @@ export LDS_M="${LDS_M:-64}"
 export LDS_SEEDS="${LDS_SEEDS:-$(seq -s ' ' 0 7)}"
 export LDS_TARGETS="${LDS_TARGETS:-endpoint_contarfactual traj_contarfactual simple_loss trajectory_state_mse}"
 export EVAL_ALGORITHMS="${EVAL_ALGORITHMS:-traj_tracin_trajectory_next_checkpoint_noise_mse_raw}"
+export UNPROMPTED_EVAL_ALGORITHMS="${UNPROMPTED_EVAL_ALGORITHMS:-traj_tracin_trajectory_next_checkpoint_noise_mse_unprompted_raw}"
 export PRED_TAG="${PRED_TAG:-pred_kept_sign_m1}"
 export LDS_PREDICTION_SUBSET="${LDS_PREDICTION_SUBSET:-kept}"
 export LDS_PREDICTION_SIGN="${LDS_PREDICTION_SIGN:--1}"
@@ -41,6 +45,6 @@ export LDS_SIMPLE_LOSS_NUM_MC="${LDS_SIMPLE_LOSS_NUM_MC:-1000}"
 export LDS_SIMPLE_LOSS_MC_SEED="${LDS_SIMPLE_LOSS_MC_SEED:-0}"
 
 echo "Stampede3 LDS eval for raw Traj-TracIn next-checkpoint scores"
-echo "experiment=${EXPERIMENT_TAG:-experiment_67}; targets=${LDS_TARGETS}; algorithms=${EVAL_ALGORITHMS}; pct=${LDS_DATASET_PERCENTAGE}; seeds=${LDS_SEEDS}"
+echo "experiment=${EXPERIMENT_TAG}; targets=${LDS_TARGETS}; algorithms=${EVAL_ALGORITHMS}; unprompted_algorithms=${UNPROMPTED_EVAL_ALGORITHMS}; pct=${LDS_DATASET_PERCENTAGE}; seeds=${LDS_SEEDS}"
 
 bash "${SCRIPT_DIR}/03_dtrak_endtracin_lds_eval_report_stampede3.sh"

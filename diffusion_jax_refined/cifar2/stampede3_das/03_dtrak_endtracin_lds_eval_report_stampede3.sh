@@ -42,11 +42,13 @@ PROMPTED_SEEDS_TEXT="${PROMPTED_INITIAL_SEEDS:-$(seq -s ' ' 0 7)}"
 UNPROMPTED_SEEDS_TEXT="${UNPROMPTED_INITIAL_SEEDS:-$(seq -s ' ' 0 23)}"
 TARGETS_TEXT="${TARGETS[*]}"
 EVAL_ALGORITHMS_TEXT="${EVAL_ALGORITHMS[*]}"
+UNPROMPTED_EVAL_ALGORITHMS=(${UNPROMPTED_EVAL_ALGORITHMS:-${EVAL_ALGORITHMS_TEXT}})
+UNPROMPTED_EVAL_ALGORITHMS_TEXT="${UNPROMPTED_EVAL_ALGORITHMS[*]}"
 LDS_SIMPLE_LOSS_TIMESTEPS="${LDS_SIMPLE_LOSS_TIMESTEPS:-$(seq -s, 0 999)}"
 LDS_SIMPLE_LOSS_NOISE_SEEDS="${LDS_SIMPLE_LOSS_NOISE_SEEDS:-0}"
 LDS_SIMPLE_LOSS_NUM_MC="${LDS_SIMPLE_LOSS_NUM_MC:-1000}"
 LDS_SIMPLE_LOSS_MC_SEED="${LDS_SIMPLE_LOSS_MC_SEED:-0}"
-export PROMPTED_SEEDS_TEXT UNPROMPTED_SEEDS_TEXT LDS_SEEDS_TEXT TARGETS_TEXT EVAL_ALGORITHMS_TEXT
+export PROMPTED_SEEDS_TEXT UNPROMPTED_SEEDS_TEXT LDS_SEEDS_TEXT TARGETS_TEXT EVAL_ALGORITHMS_TEXT UNPROMPTED_EVAL_ALGORITHMS_TEXT
 export LDS_SIMPLE_LOSS_TIMESTEPS LDS_SIMPLE_LOSS_NOISE_SEEDS LDS_SIMPLE_LOSS_NUM_MC LDS_SIMPLE_LOSS_MC_SEED
 LOG_ROOT="${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/stampede3_das_logs/03_dtrak_endtracin_lds_eval_report/${SLURM_JOB_ID:-local}"
 mkdir -p "${LOG_ROOT}"
@@ -72,7 +74,7 @@ fi
 
 echo "Job 03 Stampede3 dtrak/end_tracin: LDS eval + aggregate/report"
 echo "experiment=${EXPERIMENT_TAG}; train_seed=${TRAIN_SEED}; query_tasks=${#SPECS[@]}; eval_slots=${SLOT_LIST}; queries_per_slot=3"
-echo "targets=${TARGETS[*]}; algorithms=${EVAL_ALGORITHMS[*]}; lds_seeds=${LDS_SEEDS_TEXT}"
+echo "targets=${TARGETS[*]}; algorithms=${EVAL_ALGORITHMS[*]}; unprompted_algorithms=${UNPROMPTED_EVAL_ALGORITHMS[*]}; lds_seeds=${LDS_SEEDS_TEXT}"
 echo "simple_loss_terms=${LDS_SIMPLE_LOSS_NUM_MC}; simple_loss_noise_seeds=${LDS_SIMPLE_LOSS_NOISE_SEEDS}; logs=${LOG_ROOT}"
 echo "eval_device_mode=${LDS_EVAL_DEVICE_MODE:-gpu_then_cpu}"
 echo "eval_slot_shards=${EVAL_SLOT_SHARD_COUNT:-1}; serial_slots=${EVAL_SERIAL_SLOTS:-0}; local_parallel_slots=${EVAL_LOCAL_PARALLEL_SLOTS:-0}; force=${FORCE_LDS_EVAL:-0}"
@@ -218,7 +220,7 @@ for target in "${TARGETS[@]}"; do
       --model-glob "m_${LDS_M}_k_*_pct_${LDS_DATASET_PERCENTAGE}_subset_seed_*" \
       --initial-seed "${initial_seed}" \
       --prediction-dir "${PRED_TAG}" \
-      --algorithms "${EVAL_ALGORITHMS[@]}" \
+      --algorithms "${UNPROMPTED_EVAL_ALGORITHMS[@]}" \
       --output-name "aggregate_stampede3_dtrak_endtracin_unprompted_m_${LDS_M}_k_${LDS_K}_pct_${LDS_DATASET_PERCENTAGE}_${target}_initial_seed_${initial_seed}_seeds_0_7" \
       >"${LOG_ROOT}/aggregate_unprompted_${target}_seed_${initial_seed}.log" 2>&1 || true
   done

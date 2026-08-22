@@ -54,8 +54,12 @@ for ((idx = SLOT_INDEX; idx < ${#specs[@]}; idx += 16)); do
   export QUERY="${query_env}"
   export INITIAL_SEED="${seed}"
   export UNPROMPTED="${unprompted_flag}"
+  algorithm_text="${EVAL_ALGORITHMS_TEXT}"
+  if [[ "${UNPROMPTED}" == "1" && -n "${UNPROMPTED_EVAL_ALGORITHMS_TEXT:-}" ]]; then
+    algorithm_text="${UNPROMPTED_EVAL_ALGORITHMS_TEXT}"
+  fi
   for target in ${TARGETS_TEXT}; do
-    for algorithm in ${EVAL_ALGORITHMS_TEXT}; do
+    for algorithm in ${algorithm_text}; do
       for lds_seed in ${LDS_SEEDS_TEXT}; do
         model_root="${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/lds_model/${SAMPLE_MODEL_MODE}/train_seed_${TRAIN_SEED}"
         model_pattern="${model_root}/m_${LDS_M}_k_*_pct_${LDS_DATASET_PERCENTAGE}_subset_seed_${lds_seed}"
