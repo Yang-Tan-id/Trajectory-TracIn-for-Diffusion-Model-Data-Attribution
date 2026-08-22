@@ -3,14 +3,14 @@
 #SBATCH -o cifar2-s3-traj-proj-rtx-%j.out
 #SBATCH -e cifar2-s3-traj-proj-rtx-%j.err
 #SBATCH -p rtx-small
-#SBATCH -N 2
-#SBATCH -n 4
+#SBATCH -N 1
+#SBATCH -n 2
 #SBATCH --cpus-per-task=8
 #SBATCH -t 48:00:00
 
 set -euo pipefail
 
-export ATTR_NUM_SLOTS="${ATTR_NUM_SLOTS:-4}"
+export ATTR_NUM_SLOTS="${ATTR_NUM_SLOTS:-2}"
 export GPU_PER_NODE="${GPU_PER_NODE:-2}"
 
 SCRIPT_DIR="${STAMPEDE3_DAS_DIR:-}"
