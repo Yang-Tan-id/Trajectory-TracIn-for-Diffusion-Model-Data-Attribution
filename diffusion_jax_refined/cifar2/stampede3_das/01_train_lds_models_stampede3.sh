@@ -34,19 +34,21 @@ LDS_M="${LDS_M:-64}"
 LDS_DATASET_PERCENTAGE="${LDS_DATASET_PERCENTAGE:-50}"
 LDS_K="${LDS_K:-5000}"
 LDS_MODEL_TRAIN_SEED="${LDS_MODEL_TRAIN_SEED:-${TRAIN_SEED}}"
+GPU_PER_NODE="${GPU_PER_NODE:-4}"
+LDS_TRAIN_MAX_PARALLEL="${LDS_TRAIN_MAX_PARALLEL:-0}"
 LOG_ROOT="${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/stampede3_das_logs/01_train_lds_models/${SLURM_JOB_ID:-local}"
 mkdir -p "${LOG_ROOT}"
 
 echo "Job 01 Stampede3 DAS: train LDS models"
 echo "experiment=${EXPERIMENT_TAG}; train_seed=${TRAIN_SEED}; lds_train_seed=${LDS_MODEL_TRAIN_SEED}"
 echo "m=${LDS_M}; dataset_percentage=${LDS_DATASET_PERCENTAGE}; subset_seeds=${LDS_SEEDS_TEXT}; modes=${MODEL_MODES[*]}"
-echo "nodes=4; gpu_tasks=16; logs=${LOG_ROOT}"
+echo "gpu_per_node=${GPU_PER_NODE}; max_parallel=${LDS_TRAIN_MAX_PARALLEL}; logs=${LOG_ROOT}"
 
 pids=()
 slot=0
 for mode in "${MODEL_MODES[@]}"; do
   for subset_seed in ${LDS_SEEDS_TEXT}; do
-    gpu=$((slot % 4))
+    gpu=$((slot % GPU_PER_NODE))
     log="${LOG_ROOT}/${mode}_subset_seed_${subset_seed}.log"
     script="scripts/03_lds_training.sh"
     if mode_is_unprompted "${mode}"; then
@@ -70,6 +72,10 @@ for mode in "${MODEL_MODES[@]}"; do
         bash "${script}"
     ) >"${log}" 2>&1 &
     pids+=("$!")
+    if (( LDS_TRAIN_MAX_PARALLEL > 0 && ${#pids[@]} >= LDS_TRAIN_MAX_PARALLEL )); then
+      wait_all "${pids[@]}"
+      pids=()
+    fi
     slot=$((slot + 1))
   done
 done
