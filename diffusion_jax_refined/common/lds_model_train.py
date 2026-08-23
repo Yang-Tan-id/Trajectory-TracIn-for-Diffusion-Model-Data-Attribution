@@ -220,6 +220,10 @@ def main() -> None:
         cfg.checkpoint_dir = str(subset_dir)
         cfg.wandb_run_name = f"lds_{run_name}__subset_{subset_id:04d}"
         _save_json(subset_dir / "train_config.json", {"train_config": asdict(cfg)})
+        final_ckpt = subset_dir / f"seed_{cfg.seed}_epoch_{int(cfg.epochs):04d}.ckpt"
+        if final_ckpt.is_file() and os.environ.get("FORCE_LDS_TRAIN", "0") not in ("1", "true", "True", "yes"):
+            print(f"[{subset_id + 1}/{args.m}] skip existing {final_ckpt.name} in {subset_dir.name}", flush=True)
+            continue
         print(f"[{subset_id + 1}/{args.m}] training {subset_dir.name}", flush=True)
         run_train_with_optional_logging(
             cfg,
