@@ -189,6 +189,18 @@ run_one_task() {
   local sample_run_root algorithm_dir
   sample_run_root="$(ensure_sample "${sample_mode}" "${query_env}" "${seed}")"
   algorithm_dir="$(algorithm_dir_for_task "${unprompted_flag}" "${range}")"
+  local query_component query_artifact
+  if [[ "${unprompted_flag}" == "1" || "${score_mode}" == unprompted_* ]]; then
+    query_component="unprompted"
+  else
+    query_component="query_$(path_tag "${query_env}")"
+  fi
+  query_artifact="${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/${PROJECTED_ARTIFACT_DIR_NAME_VALUE}/${score_mode}/train_seed_${TRAIN_SEED}/${query_component}/initial_seed_${seed}/shared_query/proj_${PROJECTED_CACHE_DIM}/query_gradient_artifact.npz"
+  if [[ ! -f "${query_artifact}" ]]; then
+    echo "Missing precomputed query gradient artifact: ${query_artifact}" >"${log}"
+    echo "Run 10.5 query-cache before 11, or set RUN_QUERY_STAGE=1 manually." >>"${log}"
+    return 1
+  fi
 
   echo "[worker ${slot}] task=${i} range=${range} sample_mode=${sample_mode} score_mode=${score_mode} query=${query} seed=${seed} gpu=${gpu} -> ${log}"
   run_gpu_slot "${slot}" env \
@@ -211,9 +223,10 @@ run_one_task() {
     PROJECTED_DIMS="${PROJECTED_DIMS}" \
     PROJECTED_ARTIFACT_DIR_NAME="${PROJECTED_ARTIFACT_DIR_NAME_VALUE}" \
     INCLUDE_RAW=1 \
-    RUN_TRAIN_STAGE=0 \
-    RUN_QUERY_STAGE=1 \
+    RUN_TRAIN_STAGE=1 \
+    RUN_QUERY_STAGE=0 \
     RUN_SCORE_SWEEP=1 \
+    PROJECTED_TRAIN_PARALLEL_AXIS=score_index \
     SCORE_ALGORITHM_DIR="${algorithm_dir}" \
     ATTRIBUTION_SAMPLE_DIR="${sample_run_root}" \
     CIFAR2_ROOT="${CIFAR2_ROOT}" \

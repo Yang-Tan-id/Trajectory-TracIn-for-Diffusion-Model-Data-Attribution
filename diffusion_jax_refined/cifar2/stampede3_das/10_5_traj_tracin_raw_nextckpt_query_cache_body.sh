@@ -39,6 +39,10 @@ PROJECTED_ARTIFACT_DIR_NAME_VALUE="${PROJECTED_ARTIFACT_DIR_NAME:-projected_traj
 LOG_ROOT="${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/stampede3_das_logs/10_5_traj_tracin_raw_nextckpt_query_cache/${SLURM_JOB_ID:-local}"
 mkdir -p "${LOG_ROOT}"
 
+export XLA_FLAGS="${XLA_FLAGS:---xla_gpu_autotune_level=0}"
+export TF_CUDNN_USE_AUTOTUNE="${TF_CUDNN_USE_AUTOTUNE:-0}"
+export XLA_PYTHON_CLIENT_PREALLOCATE="${XLA_PYTHON_CLIENT_PREALLOCATE:-false}"
+
 query_task_lines() {
   local seed
   for seed in ${UNPROMPTED_SEEDS_TEXT}; do
