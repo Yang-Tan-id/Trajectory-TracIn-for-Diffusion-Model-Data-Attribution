@@ -45,6 +45,10 @@ TRAIN_SCORE_INDEX_RANGES="${TRAIN_SCORE_INDEX_RANGES:-1-10000}"
 LOG_ROOT="${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/stampede3_das_logs/11_traj_tracin_raw_nextckpt_projected/${SLURM_JOB_ID:-local}"
 mkdir -p "${LOG_ROOT}"
 
+export XLA_FLAGS="${XLA_FLAGS:---xla_gpu_autotune_level=0}"
+export TF_CUDNN_USE_AUTOTUNE="${TF_CUDNN_USE_AUTOTUNE:-0}"
+export XLA_PYTHON_CLIENT_PREALLOCATE="${XLA_PYTHON_CLIENT_PREALLOCATE:-false}"
+
 range_tag() {
   local value="$1"
   value="${value//:/-}"

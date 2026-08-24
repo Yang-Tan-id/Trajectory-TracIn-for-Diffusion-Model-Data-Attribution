@@ -12,6 +12,7 @@ set -euo pipefail
 
 export ATTR_NUM_SLOTS="${ATTR_NUM_SLOTS:-16}"
 export GPU_PER_NODE="${GPU_PER_NODE:-4}"
+export STAMPEDE3_SLOT_BACKEND="${STAMPEDE3_SLOT_BACKEND:-local}"
 
 SCRIPT_DIR="${STAMPEDE3_DAS_DIR:-}"
 if [[ -z "${SCRIPT_DIR}" || ! -f "${SCRIPT_DIR}/10_5_traj_tracin_raw_nextckpt_query_cache_body.sh" ]]; then
