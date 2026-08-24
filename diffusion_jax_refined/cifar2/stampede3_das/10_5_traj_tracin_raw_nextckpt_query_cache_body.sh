@@ -99,7 +99,7 @@ ensure_sample() {
       INITIAL_SEED="${seed}" \
       SAMPLE_SEED="${seed}" \
       SAMPLE_SEEDS="${seed}" \
-      bash scripts/00_sample_for_attribution.sh
+      bash scripts/00_sample_for_attribution.sh >&2
     fi
     rmdir "${sample_lock_dir}" 2>/dev/null || true
     trap - RETURN
