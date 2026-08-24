@@ -35,9 +35,10 @@ PROJECTED_TRAIN_SHARD_RANGES="${PROJECTED_TRAIN_SHARD_RANGES:-1-625 626-1250 125
 PROJECTED_CACHE_DIM="${PROJECTED_CACHE_DIM:-4096}"
 TRAIN_SCORE_INDEX_RANGES="${TRAIN_SCORE_INDEX_RANGES:-1-10000}"
 TRAIN_CACHE_TASK_SET="${TRAIN_CACHE_TASK_SET:-all}"
+PROJECTED_TRAIN_PARALLEL_AXIS="${PROJECTED_TRAIN_PARALLEL_AXIS:-score_index}"
 DRY_RUN="${DRY_RUN:-0}"
 
-export PYTHON_BIN PROJECTED_TRAIN_SHARD_RANGES PROJECTED_CACHE_DIM TRAIN_SCORE_INDEX_RANGES
+export PYTHON_BIN PROJECTED_TRAIN_SHARD_RANGES PROJECTED_CACHE_DIM TRAIN_SCORE_INDEX_RANGES PROJECTED_TRAIN_PARALLEL_AXIS
 export RUN_QUERY_STAGE="${RUN_QUERY_STAGE:-0}" RUN_SCORE_SWEEP="${RUN_SCORE_SWEEP:-0}" RUN_TRAIN_STAGE="${RUN_TRAIN_STAGE:-1}"
 
 split_words() {
@@ -90,6 +91,9 @@ run_slot() {
     SAMPLE_MODEL_MODE="${score_mode}"
     UNPROMPTED="${unprompted_flag}"
     TRAIN_SHARD_INDEX="${slot}"
+    TRAJ_TRACIN_CKPT_SHARD_INDEX="${slot}"
+    TRAJ_TRACIN_CKPT_SHARD_COUNT="${GPU_SLOTS}"
+    TRAJ_TRACIN_SKIP_STAGE_MERGE="$([[ "${PROJECTED_TRAIN_PARALLEL_AXIS}" == "checkpoint" ]] && echo 1 || echo 0)"
     bash "${SCRIPT_DIR}/projected_traj_tracin_score_sweep.sh"
   )
   if [[ "${backend}" == "ibrun" && -n "${SLURM_JOB_ID:-}" ]] && command -v ibrun >/dev/null; then
@@ -115,7 +119,7 @@ run_one_score_mode() {
 
   echo "Projected Traj-TracIn train cache array"
   echo "score_mode=${score_mode}; cache_dim=${PROJECTED_CACHE_DIM}; train_range=${TRAIN_SCORE_INDEX_RANGES}"
-  echo "shards=${PROJECTED_TRAIN_SHARD_RANGES}"
+  echo "parallel_axis=${PROJECTED_TRAIN_PARALLEL_AXIS}; shards=${PROJECTED_TRAIN_SHARD_RANGES}"
   echo "slots=${#SHARDS[@]}/${GPU_SLOTS}; gpu_per_node=${GPU_PER_NODE}"
 
   dry_output="$(dry_train_paths "${score_mode}")"
@@ -149,28 +153,44 @@ run_one_score_mode() {
     exit 1
   fi
 
-  echo "[merge] locating shard artifacts for score_mode=${score_mode}"
-  shard_paths=()
-  for shard in "${SHARDS[@]}"; do
-    tag="$(path_tag "${shard//-/_}")"
-    shard_path="${train_artifact_root}/shards/range_${tag}/train_datapoint_gradient_artifact.npz"
-    if [[ ! -f "${shard_path}" ]]; then
-      echo "Missing shard artifact: ${shard_path}" >&2
-      exit 1
-    fi
-    shard_paths+=("${shard_path}")
-  done
+  if [[ "${PROJECTED_TRAIN_PARALLEL_AXIS}" == "checkpoint" ]]; then
+    echo "[merge] merging checkpoint parts for score_mode=${score_mode}"
+    RUN_TRAIN_STAGE=1 RUN_QUERY_STAGE=0 RUN_SCORE_SWEEP=0 \
+      PROJECTED_TRAIN_SHARD_RANGES="" \
+      ATTRIBUTION_SCORE_MODEL_MODE="${score_mode}" SAMPLE_MODEL_MODE="${score_mode}" \
+      UNPROMPTED="$([[ "${score_mode}" == unprompted_* ]] && echo 1 || echo 0)" \
+      bash "${SCRIPT_DIR}/projected_traj_tracin_score_sweep.sh"
+  else
+    echo "[merge] locating shard artifacts for score_mode=${score_mode}"
+    shard_paths=()
+    for shard in "${SHARDS[@]}"; do
+      tag="$(path_tag "${shard//-/_}")"
+      shard_path="${train_artifact_root}/shards/range_${tag}/train_datapoint_gradient_artifact.npz"
+      if [[ ! -f "${shard_path}" ]]; then
+        echo "Missing shard artifact: ${shard_path}" >&2
+        exit 1
+      fi
+      shard_paths+=("${shard_path}")
+    done
 
-  echo "[merge] output=${train_artifact}"
-  "${PYTHON_BIN}" "${REFINE_ROOT}/common/merge_projected_train_shards.py" \
-    --output "${train_artifact}" \
-    "${shard_paths[@]}"
+    echo "[merge] output=${train_artifact}"
+    "${PYTHON_BIN}" "${REFINE_ROOT}/common/merge_projected_train_shards.py" \
+      --output "${train_artifact}" \
+      "${shard_paths[@]}"
+  fi
 }
 
 SHARDS=()
-while IFS= read -r shard_range; do
-  SHARDS+=("${shard_range}")
-done < <(split_words "${PROJECTED_TRAIN_SHARD_RANGES}")
+if [[ "${PROJECTED_TRAIN_PARALLEL_AXIS}" == "checkpoint" ]]; then
+  for ((slot = 0; slot < GPU_SLOTS; slot++)); do
+    SHARDS+=("${TRAIN_SCORE_INDEX_RANGES}")
+  done
+  export PROJECTED_TRAIN_SHARD_RANGES=""
+else
+  while IFS= read -r shard_range; do
+    SHARDS+=("${shard_range}")
+  done < <(split_words "${PROJECTED_TRAIN_SHARD_RANGES}")
+fi
 if (( ${#SHARDS[@]} > GPU_SLOTS )); then
   echo "This helper expects at most GPU_SLOTS=${GPU_SLOTS} shards, got ${#SHARDS[@]}." >&2
   exit 2

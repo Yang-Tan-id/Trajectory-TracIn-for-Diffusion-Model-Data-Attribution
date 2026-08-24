@@ -43,11 +43,13 @@ export TRAIN_SCORE_INDEX_RANGES="${TRAIN_SCORE_INDEX_RANGES:-1-10000}"
 export TRAIN_CACHE_TASK_SET="${TRAIN_CACHE_TASK_SET:-all}"
 export GPU_SLOTS="${GPU_SLOTS:-16}"
 export GPU_PER_NODE="${GPU_PER_NODE:-4}"
+export PROJECTED_TRAIN_PARALLEL_AXIS="${PROJECTED_TRAIN_PARALLEL_AXIS:-checkpoint}"
 export PROJECTED_ARTIFACT_DIR_NAME="${PROJECTED_ARTIFACT_DIR_NAME:-projected_traj_tracin_artifacts_${TRAJ_PARAMETER_SOURCE}}"
 
 echo "Stampede3 raw projected Traj-TracIn train cache"
 echo "experiment=${EXPERIMENT_TAG}; train_seed=${TRAIN_SEED}; parameter_source=${TRAJ_PARAMETER_SOURCE}; objective=${TRAJ_QUERY_OBJECTIVE}"
 echo "projected_cache_dim=${PROJECTED_CACHE_DIM}; train_range=${TRAIN_SCORE_INDEX_RANGES}; task_set=${TRAIN_CACHE_TASK_SET}"
+echo "projected_train_parallel_axis=${PROJECTED_TRAIN_PARALLEL_AXIS}"
 echo "projected_artifact_dir_name=${PROJECTED_ARTIFACT_DIR_NAME}"
 
 bash "${PROJECTED_TRAIN_SCRIPT}"

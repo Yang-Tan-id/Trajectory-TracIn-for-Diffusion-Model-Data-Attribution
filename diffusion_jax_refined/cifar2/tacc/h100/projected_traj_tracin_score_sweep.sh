@@ -25,6 +25,7 @@ RUN_QUERY_STAGE="${RUN_QUERY_STAGE:-1}"
 RUN_SCORE_SWEEP="${RUN_SCORE_SWEEP:-1}"
 INCLUDE_RAW="${INCLUDE_RAW:-1}"
 SKIP_EXISTING_SCORES="${SKIP_EXISTING_SCORES:-1}"
+PROJECTED_TRAIN_PARALLEL_AXIS="${PROJECTED_TRAIN_PARALLEL_AXIS:-score_index}"
 SHARE_TRAIN_ARTIFACT="${SHARE_TRAIN_ARTIFACT:-1}"
 SHARE_QUERY_ARTIFACT="${SHARE_QUERY_ARTIFACT:-1}"
 LOCK_POLL_SECONDS="${LOCK_POLL_SECONDS:-60}"
@@ -117,6 +118,16 @@ run_train_stage_with_lock() {
 
   if [[ -f "${artifact_path}" ]]; then
     echo "[stage train] found existing projected train artifact: ${artifact_path}"
+    return
+  fi
+
+  if [[ "${PROJECTED_TRAIN_PARALLEL_AXIS}" == "checkpoint" ]]; then
+    echo "[stage train] checkpoint-parallel worker writing checkpoint parts for: ${artifact_path}"
+    DATAPOINT_MODEL_MODE="${TRAIN_MODE_CANONICAL}" \
+    ATTRIBUTION_SAMPLE_DIR="${SAMPLE_DIR}" \
+    TRAJ_USE_SAVED_TRAJECTORY=0 \
+    SCORE_INDEX_RANGES="${TRAIN_COMPUTE_RANGE}" \
+    run_original_config_with_stage train "${artifact_path}"
     return
   fi
 

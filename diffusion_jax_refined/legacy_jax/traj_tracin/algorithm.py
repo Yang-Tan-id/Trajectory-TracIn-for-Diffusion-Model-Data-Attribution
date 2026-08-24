@@ -2006,12 +2006,33 @@ def run_attribution(cfg: TrajAttributionConfig):
         )
         stage_terms_done = 0
         stage_start_time = time.time()
+        ckpt_shard_count = max(1, int(os.environ.get("TRAJ_TRACIN_CKPT_SHARD_COUNT", "1")))
+        ckpt_shard_index = int(os.environ.get("TRAJ_TRACIN_CKPT_SHARD_INDEX", "0"))
+        if ckpt_shard_index < 0 or ckpt_shard_index >= ckpt_shard_count:
+            raise ValueError(
+                "TRAJ_TRACIN_CKPT_SHARD_INDEX must be in "
+                f"[0, {ckpt_shard_count}), got {ckpt_shard_index}"
+            )
+        skip_stage_merge = os.environ.get("TRAJ_TRACIN_SKIP_STAGE_MERGE", "0") in (
+            "1",
+            "true",
+            "True",
+            "yes",
+        )
 
         for ckpt_i, ckpt_path in enumerate(ckpts):
             if uses_next_checkpoint_target and ckpt_i + 1 >= len(ckpts):
                 print(
                     f"[stage:{stage_mode}] skipping final checkpoint "
                     f"{ckpt_i + 1}/{len(ckpts)}: no next-checkpoint query target",
+                    flush=True,
+                )
+                continue
+            if stage_mode == "train" and ckpt_shard_count > 1 and ckpt_i % ckpt_shard_count != ckpt_shard_index:
+                print(
+                    f"[stage:{stage_mode}] checkpoint shard skip "
+                    f"{ckpt_i + 1}/{len(ckpts)} for shard "
+                    f"{ckpt_shard_index}/{ckpt_shard_count}",
                     flush=True,
                 )
                 continue
@@ -2237,6 +2258,12 @@ def run_attribution(cfg: TrajAttributionConfig):
             )
 
         if stage_mode == "train" and stage_part_dir is not None:
+            if skip_stage_merge:
+                print(
+                    f"[stage:train] skipping merge by request; checkpoint parts remain under {stage_part_dir}",
+                    flush=True,
+                )
+                return
             part_paths = [
                 os.path.join(stage_part_dir, f"ckpt_{ckpt_i:04d}.npz")
                 for ckpt_i in range(len(ckpts))
