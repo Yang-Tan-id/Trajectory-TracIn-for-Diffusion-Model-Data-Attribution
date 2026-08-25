@@ -1407,6 +1407,32 @@ def train_losses_at_dynamic_t_mc_vectorized(
     return per_replica.reshape((B, S)).mean(axis=1)
 
 
+def train_losses_at_t_sequence_mc_vectorized(
+    adapter,
+    model,
+    params,
+    schedule,
+    x0_batch,
+    cond_batch,
+    *,
+    t_values,
+    num_mc_samples: int,
+    rng,
+):
+    S = int(num_mc_samples)
+    B = x0_batch.shape[0]
+    K = int(t_values.shape[0])
+    total = K * S
+    x0_rep = jnp.repeat(x0_batch, repeats=total, axis=0)
+    cond_rep = jnp.repeat(cond_batch, repeats=total, axis=0)
+    t_rep = jnp.tile(jnp.repeat(t_values.astype(jnp.int32), repeats=S), reps=(B,))
+    noise = jax.random.normal(rng, x0_rep.shape, dtype=x0_rep.dtype)
+    xt = q_sample(schedule, x0_rep, t_rep, noise)
+    pred = adapter.eps_apply(model, params, xt, t_rep, cond_rep)
+    per_replica = jnp.mean((pred - noise) ** 2, axis=tuple(range(1, pred.ndim)))
+    return per_replica.reshape((B, total)).mean(axis=1)
+
+
 def make_score_snapshot_batch_fn(
     adapter,
     model,
@@ -2008,6 +2034,9 @@ def run_attribution(cfg: TrajAttributionConfig):
         stage_start_time = time.time()
         ckpt_shard_count = max(1, int(os.environ.get("TRAJ_TRACIN_CKPT_SHARD_COUNT", "1")))
         ckpt_shard_index = int(os.environ.get("TRAJ_TRACIN_CKPT_SHARD_INDEX", "0"))
+        aggregate_train_timestamps = os.environ.get(
+            "TRAJ_TRACIN_TRAIN_AGGREGATE_TIMESTAMPS", "0"
+        ) in ("1", "true", "True", "yes")
         if ckpt_shard_index < 0 or ckpt_shard_index >= ckpt_shard_count:
             raise ValueError(
                 "TRAJ_TRACIN_CKPT_SHARD_INDEX must be in "
@@ -2183,6 +2212,104 @@ def run_attribution(cfg: TrajAttributionConfig):
                 train_snapshot_positions = []
                 train_ckpt_paths = []
                 train_term_weights = []
+
+                if aggregate_train_timestamps:
+                    t_values = array_to_device(jnp.asarray([int(t) for t in t_seq], dtype=jnp.int32), device)
+
+                    def train_phi_one_aggregate(p, x0_one, cond_one, rng_one):
+                        x0_one = x0_one[None, ...]
+                        if cond_one.ndim == 0:
+                            cond_one = cond_one[None]
+                        else:
+                            cond_one = cond_one[None, ...]
+
+                        def loss_fn(pp):
+                            return train_losses_at_t_sequence_mc_vectorized(
+                                adapter=adapter,
+                                model=model,
+                                params=pp,
+                                schedule=schedule,
+                                x0_batch=x0_one,
+                                cond_batch=cond_one,
+                                t_values=t_values,
+                                num_mc_samples=cfg.train_mc_samples,
+                                rng=rng_one,
+                            )[0]
+
+                        _loss, grads = jax.value_and_grad(loss_fn)(p)
+                        return projector(grads)
+
+                    train_phi_batch_aggregate = jax.jit(
+                        jax.vmap(train_phi_one_aggregate, in_axes=(None, 0, 0, 0))
+                    )
+                    bs_stage = max(1, int(cfg.score_batch_size))
+                    term_features = np.empty((len(picked), proj_dim), dtype=np.float32)
+                    for start in range(0, len(picked), bs_stage):
+                        end = min(len(picked), start + bs_stage)
+                        real_indices = picked[start:end]
+                        padded_indices = pad_indices_to_batch(real_indices, bs_stage)
+                        x_batch, cond_batch = make_train_batch(adapter, ds, padded_indices, device)
+                        rngs = array_to_device(
+                            jnp.stack(
+                                [
+                                    jax.random.PRNGKey(cfg.seed + 700_000 * (ckpt_i + 1) + start + j)
+                                    for j in range(bs_stage)
+                                ],
+                                axis=0,
+                            ),
+                            device,
+                        )
+                        phi_batch = train_phi_batch_aggregate(params, x_batch, cond_batch, rngs)
+                        phi_batch.block_until_ready()
+                        term_features[start:end] = np.asarray(phi_batch[: end - start], dtype=np.float32)
+                    train_phi_terms.append(term_features)
+                    train_ckpt_indices.append(int(ckpt_i))
+                    train_timesteps.append(-1)
+                    train_snapshot_positions.append(-1)
+                    train_ckpt_paths.append(str(ckpt_path))
+                    train_term_weights.append(1.0)
+                    stage_terms_done += 1
+                    print(
+                        f"[stage:train] checkpoint-level MC loss ckpt={ckpt_i + 1}/{len(ckpts)} | "
+                        f"terms={stage_terms_done}/{len(ckpts) - 1 if uses_next_checkpoint_target else len(ckpts)} | "
+                        f"timestamps={len(t_seq)} | mc_per_timestamp={cfg.train_mc_samples} | "
+                        f"elapsed={format_seconds(time.time() - stage_start_time)}",
+                        flush=True,
+                    )
+                    if stage_part_path is None:
+                        stage_features.extend(train_phi_terms)
+                        stage_ckpt_indices.extend(train_ckpt_indices)
+                        stage_timesteps.extend(train_timesteps)
+                        stage_snapshot_positions.extend(train_snapshot_positions)
+                        stage_ckpt_paths.extend(train_ckpt_paths)
+                        stage_term_weights.extend(train_term_weights)
+                    else:
+                        save_npz_compressed_atomic(
+                            stage_part_path,
+                            train_features=np.stack(train_phi_terms, axis=0).astype(np.float32),
+                            score_indices=np.asarray(picked, dtype=np.int64),
+                            ckpt_indices=np.asarray(train_ckpt_indices, dtype=np.int32),
+                            timesteps=np.asarray(train_timesteps, dtype=np.int32),
+                            snapshot_positions=np.asarray(train_snapshot_positions, dtype=np.int32),
+                            term_weights=np.asarray(train_term_weights, dtype=np.float32),
+                            ckpt_paths=np.asarray(train_ckpt_paths),
+                            proj_dim=np.asarray(proj_dim, dtype=np.int32),
+                            train_timestamp_aggregation=np.asarray("checkpoint_mc_loss"),
+                            train_timestamp_count=np.asarray(len(t_seq), dtype=np.int32),
+                        )
+                        print(
+                            f"[stage:train] saved checkpoint-level MC part "
+                            f"{ckpt_i + 1}/{len(ckpts)}: {stage_part_path}",
+                            flush=True,
+                        )
+                    used_ckpts_for_stage.append(ckpt_path)
+                    print(
+                        f"[stage:{stage_mode}] checkpoint {ckpt_i + 1}/{len(ckpts)} done | "
+                        f"elapsed={format_seconds(time.time() - stage_ckpt_start)} | "
+                        f"total_elapsed={format_seconds(time.time() - stage_start_time)}",
+                        flush=True,
+                    )
+                    continue
 
                 def train_phi_one(p, x0_one, cond_one, rng_one, t_scalar):
                     x0_one = x0_one[None, ...]

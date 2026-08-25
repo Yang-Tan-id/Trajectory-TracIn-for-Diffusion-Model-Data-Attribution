@@ -13,6 +13,7 @@ set -euo pipefail
 export ATTR_NUM_SLOTS="${ATTR_NUM_SLOTS:-16}"
 export GPU_PER_NODE="${GPU_PER_NODE:-4}"
 export STAMPEDE3_SLOT_BACKEND="${STAMPEDE3_SLOT_BACKEND:-local}"
+export STAMPEDE3_DAS_SRUN_WORKER=1
 
 SCRIPT_DIR="${STAMPEDE3_DAS_DIR:-}"
 if [[ -z "${SCRIPT_DIR}" || ! -f "${SCRIPT_DIR}/11_traj_tracin_raw_nextckpt_projected_body.sh" ]]; then
@@ -30,4 +31,5 @@ if [[ -z "${SCRIPT_DIR}" || ! -f "${SCRIPT_DIR}/11_traj_tracin_raw_nextckpt_proj
   SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 fi
 
-bash "${SCRIPT_DIR}/11_traj_tracin_raw_nextckpt_projected_body.sh"
+srun --ntasks="${ATTR_NUM_SLOTS}" --ntasks-per-node="${GPU_PER_NODE}" \
+  bash "${SCRIPT_DIR}/11_traj_tracin_raw_nextckpt_projected_body.sh"

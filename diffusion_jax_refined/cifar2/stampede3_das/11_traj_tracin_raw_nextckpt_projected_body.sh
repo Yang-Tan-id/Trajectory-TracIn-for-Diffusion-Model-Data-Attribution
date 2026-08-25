@@ -43,6 +43,7 @@ PROJECTED_SCORE_VARIANT="${PROJECTED_SCORE_VARIANT:-raw}"
 PROJECTED_ARTIFACT_DIR_NAME_VALUE="${PROJECTED_ARTIFACT_DIR_NAME:-projected_traj_tracin_artifacts_${TRAJ_PARAMETER_SOURCE_VALUE}}"
 TRAIN_SCORE_INDEX_RANGES="${TRAIN_SCORE_INDEX_RANGES:-1-10000}"
 TRAIN_SCORE_INDEX_RANGES_MODE="${TRAIN_SCORE_INDEX_RANGES_MODE:-task}"
+TRAJ_TRACIN_TRAIN_AGGREGATE_TIMESTAMPS="${TRAJ_TRACIN_TRAIN_AGGREGATE_TIMESTAMPS:-1}"
 LOG_ROOT="${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/stampede3_das_logs/11_traj_tracin_raw_nextckpt_projected/${SLURM_JOB_ID:-local}"
 mkdir -p "${LOG_ROOT}"
 
@@ -228,6 +229,7 @@ run_one_task() {
     TRAJ_PARAMETER_SOURCE="${TRAJ_PARAMETER_SOURCE_VALUE}" \
     TRAJ_SCORE_BATCH_SIZE="${TRAJ_SCORE_BATCH_SIZE}" \
     TRAJ_SNAPSHOT_CHUNK_SIZE="${TRAJ_SNAPSHOT_CHUNK_SIZE}" \
+    TRAJ_TRACIN_TRAIN_AGGREGATE_TIMESTAMPS="${TRAJ_TRACIN_TRAIN_AGGREGATE_TIMESTAMPS}" \
     TRAJ_SAVE_QUERY_NORMALIZED_SCORES=0 \
     PROJECTED_CACHE_DIM="${PROJECTED_CACHE_DIM}" \
     PROJECTED_DIMS="${PROJECTED_DIMS}" \
@@ -268,6 +270,22 @@ echo "total_tasks=${total_tasks}; slots=${ATTR_NUM_SLOTS}; gpu_per_node=${GPU_PE
 echo "projected_cache_dim=${PROJECTED_CACHE_DIM}; projected_dims=${PROJECTED_DIMS}; compat_variant=proj_${PROJECTED_SCORE_DIM}/${PROJECTED_SCORE_VARIANT}"
 echo "projected_artifact_dir_name=${PROJECTED_ARTIFACT_DIR_NAME_VALUE}"
 echo "train_score_index_ranges_mode=${TRAIN_SCORE_INDEX_RANGES_MODE}; full_train_range=${TRAIN_SCORE_INDEX_RANGES}"
+echo "train_aggregate_timestamps=${TRAJ_TRACIN_TRAIN_AGGREGATE_TIMESTAMPS}"
+
+if [[ "${STAMPEDE3_DAS_SRUN_WORKER:-0}" == "1" ]]; then
+  worker_index="${STAMPEDE3_DAS_WORKER_INDEX:-${SLURM_PROCID:-0}}"
+  worker_count="${STAMPEDE3_DAS_WORKER_COUNT:-${SLURM_NTASKS:-1}}"
+  local_rank="${SLURM_LOCALID:-$((worker_index % GPU_PER_NODE))}"
+  gpu=$((local_rank % GPU_PER_NODE))
+  worker_log="${LOG_ROOT}/worker_${worker_index}.log"
+  echo "Launch srun worker index=${worker_index}/${worker_count} local_rank=${local_rank} gpu=${gpu} -> ${worker_log}"
+  {
+    for ((i = worker_index; i < total_tasks; i += worker_count)); do
+      run_one_task "${i}" "${worker_index}" "${gpu}"
+    done
+  } >"${worker_log}" 2>&1
+  exit 0
+fi
 
 pids=()
 for ((slot = 0; slot < ATTR_NUM_SLOTS; slot++)); do

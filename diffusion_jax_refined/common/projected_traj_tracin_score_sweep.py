@@ -91,7 +91,32 @@ def as_multiterm_features(
         raise ValueError(f"{train_path} train features must be rank 2 or 3, got {train.shape}")
     if query.ndim != 2:
         raise ValueError(f"{query_path} query features must be rank 1 or 2, got {query.shape}")
-    if train.shape[0] != query.shape[0] or train.shape[2] != query.shape[1]:
+    if train.shape[0] != query.shape[0]:
+        train_ckpts = np.asarray(train_payload.get("ckpt_indices", []), dtype=np.int32).reshape(-1)
+        query_ckpts = np.asarray(query_payload.get("ckpt_indices", []), dtype=np.int32).reshape(-1)
+        if len(train_ckpts) == train.shape[0] and len(query_ckpts) == query.shape[0]:
+            query_weights = np.asarray(
+                query_payload.get("term_weights", np.full((query.shape[0],), 1.0 / float(query.shape[0]))),
+                dtype=np.float64,
+            ).reshape(-1)
+            if len(query_weights) != query.shape[0]:
+                raise ValueError(
+                    f"{query_path} query term_weights length {len(query_weights)} "
+                    f"does not match query terms {query.shape[0]}"
+                )
+            aggregated = np.zeros((train.shape[0], query.shape[1]), dtype=np.float64)
+            for term_id, ckpt in enumerate(train_ckpts):
+                mask = query_ckpts == ckpt
+                if not np.any(mask):
+                    raise ValueError(f"no query terms found for train ckpt index {int(ckpt)}")
+                aggregated[term_id] = (
+                    query[mask].astype(np.float64) * query_weights[mask, None]
+                ).sum(axis=0)
+            query = aggregated.astype(np.float32)
+            train_payload["_aligned_query_terms_are_weighted"] = np.asarray(True)
+        else:
+            raise ValueError(f"feature mismatch: train {train.shape} vs query {query.shape}")
+    if train.shape[2] != query.shape[1]:
         raise ValueError(f"feature mismatch: train {train.shape} vs query {query.shape}")
     return train, query
 
@@ -108,6 +133,8 @@ def term_weights(
     if len(weights) != num_terms:
         raise ValueError(f"query term_weights length {len(weights)} does not match terms {num_terms}")
     if "term_weights" in train_payload:
+        if bool(np.asarray(train_payload.get("_aligned_query_terms_are_weighted", False)).item()):
+            return np.ones((num_terms,), dtype=np.float64)
         train_weights = np.asarray(train_payload["term_weights"], dtype=np.float64).reshape(-1)
         if len(train_weights) != num_terms:
             raise ValueError(f"train term_weights length {len(train_weights)} does not match terms {num_terms}")
