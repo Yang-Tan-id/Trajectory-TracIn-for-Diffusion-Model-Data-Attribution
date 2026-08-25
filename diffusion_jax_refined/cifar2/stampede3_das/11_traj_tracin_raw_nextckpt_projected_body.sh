@@ -42,6 +42,7 @@ PROJECTED_SCORE_DIM="${PROJECTED_SCORE_DIM:-4096}"
 PROJECTED_SCORE_VARIANT="${PROJECTED_SCORE_VARIANT:-raw}"
 PROJECTED_ARTIFACT_DIR_NAME_VALUE="${PROJECTED_ARTIFACT_DIR_NAME:-projected_traj_tracin_artifacts_${TRAJ_PARAMETER_SOURCE_VALUE}}"
 TRAIN_SCORE_INDEX_RANGES="${TRAIN_SCORE_INDEX_RANGES:-1-10000}"
+TRAIN_SCORE_INDEX_RANGES_MODE="${TRAIN_SCORE_INDEX_RANGES_MODE:-task}"
 LOG_ROOT="${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/stampede3_das_logs/11_traj_tracin_raw_nextckpt_projected/${SLURM_JOB_ID:-local}"
 mkdir -p "${LOG_ROOT}"
 
@@ -190,9 +191,14 @@ run_one_task() {
   if [[ "${unprompted_flag}" == "1" ]]; then
     query_env="unconditional"
   fi
-  local sample_run_root algorithm_dir
+  local sample_run_root algorithm_dir train_score_index_ranges_for_task
   sample_run_root="$(ensure_sample "${sample_mode}" "${query_env}" "${seed}")"
   algorithm_dir="$(algorithm_dir_for_task "${unprompted_flag}" "${range}")"
+  if [[ "${TRAIN_SCORE_INDEX_RANGES_MODE}" == "full" ]]; then
+    train_score_index_ranges_for_task="${TRAIN_SCORE_INDEX_RANGES}"
+  else
+    train_score_index_ranges_for_task="${range}"
+  fi
   local query_component query_artifact
   if [[ "${unprompted_flag}" == "1" || "${score_mode}" == unprompted_* ]]; then
     query_component="unprompted"
@@ -217,7 +223,7 @@ run_one_task() {
     SCORE_INDEX_RANGES="${range}" \
     ATTRIBUTION_RANGES="${range}" \
     PROJECTED_SCORE_INDEX_RANGES="${range}" \
-    TRAIN_SCORE_INDEX_RANGES="${TRAIN_SCORE_INDEX_RANGES}" \
+    TRAIN_SCORE_INDEX_RANGES="${train_score_index_ranges_for_task}" \
     TRAJ_QUERY_OBJECTIVE="${TRAJ_QUERY_OBJECTIVE_VALUE}" \
     TRAJ_PARAMETER_SOURCE="${TRAJ_PARAMETER_SOURCE_VALUE}" \
     TRAJ_SCORE_BATCH_SIZE="${TRAJ_SCORE_BATCH_SIZE}" \
@@ -261,6 +267,7 @@ echo "experiment=${EXPERIMENT_TAG}; train_seed=${TRAIN_SEED}; objective=${TRAJ_Q
 echo "total_tasks=${total_tasks}; slots=${ATTR_NUM_SLOTS}; gpu_per_node=${GPU_PER_NODE}; ranges=${TRAJ_RANGES_TEXT}; logs=${LOG_ROOT}"
 echo "projected_cache_dim=${PROJECTED_CACHE_DIM}; projected_dims=${PROJECTED_DIMS}; compat_variant=proj_${PROJECTED_SCORE_DIM}/${PROJECTED_SCORE_VARIANT}"
 echo "projected_artifact_dir_name=${PROJECTED_ARTIFACT_DIR_NAME_VALUE}"
+echo "train_score_index_ranges_mode=${TRAIN_SCORE_INDEX_RANGES_MODE}; full_train_range=${TRAIN_SCORE_INDEX_RANGES}"
 
 pids=()
 for ((slot = 0; slot < ATTR_NUM_SLOTS; slot++)); do

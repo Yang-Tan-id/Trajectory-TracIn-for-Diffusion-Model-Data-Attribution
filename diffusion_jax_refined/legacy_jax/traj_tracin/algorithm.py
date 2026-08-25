@@ -2072,7 +2072,25 @@ def run_attribution(cfg: TrajAttributionConfig):
                 device=device,
             )
             eps_fn = lambda p, x, t, c: adapter.eps_apply(model, p, x, t, c)
-            if precomputed_traj is not None:
+            if stage_mode == "train":
+                T = int(schedule.betas.shape[0])
+                ddim_ts = np.linspace(T - 1, 0, int(cfg.ddim_steps), dtype=np.int32)
+                pos_seq = np.asarray(
+                    select_snapshot_positions(
+                        int(cfg.ddim_steps),
+                        int(cfg.num_traj_snapshots),
+                        cfg.traj_snapshot_positions,
+                    ),
+                    dtype=np.int32,
+                )
+                t_seq = np.asarray([int(ddim_ts[int(pos)]) for pos in pos_seq], dtype=np.int32)
+                xt_refs = []
+                print(
+                    f"[stage:{stage_mode}] using timestamp schedule only | "
+                    f"snapshots={len(t_seq)}; reference trajectory states are not needed for train loss gradients",
+                    flush=True,
+                )
+            elif precomputed_traj is not None:
                 xt_refs_raw, t_seq, pos_seq, _ = precomputed_traj
                 xt_refs = [array_to_device(x, device) for x in xt_refs_raw]
             else:
