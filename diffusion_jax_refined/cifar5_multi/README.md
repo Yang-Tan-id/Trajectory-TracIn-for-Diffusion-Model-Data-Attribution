@@ -41,6 +41,31 @@ Run it:
 python script/run_cifar5_multi_experiment.py --execute
 ```
 
+Use four GPUs as independent workers:
+
+```bash
+CUDA_VISIBLE_DEVICES=0,1,2,3 python script/run_cifar5_multi_experiment.py \
+  --execute \
+  --experiment cifar5_multi_exp1 \
+  --size 10000 \
+  --data-seed 0 \
+  --train-seed 42 \
+  --epochs 200 \
+  --lds-epochs 200 \
+  --skip-generate \
+  --gpus 0,1,2,3
+```
+
+With multiple GPUs, the driver runs prompted/unprompted base training on separate
+GPUs, splits the three sample jobs across GPUs, splits DAS and Traj TracIn
+attribution jobs by query across GPUs, and splits each LDS `m=64` run by subset
+id across the four GPUs. Parallel task logs are written under:
+
+`diffusion_jax_refined/cifar5_multi/result/<EXPERIMENT_TAG>/logs/`
+
+Use `--no-parallel` to force the old sequential schedule. Add End TracIn with
+`--attribution-algorithms das,traj_tracin,end_tracin`.
+
 The driver runs:
 
 - dataset generation

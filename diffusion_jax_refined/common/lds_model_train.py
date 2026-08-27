@@ -35,6 +35,28 @@ def _env_float(*names: str) -> float | None:
     return None
 
 
+def _parse_subset_indices(text: str | None, m: int) -> set[int] | None:
+    if text in (None, ""):
+        return None
+    out: set[int] = set()
+    for part in text.replace(",", " ").split():
+        if not part:
+            continue
+        if "-" in part:
+            start_text, end_text = part.split("-", 1)
+            start = int(start_text)
+            end = int(end_text)
+            if end < start:
+                raise ValueError(f"Invalid subset range {part!r}")
+            out.update(range(start, end + 1))
+        else:
+            out.add(int(part))
+    bad = sorted(x for x in out if x < 0 or x >= m)
+    if bad:
+        raise ValueError(f"Subset ids out of range for m={m}: {bad[:8]}")
+    return out
+
+
 def _normalize_sample_model_mode(value: str) -> str:
     aliases = {
         "prompt": "prompted_solo",
@@ -91,6 +113,11 @@ def main() -> None:
         type=int,
         default=int(os.environ.get("LDS_SAMPLE_RANDOM_SEED", os.environ.get("LDS_SUBSET_SEED", "0"))),
     )
+    parser.add_argument(
+        "--subset-indices",
+        default=os.environ.get("LDS_SUBSET_INDICES"),
+        help="Optional comma/space-separated subset ids or inclusive ranges to train, e.g. '0,4,8' or '0-15'.",
+    )
     parser.add_argument("--unprompted", action="store_true", help="Use the unconditional JAX reference model/config.")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
@@ -100,6 +127,10 @@ def main() -> None:
         parser.error("--k must be positive")
     if args.k is not None and args.dataset_percentage is not None:
         parser.error("Use either --k or --dataset-percentage, not both")
+    try:
+        train_subset_ids = _parse_subset_indices(args.subset_indices, args.m)
+    except ValueError as exc:
+        parser.error(str(exc))
 
     try:
         sample_model_mode = _normalize_sample_model_mode(args.sample_model_mode)
@@ -209,6 +240,7 @@ def main() -> None:
         "base_checkpoint": str(base_checkpoint),
         "train_config_template": asdict(train_cfg),
         "subsets": subsets,
+        "trained_subset_indices": sorted(train_subset_ids) if train_subset_ids is not None else None,
         "complete": False,
     }
     _save_json(out_dir / "lds_model_config.json", payload)
@@ -218,6 +250,8 @@ def main() -> None:
 
     for subset in subsets:
         subset_id = int(subset["subset_id"])
+        if train_subset_ids is not None and subset_id not in train_subset_ids:
+            continue
         subset_dir = Path(subset["subset_dir"])
         cfg = TrainConfig(**asdict(train_cfg))
         excluded = np.load(subset_dir / "excluded_attribution_indices.npy")
@@ -238,7 +272,17 @@ def main() -> None:
             progress_bar=True,
         )
 
-    payload["complete"] = True
+    if train_subset_ids is None:
+        payload["complete"] = True
+    else:
+        payload["complete"] = all(
+            (
+                models_dir
+                / f"subset_{subset_id:04d}"
+                / f"seed_{model_train_seed}_epoch_{int(train_cfg.epochs):04d}.ckpt"
+            ).is_file()
+            for subset_id in range(args.m)
+        )
     _save_json(out_dir / "lds_model_config.json", payload)
     print(f"Saved reusable LDS models to {out_dir}")
 
