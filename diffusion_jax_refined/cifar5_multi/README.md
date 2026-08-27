@@ -66,6 +66,29 @@ id across the four GPUs. Parallel task logs are written under:
 Use `--no-parallel` to force the old sequential schedule. Add End TracIn with
 `--attribution-algorithms das,traj_tracin,end_tracin`.
 
+## TACC Jobs
+
+Submit one 48-hour H100 job, using 4 nodes and 16 independent GPU workers:
+
+```bash
+sbatch diffusion_jax_refined/cifar5_multi/tacc/h100/run_full_2day_h100.sh
+```
+
+Submit one 48-hour RTX-small job, using 1 node and 2 independent GPU workers:
+
+```bash
+sbatch diffusion_jax_refined/cifar5_multi/tacc/rtx_small/run_full_2day_rtx_small.sh
+```
+
+Both jobs run the full pipeline in one allocation: dataset generation, base
+models, sampling, 25% LDS subset models with `3 x 64` subsets, DAS and
+Traj TracIn attribution for the three queries, then LDS eval. Override common
+settings at submit time, for example:
+
+```bash
+EXPERIMENT_TAG=cifar5_multi_exp2 JAX_BATCH_SIZE=16 sbatch diffusion_jax_refined/cifar5_multi/tacc/rtx_small/run_full_2day_rtx_small.sh
+```
+
 The driver runs:
 
 - dataset generation

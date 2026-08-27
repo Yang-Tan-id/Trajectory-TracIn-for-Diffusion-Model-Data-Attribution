@@ -122,6 +122,7 @@ class Job:
     cwd: Path
     env: dict[str, str]
     log_path: Path
+    slot: int = 0
 
 
 def parse_csv(text: str) -> list[str]:
@@ -135,6 +136,12 @@ def parse_gpus(args: argparse.Namespace) -> list[str]:
     if visible:
         return parse_csv(visible)
     return ["0"]
+
+
+def worker_gpus(args: argparse.Namespace, gpus: list[str]) -> list[str]:
+    slots = int(args.slots) if args.slots is not None else len(gpus)
+    gpu_per_node = int(args.gpu_per_node)
+    return [gpus[i % min(len(gpus), gpu_per_node)] for i in range(slots)]
 
 
 def log_root(args: argparse.Namespace) -> Path:
@@ -151,7 +158,26 @@ def gpu_env(env: dict[str, str], gpu: str, *, single_device: bool = True) -> dic
     return child
 
 
-def run_parallel_jobs(jobs: list[Job], *, execute: bool, max_parallel: int) -> None:
+def launch_cmd(args: argparse.Namespace, job: Job) -> list[str]:
+    if args.slot_backend == "ibrun":
+        cmd = ["ibrun", "-n", "1", "-o", str(job.slot)]
+        if args.use_task_affinity:
+            cmd.append("task_affinity")
+        return cmd + job.cmd
+    if args.slot_backend == "srun":
+        return [
+            "srun",
+            "--nodes=1",
+            "--ntasks=1",
+            "--exclusive",
+            "--gres=gpu:1",
+            "--cpus-per-task",
+            str(args.cpus_per_worker),
+        ] + job.cmd
+    return job.cmd
+
+
+def run_parallel_jobs(jobs: list[Job], *, args: argparse.Namespace, execute: bool, max_parallel: int) -> None:
     if not jobs:
         return
     if max_parallel <= 0:
@@ -159,9 +185,9 @@ def run_parallel_jobs(jobs: list[Job], *, execute: bool, max_parallel: int) -> N
 
     prefix = "RUN" if execute else "DRY"
     for job in jobs:
-        printable = " ".join(job.cmd)
+        printable = " ".join(launch_cmd(args, job))
         gpu = job.env.get("CUDA_VISIBLE_DEVICES", "?")
-        print(f"[{prefix}][gpu={gpu}][log={job.log_path}] {job.name}: {printable}")
+        print(f"[{prefix}][slot={job.slot}][gpu={gpu}][log={job.log_path}] {job.name}: {printable}")
     if not execute:
         return
 
@@ -175,12 +201,12 @@ def run_parallel_jobs(jobs: list[Job], *, execute: bool, max_parallel: int) -> N
             log_f = job.log_path.open("ab")
             header = (
                 f"\n\n===== {time.strftime('%Y-%m-%d %H:%M:%S')} | {job.name} | "
-                f"gpu={job.env.get('CUDA_VISIBLE_DEVICES', '?')} =====\n"
+                f"slot={job.slot} | gpu={job.env.get('CUDA_VISIBLE_DEVICES', '?')} =====\n"
             )
             log_f.write(header.encode("utf-8"))
             log_f.flush()
             proc = subprocess.Popen(
-                job.cmd,
+                launch_cmd(args, job),
                 cwd=str(job.cwd),
                 env=job.env,
                 stdout=log_f,
@@ -215,6 +241,10 @@ def subset_index_chunks(m: int, num_chunks: int) -> list[list[int]]:
     for subset_id in range(m):
         chunks[subset_id % num_chunks].append(subset_id)
     return chunks
+
+
+def slot_for(index: int, worker_count: int) -> int:
+    return index % worker_count
 
 
 def subset_indices_text(indices: list[int]) -> str:
@@ -256,6 +286,7 @@ def base_env(args: argparse.Namespace) -> dict[str, str]:
     env.setdefault("EXPERIMENT_TAG", args.experiment)
     env.setdefault("TRAIN_SEED", str(args.train_seed))
     env.setdefault("JAX_EPOCHS", str(args.epochs))
+    env.setdefault("JAX_BFLOAT16", "1")
     env.setdefault("CIFAR5_MULTI_SIZE", str(args.size))
     env.setdefault("CIFAR5_MULTI_DATA_ROOT", str(args.root.parent / "dataset" / "cifar5_multi" / str(args.size)))
     env.setdefault("DAS_PROJ_DIM", "4096")
@@ -295,8 +326,18 @@ def main() -> None:
     parser.add_argument(
         "--gpus",
         default=None,
-        help="Comma-separated physical GPU ids for independent jobs. Defaults to CUDA_VISIBLE_DEVICES, then 0.",
+        help="Comma-separated per-node GPU ids for independent jobs. Defaults to CUDA_VISIBLE_DEVICES, then 0.",
     )
+    parser.add_argument(
+        "--slots",
+        type=int,
+        default=None,
+        help="Number of independent worker slots. For TACC H100 use 16 for 4 nodes x 4 GPUs.",
+    )
+    parser.add_argument("--gpu-per-node", type=int, default=4)
+    parser.add_argument("--cpus-per-worker", type=int, default=8)
+    parser.add_argument("--slot-backend", choices=("local", "ibrun", "srun"), default=os.environ.get("TACC_SLOT_BACKEND", "local"))
+    parser.add_argument("--use-task-affinity", action="store_true")
     parser.add_argument("--no-parallel", action="store_true", help="Use the old sequential schedule.")
     parser.add_argument(
         "--attribution-algorithms",
@@ -310,12 +351,13 @@ def main() -> None:
     queries = choose_prompted_queries(args.query_seed, 2)
     all_queries = queries + ["unprompted"]
     gpus = parse_gpus(args)
-    use_parallel = (not args.no_parallel) and len(gpus) > 1
+    worker_gpu_ids = worker_gpus(args, gpus)
+    use_parallel = (not args.no_parallel) and len(worker_gpu_ids) > 1
     algorithms = tuple(parse_csv(args.attribution_algorithms))
     python_bin = os.environ.get("PYTHON_BIN", "python3")
     print(f"prompted queries: {queries}")
     print("unprompted query: unprompted")
-    print(f"job GPUs: {gpus} | parallel={use_parallel}")
+    print(f"job GPUs: {gpus} | worker_gpus={worker_gpu_ids} | backend={args.slot_backend} | parallel={use_parallel}")
     print(f"attribution algorithms: {algorithms}")
 
     if not args.skip_generate:
@@ -338,23 +380,25 @@ def main() -> None:
             jobs = [
                 Job(
                     name="train_prompted_base",
-                    cmd=["bash", "scripts/00_train.sh"],
+                    cmd=["bash", "scripts/00_train_prompted_solo.sh"],
                     cwd=args.root,
-                    env=gpu_env(env0, gpus[0]),
+                    env=gpu_env(env0, worker_gpu_ids[0]),
                     log_path=log_root(args) / "base" / "prompted.log",
+                    slot=0,
                 ),
                 Job(
                     name="train_unprompted_base",
-                    cmd=["bash", "scripts/00_train_unprompted.sh"],
+                    cmd=["bash", "scripts/00_train_unprompted_solo.sh"],
                     cwd=args.root,
-                    env=gpu_env(env0, gpus[1 % len(gpus)]),
+                    env=gpu_env(env0, worker_gpu_ids[1 % len(worker_gpu_ids)]),
                     log_path=log_root(args) / "base" / "unprompted.log",
+                    slot=1 % len(worker_gpu_ids),
                 ),
             ]
-            run_parallel_jobs(jobs, execute=args.execute, max_parallel=min(len(gpus), len(jobs)))
+            run_parallel_jobs(jobs, args=args, execute=args.execute, max_parallel=min(len(worker_gpu_ids), len(jobs)))
         else:
-            run(["bash", "scripts/00_train.sh"], env0, cwd=args.root, execute=args.execute)
-            run(["bash", "scripts/00_train_unprompted.sh"], env0, cwd=args.root, execute=args.execute)
+            run(["bash", "scripts/00_train_prompted_solo.sh"], env0, cwd=args.root, execute=args.execute)
+            run(["bash", "scripts/00_train_unprompted_solo.sh"], env0, cwd=args.root, execute=args.execute)
 
     sample_jobs = []
     for i, query in enumerate(queries):
@@ -365,8 +409,9 @@ def main() -> None:
                     name=f"sample_{query_tag(query)}",
                     cmd=["bash", "scripts/00_sample.sh"],
                     cwd=args.root,
-                    env=gpu_env(env, gpus[i % len(gpus)]),
+                    env=gpu_env(env, worker_gpu_ids[i % len(worker_gpu_ids)]),
                     log_path=log_root(args) / "sample" / f"{query_tag(query)}.log",
+                    slot=slot_for(i, len(worker_gpu_ids)),
                 )
             )
         else:
@@ -378,13 +423,53 @@ def main() -> None:
                 name="sample_unprompted",
                 cmd=["bash", "scripts/00_sample_unprompted.sh"],
                 cwd=args.root,
-                env=gpu_env(env, gpus[len(sample_jobs) % len(gpus)]),
+                env=gpu_env(env, worker_gpu_ids[len(sample_jobs) % len(worker_gpu_ids)]),
                 log_path=log_root(args) / "sample" / "unprompted.log",
+                slot=slot_for(len(sample_jobs), len(worker_gpu_ids)),
             )
         )
-        run_parallel_jobs(sample_jobs, execute=args.execute, max_parallel=min(len(gpus), len(sample_jobs)))
+        run_parallel_jobs(sample_jobs, args=args, execute=args.execute, max_parallel=min(len(worker_gpu_ids), len(sample_jobs)))
     else:
         run(["bash", "scripts/00_sample_unprompted.sh"], env, cwd=args.root, execute=args.execute)
+
+    if not args.skip_lds:
+        if use_parallel:
+            jobs = []
+            chunks = subset_index_chunks(args.lds_m, len(worker_gpu_ids))
+            for subset_seed in [x.strip() for x in args.lds_subset_seeds.split(",") if x.strip()]:
+                for mode, script_name in (
+                    ("prompted_solo", "scripts/03_lds_training.sh"),
+                    ("unprompted_solo", "scripts/03_lds_training_unprompted.sh"),
+                ):
+                    for slot, (gpu, chunk) in enumerate(zip(worker_gpu_ids, chunks)):
+                        if not chunk:
+                            continue
+                        env = env0 | {
+                            "LDS_SAMPLE_RANDOM_SEED": subset_seed,
+                            "SAMPLE_MODEL_MODE": mode,
+                            "LDS_SUBSET_INDICES": subset_indices_text(chunk),
+                        }
+                        jobs.append(
+                            Job(
+                                name=f"lds_train_{mode}_subset_seed_{subset_seed}_slot_{slot}",
+                                cmd=["bash", script_name],
+                                cwd=args.root,
+                                env=gpu_env(env, gpu),
+                                log_path=log_root(args)
+                                / "lds"
+                                / mode
+                                / f"subset_seed_{subset_seed}"
+                                / f"slot_{slot}_gpu_{gpu}.log",
+                                slot=slot,
+                            )
+                        )
+            run_parallel_jobs(jobs, args=args, execute=args.execute, max_parallel=len(worker_gpu_ids))
+        else:
+            for subset_seed in [x.strip() for x in args.lds_subset_seeds.split(",") if x.strip()]:
+                env = env0 | {"LDS_SAMPLE_RANDOM_SEED": subset_seed, "SAMPLE_MODEL_MODE": "prompted_solo"}
+                run(["bash", "scripts/03_lds_training.sh"], env, cwd=args.root, execute=args.execute)
+                env = env0 | {"LDS_SAMPLE_RANDOM_SEED": subset_seed, "SAMPLE_MODEL_MODE": "unprompted_solo"}
+                run(["bash", "scripts/03_lds_training_unprompted.sh"], env, cwd=args.root, execute=args.execute)
 
     if not args.skip_attribution:
         if use_parallel:
@@ -392,16 +477,18 @@ def main() -> None:
             for job_i, (query, algorithm) in enumerate(itertools.product(all_queries, algorithms)):
                 _, env = query_env(args, env0, query)
                 stage_cwd = args.root / "data_attribution" / algorithm
+                slot = slot_for(job_i, len(worker_gpu_ids))
                 jobs.append(
                     Job(
                         name=f"attr_{algorithm}_{query_tag(query)}",
                         cmd=attribution_job_cmd(python_bin, algorithm),
                         cwd=stage_cwd,
-                        env=gpu_env(env, gpus[job_i % len(gpus)]),
+                        env=gpu_env(env, worker_gpu_ids[slot]),
                         log_path=log_root(args) / "attribution" / algorithm / f"{query_tag(query)}.log",
+                        slot=slot,
                     )
                 )
-            run_parallel_jobs(jobs, execute=args.execute, max_parallel=len(gpus))
+            run_parallel_jobs(jobs, args=args, execute=args.execute, max_parallel=len(worker_gpu_ids))
         else:
             for query in all_queries:
                 _, env = query_env(args, env0, query)
@@ -412,43 +499,6 @@ def main() -> None:
                     run([python_bin, "03_score.py"], env, cwd=stage_cwd, execute=args.execute)
 
     if not args.skip_lds:
-        if use_parallel:
-            jobs = []
-            chunks = subset_index_chunks(args.lds_m, len(gpus))
-            for subset_seed in [x.strip() for x in args.lds_subset_seeds.split(",") if x.strip()]:
-                for mode, script_name in (
-                    ("prompted_solo", "scripts/03_lds_training.sh"),
-                    ("unprompted_solo", "scripts/03_lds_training_unprompted.sh"),
-                ):
-                    for gpu_i, (gpu, chunk) in enumerate(zip(gpus, chunks)):
-                        if not chunk:
-                            continue
-                        env = env0 | {
-                            "LDS_SAMPLE_RANDOM_SEED": subset_seed,
-                            "SAMPLE_MODEL_MODE": mode,
-                            "LDS_SUBSET_INDICES": subset_indices_text(chunk),
-                        }
-                        jobs.append(
-                            Job(
-                                name=f"lds_{mode}_subset_seed_{subset_seed}_gpu_{gpu}",
-                                cmd=["bash", script_name],
-                                cwd=args.root,
-                                env=gpu_env(env, gpu),
-                                log_path=log_root(args)
-                                / "lds"
-                                / mode
-                                / f"subset_seed_{subset_seed}"
-                                / f"gpu_{gpu}.log",
-                            )
-                        )
-            run_parallel_jobs(jobs, execute=args.execute, max_parallel=len(gpus))
-        else:
-            for subset_seed in [x.strip() for x in args.lds_subset_seeds.split(",") if x.strip()]:
-                env = env0 | {"LDS_SAMPLE_RANDOM_SEED": subset_seed, "SAMPLE_MODEL_MODE": "prompted_solo"}
-                run(["bash", "scripts/03_lds_training.sh"], env, cwd=args.root, execute=args.execute)
-                env = env0 | {"LDS_SAMPLE_RANDOM_SEED": subset_seed, "SAMPLE_MODEL_MODE": "unprompted_solo"}
-                run(["bash", "scripts/03_lds_training_unprompted.sh"], env, cwd=args.root, execute=args.execute)
-
         for query in all_queries:
             for algorithm in algorithms:
                 for target in TARGET_FUNCTIONS:
