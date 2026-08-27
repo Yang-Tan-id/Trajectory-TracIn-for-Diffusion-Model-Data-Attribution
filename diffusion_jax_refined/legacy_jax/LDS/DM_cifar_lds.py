@@ -145,6 +145,7 @@ CUDA_VISIBLE_DEVICES=3 python3 LDS/DM_cifar_lds.py \
 import argparse
 import contextlib
 import csv
+import importlib.util
 import json
 import math
 import os
@@ -186,6 +187,16 @@ TARGET_FUNCTION_CHOICES = (
     "endpoint_counterfactual",
     "traj_counterfactual",
 )
+
+
+def load_training_symbols(code_file: str):
+    module_path = resolve_path(code_file, must_exist=True)
+    spec = importlib.util.spec_from_file_location("lds_training_module", module_path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Could not load training module from {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.TrainConfig, module.train
 
 
 def normalize_target_function(name: str) -> str:
@@ -1231,6 +1242,8 @@ def main():
 
     args.base_checkpoint = resolve_path(args.base_checkpoint, must_exist=True)
     args.code_file = resolve_path(args.code_file, must_exist=True)
+    global TrainConfig, train
+    TrainConfig, train = load_training_symbols(args.code_file)
     args.data_root = resolve_path(args.data_root, must_exist=True) if args.data_root is not None else None
     args.attribution_sample_dir = (
         resolve_path(args.attribution_sample_dir, must_exist=True)

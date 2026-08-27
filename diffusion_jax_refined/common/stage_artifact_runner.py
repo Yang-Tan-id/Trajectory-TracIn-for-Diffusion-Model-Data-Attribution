@@ -3,10 +3,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
+import os
 
 import numpy as np
 
 from .stage_runner import run_stage_config, stage_root
+from .config_loader import load_config, require_attr
 
 
 TRAIN_ARTIFACT = "train_datapoint_gradient_artifact.npz"
@@ -119,7 +121,14 @@ def _combine_multiterm_dot_scores(train_payload: dict[str, np.ndarray], query_pa
     return scores
 
 
-def _combine_das_scores(train_payload: dict[str, np.ndarray], query_payload: dict[str, np.ndarray], *, train_path: Path, query_path: Path) -> np.ndarray:
+def _combine_das_scores(
+    train_payload: dict[str, np.ndarray],
+    query_payload: dict[str, np.ndarray],
+    *,
+    train_path: Path,
+    query_path: Path,
+    damping: float | None = None,
+) -> np.ndarray:
     train = _first_array(train_payload, ("train_features", "features", "phi", "phis"), path=train_path)
     train = np.asarray(train, dtype=np.float64)
     if train.ndim == 2:
@@ -145,10 +154,17 @@ def _combine_das_scores(train_payload: dict[str, np.ndarray], query_payload: dic
 
     gram_inv = None
     gram = None
-    for key in ("gram", "gram_matrix", "H", "H_proj"):
-        if key in train_payload:
-            gram = np.asarray(train_payload[key], dtype=np.float64)
-            break
+    if damping is not None and "gram_undamped" in train_payload:
+        gram = np.asarray(train_payload["gram_undamped"], dtype=np.float64)
+        if gram.ndim == 2:
+            gram = gram[None, :, :]
+        eye = np.eye(gram.shape[-1], dtype=np.float64)
+        gram = gram + float(damping) * eye[None, :, :]
+    else:
+        for key in ("gram", "gram_matrix", "H", "H_proj"):
+            if key in train_payload:
+                gram = np.asarray(train_payload[key], dtype=np.float64)
+                break
     for key in ("gram_inverse", "inverse_gram", "gram_inv", "h_inverse"):
         if key in train_payload:
             gram_inv = np.asarray(train_payload[key], dtype=np.float64)
@@ -178,7 +194,16 @@ def _combine_das_scores(train_payload: dict[str, np.ndarray], query_payload: dic
     return scores / float(train.shape[0])
 
 
-def _write_score_outputs(out_dir: Path, scores: np.ndarray, indices: np.ndarray, *, train_dir: Path, query_dir: Path, algorithm: str) -> None:
+def _write_score_outputs(
+    out_dir: Path,
+    scores: np.ndarray,
+    indices: np.ndarray,
+    *,
+    train_dir: Path,
+    query_dir: Path,
+    algorithm: str,
+    extra_manifest: dict[str, Any] | None = None,
+) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     scores = np.asarray(scores, dtype=np.float64).reshape(-1)
     indices = np.asarray(indices, dtype=np.int64).reshape(-1)
@@ -205,18 +230,43 @@ def _write_score_outputs(out_dir: Path, scores: np.ndarray, indices: np.ndarray,
             indent=2,
         )
     with open(out_dir / "score_artifact_manifest.json", "w") as handle:
-        json.dump(
-            {
+        manifest = {
                 "algorithm": algorithm,
                 "train_artifact_dir": str(train_dir),
                 "query_artifact_dir": str(query_dir),
                 "score_dir": str(out_dir),
                 "num_scores": int(len(scores)),
                 "mode": "pure_artifact_combiner",
-            },
-            handle,
-            indent=2,
-        )
+        }
+        if extra_manifest:
+            manifest.update(extra_manifest)
+        json.dump(manifest, handle, indent=2)
+
+
+def _damping_tag(value: float) -> str:
+    text = f"{float(value):g}".replace("+", "").replace("-", "neg_").replace(".", "p")
+    return text or "0"
+
+
+def _parse_float_list(text: str) -> tuple[float, ...]:
+    return tuple(float(part) for part in text.replace(",", " ").split() if part.strip())
+
+
+def _das_damping_values(config_path: Path, train_payload: dict[str, np.ndarray]) -> tuple[float, ...]:
+    if os.environ.get("DAS_DAMPING_SWEEP", "0") not in ("1", "true", "True", "yes"):
+        if "damping" in train_payload:
+            return (float(np.asarray(train_payload["damping"]).reshape(())),)
+        return (float(os.environ.get("DAS_DAMPING", "2")),)
+    if os.environ.get("DAS_DAMPING_SWEEP_VALUES"):
+        return _parse_float_list(os.environ["DAS_DAMPING_SWEEP_VALUES"])
+    if "damping_sweep_values" in train_payload:
+        values = tuple(float(v) for v in np.asarray(train_payload["damping_sweep_values"]).reshape(-1))
+        if values:
+            return values
+    cfg_module = load_config(config_path)
+    config_values = dict(require_attr(cfg_module, "ATTRIBUTION_CONFIG"))
+    values = tuple(float(v) for v in config_values.get("damping_sweep_values", ()))
+    return values or (float(config_values.get("damping", 2.0)),)
 
 
 def run_score_combination_stage(config_path: str | Path) -> Path:
@@ -238,7 +288,35 @@ def run_score_combination_stage(config_path: str | Path) -> Path:
     query_payload = _load_npz(query_path)
     algorithm = config_path.parent.name
     if algorithm == "das":
-        scores = _combine_das_scores(train_payload, query_payload, train_path=train_path, query_path=query_path)
+        damping_values = _das_damping_values(config_path, train_payload)
+        written_dirs = []
+        sweep = len(damping_values) > 1 or os.environ.get("DAS_DAMPING_SWEEP", "0") in ("1", "true", "True", "yes")
+        for damping in damping_values:
+            scores = _combine_das_scores(
+                train_payload,
+                query_payload,
+                train_path=train_path,
+                query_path=query_path,
+                damping=float(damping),
+            )
+            indices = _score_indices(train_payload, len(scores))
+            target_dir = out_dir / f"lambda_{_damping_tag(damping)}" if sweep else out_dir
+            _write_score_outputs(
+                target_dir,
+                scores,
+                indices,
+                train_dir=train_dir,
+                query_dir=query_dir,
+                algorithm=algorithm,
+                extra_manifest={
+                    "damping": float(damping),
+                    "damping_sweep_enabled": bool(sweep),
+                    "damping_sweep_values": [float(v) for v in damping_values],
+                },
+            )
+            written_dirs.append(str(target_dir))
+        print(f"[score] combined DAS scores for {len(damping_values)} damping value(s): {written_dirs}")
+        return out_dir
     elif algorithm == "dtrak":
         scores = _combine_dtrak_scores(train_payload, query_payload, train_path=train_path, query_path=query_path)
     elif algorithm in ("end_tracin", "traj_tracin"):

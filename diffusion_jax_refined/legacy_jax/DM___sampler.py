@@ -375,18 +375,19 @@ class CIFARAdapter(ModelAdapter):
         self.model, self.state = self._restore_model_and_state()
 
     def _resolve_cifar_data_root(self) -> str:
-        """batches.meta must exist; checkpoint paths are often relative to cwd or the training script dir."""
+        """Resolve CIFAR-style data roots, including generated npz datasets."""
         meta_name = "batches.meta"
+        npz_name = "dataset.npz"
 
         def has_meta(root: str) -> bool:
-            return os.path.isfile(os.path.join(root, meta_name))
+            return os.path.isfile(os.path.join(root, meta_name)) or os.path.isfile(os.path.join(root, npz_name))
 
         if self._cifar_data_root_override is not None:
             root = os.path.abspath(os.path.expanduser(self._cifar_data_root_override))
             if not has_meta(root):
                 raise FileNotFoundError(
-                    f"CIFAR {meta_name} not found under --cifar-data-root.\n"
-                    f"  Expected: {os.path.join(root, meta_name)}"
+                    f"CIFAR metadata not found under --cifar-data-root.\n"
+                    f"  Expected: {os.path.join(root, meta_name)} or {os.path.join(root, npz_name)}"
                 )
             return root
 
@@ -406,8 +407,9 @@ class CIFARAdapter(ModelAdapter):
                 return candidate
 
         raise FileNotFoundError(
-            "Could not find CIFAR batches.meta for class names / prompts.\n"
+            "Could not find CIFAR metadata for class names / prompts.\n"
             f"  Tried checkpoint config path: {os.path.join(cfg_root, meta_name)}\n"
+            f"  Also accepts generated datasets at: {os.path.join(cfg_root, npz_name)}\n"
             "  If you run from a directory that does not contain ./databases/..., either:\n"
             "    cd to the same directory you used for training, or\n"
             '    pass --cifar-data-root /path/to/cifar-10-batches-py\n'
@@ -415,6 +417,10 @@ class CIFARAdapter(ModelAdapter):
         )
 
     def _load_label_names(self) -> List[str]:
+        npz_path = os.path.join(self.cfg.data_root, "dataset.npz")
+        if os.path.isfile(npz_path):
+            with np.load(npz_path, allow_pickle=False) as payload:
+                return [str(x) for x in payload["label_names"].tolist()]
         meta_path = os.path.join(self.cfg.data_root, "batches.meta")
         with open(meta_path, "rb") as f:
             meta = pickle.load(f, encoding="bytes")

@@ -198,7 +198,7 @@ def main() -> None:
     simple_loss_noise_seeds = _int_list_env("LDS_SIMPLE_LOSS_NOISE_SEEDS")
 
     evaluator = CifarTargetEvaluator(
-        code_file=str(legacy_root / "DM__training_CIFAR10_pixel.py"),
+        code_file=str(legacy_root / f"{getattr(dataset_cfg, 'TRAINING_MODULE_NAME', 'DM__training_CIFAR10_pixel')}.py"),
         base_checkpoint=base_checkpoint,
         prompt=prompt,
         prefer_device=os.environ.get("LDS_DEVICE", "gpu"),

@@ -1355,6 +1355,7 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
     processed_mc_terms = 0
     stage_train_features = []
     stage_grams = []
+    stage_grams_undamped = []
     stage_query_features = []
     stage_residuals = []
     stage_ckpt_indices = []
@@ -1467,10 +1468,12 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
                             H_proj += np.outer(phi_np, phi_np).astype(np.float32)
                         if hasattr(stage_iter, "set_postfix"):
                             stage_iter.set_postfix(samples=f"{min(start + len(batch), M)}/{M}")
+                    H_proj_undamped = H_proj.copy()
                     H_proj += damping * np.eye(proj_dim, dtype=np.float32)
                     if stage_mode == "train":
                         stage_train_features.append(phi_cache)
                         stage_grams.append(H_proj)
+                        stage_grams_undamped.append(H_proj_undamped)
                     else:
                         stage_query_features.append(np.asarray(phi_q, dtype=np.float32))
                         stage_residuals.append(residual_cache)
@@ -1643,11 +1646,13 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
             stage_artifact_path,
             train_features=np.stack(stage_train_features, axis=0).astype(np.float32),
             gram=np.stack(stage_grams, axis=0).astype(np.float32),
+            gram_undamped=np.stack(stage_grams_undamped, axis=0).astype(np.float32),
             score_indices=np.asarray(picked, dtype=np.int64),
             ckpt_indices=np.asarray(stage_ckpt_indices, dtype=np.int32),
             timesteps=np.asarray(stage_timestep_values, dtype=np.int32),
             mc_indices=np.asarray(stage_mc_indices, dtype=np.int32),
             damping=np.asarray(float(damping), dtype=np.float32),
+            damping_sweep_values=np.asarray([float(v) for v in damping_values], dtype=np.float32),
             proj_dim=np.asarray(int(proj_dim), dtype=np.int32),
         )
         print(f"[saved] DAS train artifact: {stage_artifact_path}")

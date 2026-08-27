@@ -65,8 +65,9 @@ def run_prompted_cifar_training(
     add_legacy_jax_to_path()
     chdir_legacy_jax_root()
 
-    train_mod = __import__("DM__training_CIFAR10_pixel")
+    train_mod = __import__(getattr(cfg_module, "TRAINING_MODULE_NAME", "DM__training_CIFAR10_pixel"))
     class_names = _training_class_names(cfg_module, "CLASS_NAMES")
+    common_cfg = getattr(cfg_module, "COMMON_CIFAR", {})
     train_cfg = train_mod.TrainConfig(
         data_root=require_attr(cfg_module, "DATA_ROOT"),
         batch_names=None,
@@ -75,15 +76,15 @@ def run_prompted_cifar_training(
         exclude_ranges=None,
         exclude_indices=None,
         model_type="unet",
-        image_size=32,
+        image_size=int(common_cfg.get("image_size", getattr(cfg_module, "IMAGE_SIZE", 32))),
         in_channels=3,
         base_channels=_optional_int("JAX_BASE_CHANNELS", 160),
-        channel_mults=(1, 2, 2),
+        channel_mults=tuple(common_cfg.get("channel_mults", (1, 2, 2))),
         num_res_blocks=2,
         time_emb_dim=128,
-        num_classes=10,
+        num_classes=int(common_cfg.get("num_classes", getattr(cfg_module, "NUM_CLASSES", 10))),
         class_cond=not unconditional,
-        cond_mode=getattr(cfg_module, "COMMON_CIFAR", {}).get("cond_mode", "multi_hot"),
+        cond_mode=common_cfg.get("cond_mode", "multi_hot"),
         dropout=_optional_float("JAX_DROPOUT", 0.1),
         seed=_optional_int("TRAIN_SEED", 42),
         epochs=_optional_int("JAX_EPOCHS", 200),

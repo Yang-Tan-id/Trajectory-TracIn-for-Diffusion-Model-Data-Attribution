@@ -192,6 +192,28 @@ def build_filtered_index_to_cifar_row_map(
     batch_names: Optional[Sequence[str]],
     class_names: Optional[Sequence[str]],
 ) -> List[Tuple[int, int, int]]:
+    npz_path = os.path.join(data_root, "dataset.npz") if os.path.isdir(data_root) else data_root
+    if os.path.isfile(npz_path) and os.path.basename(npz_path) == "dataset.npz":
+        with np.load(npz_path, allow_pickle=False) as payload:
+            labels = np.asarray(payload["labels"], dtype=np.int32)
+            label_names = [str(x) for x in payload["label_names"].tolist()]
+        keep_ids = None
+        if class_names is not None:
+            name_to_id = {name: i for i, name in enumerate(label_names)}
+            keep_ids = set(int(name_to_id[name]) for name in class_names)
+        mapping: List[Tuple[int, int, int]] = []
+        for row_idx, label in enumerate(labels):
+            if labels.ndim == 1:
+                primary = int(label)
+                keep = keep_ids is None or primary in keep_ids
+            else:
+                active = np.flatnonzero(label)
+                primary = int(active[0]) if active.size else -1
+                keep = keep_ids is None or bool(set(active.tolist()) & keep_ids)
+            if keep:
+                mapping.append((0, int(row_idx), primary))
+        return mapping
+
     label_names = load_cifar_label_names(data_root)
     name_to_id = {name: i for i, name in enumerate(label_names)}
     keep_ids = None

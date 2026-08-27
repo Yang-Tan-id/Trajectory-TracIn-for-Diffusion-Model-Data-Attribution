@@ -114,13 +114,18 @@ def main() -> None:
     if str(legacy_root) not in sys.path:
         sys.path.insert(0, str(legacy_root))
 
-    from DM__training_CIFAR10_pixel import TrainConfig
+    train_mod = __import__(getattr(dataset_cfg, "TRAINING_MODULE_NAME", "DM__training_CIFAR10_pixel"))
+    TrainConfig = train_mod.TrainConfig
     from DM_counterfactual_retrain_from_attribution import (
         build_filtered_index_to_cifar_row_map,
         load_base_config,
         selected_indices_to_exclude_indices,
     )
-    from LDS.DM_cifar_lds import run_train_with_optional_logging
+    import LDS.DM_cifar_lds as lds_mod
+
+    lds_mod.TrainConfig = TrainConfig
+    lds_mod.train = train_mod.train
+    run_train_with_optional_logging = lds_mod.run_train_with_optional_logging
 
     checkpoint_attr = "UNPROMPTED_JAX_REFERENCE_CKPT" if use_unprompted else "REFERENCE_CKPT"
     base_checkpoint = Path(require_attr(dataset_cfg, checkpoint_attr)).resolve()
