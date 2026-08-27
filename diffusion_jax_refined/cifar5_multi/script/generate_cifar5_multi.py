@@ -46,7 +46,50 @@ def load_cifar10_by_label(root: Path) -> tuple[list[str], dict[int, np.ndarray],
     )
 
 
-def generate_dataset(source_root: Path, out_root: Path, size: int, seed: int) -> None:
+def _write_ppm(path: Path, image: np.ndarray) -> None:
+    if image.dtype != np.uint8 or image.ndim != 3 or image.shape[-1] != 3:
+        raise ValueError(f"expected uint8 RGB image, got {image.shape} {image.dtype}")
+    height, width = image.shape[:2]
+    with path.open("wb") as f:
+        f.write(f"P6\n{width} {height}\n255\n".encode("ascii"))
+        f.write(np.ascontiguousarray(image).tobytes())
+
+
+def write_preview_samples(
+    out_root: Path,
+    images: np.ndarray,
+    labels: np.ndarray,
+    label_ids: np.ndarray,
+    position_ids: np.ndarray,
+    preview_count: int,
+) -> None:
+    if preview_count <= 0:
+        return
+
+    count = min(preview_count, len(images))
+    preview_dir = out_root / "samples"
+    preview_dir.mkdir(parents=True, exist_ok=True)
+    position_names = tuple(POSITIONS)
+    manifest = []
+    for sample_id in range(count):
+        label_names = [LABELS[i] for i, value in enumerate(labels[sample_id]) if value]
+        label_slug = "-".join(label_names)
+        file_name = f"sample_{sample_id:05d}__{label_slug}.ppm"
+        _write_ppm(preview_dir / file_name, images[sample_id])
+        manifest.append(
+            {
+                "sample_index": sample_id,
+                "file": file_name,
+                "labels": label_names,
+                "label_ids": [int(x) for x in label_ids[sample_id]],
+                "positions": [position_names[int(x)] for x in position_ids[sample_id]],
+            }
+        )
+
+    (preview_dir / "samples.json").write_text(json.dumps(manifest, indent=2))
+
+
+def generate_dataset(source_root: Path, out_root: Path, size: int, seed: int, preview_count: int) -> None:
     label_names, images_by_label, indices_by_label = load_cifar10_by_label(source_root)
     source_label_ids = [label_names.index(name) for name in LABELS]
     rng = np.random.default_rng(seed)
@@ -88,6 +131,7 @@ def generate_dataset(source_root: Path, out_root: Path, size: int, seed: int) ->
         "format_version": 1,
         "size": int(size),
         "seed": int(seed),
+        "preview_count": int(min(max(preview_count, 0), size)),
         "image_size": 64,
         "quadrant_size": 32,
         "labels": list(LABELS),
@@ -102,13 +146,22 @@ def generate_dataset(source_root: Path, out_root: Path, size: int, seed: int) ->
         },
     }
     (out_root / "metadata.json").write_text(json.dumps(metadata, indent=2))
+    write_preview_samples(out_root, images, labels, label_ids, position_ids, preview_count)
     print(f"saved {size} cifar5_multi samples to {out_root / 'dataset.npz'}")
+    if preview_count > 0:
+        print(f"saved {min(preview_count, size)} preview samples to {out_root / 'samples'}")
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Generate 64x64 CIFAR5 multi-object composite dataset.")
     parser.add_argument("--size", type=int, default=10000)
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--preview-count",
+        type=int,
+        default=5,
+        help="Number of generated samples to export as preview .ppm files. Use 0 to disable.",
+    )
     parser.add_argument(
         "--source-root",
         type=Path,
@@ -124,7 +177,7 @@ def main() -> None:
     out_root = args.out_root
     if out_root is None:
         out_root = Path(__file__).resolve().parents[2] / "dataset" / "cifar5_multi" / str(args.size)
-    generate_dataset(args.source_root, out_root, args.size, args.seed)
+    generate_dataset(args.source_root, out_root, args.size, args.seed, args.preview_count)
 
 
 if __name__ == "__main__":

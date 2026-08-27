@@ -18,6 +18,13 @@ This writes:
 
 `diffusion_jax_refined/dataset/cifar5_multi/10000/dataset.npz`
 
+It also writes 5 preview samples by default:
+
+`diffusion_jax_refined/dataset/cifar5_multi/10000/samples/`
+
+Change the number of previews with `--preview-count 3`, or disable them with
+`--preview-count 0`.
+
 Set another size with `--size` or at runtime with `CIFAR5_MULTI_SIZE`.
 
 ## End-To-End Driver
