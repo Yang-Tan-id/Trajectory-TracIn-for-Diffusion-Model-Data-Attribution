@@ -44,6 +44,20 @@ class TestAttributionCodeContracts(unittest.TestCase):
         self.assertIn("stage_term_weights.append(ckpt_lr_weight / float(max(1, len(t_seq))))", text)
         self.assertIn("snap_weight = ckpt_lr_weight / float(max(1, len(t_seq)))", text)
 
+    def test_projected_traj_tracin_score_sweep_can_ignore_lr_weights(self):
+        text = (ROOT / "common" / "projected_traj_tracin_score_sweep.py").read_text()
+        self.assertIn("checkpoint_uniform_term_weights", text)
+        self.assertIn("--term-weighting", text)
+        self.assertIn("uniform_checkpoint", text)
+        self.assertIn("term_weighting", text)
+
+        h100_text = (
+            ROOT / "cifar2" / "tacc" / "h100" / "projected_traj_tracin_score_sweep.sh"
+        ).read_text()
+        self.assertIn("TRAJ_TRACIN_TERM_WEIGHTING", h100_text)
+        self.assertIn("traj_tracin_projected_${TRAJ_TRACIN_TERM_WEIGHTING}", h100_text)
+        self.assertIn('--term-weighting "${TRAJ_TRACIN_TERM_WEIGHTING}"', h100_text)
+
     def test_traj_tracin_score_combiner_rejects_mismatched_term_weights(self):
         text = (ROOT / "common" / "stage_artifact_runner.py").read_text()
         self.assertIn("train/query term_weights differ", text)

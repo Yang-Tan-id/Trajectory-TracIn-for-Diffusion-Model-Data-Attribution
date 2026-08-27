@@ -44,6 +44,7 @@ PROJECTED_ARTIFACT_DIR_NAME_VALUE="${PROJECTED_ARTIFACT_DIR_NAME:-projected_traj
 TRAIN_SCORE_INDEX_RANGES="${TRAIN_SCORE_INDEX_RANGES:-1-10000}"
 TRAIN_SCORE_INDEX_RANGES_MODE="${TRAIN_SCORE_INDEX_RANGES_MODE:-task}"
 TRAJ_TRACIN_TRAIN_AGGREGATE_TIMESTAMPS="${TRAJ_TRACIN_TRAIN_AGGREGATE_TIMESTAMPS:-1}"
+PROJECTED_11_STAGE="${PROJECTED_11_STAGE:-all}"
 LOG_ROOT="${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/stampede3_das_logs/11_traj_tracin_raw_nextckpt_projected/${SLURM_JOB_ID:-local}"
 mkdir -p "${LOG_ROOT}"
 
@@ -75,6 +76,16 @@ task_lines() {
   done
 }
 
+train_task_lines() {
+  local range
+  for range in ${TRAJ_RANGES_TEXT}; do
+    printf 'unprompted_solo|unprompted_solo|unprompted|0|1|%s\n' "${range}"
+  done
+  for range in ${TRAJ_RANGES_TEXT}; do
+    printf 'prompted_solo|prompted_solo|horse|0|0|%s\n' "${range}"
+  done
+}
+
 algorithm_dir_for_task() {
   local unprompted_flag="$1"
   local range="$2"
@@ -87,6 +98,18 @@ algorithm_dir_for_task() {
     printf 'traj_tracin_%s_%s_%s' \
       "${TRAJ_QUERY_OBJECTIVE_VALUE}" "${TRAJ_PARAMETER_SOURCE_VALUE}" "${tag}"
   fi
+}
+
+sample_root_for_task() {
+  local sample_mode="$1"
+  local query_env="$2"
+  local seed="$3"
+  local prompt_tag seed_tag ckpt_stem
+  prompt_tag="$(path_tag "${query_env}")"
+  printf -v seed_tag "%06d" "${seed}"
+  printf -v ckpt_stem "seed_%s_epoch_%04d" "${TRAIN_SEED}" "${JAX_EPOCHS}"
+  printf '%s/result/%s/sample/cifar/prompt_%s/model_%s__ckpt_%s' \
+    "${CIFAR2_ROOT}" "${EXPERIMENT_TAG}" "${prompt_tag}" "${sample_mode}" "${ckpt_stem}"
 }
 
 score_file_for_task() {
@@ -174,16 +197,21 @@ run_one_task() {
   local i="$1"
   local slot="$2"
   local gpu="$3"
+  local task_stage="${4:-score}"
   local sample_mode score_mode query seed unprompted_flag range
-  IFS='|' read -r sample_mode score_mode query seed unprompted_flag range <<<"${TASKS[$i]}"
+  if [[ "${task_stage}" == "train" ]]; then
+    IFS='|' read -r sample_mode score_mode query seed unprompted_flag range <<<"${TRAIN_TASKS[$i]}"
+  else
+    IFS='|' read -r sample_mode score_mode query seed unprompted_flag range <<<"${TASKS[$i]}"
+  fi
   local score_file
   score_file="$(score_file_for_task "${score_mode}" "${query}" "${seed}" "${unprompted_flag}" "${range}")"
-  local log="${LOG_ROOT}/task_${i}__projected_raw_next__${score_mode}__$(path_tag "${query}")__seed_${seed}__$(range_tag "${range}").log"
-  if [[ -f "${score_file}" ]]; then
+  local log="${LOG_ROOT}/task_${i}__${task_stage}__projected_raw_next__${score_mode}__$(path_tag "${query}")__seed_${seed}__$(range_tag "${range}").log"
+  if [[ "${task_stage}" == "score" && -f "${score_file}" ]]; then
     echo "[projected-skip] task=${i} existing=${score_file}" >"${log}"
     return 0
   fi
-  if [[ -f "$(dirname "${score_file}")/proj_${PROJECTED_SCORE_DIM}/${PROJECTED_SCORE_VARIANT}/scores.npy" ]]; then
+  if [[ "${task_stage}" == "score" && -f "$(dirname "${score_file}")/proj_${PROJECTED_SCORE_DIM}/${PROJECTED_SCORE_VARIANT}/scores.npy" ]]; then
     materialize_compat_scores "${score_file}" >"${log}" 2>&1
     return 0
   fi
@@ -193,7 +221,7 @@ run_one_task() {
     query_env="unconditional"
   fi
   local sample_run_root algorithm_dir train_score_index_ranges_for_task
-  sample_run_root="$(ensure_sample "${sample_mode}" "${query_env}" "${seed}")"
+  sample_run_root="$(sample_root_for_task "${sample_mode}" "${query_env}" "${seed}")"
   algorithm_dir="$(algorithm_dir_for_task "${unprompted_flag}" "${range}")"
   if [[ "${TRAIN_SCORE_INDEX_RANGES_MODE}" == "full" ]]; then
     train_score_index_ranges_for_task="${TRAIN_SCORE_INDEX_RANGES}"
@@ -207,13 +235,20 @@ run_one_task() {
     query_component="query_$(path_tag "${query_env}")"
   fi
   query_artifact="${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/${PROJECTED_ARTIFACT_DIR_NAME_VALUE}/${score_mode}/train_seed_${TRAIN_SEED}/${query_component}/initial_seed_${seed}/shared_query/proj_${PROJECTED_CACHE_DIM}/query_gradient_artifact.npz"
-  if [[ ! -f "${query_artifact}" ]]; then
+  if [[ "${task_stage}" == "score" && ! -f "${query_artifact}" ]]; then
     echo "Missing precomputed query gradient artifact: ${query_artifact}" >"${log}"
     echo "Run 10.5 query-cache before 11, or set RUN_QUERY_STAGE=1 manually." >>"${log}"
     return 1
   fi
 
-  echo "[worker ${slot}] task=${i} range=${range} sample_mode=${sample_mode} score_mode=${score_mode} query=${query} seed=${seed} gpu=${gpu} -> ${log}"
+  local run_train_stage=0
+  local run_score_sweep=1
+  if [[ "${task_stage}" == "train" ]]; then
+    run_train_stage=1
+    run_score_sweep=0
+  fi
+
+  echo "[worker ${slot}] stage=${task_stage} task=${i} range=${range} sample_mode=${sample_mode} score_mode=${score_mode} query=${query} seed=${seed} gpu=${gpu} -> ${log}"
   run_gpu_slot "${slot}" env \
     CUDA_VISIBLE_DEVICES="${gpu}" \
     GPU_IDS="${gpu}" \
@@ -235,9 +270,9 @@ run_one_task() {
     PROJECTED_DIMS="${PROJECTED_DIMS}" \
     PROJECTED_ARTIFACT_DIR_NAME="${PROJECTED_ARTIFACT_DIR_NAME_VALUE}" \
     INCLUDE_RAW=1 \
-    RUN_TRAIN_STAGE=1 \
+    RUN_TRAIN_STAGE="${run_train_stage}" \
     RUN_QUERY_STAGE=0 \
-    RUN_SCORE_SWEEP=1 \
+    RUN_SCORE_SWEEP="${run_score_sweep}" \
     PROJECTED_TRAIN_PARALLEL_AXIS=score_index \
     SCORE_ALGORITHM_DIR="${algorithm_dir}" \
     ATTRIBUTION_SAMPLE_DIR="${sample_run_root}" \
@@ -258,15 +293,54 @@ run_one_task() {
     UNPROMPTED="${unprompted_flag}" \
     bash "${PROJECTED_SCRIPT}" \
     >"${log}" 2>&1
-  materialize_compat_scores "${score_file}" >>"${log}" 2>&1
+  if [[ "${task_stage}" == "score" ]]; then
+    materialize_compat_scores "${score_file}" >>"${log}" 2>&1
+  fi
 }
 
 mapfile -t TASKS < <(task_lines)
+mapfile -t TRAIN_TASKS < <(train_task_lines)
 total_tasks="${#TASKS[@]}"
+total_train_tasks="${#TRAIN_TASKS[@]}"
+
+train_artifact_for_task_line() {
+  local task_line="$1"
+  local _sample_mode score_mode _query _seed _unprompted_flag range tag
+  IFS='|' read -r _sample_mode score_mode _query _seed _unprompted_flag range <<<"${task_line}"
+  tag="$(range_tag "${range}")"
+  printf '%s/result/%s/%s/%s/train_seed_%s/shared_train/%s/proj_%s/train_datapoint_gradient_artifact.npz' \
+    "${CIFAR2_ROOT}" "${EXPERIMENT_TAG}" "${PROJECTED_ARTIFACT_DIR_NAME_VALUE}" \
+    "${score_mode}" "${TRAIN_SEED}" "${tag}" "${PROJECTED_CACHE_DIM}"
+}
+
+wait_for_train_artifacts() {
+  local missing waited artifact
+  waited=0
+  while true; do
+    missing=0
+    for task_line in "${TRAIN_TASKS[@]}"; do
+      artifact="$(train_artifact_for_task_line "${task_line}")"
+      if [[ ! -f "${artifact}" ]]; then
+        missing=$((missing + 1))
+      fi
+    done
+    if (( missing == 0 )); then
+      echo "[train-stage] all shared train artifacts are ready"
+      return 0
+    fi
+    if (( waited >= ${PROJECTED_11_TRAIN_WAIT_SECONDS:-86400} )); then
+      echo "Timed out waiting for ${missing} shared train artifacts." >&2
+      return 1
+    fi
+    echo "[train-stage] waiting for ${missing}/${total_train_tasks} shared train artifacts"
+    sleep 30
+    waited=$((waited + 30))
+  done
+}
 
 echo "Stampede3 projected Traj-TracIn raw-parameter next-checkpoint attribution"
 echo "experiment=${EXPERIMENT_TAG}; train_seed=${TRAIN_SEED}; objective=${TRAJ_QUERY_OBJECTIVE_VALUE}; parameter_source=${TRAJ_PARAMETER_SOURCE_VALUE}"
-echo "total_tasks=${total_tasks}; slots=${ATTR_NUM_SLOTS}; gpu_per_node=${GPU_PER_NODE}; ranges=${TRAJ_RANGES_TEXT}; logs=${LOG_ROOT}"
+echo "total_tasks=${total_tasks}; total_train_tasks=${total_train_tasks}; stage=${PROJECTED_11_STAGE}; slots=${ATTR_NUM_SLOTS}; gpu_per_node=${GPU_PER_NODE}; ranges=${TRAJ_RANGES_TEXT}; logs=${LOG_ROOT}"
 echo "projected_cache_dim=${PROJECTED_CACHE_DIM}; projected_dims=${PROJECTED_DIMS}; compat_variant=proj_${PROJECTED_SCORE_DIM}/${PROJECTED_SCORE_VARIANT}"
 echo "projected_artifact_dir_name=${PROJECTED_ARTIFACT_DIR_NAME_VALUE}"
 echo "train_score_index_ranges_mode=${TRAIN_SCORE_INDEX_RANGES_MODE}; full_train_range=${TRAIN_SCORE_INDEX_RANGES}"
@@ -280,9 +354,17 @@ if [[ "${STAMPEDE3_DAS_SRUN_WORKER:-0}" == "1" ]]; then
   worker_log="${LOG_ROOT}/worker_${worker_index}.log"
   echo "Launch srun worker index=${worker_index}/${worker_count} local_rank=${local_rank} gpu=${gpu} -> ${worker_log}"
   {
-    for ((i = worker_index; i < total_tasks; i += worker_count)); do
-      run_one_task "${i}" "${worker_index}" "${gpu}"
-    done
+    if [[ "${PROJECTED_11_STAGE}" == "all" || "${PROJECTED_11_STAGE}" == "train" ]]; then
+      for ((i = worker_index; i < total_train_tasks; i += worker_count)); do
+        run_one_task "${i}" "${worker_index}" "${gpu}" train
+      done
+    fi
+    if [[ "${PROJECTED_11_STAGE}" == "all" || "${PROJECTED_11_STAGE}" == "score" ]]; then
+      wait_for_train_artifacts
+      for ((i = worker_index; i < total_tasks; i += worker_count)); do
+        run_one_task "${i}" "${worker_index}" "${gpu}" score
+      done
+    fi
   } >"${worker_log}" 2>&1
   exit 0
 fi
@@ -293,9 +375,17 @@ for ((slot = 0; slot < ATTR_NUM_SLOTS; slot++)); do
   worker_log="${LOG_ROOT}/worker_${slot}.log"
   echo "Launch worker slot=${slot} gpu=${gpu} -> ${worker_log}"
   (
-    for ((i = slot; i < total_tasks; i += ATTR_NUM_SLOTS)); do
-      run_one_task "${i}" "${slot}" "${gpu}"
-    done
+    if [[ "${PROJECTED_11_STAGE}" == "all" || "${PROJECTED_11_STAGE}" == "train" ]]; then
+      for ((i = slot; i < total_train_tasks; i += ATTR_NUM_SLOTS)); do
+        run_one_task "${i}" "${slot}" "${gpu}" train
+      done
+    fi
+    if [[ "${PROJECTED_11_STAGE}" == "all" || "${PROJECTED_11_STAGE}" == "score" ]]; then
+      wait_for_train_artifacts
+      for ((i = slot; i < total_tasks; i += ATTR_NUM_SLOTS)); do
+        run_one_task "${i}" "${slot}" "${gpu}" score
+      done
+    fi
   ) >"${worker_log}" 2>&1 &
   pids+=("$!")
 done

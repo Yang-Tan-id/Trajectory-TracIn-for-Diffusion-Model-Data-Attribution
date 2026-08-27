@@ -126,6 +126,9 @@ def term_weights(
     query_payload: dict[str, np.ndarray],
     num_terms: int,
 ) -> np.ndarray:
+    if bool(np.asarray(train_payload.get("_aligned_query_terms_are_weighted", False)).item()):
+        return np.ones((num_terms,), dtype=np.float64)
+
     weights = np.asarray(
         query_payload.get("term_weights", np.full((num_terms,), 1.0 / float(num_terms))),
         dtype=np.float64,
@@ -133,14 +136,48 @@ def term_weights(
     if len(weights) != num_terms:
         raise ValueError(f"query term_weights length {len(weights)} does not match terms {num_terms}")
     if "term_weights" in train_payload:
-        if bool(np.asarray(train_payload.get("_aligned_query_terms_are_weighted", False)).item()):
-            return np.ones((num_terms,), dtype=np.float64)
         train_weights = np.asarray(train_payload["term_weights"], dtype=np.float64).reshape(-1)
         if len(train_weights) != num_terms:
             raise ValueError(f"train term_weights length {len(train_weights)} does not match terms {num_terms}")
         if not np.allclose(train_weights, weights, rtol=1e-5, atol=1e-12):
             raise ValueError("train/query term_weights differ")
     return weights
+
+
+def checkpoint_uniform_term_weights(
+    payload: dict[str, np.ndarray],
+    num_terms: int,
+) -> np.ndarray:
+    ckpt_indices = np.asarray(payload.get("ckpt_indices", []), dtype=np.int64).reshape(-1)
+    if len(ckpt_indices) != num_terms:
+        return np.full((num_terms,), 1.0 / float(max(1, num_terms)), dtype=np.float64)
+
+    weights = np.zeros((num_terms,), dtype=np.float64)
+    unique_ckpts = np.unique(ckpt_indices)
+    if len(unique_ckpts) == 0:
+        return np.full((num_terms,), 1.0 / float(max(1, num_terms)), dtype=np.float64)
+    per_ckpt = 1.0 / float(len(unique_ckpts))
+    for ckpt in unique_ckpts:
+        mask = ckpt_indices == ckpt
+        weights[mask] = per_ckpt / float(np.count_nonzero(mask))
+    return weights
+
+
+def resolve_term_weights(
+    train_payload: dict[str, np.ndarray],
+    query_payload: dict[str, np.ndarray],
+    num_terms: int,
+    mode: str,
+) -> np.ndarray:
+    if mode == "artifact":
+        return term_weights(train_payload, query_payload, num_terms)
+    if mode in ("uniform", "uniform_checkpoint"):
+        return checkpoint_uniform_term_weights(train_payload, num_terms)
+    if mode == "uniform_term":
+        return np.full((num_terms,), 1.0 / float(max(1, num_terms)), dtype=np.float64)
+    raise ValueError(
+        f"unknown term weighting {mode!r}; expected artifact, uniform_checkpoint, or uniform_term"
+    )
 
 
 def l2_normalize_rows(x: np.ndarray, eps: float) -> np.ndarray:
@@ -238,6 +275,7 @@ def score_projection_dims(
     include_raw: bool,
     score_index_ranges: tuple[tuple[int, int], ...] | None,
     score_index_base: int,
+    term_weighting: str,
 ) -> list[Path]:
     train_payload = load_npz(train_path)
     query_payload = load_npz(query_path)
@@ -253,7 +291,7 @@ def score_projection_dims(
     if too_large:
         raise ValueError(f"requested projection dims {too_large} exceed cached feature dim {max_dim}")
 
-    weights = term_weights(train_payload, query_payload, train_all.shape[0])
+    weights = resolve_term_weights(train_payload, query_payload, train_all.shape[0], term_weighting)
     indices_all = score_indices(train_payload, train_all.shape[1])
     keep = range_mask(indices_all, score_index_ranges, index_base=int(score_index_base))
     if not np.any(keep):
@@ -273,6 +311,8 @@ def score_projection_dims(
         },
         "score_index_ranges": score_index_ranges,
         "score_index_base": int(score_index_base),
+        "term_weighting": term_weighting,
+        "term_weight_sum": float(np.sum(weights)),
     }
 
     written = []
@@ -324,6 +364,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--normalize-eps", type=float, default=1e-8)
     parser.add_argument("--score-index-ranges", default=None, help="Optional START-END ranges to filter final scores.")
     parser.add_argument("--score-index-base", type=int, default=1, choices=(0, 1))
+    parser.add_argument(
+        "--term-weighting",
+        choices=("artifact", "uniform", "uniform_checkpoint", "uniform_term"),
+        default="artifact",
+        help=(
+            "How to weight checkpoint/snapshot terms. artifact preserves cached "
+            "learning-rate weights; uniform/uniform_checkpoint gives every checkpoint "
+            "equal total weight; uniform_term gives every checkpoint-snapshot term equal weight."
+        ),
+    )
     parser.add_argument("--no-raw", action="store_true", help="Only write normalized variants.")
     return parser.parse_args()
 
@@ -339,6 +389,7 @@ def main() -> None:
         include_raw=not bool(args.no_raw),
         score_index_ranges=parse_score_index_ranges(args.score_index_ranges),
         score_index_base=int(args.score_index_base),
+        term_weighting=str(args.term_weighting),
     )
 
 

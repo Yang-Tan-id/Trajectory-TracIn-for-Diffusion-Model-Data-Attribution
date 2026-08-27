@@ -42,6 +42,31 @@ eval_summary_for_call() {
 }
 
 mapfile -t specs < <(query_specs_inner)
+target_groups=()
+has_endpoint=0
+has_traj=0
+for target in ${TARGETS_TEXT}; do
+  if [[ "${target}" == "endpoint_contarfactual" || "${target}" == "endpoint_counterfactual" ]]; then
+    has_endpoint=1
+  elif [[ "${target}" == "traj_contarfactual" || "${target}" == "traj_counterfactual" ]]; then
+    has_traj=1
+  fi
+done
+counterfactual_group_added=0
+for target in ${TARGETS_TEXT}; do
+  if [[ "${target}" == "endpoint_contarfactual" || "${target}" == "endpoint_counterfactual" || "${target}" == "traj_contarfactual" || "${target}" == "traj_counterfactual" ]]; then
+    if (( has_endpoint == 1 && has_traj == 1 )); then
+      if (( counterfactual_group_added == 0 )); then
+        target_groups+=("endpoint_contarfactual,traj_contarfactual")
+        counterfactual_group_added=1
+      fi
+    else
+      target_groups+=("${target}")
+    fi
+  else
+    target_groups+=("${target}")
+  fi
+done
 eval_call_index=0
 eval_slot_shard_index="${EVAL_SLOT_SHARD_INDEX:-0}"
 eval_slot_shard_count="${EVAL_SLOT_SHARD_COUNT:-1}"
@@ -58,7 +83,7 @@ for ((idx = SLOT_INDEX; idx < ${#specs[@]}; idx += 16)); do
   if [[ "${UNPROMPTED}" == "1" && -n "${UNPROMPTED_EVAL_ALGORITHMS_TEXT:-}" ]]; then
     algorithm_text="${UNPROMPTED_EVAL_ALGORITHMS_TEXT}"
   fi
-  for target in ${TARGETS_TEXT}; do
+  for target_group in "${target_groups[@]}"; do
     for algorithm in ${algorithm_text}; do
       for lds_seed in ${LDS_SEEDS_TEXT}; do
         model_root="${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/lds_model/${SAMPLE_MODEL_MODE}/train_seed_${TRAIN_SEED}"
@@ -76,17 +101,26 @@ for ((idx = SLOT_INDEX; idx < ${#specs[@]}; idx += 16)); do
             continue
           fi
         fi
-        eval_summary="$(eval_summary_for_call "${algorithm}" "${target}" "${model_dir}")"
-        if [[ "${FORCE_LDS_EVAL:-0}" != "1" && -f "${eval_summary}" ]]; then
-          echo "[lds-eval-skip] shard=${eval_slot_shard_index}/${eval_slot_shard_count} call=${eval_call_index} idx=${idx} mode=${SAMPLE_MODEL_MODE} query=${QUERY} initial_seed=${INITIAL_SEED} target=${target} algorithm=${algorithm} lds_seed=${lds_seed} existing=${eval_summary}"
+        all_summaries_exist=1
+        existing_summaries=()
+        IFS="," read -r -a grouped_targets <<<"${target_group}"
+        for target in "${grouped_targets[@]}"; do
+          eval_summary="$(eval_summary_for_call "${algorithm}" "${target}" "${model_dir}")"
+          existing_summaries+=("${eval_summary}")
+          if [[ ! -f "${eval_summary}" ]]; then
+            all_summaries_exist=0
+          fi
+        done
+        if [[ "${FORCE_LDS_EVAL:-0}" != "1" && "${all_summaries_exist}" == "1" ]]; then
+          echo "[lds-eval-skip] shard=${eval_slot_shard_index}/${eval_slot_shard_count} call=${eval_call_index} idx=${idx} mode=${SAMPLE_MODEL_MODE} query=${QUERY} initial_seed=${INITIAL_SEED} target=${target_group} algorithm=${algorithm} lds_seed=${lds_seed} existing=${existing_summaries[*]}"
           eval_call_index=$((eval_call_index + 1))
           continue
         fi
-        echo "[lds-eval] shard=${eval_slot_shard_index}/${eval_slot_shard_count} call=${eval_call_index} idx=${idx} mode=${SAMPLE_MODEL_MODE} query=${QUERY} initial_seed=${INITIAL_SEED} target=${target} algorithm=${algorithm} lds_seed=${lds_seed}"
+        echo "[lds-eval] shard=${eval_slot_shard_index}/${eval_slot_shard_count} call=${eval_call_index} idx=${idx} mode=${SAMPLE_MODEL_MODE} query=${QUERY} initial_seed=${INITIAL_SEED} target=${target_group} algorithm=${algorithm} lds_seed=${lds_seed}"
         if [[ "${UNPROMPTED}" == "1" ]]; then
-          LDS_MODEL_DIRS="${model_dir}" "${PYTHON_BIN}" lds/run_eval.py --unprompted --algorithm "${algorithm}" --lds-model-dirs "${model_dir}" --target-function "${target}"
+          LDS_MODEL_DIRS="${model_dir}" "${PYTHON_BIN}" lds/run_eval.py --unprompted --algorithm "${algorithm}" --lds-model-dirs "${model_dir}" --target-function "${target_group}"
         else
-          LDS_MODEL_DIRS="${model_dir}" "${PYTHON_BIN}" lds/run_eval.py --algorithm "${algorithm}" --lds-model-dirs "${model_dir}" --target-function "${target}"
+          LDS_MODEL_DIRS="${model_dir}" "${PYTHON_BIN}" lds/run_eval.py --algorithm "${algorithm}" --lds-model-dirs "${model_dir}" --target-function "${target_group}"
         fi
         eval_call_index=$((eval_call_index + 1))
       done

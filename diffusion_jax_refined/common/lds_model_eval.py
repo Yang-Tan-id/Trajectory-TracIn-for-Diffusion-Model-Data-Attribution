@@ -87,8 +87,8 @@ def main() -> None:
     parser.add_argument("--duplicate-policy", choices=["max", "sum", "mean"], default="max")
     parser.add_argument(
         "--target-function",
-        choices=TARGET_FUNCTION_CHOICES,
         default="noise_trajectory",
+        help="Target function, or comma/space-separated target functions to evaluate in one pass.",
     )
     parser.add_argument("--trajectory-reduction", choices=["mean", "sum", "snapshot_mean"], default=None)
     parser.add_argument("--out-dir", default=None)
@@ -113,7 +113,21 @@ def main() -> None:
         write_csv,
         normalize_target_function,
     )
-    args.target_function = normalize_target_function(args.target_function)
+    target_functions = [
+        normalize_target_function(part)
+        for part in args.target_function.replace(",", " ").split()
+        if part.strip()
+    ]
+    if not target_functions:
+        parser.error("--target-function is empty")
+    invalid_targets = [target for target in target_functions if target not in TARGET_FUNCTION_CHOICES]
+    if invalid_targets:
+        parser.error(f"invalid --target-function value(s): {', '.join(invalid_targets)}")
+    evaluator_target_function = (
+        "traj_contarfactual"
+        if "traj_contarfactual" in target_functions
+        else target_functions[0]
+    )
 
     model_dirs = _paths(args.lds_model_dirs)
     if not model_dirs:
@@ -189,7 +203,7 @@ def main() -> None:
         prompt=prompt,
         prefer_device=os.environ.get("LDS_DEVICE", "gpu"),
         data_root=str(Path(require_attr(dataset_cfg, "DATA_ROOT")).resolve()),
-        target_function=args.target_function,
+        target_function=evaluator_target_function,
         sample_root=str(Path(sample_dir).resolve()),
         sample_seed=None if sample_seed is None else int(sample_seed),
         sample_index=sample_index,
@@ -215,23 +229,29 @@ def main() -> None:
                 f"trajectory={evaluator.target_meta.get('trajectory_xt_path')}"
             )
 
-    if args.out_dir:
-        out_dir = Path(args.out_dir).resolve()
-    else:
-        names = _compact_model_group_name(model_dirs)
-        eval_kind = "lds_unprompted" if args.unprompted else "lds"
-        eval_root_attr = "UNPROMPTED_EVAL_RUN_ROOT" if args.unprompted else "EVAL_RUN_ROOT"
-        out_dir = (
+    names = _compact_model_group_name(model_dirs)
+    eval_kind = "lds_unprompted" if args.unprompted else "lds"
+    eval_root_attr = "UNPROMPTED_EVAL_RUN_ROOT" if args.unprompted else "EVAL_RUN_ROOT"
+    if args.out_dir and len(target_functions) > 1:
+        raise ValueError("--out-dir is only supported with a single --target-function")
+
+    def out_dir_for_target(target_function: str) -> Path:
+        if args.out_dir:
+            return Path(args.out_dir).resolve()
+        return (
             Path(require_attr(dataset_cfg, eval_root_attr))
             / eval_kind
             / args.algorithm
-            / args.target_function
+            / target_function
             / _prediction_tag(args.prediction_subset, args.prediction_sign)
             / names
         )
-    out_dir.mkdir(parents=True, exist_ok=True)
 
-    rows = []
+    out_dirs = {target: out_dir_for_target(target) for target in target_functions}
+    for out_dir in out_dirs.values():
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+    rows_by_target = {target: [] for target in target_functions}
     started = time.time()
     for global_id, (model_dir, subset_dir, subset) in enumerate(subset_records):
         kept = np.load(subset_dir / "kept_attribution_indices.npy")
@@ -241,72 +261,83 @@ def main() -> None:
             prediction_indices = np.load(subset_dir / "excluded_attribution_indices.npy")
         prediction = sum_scores(prediction_indices, score_map, args.prediction_sign)
         checkpoint = latest_checkpoint(str(subset_dir))
-        true_f, details = evaluator.evaluate(checkpoint)
-        row = {
-            "subset_id": global_id,
-            "subset_seed": int(subset["subset_seed"]),
-            "subset_size": int(len(kept)),
+        values = evaluator.evaluate_many(checkpoint, target_functions)
+        for target_function in target_functions:
+            true_f, details = values[target_function]
+            row = {
+                "subset_id": global_id,
+                "subset_seed": int(subset["subset_seed"]),
+                "subset_size": int(len(kept)),
+                "prediction_subset": args.prediction_subset,
+                "prediction_sign": args.prediction_sign,
+                "pred_sum_tau": prediction,
+                "true_f": true_f,
+                "checkpoint": checkpoint,
+                "subset_dir": str(subset_dir),
+            }
+            rows = rows_by_target[target_function]
+            rows.append(row)
+            out_dir = out_dirs[target_function]
+            (out_dir / f"target_{global_id:04d}.json").write_text(
+                json.dumps({**row, "target_details": details}, indent=2)
+            )
+            write_csv(str(out_dir / "lds_results.csv"), rows)
+        print(
+            f"[{global_id + 1}/{len(subset_records)}] {model_dir.name}/{subset_dir.name} "
+            f"targets={','.join(target_functions)}",
+            flush=True,
+        )
+
+    for target_function, rows in rows_by_target.items():
+        out_dir = out_dirs[target_function]
+        pred = np.asarray([row["pred_sum_tau"] for row in rows], dtype=np.float64)
+        true = np.asarray([row["true_f"] for row in rows], dtype=np.float64)
+        lds = spearman_corr(pred, true)
+        summary = {
+            "algorithm": args.algorithm,
+            "mode": "unprompted" if args.unprompted else "prompted",
+            "lds_model_dirs": [str(path) for path in model_dirs],
+            "score_sources": sources,
+            "num_models": len(rows),
+            "lds_spearman": lds,
+            "lds_percent": 100.0 * lds if not math.isnan(lds) else float("nan"),
+            "target_function": target_function,
+            "target_functions_evaluated_in_pass": target_functions,
+            "trajectory_reduction": reduction,
             "prediction_subset": args.prediction_subset,
             "prediction_sign": args.prediction_sign,
-            "pred_sum_tau": prediction,
-            "true_f": true_f,
-            "checkpoint": checkpoint,
-            "subset_dir": str(subset_dir),
+            "elapsed_sec": time.time() - started,
         }
-        rows.append(row)
-        (out_dir / f"target_{global_id:04d}.json").write_text(
-            json.dumps({**row, "target_details": details}, indent=2)
-        )
-        write_csv(str(out_dir / "lds_results.csv"), rows)
-        print(f"[{global_id + 1}/{len(subset_records)}] {model_dir.name}/{subset_dir.name}", flush=True)
-
-    pred = np.asarray([row["pred_sum_tau"] for row in rows], dtype=np.float64)
-    true = np.asarray([row["true_f"] for row in rows], dtype=np.float64)
-    lds = spearman_corr(pred, true)
-    summary = {
-        "algorithm": args.algorithm,
-        "mode": "unprompted" if args.unprompted else "prompted",
-        "lds_model_dirs": [str(path) for path in model_dirs],
-        "score_sources": sources,
-        "num_models": len(rows),
-        "lds_spearman": lds,
-        "lds_percent": 100.0 * lds if not math.isnan(lds) else float("nan"),
-        "target_function": args.target_function,
-        "trajectory_reduction": reduction,
-        "prediction_subset": args.prediction_subset,
-        "prediction_sign": args.prediction_sign,
-        "elapsed_sec": time.time() - started,
-    }
-    (out_dir / "lds_summary.json").write_text(json.dumps(summary, indent=2))
-    plot_scatter(str(out_dir / "lds_scatter.png"), pred, true, f"LDS={lds:.4f} ({100.0 * lds:.2f}%)")
-    if np.any(scores < 0):
-        squared_map = build_score_vector(indices, np.square(scores))
-        squared_rows = []
-        for row, (_, subset_dir, _) in zip(rows, subset_records):
-            prediction_indices = np.load(
-                subset_dir
-                / (
-                    "kept_attribution_indices.npy"
-                    if args.prediction_subset == "kept"
-                    else "excluded_attribution_indices.npy"
+        (out_dir / "lds_summary.json").write_text(json.dumps(summary, indent=2))
+        plot_scatter(str(out_dir / "lds_scatter.png"), pred, true, f"LDS={lds:.4f} ({100.0 * lds:.2f}%)")
+        if np.any(scores < 0):
+            squared_map = build_score_vector(indices, np.square(scores))
+            squared_rows = []
+            for row, (_, subset_dir, _) in zip(rows, subset_records):
+                prediction_indices = np.load(
+                    subset_dir
+                    / (
+                        "kept_attribution_indices.npy"
+                        if args.prediction_subset == "kept"
+                        else "excluded_attribution_indices.npy"
+                    )
                 )
+                squared_row = dict(row)
+                squared_row["pred_sum_tau"] = sum_scores(
+                    prediction_indices, squared_map, args.prediction_sign
+                )
+                squared_rows.append(squared_row)
+            squared_pred = np.asarray([row["pred_sum_tau"] for row in squared_rows])
+            squared_lds = spearman_corr(squared_pred, true)
+            write_csv(str(out_dir / "lds_results_squared_scores.csv"), squared_rows)
+            plot_scatter(
+                str(out_dir / "lds_scatter_squared_scores.png"),
+                squared_pred,
+                true,
+                f"Squared-score LDS={squared_lds:.4f} ({100.0 * squared_lds:.2f}%)",
+                xlabel="Predicted sum of squared attribution scores",
             )
-            squared_row = dict(row)
-            squared_row["pred_sum_tau"] = sum_scores(
-                prediction_indices, squared_map, args.prediction_sign
-            )
-            squared_rows.append(squared_row)
-        squared_pred = np.asarray([row["pred_sum_tau"] for row in squared_rows])
-        squared_lds = spearman_corr(squared_pred, true)
-        write_csv(str(out_dir / "lds_results_squared_scores.csv"), squared_rows)
-        plot_scatter(
-            str(out_dir / "lds_scatter_squared_scores.png"),
-            squared_pred,
-            true,
-            f"Squared-score LDS={squared_lds:.4f} ({100.0 * squared_lds:.2f}%)",
-            xlabel="Predicted sum of squared attribution scores",
-        )
-    print(f"Saved LDS evaluation to {out_dir}")
+        print(f"Saved LDS evaluation to {out_dir}")
 
 
 if __name__ == "__main__":

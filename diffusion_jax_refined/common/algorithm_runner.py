@@ -118,6 +118,8 @@ def run_algorithm_config(config_path: str | Path) -> Any:
         range_suffix = _range_suffix_from_env()
         if range_suffix is not None:
             output_algorithm = f"{output_algorithm}_{range_suffix}"
+    if os.environ.get("ATTRIBUTION_OUTPUT_ALGORITHM"):
+        output_algorithm = os.environ["ATTRIBUTION_OUTPUT_ALGORITHM"]
     out_dir = Path(build_output_dir(dataset_name, experiment_tag, output_algorithm, query, initial_seed))
     if algorithm == "das" and os.environ.get("DAS_DAMPING_OUTPUT_TAG"):
         out_dir = out_dir / f"lambda_{_damping_tag(os.environ['DAS_DAMPING_OUTPUT_TAG'])}"

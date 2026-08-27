@@ -947,6 +947,82 @@ class CifarTargetEvaluator:
         }
         return value, details
 
+    def _counterfactual_values_from_trajectory(
+        self,
+        target_xt: np.ndarray,
+        *,
+        include_endpoint: bool,
+        include_traj: bool,
+    ) -> Dict[str, Tuple[float, Dict[str, object]]]:
+        assert self.xt_ref is not None
+        assert self.t_seq is not None
+        ref_xt = np.asarray(jax.device_get(self.xt_ref), dtype=np.float32)
+        if target_xt.shape != ref_xt.shape:
+            raise ValueError(f"Generated trajectory shape {target_xt.shape} does not match reference {ref_xt.shape}")
+        out: Dict[str, Tuple[float, Dict[str, object]]] = {}
+        if include_endpoint:
+            sq = (target_xt[-1:].astype(np.float64) - ref_xt[-1:].astype(np.float64)) ** 2
+            per_snapshot_mean = np.mean(sq, axis=tuple(range(1, sq.ndim)))
+            out["endpoint_contarfactual"] = (
+                float(np.mean(per_snapshot_mean)),
+                {
+                    "target_function": "endpoint_contarfactual",
+                    "canonical_spelling": "endpoint_counterfactual",
+                    "num_trajectory_steps": 1,
+                    "trajectory_reduction": "mean_per_state_mse",
+                    "definition": "Generate target-checkpoint trajectory from the same seed and compare the endpoint to the saved reference endpoint.",
+                    "sample_seed": int(self.sample_seed),
+                    "per_snapshot_mean_min": float(np.min(per_snapshot_mean)),
+                    "per_snapshot_mean_mean": float(np.mean(per_snapshot_mean)),
+                    "per_snapshot_mean_max": float(np.max(per_snapshot_mean)),
+                },
+            )
+        if include_traj:
+            sq = (target_xt.astype(np.float64) - ref_xt.astype(np.float64)) ** 2
+            per_snapshot_mean = np.mean(sq, axis=tuple(range(1, sq.ndim)))
+            out["traj_contarfactual"] = (
+                float(np.mean(per_snapshot_mean)),
+                {
+                    "target_function": "traj_contarfactual",
+                    "canonical_spelling": "traj_counterfactual",
+                    "num_trajectory_steps": int(len(self.t_seq)),
+                    "trajectory_reduction": "mean_per_state_mse",
+                    "definition": "Generate target-checkpoint trajectory from the same seed and average per-state MSE to the saved reference trajectory.",
+                    "sample_seed": int(self.sample_seed),
+                    "per_snapshot_mean_min": float(np.min(per_snapshot_mean)),
+                    "per_snapshot_mean_mean": float(np.mean(per_snapshot_mean)),
+                    "per_snapshot_mean_max": float(np.max(per_snapshot_mean)),
+                },
+            )
+        return out
+
+    def evaluate_many(self, checkpoint: str, target_functions: Sequence[str]) -> Dict[str, Tuple[float, Dict[str, object]]]:
+        targets = [normalize_target_function(target) for target in target_functions]
+        if set(targets).issubset({"endpoint_contarfactual", "traj_contarfactual"}):
+            if self.sample_seed is None:
+                raise ValueError("trajectory counterfactual targets require --attribution-sample-seed/seed metadata.")
+            assert self.t_seq is not None
+            target_adapter = self._make_adapter(checkpoint)
+            target_xt = self._sample_model_space_trajectory(
+                target_adapter,
+                seed=int(self.sample_seed),
+                timesteps_to_save=self.t_seq,
+            )
+            return self._counterfactual_values_from_trajectory(
+                target_xt,
+                include_endpoint="endpoint_contarfactual" in targets,
+                include_traj="traj_contarfactual" in targets,
+            )
+        values: Dict[str, Tuple[float, Dict[str, object]]] = {}
+        original_target = self.target_function
+        try:
+            for target in targets:
+                self.target_function = target
+                values[target] = self.evaluate(checkpoint)
+        finally:
+            self.target_function = original_target
+        return values
+
     def evaluate(self, checkpoint: str) -> Tuple[float, Dict[str, object]]:
         target_adapter = self._make_adapter(checkpoint)
         # Store the target adapter for the jitted closures. The module/model structure is

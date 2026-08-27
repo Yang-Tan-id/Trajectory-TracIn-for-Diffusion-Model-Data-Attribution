@@ -1506,6 +1506,42 @@ def make_score_snapshot_chunk_batch_fn(
     return jax.jit(score_chunk)
 
 
+def make_score_t_sequence_batch_fn(
+    adapter,
+    model,
+    schedule,
+    *,
+    train_mc_samples: int,
+    return_query_normalized: bool = False,
+    query_normalize_eps: float = 1e-8,
+):
+    def score_sequence(params, query_grad, x0_batch, cond_batch, rng, t_values):
+        def losses_fn(p):
+            return train_losses_at_t_sequence_mc_vectorized(
+                adapter=adapter,
+                model=model,
+                params=p,
+                schedule=schedule,
+                x0_batch=x0_batch,
+                cond_batch=cond_batch,
+                t_values=t_values,
+                num_mc_samples=train_mc_samples,
+                rng=rng,
+            )
+
+        if return_query_normalized:
+            _losses, pushfwd = jax.linearize(losses_fn, params)
+            raw_scores = pushfwd(query_grad)
+            normalized_query_grad = tree_l2_normalize(query_grad, query_normalize_eps)
+            normalized_scores = pushfwd(normalized_query_grad)
+            return raw_scores, normalized_scores
+
+        _, directional_scores = jax.jvp(losses_fn, (params,), (query_grad,))
+        return directional_scores
+
+    return jax.jit(score_sequence)
+
+
 def run_attribution(cfg: TrajAttributionConfig):
     stage_mode = os.environ.get("TRAJ_TRACIN_STAGE_MODE", "").strip().lower()
     stage_artifact_path = os.environ.get("TRAJ_TRACIN_STAGE_ARTIFACT_PATH")
@@ -2214,9 +2250,44 @@ def run_attribution(cfg: TrajAttributionConfig):
                 train_term_weights = []
 
                 if aggregate_train_timestamps:
-                    t_values = array_to_device(jnp.asarray([int(t) for t in t_seq], dtype=jnp.int32), device)
+                    aggregate_timestamp_count = max(
+                        1,
+                        int(os.environ.get("TRAJ_TRACIN_TRAIN_AGGREGATE_NUM_TIMESTEPS", "10")),
+                    )
+                    if aggregate_timestamp_count < len(t_seq):
+                        aggregate_positions = np.linspace(
+                            0,
+                            len(t_seq) - 1,
+                            aggregate_timestamp_count,
+                            dtype=np.int32,
+                        )
+                        train_t_seq = np.asarray(
+                            [int(t_seq[int(pos)]) for pos in aggregate_positions],
+                            dtype=np.int32,
+                        )
+                    else:
+                        train_t_seq = np.asarray([int(t) for t in t_seq], dtype=np.int32)
+                    timestamp_chunk_size = max(
+                        1,
+                        int(
+                            os.environ.get(
+                                "TRAJ_TRACIN_TRAIN_TIMESTAMP_CHUNK_SIZE",
+                                str(len(train_t_seq)),
+                            )
+                        ),
+                    )
+                    t_chunks = [
+                        array_to_device(
+                            jnp.asarray(
+                                [int(t) for t in train_t_seq[start : start + timestamp_chunk_size]],
+                                dtype=jnp.int32,
+                            ),
+                            device,
+                        )
+                        for start in range(0, len(train_t_seq), timestamp_chunk_size)
+                    ]
 
-                    def train_phi_one_aggregate(p, x0_one, cond_one, rng_one):
+                    def train_phi_one_aggregate_chunk(p, x0_one, cond_one, rng_one, t_values_chunk):
                         x0_one = x0_one[None, ...]
                         if cond_one.ndim == 0:
                             cond_one = cond_one[None]
@@ -2231,7 +2302,7 @@ def run_attribution(cfg: TrajAttributionConfig):
                                 schedule=schedule,
                                 x0_batch=x0_one,
                                 cond_batch=cond_one,
-                                t_values=t_values,
+                                t_values=t_values_chunk,
                                 num_mc_samples=cfg.train_mc_samples,
                                 rng=rng_one,
                             )[0]
@@ -2239,29 +2310,59 @@ def run_attribution(cfg: TrajAttributionConfig):
                         _loss, grads = jax.value_and_grad(loss_fn)(p)
                         return projector(grads)
 
-                    train_phi_batch_aggregate = jax.jit(
-                        jax.vmap(train_phi_one_aggregate, in_axes=(None, 0, 0, 0))
+                    train_phi_batch_aggregate_chunk = jax.jit(
+                        jax.vmap(train_phi_one_aggregate_chunk, in_axes=(None, 0, 0, 0, None))
                     )
                     bs_stage = max(1, int(cfg.score_batch_size))
+                    total_batches = (len(picked) + bs_stage - 1) // bs_stage
+                    progress_every = max(
+                        1,
+                        int(os.environ.get("TRAJ_TRACIN_TRAIN_BATCH_LOG_EVERY", "10")),
+                    )
                     term_features = np.empty((len(picked), proj_dim), dtype=np.float32)
-                    for start in range(0, len(picked), bs_stage):
+                    for batch_id, start in enumerate(range(0, len(picked), bs_stage), start=1):
                         end = min(len(picked), start + bs_stage)
                         real_indices = picked[start:end]
                         padded_indices = pad_indices_to_batch(real_indices, bs_stage)
                         x_batch, cond_batch = make_train_batch(adapter, ds, padded_indices, device)
-                        rngs = array_to_device(
-                            jnp.stack(
-                                [
-                                    jax.random.PRNGKey(cfg.seed + 700_000 * (ckpt_i + 1) + start + j)
-                                    for j in range(bs_stage)
-                                ],
-                                axis=0,
-                            ),
-                            device,
-                        )
-                        phi_batch = train_phi_batch_aggregate(params, x_batch, cond_batch, rngs)
-                        phi_batch.block_until_ready()
-                        term_features[start:end] = np.asarray(phi_batch[: end - start], dtype=np.float32)
+                        phi_accum = np.zeros((bs_stage, proj_dim), dtype=np.float64)
+                        for chunk_id, t_values_chunk in enumerate(t_chunks):
+                            chunk_len = int(t_values_chunk.shape[0])
+                            rngs = array_to_device(
+                                jnp.stack(
+                                    [
+                                        jax.random.PRNGKey(
+                                            cfg.seed
+                                            + 700_000 * (ckpt_i + 1)
+                                            + 10_000 * chunk_id
+                                            + start
+                                            + j
+                                        )
+                                        for j in range(bs_stage)
+                                    ],
+                                    axis=0,
+                                ),
+                                device,
+                            )
+                            phi_chunk = train_phi_batch_aggregate_chunk(
+                                params, x_batch, cond_batch, rngs, t_values_chunk
+                            )
+                            phi_chunk.block_until_ready()
+                            phi_accum += (
+                                np.asarray(phi_chunk, dtype=np.float64)
+                                * (float(chunk_len) / float(max(1, len(train_t_seq))))
+                            )
+                        term_features[start:end] = phi_accum[: end - start].astype(np.float32)
+                        if batch_id == 1 or batch_id == total_batches or batch_id % progress_every == 0:
+                            print(
+                                f"[stage:train] checkpoint-level MC batch {batch_id}/{total_batches} | "
+                                f"ckpt={ckpt_i + 1}/{len(ckpts)} | datapoints={end}/{len(picked)} | "
+                                f"aggregate_timestamps={len(train_t_seq)} | "
+                                f"timestamp_chunk_size={timestamp_chunk_size} | "
+                                f"elapsed={format_seconds(time.time() - stage_ckpt_start)} | "
+                                f"total_elapsed={format_seconds(time.time() - stage_start_time)}",
+                                flush=True,
+                            )
                     train_phi_terms.append(term_features)
                     train_ckpt_indices.append(int(ckpt_i))
                     train_timesteps.append(-1)
@@ -2272,7 +2373,8 @@ def run_attribution(cfg: TrajAttributionConfig):
                     print(
                         f"[stage:train] checkpoint-level MC loss ckpt={ckpt_i + 1}/{len(ckpts)} | "
                         f"terms={stage_terms_done}/{len(ckpts) - 1 if uses_next_checkpoint_target else len(ckpts)} | "
-                        f"timestamps={len(t_seq)} | mc_per_timestamp={cfg.train_mc_samples} | "
+                        f"aggregate_timestamps={len(train_t_seq)} | "
+                        f"mc_per_timestamp={cfg.train_mc_samples} | "
                         f"elapsed={format_seconds(time.time() - stage_start_time)}",
                         flush=True,
                     )
@@ -2295,7 +2397,9 @@ def run_attribution(cfg: TrajAttributionConfig):
                             ckpt_paths=np.asarray(train_ckpt_paths),
                             proj_dim=np.asarray(proj_dim, dtype=np.int32),
                             train_timestamp_aggregation=np.asarray("checkpoint_mc_loss"),
-                            train_timestamp_count=np.asarray(len(t_seq), dtype=np.int32),
+                            train_timestamp_count=np.asarray(len(train_t_seq), dtype=np.int32),
+                            train_timesteps_used=np.asarray(train_t_seq, dtype=np.int32),
+                            train_timestamp_chunk_size=np.asarray(timestamp_chunk_size, dtype=np.int32),
                         )
                         print(
                             f"[stage:train] saved checkpoint-level MC part "
@@ -2555,6 +2659,19 @@ def run_attribution(cfg: TrajAttributionConfig):
             "[setup] saving full-dim per-term score contributions for variants="
             f"{tuple(key.replace('scores_by_term_', '') for key in full_term_score_keys)}"
         )
+    full_aggregate_train_timestamps = os.environ.get(
+        "TRAJ_TRACIN_FULL_AGGREGATE_TRAIN_TIMESTAMPS", "0"
+    ) in ("1", "true", "True", "yes")
+    full_aggregate_timestamp_count = max(
+        1,
+        int(os.environ.get("TRAJ_TRACIN_FULL_AGGREGATE_NUM_TIMESTEPS", "10")),
+    )
+    if full_aggregate_train_timestamps and full_term_scores_by_key:
+        raise ValueError(
+            "TRAJ_TRACIN_FULL_AGGREGATE_TRAIN_TIMESTAMPS=1 is incompatible with "
+            "TRAJ_TRACIN_FULL_SAVE_TERM_SCORE_VARIANTS, because the train gradient is "
+            "collapsed across timesteps."
+        )
 
     snapshot_positions_used = None
     timestep_values_used = None
@@ -2664,6 +2781,21 @@ def run_attribution(cfg: TrajAttributionConfig):
         print(f"[checkpoint {ckpt_i + 1}/{len(ckpts)}] preparing jitted query-gradient chunk function...")
         query_grad_chunk_fn = make_query_grad_chunk_fn(adapter, model, cfg.query_objective)
         query_target_params = query_target_params_for_checkpoint(ckpt_i)
+        if full_aggregate_train_timestamps:
+            print(
+                f"[checkpoint {ckpt_i + 1}/{len(ckpts)}] preparing jitted aggregate train-loss scorer "
+                f"| aggregate_timesteps={full_aggregate_timestamp_count} | mc_per_timestep={cfg.train_mc_samples}"
+            )
+            score_t_sequence_batch_fn = make_score_t_sequence_batch_fn(
+                adapter=adapter,
+                model=model,
+                schedule=schedule,
+                train_mc_samples=cfg.train_mc_samples,
+                return_query_normalized=bool(cfg.save_query_normalized_scores),
+                query_normalize_eps=float(cfg.query_normalize_eps),
+            )
+        else:
+            score_t_sequence_batch_fn = None
         print(f"[checkpoint {ckpt_i + 1}/{len(ckpts)}] preparing jitted snapshot chunk scorer...")
         score_snapshot_chunk_fn = make_score_snapshot_chunk_batch_fn(
             adapter=adapter,
@@ -2690,6 +2822,142 @@ def run_attribution(cfg: TrajAttributionConfig):
         snap_weight = ckpt_lr_weight / float(max(1, len(t_seq)))
         report_every_batches = max(1, int(math.ceil(cfg.progress_every / batch_size)))
         snapshot_chunk_size = max(1, int(cfg.snapshot_chunk_size))
+
+        if full_aggregate_train_timestamps:
+            print(
+                f"[checkpoint {ckpt_i + 1}/{len(ckpts)}] aggregating query gradients over "
+                f"{len(t_seq)} trajectory snapshots..."
+            )
+            query_grad_total = None
+            for chunk_start in range(0, len(t_seq), snapshot_chunk_size):
+                chunk_end = min(chunk_start + snapshot_chunk_size, len(t_seq))
+                chunk_ids = list(range(chunk_start, chunk_end))
+                xt_chunk = array_to_device(jnp.stack([xt_refs[i] for i in chunk_ids], axis=0), device)
+                t_chunk = array_to_device(
+                    jnp.asarray([int(t_seq[i]) for i in chunk_ids], dtype=jnp.int32),
+                    device,
+                )
+                query_grads = query_grad_chunk_fn(
+                    params,
+                    query_target_params,
+                    reference_params,
+                    xt_chunk,
+                    t_chunk,
+                    query_cond,
+                )
+                query_grads = tree_to_device(query_grads, device)
+                chunk_sum = jax.tree_util.tree_map(lambda x: jnp.sum(x, axis=0), query_grads)
+                query_grad_total = chunk_sum if query_grad_total is None else tree_add(query_grad_total, chunk_sum)
+                print(
+                    f"[checkpoint {ckpt_i + 1}/{len(ckpts)}] query-gradient aggregate "
+                    f"snapshots={chunk_end}/{len(t_seq)}",
+                    flush=True,
+                )
+            if query_grad_total is None:
+                raise RuntimeError("No query gradients were produced for aggregate full-dim scoring.")
+            query_grad_total = tree_scalar_mul(query_grad_total, 1.0 / float(max(1, len(t_seq))))
+            query_grad_total = tree_to_device(query_grad_total, device)
+
+            if full_aggregate_timestamp_count < len(t_seq):
+                aggregate_positions = np.linspace(
+                    0,
+                    len(t_seq) - 1,
+                    full_aggregate_timestamp_count,
+                    dtype=np.int32,
+                )
+                train_t_seq = np.asarray(
+                    [int(t_seq[int(pos)]) for pos in aggregate_positions],
+                    dtype=np.int32,
+                )
+            else:
+                train_t_seq = np.asarray([int(t) for t in t_seq], dtype=np.int32)
+            train_t_values = array_to_device(jnp.asarray(train_t_seq, dtype=jnp.int32), device)
+            print(
+                f"[checkpoint {ckpt_i + 1}/{len(ckpts)}] train loss gradient uses "
+                f"{len(train_t_seq)} timesteps: {train_t_seq[:min(10, len(train_t_seq))].tolist()}",
+                flush=True,
+            )
+
+            score_iter = iter_with_tqdm(
+                range(len(batch_starts)),
+                total=len(batch_starts),
+                desc=f"Checkpoint {ckpt_i + 1}/{len(ckpts)} aggregate",
+                enabled=cfg.use_tqdm,
+            )
+            for batch_no, start in enumerate(batch_starts, start=1):
+                end = min(start + batch_size, len(picked))
+                real_indices = picked[start:end]
+                padded_indices = pad_indices_to_batch(real_indices, batch_size)
+                x_batch, cond_batch = make_train_batch(adapter, ds, padded_indices, device)
+                if batch_no == 1:
+                    print(
+                        "[device-check] "
+                        f"x_batch={array_device_str(x_batch)} | "
+                        f"cond_batch={array_device_str(cond_batch)}"
+                    )
+                rng = array_to_device(
+                    jax.random.PRNGKey(cfg.seed + 100000 * ckpt_i + 9000 * batch_no),
+                    device,
+                )
+                assert score_t_sequence_batch_fn is not None
+                aggregate_scores_out = score_t_sequence_batch_fn(
+                    params,
+                    query_grad_total,
+                    x_batch,
+                    cond_batch,
+                    rng,
+                    train_t_values,
+                )
+                if cfg.save_query_normalized_scores:
+                    raw_scores, normalized_scores = aggregate_scores_out
+                    raw_scores.block_until_ready()
+                    normalized_scores.block_until_ready()
+                    batch_scores = np.asarray(jax.device_get(raw_scores))[: len(real_indices)]
+                    batch_query_normalized_scores = np.asarray(jax.device_get(normalized_scores))[: len(real_indices)]
+                else:
+                    aggregate_scores_out.block_until_ready()
+                    batch_scores = np.asarray(jax.device_get(aggregate_scores_out))[: len(real_indices)]
+                    batch_query_normalized_scores = None
+                batch_contrib = ckpt_lr_weight * batch_scores.astype(np.float64)
+                scores[start:end] += batch_contrib
+                if query_normalized_scores is not None and batch_query_normalized_scores is not None:
+                    query_normalized_scores[start:end] += ckpt_lr_weight * batch_query_normalized_scores.astype(np.float64)
+
+                running_sum += float(scores[start:end].sum())
+                batch_min = float(scores[start:end].min()) if len(real_indices) else 0.0
+                batch_max = float(scores[start:end].max()) if len(real_indices) else 0.0
+                running_min = batch_min if running_min is None else min(running_min, batch_min)
+                running_max = batch_max if running_max is None else max(running_max, batch_max)
+                processed_points_all_ckpts += len(real_indices)
+
+                if hasattr(score_iter, "update"):
+                    score_iter.update(1)
+                    score_iter.set_postfix(
+                        samples=f"{end}/{len(picked)}",
+                        timesteps=f"{len(train_t_seq)}",
+                        mc=f"{cfg.train_mc_samples}",
+                    )
+                if (not cfg.use_tqdm) and (
+                    batch_no == 1 or end == len(picked) or batch_no % report_every_batches == 0
+                ):
+                    elapsed_ckpt = time.time() - score_loop_start
+                    avg_unit = elapsed_ckpt / max(1, batch_no)
+                    remain_ckpt = avg_unit * (len(batch_starts) - batch_no)
+                    print(
+                        f"[checkpoint {ckpt_i + 1}/{len(ckpts)}] aggregate train loss | "
+                        f"samples {end}/{len(picked)} | "
+                        f"last_idx={real_indices[-1]} | "
+                        f"ckpt_elapsed={format_seconds(elapsed_ckpt)} | "
+                        f"ckpt_eta={format_seconds(remain_ckpt)}"
+                    )
+            if hasattr(score_iter, "close"):
+                score_iter.close()
+            print(
+                f"[checkpoint {ckpt_i + 1}/{len(ckpts)}] aggregate train-loss score complete | "
+                f"train_timesteps={len(train_t_seq)} | mc_per_timestep={cfg.train_mc_samples}",
+                flush=True,
+            )
+            continue
 
         for chunk_start in range(0, len(t_seq), snapshot_chunk_size):
             chunk_end = min(chunk_start + snapshot_chunk_size, len(t_seq))

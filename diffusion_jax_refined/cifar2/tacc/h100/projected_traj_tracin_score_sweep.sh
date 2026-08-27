@@ -25,6 +25,7 @@ RUN_QUERY_STAGE="${RUN_QUERY_STAGE:-1}"
 RUN_SCORE_SWEEP="${RUN_SCORE_SWEEP:-1}"
 INCLUDE_RAW="${INCLUDE_RAW:-1}"
 SKIP_EXISTING_SCORES="${SKIP_EXISTING_SCORES:-1}"
+TRAJ_TRACIN_TERM_WEIGHTING="${TRAJ_TRACIN_TERM_WEIGHTING:-artifact}"
 PROJECTED_TRAIN_PARALLEL_AXIS="${PROJECTED_TRAIN_PARALLEL_AXIS:-score_index}"
 SHARE_TRAIN_ARTIFACT="${SHARE_TRAIN_ARTIFACT:-1}"
 SHARE_QUERY_ARTIFACT="${SHARE_QUERY_ARTIFACT:-1}"
@@ -204,10 +205,15 @@ RTAG="$(range_tag "${SCORE_INDEX_RANGES}")"
 TRAIN_RTAG="$(range_tag "${TRAIN_SCORE_INDEX_RANGES}")"
 TRAIN_COMPUTE_RANGE="$(selected_train_range)"
 TRAIN_COMPUTE_RTAG="$(range_tag "${TRAIN_COMPUTE_RANGE}")"
-if [[ "${SCORE_INDEX_RANGES}" == "${TRAIN_SCORE_INDEX_RANGES}" ]]; then
-  SCORE_ALGORITHM_DIR="${SCORE_ALGORITHM_DIR:-traj_tracin_projected}"
+if [[ "${TRAJ_TRACIN_TERM_WEIGHTING}" == "artifact" ]]; then
+  DEFAULT_SCORE_ALGORITHM_DIR="traj_tracin_projected"
 else
-  SCORE_ALGORITHM_DIR="${SCORE_ALGORITHM_DIR:-traj_tracin_projected_range_${RTAG}}"
+  DEFAULT_SCORE_ALGORITHM_DIR="traj_tracin_projected_${TRAJ_TRACIN_TERM_WEIGHTING}"
+fi
+if [[ "${SCORE_INDEX_RANGES}" == "${TRAIN_SCORE_INDEX_RANGES}" ]]; then
+  SCORE_ALGORITHM_DIR="${SCORE_ALGORITHM_DIR:-${DEFAULT_SCORE_ALGORITHM_DIR}}"
+else
+  SCORE_ALGORITHM_DIR="${SCORE_ALGORITHM_DIR:-${DEFAULT_SCORE_ALGORITHM_DIR}_range_${RTAG}}"
 fi
 
 PROJECTED_ARTIFACT_DIR_NAME="${PROJECTED_ARTIFACT_DIR_NAME:-projected_traj_tracin_artifacts}"
@@ -236,6 +242,7 @@ mkdir -p "${TRAIN_ARTIFACT_ROOT}" "$(dirname "${TRAIN_SHARD_ARTIFACT}")" "${QUER
 echo "Projected Traj-TracIn score sweep"
 echo "experiment=${EXPERIMENT_TAG}; train_seed=${TRAIN_SEED}; score_mode=${ATTRIBUTION_SCORE_MODEL_MODE}; query=${QUERY}; initial_seed=${INITIAL_SEED}"
 echo "range=${SCORE_INDEX_RANGES}; cache_dim=${PROJECTED_CACHE_DIM}; dims=${PROJECTED_DIMS}; normalize_eps=${NORMALIZE_EPS}"
+echo "term_weighting=${TRAJ_TRACIN_TERM_WEIGHTING}; score_algorithm_dir=${SCORE_ALGORITHM_DIR}"
 echo "train_range=${TRAIN_SCORE_INDEX_RANGES}"
 echo "train_compute_range=${TRAIN_COMPUTE_RANGE}; train_shard_index=${TRAIN_SHARD_INDEX:-none}"
 echo "share_train_artifact=${SHARE_TRAIN_ARTIFACT}"
@@ -289,6 +296,7 @@ if [[ "${RUN_SCORE_SWEEP}" == "1" ]]; then
     --normalize-eps "${NORMALIZE_EPS}" \
     --score-index-ranges "${SCORE_INDEX_RANGES}" \
     --score-index-base 1 \
+    --term-weighting "${TRAJ_TRACIN_TERM_WEIGHTING}" \
     "${raw_arg[@]}"
 else
   echo "[score sweep] skipped; RUN_SCORE_SWEEP=${RUN_SCORE_SWEEP}"
