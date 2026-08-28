@@ -40,6 +40,7 @@ PROJECTED_CACHE_DIM="${PROJECTED_CACHE_DIM:-4096}"
 PROJECTED_DIMS="${PROJECTED_DIMS:-4096}"
 PROJECTED_SCORE_DIM="${PROJECTED_SCORE_DIM:-4096}"
 PROJECTED_SCORE_VARIANT="${PROJECTED_SCORE_VARIANT:-raw}"
+PROJECTED_SCORE_VARIANTS="${PROJECTED_SCORE_VARIANTS:-raw query_l2_normalized train_l2_normalized query_train_l2_normalized}"
 PROJECTED_ARTIFACT_DIR_NAME_VALUE="${PROJECTED_ARTIFACT_DIR_NAME:-projected_traj_tracin_artifacts_${TRAJ_PARAMETER_SOURCE_VALUE}}"
 TRAIN_SCORE_INDEX_RANGES="${TRAIN_SCORE_INDEX_RANGES:-1-10000}"
 TRAIN_SCORE_INDEX_RANGES_MODE="${TRAIN_SCORE_INDEX_RANGES_MODE:-task}"
@@ -100,6 +101,33 @@ algorithm_dir_for_task() {
   fi
 }
 
+variant_suffix() {
+  local variant="$1"
+  case "${variant}" in
+    raw) printf '' ;;
+    query_l2_normalized) printf '_q_l2' ;;
+    train_l2_normalized) printf '_t_l2' ;;
+    query_train_l2_normalized) printf '_qt_l2' ;;
+    *) printf '_%s' "$(path_tag "${variant}")" ;;
+  esac
+}
+
+algorithm_dir_for_task_variant() {
+  local unprompted_flag="$1"
+  local range="$2"
+  local variant="$3"
+  local tag suffix
+  tag="$(range_tag "${range}")"
+  suffix="$(variant_suffix "${variant}")"
+  if [[ "${unprompted_flag}" == "1" ]]; then
+    printf 'traj_tracin_%s_unprompted_%s%s_%s' \
+      "${TRAJ_QUERY_OBJECTIVE_VALUE}" "${TRAJ_PARAMETER_SOURCE_VALUE}" "${suffix}" "${tag}"
+  else
+    printf 'traj_tracin_%s_%s%s_%s' \
+      "${TRAJ_QUERY_OBJECTIVE_VALUE}" "${TRAJ_PARAMETER_SOURCE_VALUE}" "${suffix}" "${tag}"
+  fi
+}
+
 sample_root_for_task() {
   local sample_mode="$1"
   local query_env="$2"
@@ -118,8 +146,9 @@ score_file_for_task() {
   local seed="$3"
   local unprompted_flag="$4"
   local range="$5"
+  local variant="${6:-raw}"
   local algorithm_dir
-  algorithm_dir="$(algorithm_dir_for_task "${unprompted_flag}" "${range}")"
+  algorithm_dir="$(algorithm_dir_for_task_variant "${unprompted_flag}" "${range}" "${variant}")"
   if [[ "${unprompted_flag}" == "1" || "${score_mode}" == unprompted_* ]]; then
     printf '%s/result/%s/attribution_score/%s/train_seed_%s/unprompted/initial_seed_%s/%s/scores.npy' \
       "${CIFAR2_ROOT}" "${EXPERIMENT_TAG}" "${score_mode}" "${TRAIN_SEED}" "${seed}" "${algorithm_dir}"
@@ -129,18 +158,101 @@ score_file_for_task() {
   fi
 }
 
-materialize_compat_scores() {
-  local score_file="$1"
-  local compat_dir
+compat_score_dir_for_task() {
+  local score_mode="$1"
+  local query="$2"
+  local seed="$3"
+  local unprompted_flag="$4"
+  local range="$5"
+  local variant="$6"
+  dirname "$(score_file_for_task "${score_mode}" "${query}" "${seed}" "${unprompted_flag}" "${range}" "${variant}")"
+}
+
+projected_variant_dir_for_task() {
+  local score_mode="$1"
+  local query="$2"
+  local seed="$3"
+  local unprompted_flag="$4"
+  local range="$5"
+  local algorithm_dir compat_dir
+  algorithm_dir="$(algorithm_dir_for_task "${unprompted_flag}" "${range}")"
+  if [[ "${unprompted_flag}" == "1" || "${score_mode}" == unprompted_* ]]; then
+    compat_dir="${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/attribution_score/${score_mode}/train_seed_${TRAIN_SEED}/unprompted/initial_seed_${seed}/${algorithm_dir}"
+  else
+    compat_dir="${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/attribution_score/${score_mode}/train_seed_${TRAIN_SEED}/query_$(path_tag "${query}")/initial_seed_${seed}/${algorithm_dir}"
+  fi
+  printf '%s/proj_%s' "${compat_dir}" "${PROJECTED_SCORE_DIM}"
+}
+
+materialize_compat_scores_for_task() {
+  local score_mode="$1"
+  local query="$2"
+  local seed="$3"
+  local unprompted_flag="$4"
+  local range="$5"
+  local projected_root variant compat_dir projected_dir
+  projected_root="$(projected_variant_dir_for_task "${score_mode}" "${query}" "${seed}" "${unprompted_flag}" "${range}")"
+  for variant in ${PROJECTED_SCORE_VARIANTS}; do
+    compat_dir="$(compat_score_dir_for_task "${score_mode}" "${query}" "${seed}" "${unprompted_flag}" "${range}" "${variant}")"
+    projected_dir="${projected_root}/${variant}"
+    if [[ ! -f "${projected_dir}/scores.npy" || ! -f "${projected_dir}/score_indices.npy" ]]; then
+      echo "Projected score output is missing: ${projected_dir}" >&2
+      exit 1
+    fi
+    mkdir -p "${compat_dir}"
+    ln -sfn "${projected_dir}/scores.npy" "${compat_dir}/scores.npy"
+    ln -sfn "${projected_dir}/score_indices.npy" "${compat_dir}/score_indices.npy"
+    echo "[compat] ${compat_dir}/scores.npy -> ${projected_dir}/scores.npy"
+  done
+}
+
+compat_scores_complete_for_task() {
+  local score_mode="$1"
+  local query="$2"
+  local seed="$3"
+  local unprompted_flag="$4"
+  local range="$5"
+  local variant score_file
+  for variant in ${PROJECTED_SCORE_VARIANTS}; do
+    score_file="$(score_file_for_task "${score_mode}" "${query}" "${seed}" "${unprompted_flag}" "${range}" "${variant}")"
+    [[ -f "${score_file}" ]] || return 1
+  done
+  return 0
+}
+
+raw_compat_score_file_for_task() {
+  local score_mode="$1"
+  local query="$2"
+  local seed="$3"
+  local unprompted_flag="$4"
+  local range="$5"
+  local algorithm_dir compat_dir
+  algorithm_dir="$(algorithm_dir_for_task "${unprompted_flag}" "${range}")"
+  if [[ "${unprompted_flag}" == "1" || "${score_mode}" == unprompted_* ]]; then
+    compat_dir="${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/attribution_score/${score_mode}/train_seed_${TRAIN_SEED}/unprompted/initial_seed_${seed}/${algorithm_dir}"
+  else
+    compat_dir="${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/attribution_score/${score_mode}/train_seed_${TRAIN_SEED}/query_$(path_tag "${query}")/initial_seed_${seed}/${algorithm_dir}"
+  fi
+  printf '%s/scores.npy' "${compat_dir}"
+}
+
+materialize_legacy_raw_compat_scores() {
+  local score_mode="$1"
+  local query="$2"
+  local seed="$3"
+  local unprompted_flag="$4"
+  local range="$5"
+  local score_file compat_dir projected_dir
+  score_file="$(raw_compat_score_file_for_task "${score_mode}" "${query}" "${seed}" "${unprompted_flag}" "${range}")"
   compat_dir="$(dirname "${score_file}")"
-  local projected_dir="${compat_dir}/proj_${PROJECTED_SCORE_DIM}/${PROJECTED_SCORE_VARIANT}"
+  projected_dir="${compat_dir}/proj_${PROJECTED_SCORE_DIM}/raw"
   if [[ ! -f "${projected_dir}/scores.npy" || ! -f "${projected_dir}/score_indices.npy" ]]; then
     echo "Projected score output is missing: ${projected_dir}" >&2
     exit 1
   fi
-  ln -sfn "proj_${PROJECTED_SCORE_DIM}/${PROJECTED_SCORE_VARIANT}/scores.npy" "${compat_dir}/scores.npy"
-  ln -sfn "proj_${PROJECTED_SCORE_DIM}/${PROJECTED_SCORE_VARIANT}/score_indices.npy" "${compat_dir}/score_indices.npy"
-  echo "[compat] ${compat_dir}/scores.npy -> proj_${PROJECTED_SCORE_DIM}/${PROJECTED_SCORE_VARIANT}/scores.npy"
+  ln -sfn "proj_${PROJECTED_SCORE_DIM}/raw/scores.npy" "${compat_dir}/scores.npy"
+  ln -sfn "proj_${PROJECTED_SCORE_DIM}/raw/score_indices.npy" "${compat_dir}/score_indices.npy"
+  echo "[compat] ${compat_dir}/scores.npy -> proj_${PROJECTED_SCORE_DIM}/raw/scores.npy"
 }
 
 ensure_sample() {
@@ -205,14 +317,15 @@ run_one_task() {
     IFS='|' read -r sample_mode score_mode query seed unprompted_flag range <<<"${TASKS[$i]}"
   fi
   local score_file
-  score_file="$(score_file_for_task "${score_mode}" "${query}" "${seed}" "${unprompted_flag}" "${range}")"
+  score_file="$(raw_compat_score_file_for_task "${score_mode}" "${query}" "${seed}" "${unprompted_flag}" "${range}")"
   local log="${LOG_ROOT}/task_${i}__${task_stage}__projected_raw_next__${score_mode}__$(path_tag "${query}")__seed_${seed}__$(range_tag "${range}").log"
-  if [[ "${task_stage}" == "score" && -f "${score_file}" ]]; then
+  if [[ "${task_stage}" == "score" ]] && compat_scores_complete_for_task "${score_mode}" "${query}" "${seed}" "${unprompted_flag}" "${range}" && [[ -f "${score_file}" ]]; then
     echo "[projected-skip] task=${i} existing=${score_file}" >"${log}"
     return 0
   fi
   if [[ "${task_stage}" == "score" && -f "$(dirname "${score_file}")/proj_${PROJECTED_SCORE_DIM}/${PROJECTED_SCORE_VARIANT}/scores.npy" ]]; then
-    materialize_compat_scores "${score_file}" >"${log}" 2>&1
+    materialize_legacy_raw_compat_scores "${score_mode}" "${query}" "${seed}" "${unprompted_flag}" "${range}" >"${log}" 2>&1
+    materialize_compat_scores_for_task "${score_mode}" "${query}" "${seed}" "${unprompted_flag}" "${range}" >>"${log}" 2>&1
     return 0
   fi
 
@@ -294,7 +407,8 @@ run_one_task() {
     bash "${PROJECTED_SCRIPT}" \
     >"${log}" 2>&1
   if [[ "${task_stage}" == "score" ]]; then
-    materialize_compat_scores "${score_file}" >>"${log}" 2>&1
+    materialize_legacy_raw_compat_scores "${score_mode}" "${query}" "${seed}" "${unprompted_flag}" "${range}" >>"${log}" 2>&1
+    materialize_compat_scores_for_task "${score_mode}" "${query}" "${seed}" "${unprompted_flag}" "${range}" >>"${log}" 2>&1
   fi
 }
 
@@ -341,7 +455,7 @@ wait_for_train_artifacts() {
 echo "Stampede3 projected Traj-TracIn raw-parameter next-checkpoint attribution"
 echo "experiment=${EXPERIMENT_TAG}; train_seed=${TRAIN_SEED}; objective=${TRAJ_QUERY_OBJECTIVE_VALUE}; parameter_source=${TRAJ_PARAMETER_SOURCE_VALUE}"
 echo "total_tasks=${total_tasks}; total_train_tasks=${total_train_tasks}; stage=${PROJECTED_11_STAGE}; slots=${ATTR_NUM_SLOTS}; gpu_per_node=${GPU_PER_NODE}; ranges=${TRAJ_RANGES_TEXT}; logs=${LOG_ROOT}"
-echo "projected_cache_dim=${PROJECTED_CACHE_DIM}; projected_dims=${PROJECTED_DIMS}; compat_variant=proj_${PROJECTED_SCORE_DIM}/${PROJECTED_SCORE_VARIANT}"
+echo "projected_cache_dim=${PROJECTED_CACHE_DIM}; projected_dims=${PROJECTED_DIMS}; compat_variants=${PROJECTED_SCORE_VARIANTS}"
 echo "projected_artifact_dir_name=${PROJECTED_ARTIFACT_DIR_NAME_VALUE}"
 echo "train_score_index_ranges_mode=${TRAIN_SCORE_INDEX_RANGES_MODE}; full_train_range=${TRAIN_SCORE_INDEX_RANGES}"
 echo "train_aggregate_timestamps=${TRAJ_TRACIN_TRAIN_AGGREGATE_TIMESTAMPS}"
@@ -395,13 +509,15 @@ wait_all "${pids[@]}"
 missing=0
 for ((i = 0; i < total_tasks; i++)); do
   IFS='|' read -r _sample_mode score_mode query seed unprompted_flag range <<<"${TASKS[$i]}"
-  score_file="$(score_file_for_task "${score_mode}" "${query}" "${seed}" "${unprompted_flag}" "${range}")"
-  if [[ -f "${score_file}" ]]; then
-    echo "Found projected TrajTracIn raw-next compat artifact for task=${i}: ${score_file}"
-  else
-    echo "Missing projected TrajTracIn raw-next compat artifact for task=${i}: ${score_file}" >&2
-    missing=$((missing + 1))
-  fi
+  for variant in ${PROJECTED_SCORE_VARIANTS}; do
+    score_file="$(score_file_for_task "${score_mode}" "${query}" "${seed}" "${unprompted_flag}" "${range}" "${variant}")"
+    if [[ -f "${score_file}" ]]; then
+      echo "Found projected TrajTracIn raw-next ${variant} compat artifact for task=${i}: ${score_file}"
+    else
+      echo "Missing projected TrajTracIn raw-next ${variant} compat artifact for task=${i}: ${score_file}" >&2
+      missing=$((missing + 1))
+    fi
+  done
 done
 if (( missing > 0 )); then
   echo "Projected job 11 missing ${missing} expected score artifacts." >&2
