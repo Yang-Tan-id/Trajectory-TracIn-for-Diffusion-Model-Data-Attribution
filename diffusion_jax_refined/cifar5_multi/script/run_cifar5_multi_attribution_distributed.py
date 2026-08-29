@@ -79,9 +79,14 @@ def split_1based_ranges(size: int, shards: int) -> list[tuple[int, int]]:
     return out
 
 
-def shard_artifact_path(root: Path, args: argparse.Namespace, mode: str, start: int, end: int) -> Path:
-    final_path = train_artifact_path(root, args, mode, "traj_tracin")
+def shard_artifact_path(root: Path, args: argparse.Namespace, mode: str, algorithm: str, start: int, end: int) -> Path:
+    final_path = train_artifact_path(root, args, mode, algorithm)
     return final_path.parent / "datapoint_shards" / f"range_{start}_{end}" / TRAIN_ARTIFACT
+
+
+def das_global_gram_path(root: Path, args: argparse.Namespace, mode: str) -> Path:
+    final_path = train_artifact_path(root, args, mode, "das")
+    return final_path.parent / "global_gram_artifact.npz"
 
 
 def score_shard_dir(score_dir: Path, start: int, end: int) -> Path:
@@ -146,31 +151,149 @@ def main() -> None:
         args.skip_traj_tracin = True
         args.skip_lds_eval = False
 
+    ranges = split_1based_ranges(args.size, len(worker_gpu_ids))
+
     if not args.skip_das:
-        das_jobs: list[Job] = []
+        das_query_jobs: list[Job] = []
         for i, query in enumerate(all_queries):
             mode, env = query_env(args, env0, query)
             if score_complete(args.root, args, mode=mode, query=query, algorithm="das"):
                 print(f"[skip] DAS scores already complete for {query_tag(query)}")
                 continue
             slot = slot_for(i, len(worker_gpu_ids))
-            das_jobs.append(
+            das_query_jobs.append(
                 Job(
-                    name=f"das_{query_tag(query)}",
-                    cmd=shell_join(
-                        [
-                            [python_bin, "02_query_gradient.py"],
-                            [python_bin, "01_train_datapoint_gradient.py"],
-                            [python_bin, "03_score.py"],
-                        ]
-                    ),
+                    name=f"das_query_{query_tag(query)}",
+                    cmd=[python_bin, "02_query_gradient.py"],
                     cwd=args.root / "data_attribution" / "das",
                     env=gpu_env(env, worker_gpu_ids[slot]),
-                    log_path=log_root(args) / "attribution_resume" / "das" / f"{query_tag(query)}.log",
+                    log_path=log_root(args) / "attribution_resume" / "das" / "query" / f"{query_tag(query)}.log",
                     slot=slot,
                 )
             )
-        run_parallel_jobs(das_jobs, args=args, execute=args.execute, max_parallel=len(worker_gpu_ids))
+        run_parallel_jobs(das_query_jobs, args=args, execute=args.execute, max_parallel=len(worker_gpu_ids))
+
+        for mode in ("prompted_solo", "unprompted_solo"):
+            final_artifact = train_artifact_path(args.root, args, mode, "das")
+            global_gram = das_global_gram_path(args.root, args, mode)
+            if final_artifact.is_file() or global_gram.is_file():
+                print(f"[skip] complete/shared DAS train state for {mode}: {global_gram if global_gram.is_file() else final_artifact}")
+                continue
+
+            shard_jobs: list[Job] = []
+            for shard_id, (start, end) in enumerate(ranges):
+                shard_path = shard_artifact_path(args.root, args, mode, "das", start, end)
+                if train_artifact_complete(shard_path, expected_points=end - start + 1):
+                    print(f"[skip] DAS train shard {mode} {start}-{end}: {shard_path}")
+                    continue
+                env = env0 | {
+                    "DATAPOINT_MODEL_MODE": mode,
+                    "SAMPLE_MODEL_MODE": mode,
+                    "ATTRIBUTION_SCORE_MODEL_MODE": mode,
+                    "SCORE_INDEX_RANGES": f"{start}-{end}",
+                    "TRAIN_DATAPOINT_GRADIENT_ARTIFACT_PATH": str(shard_path),
+                }
+                if mode.startswith("unprompted"):
+                    env["UNPROMPTED"] = "1"
+                slot = slot_for(shard_id, len(worker_gpu_ids))
+                shard_jobs.append(
+                    Job(
+                        name=f"das_train_{mode}_range_{start}_{end}",
+                        cmd=[python_bin, "01_train_datapoint_gradient.py"],
+                        cwd=args.root / "data_attribution" / "das",
+                        env=gpu_env(env, worker_gpu_ids[slot]),
+                        log_path=log_root(args)
+                        / "attribution_resume"
+                        / "das"
+                        / "train_shards"
+                        / mode
+                        / f"range_{start}_{end}_slot_{slot}_gpu_{worker_gpu_ids[slot]}.log",
+                        slot=slot,
+                    )
+                )
+            run_parallel_jobs(shard_jobs, args=args, execute=args.execute, max_parallel=len(worker_gpu_ids))
+
+            shard_paths = [shard_artifact_path(args.root, args, mode, "das", start, end) for start, end in ranges]
+            if args.execute:
+                missing = [str(path) for path in shard_paths if not path.is_file()]
+                if missing:
+                    raise FileNotFoundError(f"Missing DAS train shard(s) for {mode}: {missing[:3]}")
+            run(
+                [python_bin, str(args.root.parent / "common" / "merge_das_train_shards.py"), "--output", str(global_gram), *map(str, shard_paths)],
+                env0,
+                cwd=args.root,
+                execute=args.execute,
+            )
+
+        for query in all_queries:
+            mode, env = query_env(args, env0, query)
+            if score_complete(args.root, args, mode=mode, query=query, algorithm="das"):
+                print(f"[skip] DAS scores already complete for {query_tag(query)}")
+                continue
+            final_artifact = train_artifact_path(args.root, args, mode, "das")
+            if train_artifact_complete(final_artifact, expected_points=args.size):
+                slot = slot_for(0, len(worker_gpu_ids))
+                run_parallel_jobs(
+                    [
+                        Job(
+                            name=f"das_score_{query_tag(query)}",
+                            cmd=[python_bin, "03_score.py"],
+                            cwd=args.root / "data_attribution" / "das",
+                            env=gpu_env(env, worker_gpu_ids[slot]),
+                            log_path=log_root(args) / "attribution_resume" / "das" / "score" / f"{query_tag(query)}.log",
+                            slot=slot,
+                        )
+                    ],
+                    args=args,
+                    execute=args.execute,
+                    max_parallel=len(worker_gpu_ids),
+                )
+                continue
+            global_gram = das_global_gram_path(args.root, args, mode)
+            score_dirs = attribution_score_dirs(args.root, args, mode=mode, query=query, algorithm="das")
+            das_base_score_dir = score_dirs[0][1].parent
+            shard_score_jobs: list[Job] = []
+            for shard_id, (start, end) in enumerate(ranges):
+                shard_path = shard_artifact_path(args.root, args, mode, "das", start, end)
+                target_score_base = score_shard_dir(das_base_score_dir, start, end)
+                if all((target_score_base / score_tag / "scores.npy").is_file() for score_tag, _score_dir in score_dirs):
+                    print(f"[skip] DAS score shard {query_tag(query)} {start}-{end}: {target_score_base}")
+                    continue
+                shard_env = env | {
+                    "TRAIN_DATAPOINT_GRADIENT_ARTIFACT_PATH": str(shard_path),
+                    "DAS_GLOBAL_GRAM_ARTIFACT_PATH": str(global_gram),
+                    "SCORE_OUTPUT_DIR": str(target_score_base),
+                }
+                slot = slot_for(shard_id, len(worker_gpu_ids))
+                shard_score_jobs.append(
+                    Job(
+                        name=f"das_score_{query_tag(query)}_range_{start}_{end}",
+                        cmd=[python_bin, "03_score.py"],
+                        cwd=args.root / "data_attribution" / "das",
+                        env=gpu_env(shard_env, worker_gpu_ids[slot]),
+                        log_path=log_root(args)
+                        / "attribution_resume"
+                        / "das"
+                        / "score_shards"
+                        / query_tag(query)
+                        / f"range_{start}_{end}_slot_{slot}_gpu_{worker_gpu_ids[slot]}.log",
+                        slot=slot,
+                    )
+                )
+            run_parallel_jobs(shard_score_jobs, args=args, execute=args.execute, max_parallel=len(worker_gpu_ids))
+
+            for score_tag, final_score_dir in score_dirs:
+                shard_dirs = [score_shard_dir(das_base_score_dir, start, end) / score_tag for start, end in ranges]
+                if args.execute:
+                    missing_scores = [str(path / "scores.npy") for path in shard_dirs if not (path / "scores.npy").is_file()]
+                    if missing_scores:
+                        raise FileNotFoundError(f"Missing DAS score shard(s) for {query_tag(query)} {score_tag}: {missing_scores[:3]}")
+                run(
+                    [python_bin, str(args.root.parent / "common" / "merge_score_shards.py"), "--output-dir", str(final_score_dir), *map(str, shard_dirs)],
+                    env0,
+                    cwd=args.root,
+                    execute=args.execute,
+                )
 
     if not args.skip_traj_tracin:
         query_jobs: list[Job] = []
@@ -189,7 +312,6 @@ def main() -> None:
             )
         run_parallel_jobs(query_jobs, args=args, execute=args.execute, max_parallel=len(worker_gpu_ids))
 
-        ranges = split_1based_ranges(args.size, len(worker_gpu_ids))
         for mode in ("prompted_solo", "unprompted_solo"):
             final_artifact = train_artifact_path(args.root, args, mode, "traj_tracin")
             if train_artifact_complete(final_artifact, expected_points=args.size):
@@ -198,7 +320,7 @@ def main() -> None:
 
             shard_jobs: list[Job] = []
             for shard_id, (start, end) in enumerate(ranges):
-                shard_path = shard_artifact_path(args.root, args, mode, start, end)
+                shard_path = shard_artifact_path(args.root, args, mode, "traj_tracin", start, end)
                 if train_artifact_complete(shard_path, expected_points=end - start + 1):
                     print(f"[skip] TrajTracIn train shard {mode} {start}-{end}: {shard_path}")
                     continue
@@ -230,7 +352,7 @@ def main() -> None:
                 )
             run_parallel_jobs(shard_jobs, args=args, execute=args.execute, max_parallel=len(worker_gpu_ids))
 
-            shard_paths = [shard_artifact_path(args.root, args, mode, start, end) for start, end in ranges]
+            shard_paths = [shard_artifact_path(args.root, args, mode, "traj_tracin", start, end) for start, end in ranges]
             if args.execute:
                 missing = [str(path) for path in shard_paths if not path.is_file()]
                 if missing:
@@ -262,7 +384,7 @@ def main() -> None:
 
             shard_score_jobs: list[Job] = []
             for shard_id, (start, end) in enumerate(ranges):
-                shard_path = shard_artifact_path(args.root, args, mode, start, end)
+                shard_path = shard_artifact_path(args.root, args, mode, "traj_tracin", start, end)
                 target_score_dir = score_shard_dir(score_dirs[0][1], start, end)
                 if (target_score_dir / "scores.npy").is_file():
                     print(f"[skip] TrajTracIn score shard {query_tag(query)} {start}-{end}: {target_score_dir}")

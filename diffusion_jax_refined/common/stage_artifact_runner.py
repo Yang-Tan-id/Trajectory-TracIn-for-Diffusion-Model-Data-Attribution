@@ -149,6 +149,11 @@ def _combine_das_scores(
     residual = np.asarray(residual, dtype=np.float64)
     if residual.ndim == 1:
         residual = residual[None, :]
+    if residual.shape[0] == train.shape[0] and residual.shape[1] != train.shape[1]:
+        train_indices = np.asarray(train_payload.get("score_indices", ()), dtype=np.int64).reshape(-1)
+        max_index = int(train_indices.max()) if train_indices.size else -1
+        if train_indices.shape[0] == train.shape[1] and residual.shape[1] > max_index:
+            residual = residual[:, train_indices]
     if residual.shape[0] != train.shape[0] or residual.shape[1] != train.shape[1]:
         raise ValueError(f"residual shape {residual.shape} does not match train features {train.shape}")
 
@@ -289,6 +294,12 @@ def run_score_combination_stage(config_path: str | Path) -> Path:
     query_payload = _load_npz(query_path)
     algorithm = config_path.parent.name
     if algorithm == "das":
+        global_gram_path = os.environ.get("DAS_GLOBAL_GRAM_ARTIFACT_PATH")
+        if global_gram_path:
+            global_gram_payload = _load_npz(Path(global_gram_path))
+            for key in ("gram", "gram_undamped", "damping", "damping_sweep_values"):
+                if key in global_gram_payload:
+                    train_payload[key] = global_gram_payload[key]
         damping_values = _das_damping_values(config_path, train_payload)
         written_dirs = []
         sweep = len(damping_values) > 1 or os.environ.get("DAS_DAMPING_SWEEP", "0") in ("1", "true", "True", "yes")
