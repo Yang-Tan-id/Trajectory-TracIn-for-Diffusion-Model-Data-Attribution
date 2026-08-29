@@ -331,6 +331,7 @@ def main() -> None:
                     "SCORE_INDEX_RANGES": f"{start}-{end}",
                     "TRAIN_DATAPOINT_GRADIENT_ARTIFACT_PATH": str(shard_path),
                     "TRACIN_USE_SHARED_TRAIN_GRADIENT": "1",
+                    "TRAJ_USE_SAVED_TRAJECTORY": "0",
                 }
                 if mode.startswith("unprompted"):
                     env["UNPROMPTED"] = "1"
