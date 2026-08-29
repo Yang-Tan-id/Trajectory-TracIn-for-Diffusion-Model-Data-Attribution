@@ -38,10 +38,11 @@ def run_train_datapoint_gradient_artifact(config_path: str | Path) -> Path:
     config_path = Path(config_path)
     out_dir = run_stage_config(config_path, "train_datapoint_gradient")
     algorithm = config_path.parent.name
-    artifact = out_dir / TRAIN_ARTIFACT
+    artifact = Path(os.environ.get("TRAIN_DATAPOINT_GRADIENT_ARTIFACT_PATH", out_dir / TRAIN_ARTIFACT))
     if artifact.is_file():
         print(f"[stage-1] found existing train artifact: {artifact}")
         return out_dir
+    artifact.parent.mkdir(parents=True, exist_ok=True)
     if algorithm == "dtrak":
         with _temporary_env(
             {
@@ -76,10 +77,11 @@ def run_query_gradient_artifact(config_path: str | Path) -> Path:
     config_path = Path(config_path)
     out_dir = run_stage_config(config_path, "query_gradient")
     algorithm = config_path.parent.name
-    artifact = out_dir / QUERY_ARTIFACT
+    artifact = Path(os.environ.get("QUERY_GRADIENT_ARTIFACT_PATH", out_dir / QUERY_ARTIFACT))
     if artifact.is_file():
         print(f"[stage-2] found existing query artifact: {artifact}")
         return out_dir
+    artifact.parent.mkdir(parents=True, exist_ok=True)
     if algorithm == "dtrak":
         with _temporary_env(
             {
