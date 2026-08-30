@@ -47,6 +47,21 @@ def train_artifact_path(root: Path, args: argparse.Namespace, mode: str, algorit
     )
 
 
+def namespaced_train_artifact_path(
+    root: Path,
+    args: argparse.Namespace,
+    mode: str,
+    algorithm: str,
+    namespace: str,
+) -> Path:
+    current = args.artifact_namespace
+    try:
+        args.artifact_namespace = namespace
+        return train_artifact_path(root, args, mode, algorithm)
+    finally:
+        args.artifact_namespace = current
+
+
 def train_artifact_complete(path: Path, *, expected_points: int) -> bool:
     if not path.is_file():
         return False
@@ -154,6 +169,11 @@ def main() -> None:
     parser.add_argument("--only-lds-eval", action="store_true")
     parser.add_argument("--artifact-namespace", default=os.environ.get("ATTRIBUTION_ARTIFACT_NAMESPACE", ""))
     parser.add_argument("--namespace-query-gradient", action="store_true")
+    parser.add_argument(
+        "--aggregate-traj-train-from-namespace",
+        default=os.environ.get("AGGREGATE_TRAJ_TRAIN_FROM_NAMESPACE", ""),
+        help="Aggregate completed TrajTracIn train shards from this namespace into the current namespace before scoring.",
+    )
     parser.add_argument(
         "--eval-algorithms",
         default=None,
@@ -347,6 +367,9 @@ def main() -> None:
                 )
 
     if not args.skip_traj_tracin:
+        source_namespace = args.aggregate_traj_train_from_namespace.strip()
+        if source_namespace and not artifact_namespace(args):
+            raise ValueError("--aggregate-traj-train-from-namespace requires --artifact-namespace")
         if not args.only_train_gradient and not args.skip_query_gradient:
             query_jobs: list[Job] = []
             for i, query in enumerate(all_queries):
@@ -375,6 +398,30 @@ def main() -> None:
             shard_jobs: list[Job] = []
             for shard_id, (start, end) in enumerate(ranges):
                 shard_path = shard_artifact_path(args.root, args, mode, "traj_tracin", start, end)
+                if source_namespace:
+                    source_final = namespaced_train_artifact_path(
+                        args.root,
+                        args,
+                        mode,
+                        "traj_tracin",
+                        source_namespace,
+                    )
+                    source_shard = source_final.parent / "datapoint_shards" / f"range_{start}_{end}" / TRAIN_ARTIFACT
+                    if not train_artifact_complete(shard_path, expected_points=end - start + 1):
+                        run(
+                            [
+                                python_bin,
+                                str(args.root.parent / "common" / "aggregate_traj_train_by_checkpoint.py"),
+                                "--input",
+                                str(source_shard),
+                                "--output",
+                                str(shard_path),
+                            ],
+                            env0,
+                            cwd=args.root,
+                            execute=args.execute,
+                        )
+                    continue
                 if train_artifact_complete(shard_path, expected_points=end - start + 1):
                     print(f"[skip] TrajTracIn train shard {mode} {start}-{end}: {shard_path}")
                     continue

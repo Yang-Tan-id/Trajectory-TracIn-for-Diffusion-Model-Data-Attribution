@@ -104,6 +104,27 @@ def _combine_multiterm_dot_scores(train_payload: dict[str, np.ndarray], query_pa
         query = query[None, :]
     if query.ndim != 2:
         raise ValueError(f"{query_path} query features must be rank 1 or 2, got shape {query.shape}")
+    if train.shape[0] != query.shape[0] and "checkpoint_shared_train_gradient" in train_payload:
+        train_ckpts = np.asarray(train_payload.get("ckpt_indices"), dtype=np.int32).reshape(-1)
+        query_ckpts = np.asarray(query_payload.get("ckpt_indices"), dtype=np.int32).reshape(-1)
+        if train_ckpts.shape[0] != train.shape[0] or query_ckpts.shape[0] != query.shape[0]:
+            raise ValueError("checkpoint-shared TrajTracIn artifacts require ckpt_indices on train and query")
+        if train.shape[2] != query.shape[1]:
+            raise ValueError(f"feature dimension mismatch: train {train.shape} vs query {query.shape}")
+        weights = np.asarray(
+            query_payload.get("term_weights", np.full((query.shape[0],), 1.0 / float(query.shape[0]))),
+            dtype=np.float64,
+        ).reshape(-1)
+        if weights.shape[0] != query.shape[0]:
+            raise ValueError(f"query term_weights length {weights.shape[0]} does not match query terms {query.shape[0]}")
+        by_ckpt = {int(ckpt): i for i, ckpt in enumerate(train_ckpts)}
+        missing = sorted({int(ckpt) for ckpt in query_ckpts if int(ckpt) not in by_ckpt})
+        if missing:
+            raise ValueError(f"query has checkpoint(s) missing from train artifact: {missing[:10]}")
+        scores = np.zeros((train.shape[1],), dtype=np.float64)
+        for i in range(query.shape[0]):
+            scores += float(weights[i]) * (train[by_ckpt[int(query_ckpts[i])]] @ query[i])
+        return scores
     if train.shape[0] != query.shape[0] or train.shape[2] != query.shape[1]:
         raise ValueError(f"feature dimension mismatch: train {train.shape} vs query {query.shape}")
     weights = np.asarray(query_payload.get("term_weights", np.full((train.shape[0],), 1.0 / float(train.shape[0]))), dtype=np.float64).reshape(-1)
