@@ -50,10 +50,14 @@ export TRAJ_TRACIN_PROJ_DIM="${TRAJ_TRACIN_PROJ_DIM:-4096}"
 export PROJECTED_CACHE_DIM="${PROJECTED_CACHE_DIM:-4096}"
 export PROJECTED_DIMS="${PROJECTED_DIMS:-4096}"
 export TRACIN_USE_SHARED_TRAIN_GRADIENT=1
+export TRAJ_NUM_SNAPSHOTS="${TRAJ_NUM_SNAPSHOTS:-10}"
+export TRAJ_TRAIN_MC_SAMPLES="${TRAJ_TRAIN_MC_SAMPLES:-10}"
 
 echo "CIFAR5 multi attribution RTX-small job"
 echo "repo=${REPO_ROOT}"
 echo "experiment=${EXPERIMENT_TAG}; train_seed=${TRAIN_SEED}; slots=${GPU_SLOTS:-2}"
+echo "traj_num_snapshots=${TRAJ_NUM_SNAPSHOTS}; traj_train_mc_samples=${TRAJ_TRAIN_MC_SAMPLES}"
+echo "artifact_namespace=${ATTRIBUTION_ARTIFACT_NAMESPACE:-}"
 echo "python=$(${PYTHON_BIN} -c 'import sys; print(sys.executable)')"
 
 "${PYTHON_BIN}" "${CIFAR5_ROOT}/script/run_cifar5_multi_attribution_distributed.py" \

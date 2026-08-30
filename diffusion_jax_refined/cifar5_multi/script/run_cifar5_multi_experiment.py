@@ -27,6 +27,14 @@ def damping_tag(value: float) -> str:
     return f"{float(value):g}".replace("+", "").replace("-", "neg_").replace(".", "p")
 
 
+def artifact_namespace(args: argparse.Namespace) -> str:
+    raw = str(getattr(args, "artifact_namespace", "") or "").strip()
+    if not raw:
+        return ""
+    safe = "".join(ch if ch.isalnum() or ch in "._-" else "_" for ch in raw)
+    return safe.strip("._-")
+
+
 def das_damping_values() -> tuple[float, ...]:
     text = os.environ.get("DAS_DAMPING_SWEEP_VALUES")
     if text:
@@ -54,6 +62,7 @@ def lds_model_dirs(root: Path, args: argparse.Namespace, mode: str) -> str:
 
 def attribution_score_dirs(root: Path, args: argparse.Namespace, *, mode: str, query: str, algorithm: str) -> list[tuple[str, Path]]:
     query_component = "unprompted" if query == "unprompted" else f"query_{query_tag(query)}"
+    namespace = artifact_namespace(args)
     base = (
         root
         / "result"
@@ -63,9 +72,10 @@ def attribution_score_dirs(root: Path, args: argparse.Namespace, *, mode: str, q
         / f"train_seed_{args.train_seed}"
         / query_component
         / f"initial_seed_{args.sample_seeds.split(',')[0]}"
-        / algorithm
-        / "score"
     )
+    if namespace:
+        base = base / namespace
+    base = base / algorithm / "score"
     if algorithm == "das":
         return [(f"lambda_{damping_tag(v)}", base / f"lambda_{damping_tag(v)}") for v in das_damping_values()]
     return [("default", base)]
@@ -84,7 +94,7 @@ def lds_eval_out_dir(
     query_component = "unprompted" if query == "unprompted" else f"query_{query_tag(query)}"
     lds_component = "lds_unprompted" if query == "unprompted" else "lds"
     alg_component = algorithm if score_tag == "default" else f"{algorithm}_{score_tag}"
-    return (
+    base = (
         root
         / "result"
         / args.experiment
@@ -92,10 +102,11 @@ def lds_eval_out_dir(
         / mode
         / query_component
         / f"initial_seed_{args.sample_seeds.split(',')[0]}"
-        / lds_component
-        / alg_component
-        / target
     )
+    namespace = artifact_namespace(args)
+    if namespace:
+        base = base / namespace
+    return base / lds_component / alg_component / target
 
 
 def choose_prompted_queries(seed: int, count: int = 2) -> list[str]:

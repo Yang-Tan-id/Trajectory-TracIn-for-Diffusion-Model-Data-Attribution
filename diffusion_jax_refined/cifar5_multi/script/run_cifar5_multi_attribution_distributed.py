@@ -8,6 +8,7 @@ from pathlib import Path
 from run_cifar5_multi_experiment import (
     Job,
     TARGET_FUNCTIONS,
+    artifact_namespace,
     attribution_score_dirs,
     base_env,
     choose_prompted_queries,
@@ -30,13 +31,17 @@ TRAIN_ARTIFACT = "train_datapoint_gradient_artifact.npz"
 
 
 def train_artifact_path(root: Path, args: argparse.Namespace, mode: str, algorithm: str) -> Path:
+    train_root = f"seed_{args.train_seed}_train_gradient"
+    namespace = artifact_namespace(args)
+    if namespace:
+        train_root = f"{train_root}_{namespace}"
     return (
         root
         / "result"
         / args.experiment
         / "model"
         / mode
-        / f"seed_{args.train_seed}_train_gradient"
+        / train_root
         / algorithm
         / TRAIN_ARTIFACT
     )
@@ -93,6 +98,37 @@ def score_shard_dir(score_dir: Path, start: int, end: int) -> Path:
     return score_dir / "datapoint_shards" / f"range_{start}_{end}"
 
 
+def resume_log_root(args: argparse.Namespace) -> Path:
+    root = log_root(args) / "attribution_resume"
+    namespace = artifact_namespace(args)
+    return root / namespace if namespace else root
+
+
+def query_gradient_artifact_path(root: Path, args: argparse.Namespace, mode: str, query: str, algorithm: str) -> Path:
+    if query == "unprompted":
+        sample_query = "prompt_unconditional"
+        model_mode = "unprompted_solo"
+    else:
+        sample_query = f"prompt_{query.replace(',', '__')}"
+        model_mode = mode
+    query_dir = f"seed_{args.sample_seeds.split(',')[0].zfill(6)}_query_gradient"
+    namespace = artifact_namespace(args)
+    if namespace:
+        query_dir = f"{query_dir}_{namespace}"
+    return (
+        root
+        / "result"
+        / args.experiment
+        / "sample"
+        / "cifar"
+        / sample_query
+        / f"model_{model_mode}__ckpt_seed_{args.train_seed}_epoch_{args.epochs:04d}"
+        / query_dir
+        / algorithm
+        / "query_gradient_artifact.npz"
+    )
+
+
 def shell_join(commands: list[list[str]]) -> list[str]:
     return ["bash", "-lc", " && ".join(" ".join(cmd) for cmd in commands)]
 
@@ -115,6 +151,7 @@ def main() -> None:
     parser.add_argument("--skip-lds-eval", action="store_true")
     parser.add_argument("--only-train-gradient", action="store_true")
     parser.add_argument("--only-lds-eval", action="store_true")
+    parser.add_argument("--artifact-namespace", default=os.environ.get("ATTRIBUTION_ARTIFACT_NAMESPACE", ""))
     parser.add_argument(
         "--eval-algorithms",
         default=None,
@@ -146,6 +183,8 @@ def main() -> None:
     python_bin = os.environ.get("PYTHON_BIN", "python3")
     print(f"prompted queries: {queries}")
     print(f"worker slots={len(worker_gpu_ids)} | worker_gpus={worker_gpu_ids} | backend={args.slot_backend}")
+    if artifact_namespace(args):
+        print(f"artifact namespace={artifact_namespace(args)}")
 
     if args.only_lds_eval:
         args.skip_das = True
@@ -164,6 +203,8 @@ def main() -> None:
                 if score_complete(args.root, args, mode=mode, query=query, algorithm="das"):
                     print(f"[skip] DAS scores already complete for {query_tag(query)}")
                     continue
+                query_artifact = query_gradient_artifact_path(args.root, args, mode, query, "das")
+                env = env | {"QUERY_GRADIENT_ARTIFACT_PATH": str(query_artifact)}
                 slot = slot_for(i, len(worker_gpu_ids))
                 das_query_jobs.append(
                     Job(
@@ -171,7 +212,7 @@ def main() -> None:
                         cmd=[python_bin, "02_query_gradient.py"],
                         cwd=args.root / "data_attribution" / "das",
                         env=gpu_env(env, worker_gpu_ids[slot]),
-                        log_path=log_root(args) / "attribution_resume" / "das" / "query" / f"{query_tag(query)}.log",
+                        log_path=resume_log_root(args) / "das" / "query" / f"{query_tag(query)}.log",
                         slot=slot,
                     )
                 )
@@ -206,8 +247,7 @@ def main() -> None:
                         cmd=[python_bin, "01_train_datapoint_gradient.py"],
                         cwd=args.root / "data_attribution" / "das",
                         env=gpu_env(env, worker_gpu_ids[slot]),
-                        log_path=log_root(args)
-                        / "attribution_resume"
+                        log_path=resume_log_root(args)
                         / "das"
                         / "train_shards"
                         / mode
@@ -239,14 +279,17 @@ def main() -> None:
             final_artifact = train_artifact_path(args.root, args, mode, "das")
             if train_artifact_complete(final_artifact, expected_points=args.size):
                 slot = slot_for(0, len(worker_gpu_ids))
+                score_env = env | {
+                    "QUERY_GRADIENT_ARTIFACT_PATH": str(query_gradient_artifact_path(args.root, args, mode, query, "das")),
+                }
                 run_parallel_jobs(
                     [
                         Job(
                             name=f"das_score_{query_tag(query)}",
                             cmd=[python_bin, "03_score.py"],
                             cwd=args.root / "data_attribution" / "das",
-                            env=gpu_env(env, worker_gpu_ids[slot]),
-                            log_path=log_root(args) / "attribution_resume" / "das" / "score" / f"{query_tag(query)}.log",
+                            env=gpu_env(score_env, worker_gpu_ids[slot]),
+                            log_path=resume_log_root(args) / "das" / "score" / f"{query_tag(query)}.log",
                             slot=slot,
                         )
                     ],
@@ -267,6 +310,7 @@ def main() -> None:
                     continue
                 shard_env = env | {
                     "TRAIN_DATAPOINT_GRADIENT_ARTIFACT_PATH": str(shard_path),
+                    "QUERY_GRADIENT_ARTIFACT_PATH": str(query_gradient_artifact_path(args.root, args, mode, query, "das")),
                     "DAS_GLOBAL_GRAM_ARTIFACT_PATH": str(global_gram),
                     "SCORE_OUTPUT_DIR": str(target_score_base),
                 }
@@ -277,8 +321,7 @@ def main() -> None:
                         cmd=[python_bin, "03_score.py"],
                         cwd=args.root / "data_attribution" / "das",
                         env=gpu_env(shard_env, worker_gpu_ids[slot]),
-                        log_path=log_root(args)
-                        / "attribution_resume"
+                        log_path=resume_log_root(args)
                         / "das"
                         / "score_shards"
                         / query_tag(query)
@@ -305,7 +348,9 @@ def main() -> None:
         if not args.only_train_gradient:
             query_jobs: list[Job] = []
             for i, query in enumerate(all_queries):
-                _mode, env = query_env(args, env0, query)
+                mode, env = query_env(args, env0, query)
+                query_artifact = query_gradient_artifact_path(args.root, args, mode, query, "traj_tracin")
+                env = env | {"QUERY_GRADIENT_ARTIFACT_PATH": str(query_artifact)}
                 slot = slot_for(i, len(worker_gpu_ids))
                 query_jobs.append(
                     Job(
@@ -313,7 +358,7 @@ def main() -> None:
                         cmd=[python_bin, "02_query_gradient.py"],
                         cwd=args.root / "data_attribution" / "traj_tracin",
                         env=gpu_env(env, worker_gpu_ids[slot]),
-                        log_path=log_root(args) / "attribution_resume" / "traj_tracin" / "query" / f"{query_tag(query)}.log",
+                        log_path=resume_log_root(args) / "traj_tracin" / "query" / f"{query_tag(query)}.log",
                         slot=slot,
                     )
                 )
@@ -349,8 +394,7 @@ def main() -> None:
                         cmd=[python_bin, "01_train_datapoint_gradient.py"],
                         cwd=args.root / "data_attribution" / "traj_tracin",
                         env=gpu_env(env, worker_gpu_ids[slot]),
-                        log_path=log_root(args)
-                        / "attribution_resume"
+                        log_path=resume_log_root(args)
                         / "traj_tracin"
                         / "train_shards"
                         / mode
@@ -379,13 +423,16 @@ def main() -> None:
             if train_artifact_complete(final_artifact, expected_points=args.size):
                 score_jobs = []
                 slot = slot_for(len(score_jobs), len(worker_gpu_ids))
+                score_env = env | {
+                    "QUERY_GRADIENT_ARTIFACT_PATH": str(query_gradient_artifact_path(args.root, args, mode, query, "traj_tracin")),
+                }
                 score_jobs.append(
                     Job(
                         name=f"traj_score_{query_tag(query)}",
                         cmd=[python_bin, "03_score.py"],
                         cwd=args.root / "data_attribution" / "traj_tracin",
-                        env=gpu_env(env, worker_gpu_ids[slot]),
-                        log_path=log_root(args) / "attribution_resume" / "traj_tracin" / "score" / f"{query_tag(query)}.log",
+                        env=gpu_env(score_env, worker_gpu_ids[slot]),
+                        log_path=resume_log_root(args) / "traj_tracin" / "score" / f"{query_tag(query)}.log",
                         slot=slot,
                     )
                 )
@@ -401,6 +448,7 @@ def main() -> None:
                     continue
                 shard_env = env | {
                     "TRAIN_DATAPOINT_GRADIENT_ARTIFACT_PATH": str(shard_path),
+                    "QUERY_GRADIENT_ARTIFACT_PATH": str(query_gradient_artifact_path(args.root, args, mode, query, "traj_tracin")),
                     "SCORE_OUTPUT_DIR": str(target_score_dir),
                 }
                 slot = slot_for(shard_id, len(worker_gpu_ids))
@@ -410,8 +458,7 @@ def main() -> None:
                         cmd=[python_bin, "03_score.py"],
                         cwd=args.root / "data_attribution" / "traj_tracin",
                         env=gpu_env(shard_env, worker_gpu_ids[slot]),
-                        log_path=log_root(args)
-                        / "attribution_resume"
+                        log_path=resume_log_root(args)
                         / "traj_tracin"
                         / "score_shards"
                         / query_tag(query)
