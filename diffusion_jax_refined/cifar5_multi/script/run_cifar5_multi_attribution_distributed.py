@@ -112,7 +112,7 @@ def query_gradient_artifact_path(root: Path, args: argparse.Namespace, mode: str
         sample_query = f"prompt_{query.replace(',', '__')}"
         model_mode = mode
     query_dir = f"seed_{args.sample_seeds.split(',')[0].zfill(6)}_query_gradient"
-    namespace = artifact_namespace(args)
+    namespace = artifact_namespace(args) if getattr(args, "namespace_query_gradient", False) else ""
     if namespace:
         query_dir = f"{query_dir}_{namespace}"
     return (
@@ -152,6 +152,7 @@ def main() -> None:
     parser.add_argument("--only-train-gradient", action="store_true")
     parser.add_argument("--only-lds-eval", action="store_true")
     parser.add_argument("--artifact-namespace", default=os.environ.get("ATTRIBUTION_ARTIFACT_NAMESPACE", ""))
+    parser.add_argument("--namespace-query-gradient", action="store_true")
     parser.add_argument(
         "--eval-algorithms",
         default=None,

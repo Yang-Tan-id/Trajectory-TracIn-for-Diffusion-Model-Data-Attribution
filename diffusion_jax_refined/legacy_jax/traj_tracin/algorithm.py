@@ -341,6 +341,24 @@ def select_snapshot_positions(
     return cosine_select_indices(ddim_steps, num_keep)
 
 
+def select_precomputed_trajectory_snapshots(
+    xt_refs,
+    t_seq,
+    pos_seq,
+    num_keep: int,
+    snapshot_positions: Optional[Sequence[int]] = None,
+):
+    total = len(t_seq)
+    if total <= int(num_keep) and snapshot_positions is None:
+        return list(xt_refs), np.asarray(t_seq, dtype=np.int32), np.asarray(pos_seq, dtype=np.int32)
+    keep = select_snapshot_positions(total, int(num_keep), snapshot_positions)
+    return (
+        [xt_refs[int(i)] for i in keep],
+        np.asarray([int(t_seq[int(i)]) for i in keep], dtype=np.int32),
+        np.asarray([int(pos_seq[int(i)]) for i in keep], dtype=np.int32),
+    )
+
+
 def compute_reference_trajectory_ddim(
     eps_fn,
     params,
