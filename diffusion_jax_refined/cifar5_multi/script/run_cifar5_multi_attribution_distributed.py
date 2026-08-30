@@ -149,6 +149,7 @@ def main() -> None:
     parser.add_argument("--skip-das", action="store_true")
     parser.add_argument("--skip-traj-tracin", action="store_true")
     parser.add_argument("--skip-lds-eval", action="store_true")
+    parser.add_argument("--skip-query-gradient", action="store_true")
     parser.add_argument("--only-train-gradient", action="store_true")
     parser.add_argument("--only-lds-eval", action="store_true")
     parser.add_argument("--artifact-namespace", default=os.environ.get("ATTRIBUTION_ARTIFACT_NAMESPACE", ""))
@@ -197,7 +198,7 @@ def main() -> None:
     ranges = split_1based_ranges(args.size, len(worker_gpu_ids))
 
     if not args.skip_das:
-        if not args.only_train_gradient:
+        if not args.only_train_gradient and not args.skip_query_gradient:
             das_query_jobs: list[Job] = []
             for i, query in enumerate(all_queries):
                 mode, env = query_env(args, env0, query)
@@ -346,7 +347,7 @@ def main() -> None:
                 )
 
     if not args.skip_traj_tracin:
-        if not args.only_train_gradient:
+        if not args.only_train_gradient and not args.skip_query_gradient:
             query_jobs: list[Job] = []
             for i, query in enumerate(all_queries):
                 mode, env = query_env(args, env0, query)
