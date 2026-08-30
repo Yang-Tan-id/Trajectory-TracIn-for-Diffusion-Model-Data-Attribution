@@ -24,6 +24,9 @@ export TRAJ_TRACIN_PROJ_DIM="${TRAJ_TRACIN_PROJ_DIM:-4096}"
 export PROJECTED_CACHE_DIM="${PROJECTED_CACHE_DIM:-4096}"
 export PROJECTED_DIMS="${PROJECTED_DIMS:-4096}"
 export TRACIN_USE_SHARED_TRAIN_GRADIENT=1
+export GPU_IDS="${GPU_IDS:-0,1,2,3}"
+export GPU_SLOTS="${GPU_SLOTS:-4}"
+export GPU_PER_NODE="${GPU_PER_NODE:-${GPU_SLOTS}}"
 
 "${PYTHON_BIN}" "${CIFAR5_ROOT}/script/run_cifar5_multi_attribution_distributed.py" \
   --execute \
@@ -31,9 +34,9 @@ export TRACIN_USE_SHARED_TRAIN_GRADIENT=1
   --size "${CIFAR5_MULTI_SIZE}" \
   --train-seed "${TRAIN_SEED}" \
   --epochs "${JAX_EPOCHS}" \
-  --gpus "${GPU_IDS:-0,1,2,3}" \
-  --slots "${GPU_SLOTS:-4}" \
-  --gpu-per-node 4 \
+  --gpus "${GPU_IDS}" \
+  --slots "${GPU_SLOTS}" \
+  --gpu-per-node "${GPU_PER_NODE}" \
   --cpus-per-worker "${CPUS_PER_WORKER:-8}" \
   --slot-backend local \
   --only-train-gradient \
