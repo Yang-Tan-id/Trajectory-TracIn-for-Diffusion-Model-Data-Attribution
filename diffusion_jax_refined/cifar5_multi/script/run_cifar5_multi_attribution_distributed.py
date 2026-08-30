@@ -113,6 +113,7 @@ def main() -> None:
     parser.add_argument("--skip-das", action="store_true")
     parser.add_argument("--skip-traj-tracin", action="store_true")
     parser.add_argument("--skip-lds-eval", action="store_true")
+    parser.add_argument("--only-train-gradient", action="store_true")
     parser.add_argument("--only-lds-eval", action="store_true")
     parser.add_argument(
         "--eval-algorithms",
@@ -150,28 +151,31 @@ def main() -> None:
         args.skip_das = True
         args.skip_traj_tracin = True
         args.skip_lds_eval = False
+    if args.only_train_gradient:
+        args.skip_lds_eval = True
 
     ranges = split_1based_ranges(args.size, len(worker_gpu_ids))
 
     if not args.skip_das:
-        das_query_jobs: list[Job] = []
-        for i, query in enumerate(all_queries):
-            mode, env = query_env(args, env0, query)
-            if score_complete(args.root, args, mode=mode, query=query, algorithm="das"):
-                print(f"[skip] DAS scores already complete for {query_tag(query)}")
-                continue
-            slot = slot_for(i, len(worker_gpu_ids))
-            das_query_jobs.append(
-                Job(
-                    name=f"das_query_{query_tag(query)}",
-                    cmd=[python_bin, "02_query_gradient.py"],
-                    cwd=args.root / "data_attribution" / "das",
-                    env=gpu_env(env, worker_gpu_ids[slot]),
-                    log_path=log_root(args) / "attribution_resume" / "das" / "query" / f"{query_tag(query)}.log",
-                    slot=slot,
+        if not args.only_train_gradient:
+            das_query_jobs: list[Job] = []
+            for i, query in enumerate(all_queries):
+                mode, env = query_env(args, env0, query)
+                if score_complete(args.root, args, mode=mode, query=query, algorithm="das"):
+                    print(f"[skip] DAS scores already complete for {query_tag(query)}")
+                    continue
+                slot = slot_for(i, len(worker_gpu_ids))
+                das_query_jobs.append(
+                    Job(
+                        name=f"das_query_{query_tag(query)}",
+                        cmd=[python_bin, "02_query_gradient.py"],
+                        cwd=args.root / "data_attribution" / "das",
+                        env=gpu_env(env, worker_gpu_ids[slot]),
+                        log_path=log_root(args) / "attribution_resume" / "das" / "query" / f"{query_tag(query)}.log",
+                        slot=slot,
+                    )
                 )
-            )
-        run_parallel_jobs(das_query_jobs, args=args, execute=args.execute, max_parallel=len(worker_gpu_ids))
+            run_parallel_jobs(das_query_jobs, args=args, execute=args.execute, max_parallel=len(worker_gpu_ids))
 
         for mode in ("prompted_solo", "unprompted_solo"):
             final_artifact = train_artifact_path(args.root, args, mode, "das")
@@ -225,7 +229,9 @@ def main() -> None:
                 execute=args.execute,
             )
 
-        for query in all_queries:
+        if args.only_train_gradient:
+            print("[done] DAS train-gradient-only stage complete")
+        for query in ([] if args.only_train_gradient else all_queries):
             mode, env = query_env(args, env0, query)
             if score_complete(args.root, args, mode=mode, query=query, algorithm="das"):
                 print(f"[skip] DAS scores already complete for {query_tag(query)}")
@@ -296,21 +302,22 @@ def main() -> None:
                 )
 
     if not args.skip_traj_tracin:
-        query_jobs: list[Job] = []
-        for i, query in enumerate(all_queries):
-            _mode, env = query_env(args, env0, query)
-            slot = slot_for(i, len(worker_gpu_ids))
-            query_jobs.append(
-                Job(
-                    name=f"traj_query_{query_tag(query)}",
-                    cmd=[python_bin, "02_query_gradient.py"],
-                    cwd=args.root / "data_attribution" / "traj_tracin",
-                    env=gpu_env(env, worker_gpu_ids[slot]),
-                    log_path=log_root(args) / "attribution_resume" / "traj_tracin" / "query" / f"{query_tag(query)}.log",
-                    slot=slot,
+        if not args.only_train_gradient:
+            query_jobs: list[Job] = []
+            for i, query in enumerate(all_queries):
+                _mode, env = query_env(args, env0, query)
+                slot = slot_for(i, len(worker_gpu_ids))
+                query_jobs.append(
+                    Job(
+                        name=f"traj_query_{query_tag(query)}",
+                        cmd=[python_bin, "02_query_gradient.py"],
+                        cwd=args.root / "data_attribution" / "traj_tracin",
+                        env=gpu_env(env, worker_gpu_ids[slot]),
+                        log_path=log_root(args) / "attribution_resume" / "traj_tracin" / "query" / f"{query_tag(query)}.log",
+                        slot=slot,
+                    )
                 )
-            )
-        run_parallel_jobs(query_jobs, args=args, execute=args.execute, max_parallel=len(worker_gpu_ids))
+            run_parallel_jobs(query_jobs, args=args, execute=args.execute, max_parallel=len(worker_gpu_ids))
 
         for mode in ("prompted_solo", "unprompted_solo"):
             final_artifact = train_artifact_path(args.root, args, mode, "traj_tracin")
@@ -359,7 +366,9 @@ def main() -> None:
                 if missing:
                     raise FileNotFoundError(f"Missing TrajTracIn train shard(s) for {mode}: {missing[:3]}")
 
-        for query in all_queries:
+        if args.only_train_gradient:
+            print("[done] TrajTracIn train-gradient-only stage complete")
+        for query in ([] if args.only_train_gradient else all_queries):
             mode, env = query_env(args, env0, query)
             if score_complete(args.root, args, mode=mode, query=query, algorithm="traj_tracin"):
                 print(f"[skip] TrajTracIn scores already complete for {query_tag(query)}")
