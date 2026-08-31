@@ -104,14 +104,15 @@ def _combine_dtrak_scores(train_payload: dict[str, np.ndarray], query_payload: d
 
 def _combine_multiterm_dot_scores(train_payload: dict[str, np.ndarray], query_payload: dict[str, np.ndarray], *, train_path: Path, query_path: Path) -> np.ndarray:
     use_tqdm = _env_flag("TRACIN_SCORE_TQDM", "1")
+    score_dtype = np.float64 if _env_flag("TRACIN_SCORE_FLOAT64", "0") else np.float32
     train = _first_array(train_payload, ("train_features", "features", "train_gradients", "gradients"), path=train_path)
-    train = np.asarray(train, dtype=np.float64)
+    train = np.asarray(train, dtype=score_dtype)
     if train.ndim == 2:
         return _combine_dot_scores(train_payload, query_payload, train_path=train_path, query_path=query_path)
     if train.ndim != 3:
         raise ValueError(f"{train_path} train features must be rank 2 or 3, got shape {train.shape}")
     query = _first_array(query_payload, ("query_features", "query_feature", "query_gradient", "query_gradients"), path=query_path)
-    query = np.asarray(query, dtype=np.float64)
+    query = np.asarray(query, dtype=score_dtype)
     if query.ndim == 1:
         query = query[None, :]
     if query.ndim != 2:
@@ -136,7 +137,7 @@ def _combine_multiterm_dot_scores(train_payload: dict[str, np.ndarray], query_pa
         print(
             "[traj-score] "
             f"checkpoint_shared=1 train_terms={train.shape[0]} query_terms={query.shape[0]} "
-            f"points={train.shape[1]} dim={train.shape[2]}",
+            f"points={train.shape[1]} dim={train.shape[2]} dtype={np.dtype(score_dtype).name}",
             flush=True,
         )
         scores = np.zeros((train.shape[1],), dtype=np.float64)
@@ -165,7 +166,8 @@ def _combine_multiterm_dot_scores(train_payload: dict[str, np.ndarray], query_pa
     scores = np.zeros((train.shape[1],), dtype=np.float64)
     print(
         "[traj-score] "
-        f"checkpoint_shared=0 terms={train.shape[0]} points={train.shape[1]} dim={train.shape[2]}",
+        f"checkpoint_shared=0 terms={train.shape[0]} points={train.shape[1]} dim={train.shape[2]} "
+        f"dtype={np.dtype(score_dtype).name}",
         flush=True,
     )
     term_iter = _iter_with_tqdm(

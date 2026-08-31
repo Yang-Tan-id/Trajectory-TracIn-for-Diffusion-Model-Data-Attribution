@@ -2252,10 +2252,11 @@ def run_attribution(cfg: TrajAttributionConfig):
                         stage_ckpt_paths.append(str(ckpt_path))
                         stage_term_weights.append(ckpt_lr_weight / float(max(1, len(t_seq))))
                     stage_terms_done += len(chunk_ids)
+                    query_total_terms = (len(ckpts) - 1 if uses_next_checkpoint_target else len(ckpts)) * len(t_seq)
                     print(
                         f"[stage:query] checkpoint {ckpt_i + 1}/{len(ckpts)} "
                         f"snapshot {chunk_start + 1}-{chunk_end}/{len(t_seq)} | "
-                        f"terms={stage_terms_done}/{stage_total_terms} | "
+                        f"terms={stage_terms_done}/{query_total_terms} | "
                         f"elapsed={format_seconds(time.time() - stage_start_time)}",
                         flush=True,
                     )

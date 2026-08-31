@@ -92,6 +92,26 @@ def artifact_complete(path: Path) -> bool:
     return path.is_file()
 
 
+def query_artifact_complete(path: Path, *, algorithm: str, expected_terms: int) -> bool:
+    if not path.is_file():
+        return False
+    try:
+        import numpy as np
+
+        with np.load(path, allow_pickle=False) as data:
+            if algorithm == "traj_tracin":
+                if "query_features" not in data:
+                    return False
+                return int(np.asarray(data["query_features"]).shape[0]) == int(expected_terms)
+            if algorithm == "das":
+                if "query_features" not in data:
+                    return False
+                return int(np.asarray(data["query_features"]).shape[0]) == int(expected_terms)
+    except Exception:
+        return False
+    return True
+
+
 def run_distributed_for_query(
     args: argparse.Namespace,
     *,
@@ -309,7 +329,8 @@ def main() -> None:
                 q_args = args_for_seed(args, seed, namespace=ns)
                 q_args.namespace_query_gradient = args.namespace_query_gradient
                 path = query_gradient_artifact_path(args.root, q_args, "prompted_solo", query, algorithm)
-                if artifact_complete(path):
+                expected_terms = 100 if algorithm == "das" else 5000
+                if query_artifact_complete(path, algorithm=algorithm, expected_terms=expected_terms):
                     print(f"[skip] {algorithm} query gradient exists: {path}")
                     continue
                 env = env0 | {
