@@ -223,6 +223,7 @@ def main() -> None:
     parser.add_argument("--slots", type=int, default=None)
     parser.add_argument("--gpu-per-node", type=int, default=4)
     parser.add_argument("--cpus-per-worker", type=int, default=8)
+    parser.add_argument("--max-parallel", type=int, default=int(os.environ.get("MAX_PARALLEL", "0")) or None)
     parser.add_argument("--slot-backend", choices=("local", "ibrun", "srun"), default=os.environ.get("TACC_SLOT_BACKEND", "local"))
     parser.add_argument("--use-task-affinity", action="store_true")
     args = parser.parse_args()
@@ -237,14 +238,16 @@ def main() -> None:
     env0.setdefault("DAS_DAMPING_SWEEP", "1")
     env0.setdefault("JAX_BFLOAT16", "1")
     env0.setdefault("JAX_PREFETCH_SIZE", "1")
+    env0.setdefault("PYTHONUNBUFFERED", "1")
 
     queries = choose_prompted_queries(args.query_seed, 2)
     all_queries = queries + ["unprompted"]
     gpus = parse_gpus(args)
     worker_gpu_ids = worker_gpus(args, gpus)
+    max_parallel = max(1, min(args.max_parallel or len(worker_gpu_ids), len(worker_gpu_ids)))
     python_bin = os.environ.get("PYTHON_BIN", "python3")
     print(f"prompted queries: {queries}")
-    print(f"worker slots={len(worker_gpu_ids)} | worker_gpus={worker_gpu_ids} | backend={args.slot_backend}")
+    print(f"worker slots={len(worker_gpu_ids)} | worker_gpus={worker_gpu_ids} | max_parallel={max_parallel} | backend={args.slot_backend}")
     if artifact_namespace(args):
         print(f"artifact namespace={artifact_namespace(args)}")
 
@@ -278,7 +281,7 @@ def main() -> None:
                         slot=slot,
                     )
                 )
-            run_parallel_jobs(das_query_jobs, args=args, execute=args.execute, max_parallel=len(worker_gpu_ids))
+            run_parallel_jobs(das_query_jobs, args=args, execute=args.execute, max_parallel=max_parallel)
 
         for mode in ("prompted_solo", "unprompted_solo"):
             final_artifact = train_artifact_path(args.root, args, mode, "das")
@@ -317,7 +320,7 @@ def main() -> None:
                         slot=slot,
                     )
                 )
-            run_parallel_jobs(shard_jobs, args=args, execute=args.execute, max_parallel=len(worker_gpu_ids))
+            run_parallel_jobs(shard_jobs, args=args, execute=args.execute, max_parallel=max_parallel)
 
             shard_paths = [shard_artifact_path(args.root, args, mode, "das", start, end) for start, end in ranges]
             if args.execute:
@@ -357,7 +360,7 @@ def main() -> None:
                     ],
                     args=args,
                     execute=args.execute,
-                    max_parallel=len(worker_gpu_ids),
+                    max_parallel=max_parallel,
                 )
                 continue
             global_gram = das_global_gram_path(args.root, args, mode)
@@ -391,7 +394,7 @@ def main() -> None:
                         slot=slot,
                     )
                 )
-            run_parallel_jobs(shard_score_jobs, args=args, execute=args.execute, max_parallel=len(worker_gpu_ids))
+            run_parallel_jobs(shard_score_jobs, args=args, execute=args.execute, max_parallel=max_parallel)
 
             for score_tag, final_score_dir in score_dirs:
                 shard_dirs = [score_shard_dir(das_base_score_dir, start, end) / score_tag for start, end in ranges]
@@ -427,7 +430,7 @@ def main() -> None:
                         slot=slot,
                     )
                 )
-            run_parallel_jobs(query_jobs, args=args, execute=args.execute, max_parallel=len(worker_gpu_ids))
+            run_parallel_jobs(query_jobs, args=args, execute=args.execute, max_parallel=max_parallel)
 
         for mode in ("prompted_solo", "unprompted_solo"):
             final_artifact = train_artifact_path(args.root, args, mode, "traj_tracin")
@@ -510,7 +513,7 @@ def main() -> None:
                         slot=slot,
                     )
                 )
-            run_parallel_jobs(shard_jobs, args=args, execute=args.execute, max_parallel=len(worker_gpu_ids))
+            run_parallel_jobs(shard_jobs, args=args, execute=args.execute, max_parallel=max_parallel)
 
             shard_paths = [shard_artifact_path(args.root, args, mode, "traj_tracin", start, end) for start, end in ranges]
             if args.execute:
@@ -544,7 +547,7 @@ def main() -> None:
                         slot=slot,
                     )
                 )
-                run_parallel_jobs(score_jobs, args=args, execute=args.execute, max_parallel=len(worker_gpu_ids))
+                run_parallel_jobs(score_jobs, args=args, execute=args.execute, max_parallel=max_parallel)
                 continue
 
             shard_score_jobs: list[Job] = []
@@ -574,7 +577,7 @@ def main() -> None:
                         slot=slot,
                     )
                 )
-            run_parallel_jobs(shard_score_jobs, args=args, execute=args.execute, max_parallel=len(worker_gpu_ids))
+            run_parallel_jobs(shard_score_jobs, args=args, execute=args.execute, max_parallel=max_parallel)
 
             shard_dirs = [score_shard_dir(score_dirs[0][1], start, end) for start, end in ranges]
             if args.execute:
