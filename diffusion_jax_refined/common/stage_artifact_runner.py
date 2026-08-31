@@ -10,9 +10,20 @@ import numpy as np
 from .stage_runner import run_stage_config, stage_root
 from .config_loader import load_config, require_attr
 
+try:
+    from tqdm.auto import tqdm
+except Exception:  # pragma: no cover - tqdm is optional on cluster envs.
+    tqdm = None
+
 
 TRAIN_ARTIFACT = "train_datapoint_gradient_artifact.npz"
 QUERY_ARTIFACT = "query_gradient_artifact.npz"
+
+
+def _iter_with_tqdm(iterable, *, total: int | None, desc: str, enabled: bool = True):
+    if enabled and tqdm is not None:
+        return tqdm(iterable, total=total, desc=desc, dynamic_ncols=True)
+    return iterable
 
 
 def _load_npz(path: Path) -> dict[str, np.ndarray]:
@@ -152,6 +163,8 @@ def _combine_das_scores(
 ) -> np.ndarray:
     score_dtype = _score_float_dtype()
     use_denominator = _env_flag("DAS_SHERMAN_MORRISON_DENOMINATOR", "1")
+    use_tqdm = _env_flag("DAS_SCORE_TQDM", "1")
+    denom_batch_size = max(1, int(os.environ.get("DAS_SCORE_DENOM_BATCH_SIZE", "256")))
     train = _first_array(train_payload, ("train_features", "features", "phi", "phis"), path=train_path)
     train = np.asarray(train, dtype=score_dtype)
     if train.ndim == 2:
@@ -202,8 +215,22 @@ def _combine_das_scores(
     if gram is not None and gram.ndim == 2:
         gram = gram[None, :, :]
 
+    print(
+        "[das-score] "
+        f"terms={train.shape[0]} points={train.shape[1]} dim={train.shape[2]} "
+        f"damping={damping} dtype={np.dtype(score_dtype).name} denominator={int(use_denominator)} "
+        f"denom_batch={denom_batch_size}",
+        flush=True,
+    )
     scores = np.zeros((train.shape[1],), dtype=np.float64)
-    for i in range(train.shape[0]):
+    term_iter = _iter_with_tqdm(
+        range(train.shape[0]),
+        total=train.shape[0],
+        desc=f"DAS score lambda={_damping_tag(damping or 0)}",
+        enabled=use_tqdm,
+    )
+    for i in term_iter:
+        print(f"[das-score] term {i + 1}/{train.shape[0]} | solving query", flush=True)
         if gram_inv is not None:
             inv = gram_inv[i]
             u = inv @ query[i]
@@ -215,14 +242,35 @@ def _combine_das_scores(
             u = query[i]
         raw = (train[i] @ u) * residual[i]
         if use_denominator and (gram_inv is not None or gram is not None):
+            print(f"[das-score] term {i + 1}/{train.shape[0]} | denominator", flush=True)
             if inv is not None:
                 solved_train = train[i] @ inv.T
+                leverage = np.einsum("md,md->m", train[i], solved_train, dtype=np.float64)
             else:
-                solved_train = np.linalg.solve(gram[i], train[i].T).T
-            leverage = np.einsum("md,md->m", train[i], solved_train, dtype=np.float64)
-            denom = np.maximum(1.0 - leverage, 1e-12)
+                leverage = np.empty((train.shape[1],), dtype=np.float64)
+                starts = range(0, train.shape[1], denom_batch_size)
+                denom_iter = _iter_with_tqdm(
+                    starts,
+                    total=(train.shape[1] + denom_batch_size - 1) // denom_batch_size,
+                    desc=f"DAS denom term={i + 1}/{train.shape[0]} lambda={_damping_tag(damping or 0)}",
+                    enabled=use_tqdm,
+                )
+                for start in denom_iter:
+                    end = min(start + denom_batch_size, train.shape[1])
+                    phi_chunk = train[i, start:end]
+                    solved_train = np.linalg.solve(gram[i], phi_chunk.T).T
+                    leverage[start:end] = np.einsum("md,md->m", phi_chunk, solved_train, dtype=np.float64)
+                    if hasattr(denom_iter, "set_postfix"):
+                        denom_iter.set_postfix(samples=f"{end}/{train.shape[1]}")
+            denom = 1.0 - leverage
+            denom = np.where(
+                np.abs(denom) < 1e-6,
+                np.where(denom >= 0.0, 1e-6, -1e-6),
+                denom,
+            )
             raw = raw / denom
         scores += np.square(raw)
+        print(f"[das-score] term {i + 1}/{train.shape[0]} done", flush=True)
     return scores / float(train.shape[0])
 
 
