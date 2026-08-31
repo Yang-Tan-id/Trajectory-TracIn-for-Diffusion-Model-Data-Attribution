@@ -125,7 +125,7 @@ def query_gradient_artifact_path(root: Path, args: argparse.Namespace, mode: str
         sample_query = "prompt_unconditional"
         model_mode = "unprompted_solo"
     else:
-        sample_query = f"prompt_{query.replace(',', '__')}"
+        sample_query = f"prompt_{query_tag(query)}"
         model_mode = mode
     query_dir = f"seed_{args.sample_seeds.split(',')[0].zfill(6)}_query_gradient"
     namespace = artifact_namespace(args) if getattr(args, "namespace_query_gradient", False) else ""
