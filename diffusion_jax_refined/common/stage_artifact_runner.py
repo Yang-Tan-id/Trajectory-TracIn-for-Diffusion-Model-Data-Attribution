@@ -50,22 +50,37 @@ def _score_indices(train_payload: dict[str, np.ndarray], n: int) -> np.ndarray:
     return np.arange(n, dtype=np.int64)
 
 
-def _query_vector(query_payload: dict[str, np.ndarray], *, path: Path) -> np.ndarray:
+def _normalize_rows(x: np.ndarray, eps: float) -> np.ndarray:
+    denom = np.linalg.norm(x, axis=-1, keepdims=True)
+    return x / np.maximum(denom, float(eps))
+
+
+def _query_vector(query_payload: dict[str, np.ndarray], *, path: Path, normalize: bool = False, eps: float = 1e-8) -> np.ndarray:
     q = _first_array(query_payload, ("query_feature", "query_features", "query_gradient", "query_gradients"), path=path)
     q = np.asarray(q, dtype=np.float64)
     if q.ndim == 1:
-        return q
+        return _normalize_rows(q[None, :], eps)[0] if normalize else q
     if q.ndim == 2:
+        if normalize:
+            q = _normalize_rows(q, eps)
         return q.sum(axis=0)
     raise ValueError(f"{path} query feature must be rank 1 or 2, got shape {q.shape}")
 
 
-def _combine_dot_scores(train_payload: dict[str, np.ndarray], query_payload: dict[str, np.ndarray], *, train_path: Path, query_path: Path) -> np.ndarray:
+def _combine_dot_scores(
+    train_payload: dict[str, np.ndarray],
+    query_payload: dict[str, np.ndarray],
+    *,
+    train_path: Path,
+    query_path: Path,
+    normalize_query: bool = False,
+    query_normalize_eps: float = 1e-8,
+) -> np.ndarray:
     train = _first_array(train_payload, ("train_features", "features", "train_gradients", "gradients"), path=train_path)
     train = np.asarray(train, dtype=np.float64)
     if train.ndim != 2:
         raise ValueError(f"{train_path} train features must be rank 2, got shape {train.shape}")
-    query = _query_vector(query_payload, path=query_path)
+    query = _query_vector(query_payload, path=query_path, normalize=normalize_query, eps=query_normalize_eps)
     if train.shape[1] != query.shape[0]:
         raise ValueError(f"feature dimension mismatch: train {train.shape} vs query {query.shape}")
     return train @ query
@@ -102,7 +117,15 @@ def _combine_dtrak_scores(train_payload: dict[str, np.ndarray], query_payload: d
     return scores / float(train.shape[0])
 
 
-def _combine_multiterm_dot_scores(train_payload: dict[str, np.ndarray], query_payload: dict[str, np.ndarray], *, train_path: Path, query_path: Path) -> np.ndarray:
+def _combine_multiterm_dot_scores(
+    train_payload: dict[str, np.ndarray],
+    query_payload: dict[str, np.ndarray],
+    *,
+    train_path: Path,
+    query_path: Path,
+    normalize_query: bool = False,
+    query_normalize_eps: float = 1e-8,
+) -> np.ndarray:
     use_tqdm = _env_flag("TRACIN_SCORE_TQDM", "1")
     score_dtype = np.float64 if _env_flag("TRACIN_SCORE_FLOAT64", "0") else np.float32
     train = _first_array(train_payload, ("train_features", "features", "train_gradients", "gradients"), path=train_path)
@@ -117,6 +140,8 @@ def _combine_multiterm_dot_scores(train_payload: dict[str, np.ndarray], query_pa
         query = query[None, :]
     if query.ndim != 2:
         raise ValueError(f"{query_path} query features must be rank 1 or 2, got shape {query.shape}")
+    if normalize_query:
+        query = _normalize_rows(query, query_normalize_eps)
     if train.shape[0] != query.shape[0] and "checkpoint_shared_train_gradient" in train_payload:
         train_ckpts = np.asarray(train_payload.get("ckpt_indices"), dtype=np.int32).reshape(-1)
         query_ckpts = np.asarray(query_payload.get("ckpt_indices"), dtype=np.int32).reshape(-1)
@@ -137,7 +162,8 @@ def _combine_multiterm_dot_scores(train_payload: dict[str, np.ndarray], query_pa
         print(
             "[traj-score] "
             f"checkpoint_shared=1 train_terms={train.shape[0]} query_terms={query.shape[0]} "
-            f"points={train.shape[1]} dim={train.shape[2]} dtype={np.dtype(score_dtype).name}",
+            f"points={train.shape[1]} dim={train.shape[2]} dtype={np.dtype(score_dtype).name} "
+            f"query_normalized={int(normalize_query)}",
             flush=True,
         )
         scores = np.zeros((train.shape[1],), dtype=np.float64)
@@ -167,7 +193,7 @@ def _combine_multiterm_dot_scores(train_payload: dict[str, np.ndarray], query_pa
     print(
         "[traj-score] "
         f"checkpoint_shared=0 terms={train.shape[0]} points={train.shape[1]} dim={train.shape[2]} "
-        f"dtype={np.dtype(score_dtype).name}",
+        f"dtype={np.dtype(score_dtype).name} query_normalized={int(normalize_query)}",
         flush=True,
     )
     term_iter = _iter_with_tqdm(
@@ -468,6 +494,15 @@ def _score_float_dtype() -> np.dtype:
     return np.float64 if _env_flag("DAS_SCORE_FLOAT64", "0") else np.float32
 
 
+def _query_normalized_score_dir(out_dir: Path) -> Path:
+    parts = list(out_dir.parts)
+    if "score" in parts:
+        idx = len(parts) - 1 - parts[::-1].index("score")
+        parts[idx] = "score_query_normalized"
+        return Path(*parts)
+    return out_dir.parent / f"{out_dir.name}_query_normalized"
+
+
 def _das_damping_values(config_path: Path, train_payload: dict[str, np.ndarray]) -> tuple[float, ...]:
     if os.environ.get("DAS_DAMPING_SWEEP", "0") not in ("1", "true", "True", "yes"):
         if "damping" in train_payload:
@@ -544,6 +579,32 @@ def run_score_combination_stage(config_path: str | Path) -> Path:
         scores = _combine_dtrak_scores(train_payload, query_payload, train_path=train_path, query_path=query_path)
     elif algorithm in ("end_tracin", "traj_tracin"):
         scores = _combine_multiterm_dot_scores(train_payload, query_payload, train_path=train_path, query_path=query_path)
+        if _env_flag("TRACIN_SCORE_QUERY_NORMALIZE", "0"):
+            query_normalize_eps = float(os.environ.get("TRACIN_SCORE_QUERY_NORMALIZE_EPS", "1e-8"))
+            normalized_scores = _combine_multiterm_dot_scores(
+                train_payload,
+                query_payload,
+                train_path=train_path,
+                query_path=query_path,
+                normalize_query=True,
+                query_normalize_eps=query_normalize_eps,
+            )
+            indices = _score_indices(train_payload, len(normalized_scores))
+            normalized_out_dir = _query_normalized_score_dir(out_dir)
+            _write_score_outputs(
+                normalized_out_dir,
+                normalized_scores,
+                indices,
+                train_dir=train_dir,
+                query_dir=query_dir,
+                algorithm=algorithm,
+                extra_manifest={
+                    "query_gradient": "l2",
+                    "query_normalize_eps": query_normalize_eps,
+                    "raw_score_dir": str(out_dir),
+                },
+            )
+            print(f"[score] wrote query-normalized TrajTracIn scores: {normalized_out_dir}")
     else:
         scores = _combine_dot_scores(train_payload, query_payload, train_path=train_path, query_path=query_path)
     indices = _score_indices(train_payload, len(scores))

@@ -567,7 +567,8 @@ def main() -> None:
             for shard_id, (start, end) in enumerate(ranges):
                 shard_path = shard_artifact_path(args.root, args, mode, "traj_tracin", start, end)
                 target_score_dir = score_shard_dir(score_dirs[0][1], start, end)
-                if (target_score_dir / "scores.npy").is_file():
+                target_score_dirs = [score_shard_dir(score_dir, start, end) for _tag, score_dir in score_dirs]
+                if all((score_dir / "scores.npy").is_file() for score_dir in target_score_dirs):
                     print(f"[skip] TrajTracIn score shard {query_tag(query)} {start}-{end}: {target_score_dir}")
                     continue
                 shard_env = env | {
@@ -592,17 +593,26 @@ def main() -> None:
                 )
             run_parallel_jobs(shard_score_jobs, args=args, execute=args.execute, max_parallel=max_parallel)
 
-            shard_dirs = [score_shard_dir(score_dirs[0][1], start, end) for start, end in ranges]
-            if args.execute:
-                missing_scores = [str(path / "scores.npy") for path in shard_dirs if not (path / "scores.npy").is_file()]
-                if missing_scores:
-                    raise FileNotFoundError(f"Missing TrajTracIn score shard(s) for {query_tag(query)}: {missing_scores[:3]}")
-            run(
-                [python_bin, str(args.root.parent / "common" / "merge_score_shards.py"), "--output-dir", str(score_dirs[0][1]), *map(str, shard_dirs)],
-                env0,
-                cwd=args.root,
-                execute=args.execute,
-            )
+            for score_tag, score_dir in score_dirs:
+                shard_dirs = [score_shard_dir(score_dir, start, end) for start, end in ranges]
+                if args.execute:
+                    missing_scores = [str(path / "scores.npy") for path in shard_dirs if not (path / "scores.npy").is_file()]
+                    if missing_scores:
+                        raise FileNotFoundError(
+                            f"Missing TrajTracIn {score_tag} score shard(s) for {query_tag(query)}: {missing_scores[:3]}"
+                        )
+                run(
+                    [
+                        python_bin,
+                        str(args.root.parent / "common" / "merge_score_shards.py"),
+                        "--output-dir",
+                        str(score_dir),
+                        *map(str, shard_dirs),
+                    ],
+                    env0,
+                    cwd=args.root,
+                    execute=args.execute,
+                )
 
     if not args.skip_lds_eval:
         if args.eval_algorithms:

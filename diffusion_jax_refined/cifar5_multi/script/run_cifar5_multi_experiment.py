@@ -78,6 +78,8 @@ def attribution_score_dirs(root: Path, args: argparse.Namespace, *, mode: str, q
     base = base / algorithm / "score"
     if algorithm == "das":
         return [(f"lambda_{damping_tag(v)}", base / f"lambda_{damping_tag(v)}") for v in das_damping_values()]
+    if algorithm == "traj_tracin" and os.environ.get("TRACIN_SCORE_QUERY_NORMALIZE", "0") not in ("0", "false", "False", "no", "No"):
+        return [("default", base), ("query_normalized", base.parent / "score_query_normalized")]
     return [("default", base)]
 
 
