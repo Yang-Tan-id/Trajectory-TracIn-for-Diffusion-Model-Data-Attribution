@@ -53,7 +53,15 @@ echo "CIFAR5 multi random-20 prompted attribution RTX-small job"
 echo "repo=${REPO_ROOT}"
 echo "experiment=${EXPERIMENT_TAG}; train_seed=${TRAIN_SEED}; slots=${GPU_SLOTS:-2}"
 echo "traj_namespace=${TRAJ_ATTRIBUTION_ARTIFACT_NAMESPACE:-h100_traj_ckptshared_10x10}"
+echo "traj_score_query_normalize=${TRACIN_SCORE_QUERY_NORMALIZE:-0}; eps=${TRACIN_SCORE_QUERY_NORMALIZE_EPS:-1e-8}"
 echo "python=$(${PYTHON_BIN} -c 'import sys; print(sys.executable)')"
+
+TRACIN_QN_ARGS=()
+case "${TRACIN_SCORE_QUERY_NORMALIZE:-0}" in
+  1|true|True|yes|Yes)
+    TRACIN_QN_ARGS=(--tracin-score-query-normalize --tracin-score-query-normalize-eps "${TRACIN_SCORE_QUERY_NORMALIZE_EPS:-1e-8}")
+    ;;
+esac
 
 "${PYTHON_BIN}" diffusion_jax_refined/cifar5_multi/script/run_cifar5_multi_random_prompted_queries.py \
   --execute \
@@ -73,4 +81,5 @@ echo "python=$(${PYTHON_BIN} -c 'import sys; print(sys.executable)')"
   --cpus-per-worker "${CPUS_PER_WORKER:-8}" \
   --slot-backend "${TACC_SLOT_BACKEND:-local}" \
   --max-parallel "${MAX_PARALLEL:-2}" \
+  "${TRACIN_QN_ARGS[@]}" \
   ${EXTRA_CIFAR5_RANDOM20_ARGS:-}

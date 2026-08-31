@@ -164,6 +164,11 @@ def run_distributed_for_query(
         cmd.append("--namespace-query-gradient")
     if namespace and args.aggregate_traj_train_from_namespace:
         cmd.extend(["--aggregate-traj-train-from-namespace", args.aggregate_traj_train_from_namespace])
+    if args.tracin_score_query_normalize:
+        env = env | {
+            "TRACIN_SCORE_QUERY_NORMALIZE": "1",
+            "TRACIN_SCORE_QUERY_NORMALIZE_EPS": str(args.tracin_score_query_normalize_eps),
+        }
     run(cmd, env, cwd=args.root, execute=args.execute)
 
 
@@ -243,6 +248,16 @@ def main() -> None:
     parser.add_argument("--namespace-query-gradient", action="store_true")
     parser.add_argument("--traj-artifact-namespace", default=os.environ.get("TRAJ_ATTRIBUTION_ARTIFACT_NAMESPACE", "h100_traj_ckptshared_10x10"))
     parser.add_argument("--aggregate-traj-train-from-namespace", default=os.environ.get("AGGREGATE_TRAJ_TRAIN_FROM_NAMESPACE", ""))
+    parser.add_argument(
+        "--tracin-score-query-normalize",
+        action="store_true",
+        default=os.environ.get("TRACIN_SCORE_QUERY_NORMALIZE", "0") not in ("0", "false", "False", "no", "No"),
+    )
+    parser.add_argument(
+        "--tracin-score-query-normalize-eps",
+        type=float,
+        default=float(os.environ.get("TRACIN_SCORE_QUERY_NORMALIZE_EPS", "1e-8")),
+    )
     parser.add_argument("--das-damping-sweep-values", default=os.environ.get("DAS_DAMPING_SWEEP_VALUES", DEFAULT_DAS_SWEEP))
     parser.add_argument("--python-bin", default=os.environ.get("PYTHON_BIN", "python3"))
     args = parser.parse_args()
@@ -268,6 +283,13 @@ def main() -> None:
     env0.setdefault("TRACIN_USE_SHARED_TRAIN_GRADIENT", "1")
     env0.setdefault("TRAJ_NUM_SNAPSHOTS", "10")
     env0.setdefault("TRAJ_TRAIN_MC_SAMPLES", "10")
+    env0["TRACIN_SCORE_QUERY_NORMALIZE"] = "1" if args.tracin_score_query_normalize else "0"
+    env0["TRACIN_SCORE_QUERY_NORMALIZE_EPS"] = str(args.tracin_score_query_normalize_eps)
+
+    print(
+        "traj_score_query_normalize="
+        f"{int(args.tracin_score_query_normalize)} eps={args.tracin_score_query_normalize_eps:g}"
+    )
 
     specs = build_query_specs(args)
     manifest_dir = args.root / "result" / args.experiment / "query_sets"
