@@ -103,6 +103,7 @@ def _combine_dtrak_scores(train_payload: dict[str, np.ndarray], query_payload: d
 
 
 def _combine_multiterm_dot_scores(train_payload: dict[str, np.ndarray], query_payload: dict[str, np.ndarray], *, train_path: Path, query_path: Path) -> np.ndarray:
+    use_tqdm = _env_flag("TRACIN_SCORE_TQDM", "1")
     train = _first_array(train_payload, ("train_features", "features", "train_gradients", "gradients"), path=train_path)
     train = np.asarray(train, dtype=np.float64)
     if train.ndim == 2:
@@ -132,9 +133,23 @@ def _combine_multiterm_dot_scores(train_payload: dict[str, np.ndarray], query_pa
         missing = sorted({int(ckpt) for ckpt in query_ckpts if int(ckpt) not in by_ckpt})
         if missing:
             raise ValueError(f"query has checkpoint(s) missing from train artifact: {missing[:10]}")
+        print(
+            "[traj-score] "
+            f"checkpoint_shared=1 train_terms={train.shape[0]} query_terms={query.shape[0]} "
+            f"points={train.shape[1]} dim={train.shape[2]}",
+            flush=True,
+        )
         scores = np.zeros((train.shape[1],), dtype=np.float64)
-        for i in range(query.shape[0]):
+        query_iter = _iter_with_tqdm(
+            range(query.shape[0]),
+            total=query.shape[0],
+            desc="TrajTracIn score broadcast terms",
+            enabled=use_tqdm,
+        )
+        for i in query_iter:
             scores += float(weights[i]) * (train[by_ckpt[int(query_ckpts[i])]] @ query[i])
+            if (i + 1) % 100 == 0 or i + 1 == query.shape[0]:
+                print(f"[traj-score] broadcast term {i + 1}/{query.shape[0]}", flush=True)
         return scores
     if train.shape[0] != query.shape[0] or train.shape[2] != query.shape[1]:
         raise ValueError(f"feature dimension mismatch: train {train.shape} vs query {query.shape}")
@@ -148,8 +163,21 @@ def _combine_multiterm_dot_scores(train_payload: dict[str, np.ndarray], query_pa
         if not np.allclose(train_weights, weights, rtol=1e-5, atol=1e-12):
             raise ValueError("train/query term_weights differ; regenerate both Traj TracIn artifacts with the same LR schedule")
     scores = np.zeros((train.shape[1],), dtype=np.float64)
-    for i in range(train.shape[0]):
+    print(
+        "[traj-score] "
+        f"checkpoint_shared=0 terms={train.shape[0]} points={train.shape[1]} dim={train.shape[2]}",
+        flush=True,
+    )
+    term_iter = _iter_with_tqdm(
+        range(train.shape[0]),
+        total=train.shape[0],
+        desc="TrajTracIn score terms",
+        enabled=use_tqdm,
+    )
+    for i in term_iter:
         scores += float(weights[i]) * (train[i] @ query[i])
+        if (i + 1) % 100 == 0 or i + 1 == train.shape[0]:
+            print(f"[traj-score] term {i + 1}/{train.shape[0]}", flush=True)
     return scores
 
 
