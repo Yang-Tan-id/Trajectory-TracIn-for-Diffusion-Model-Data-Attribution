@@ -85,6 +85,50 @@ def _prediction_tag(subset: str, sign: float) -> str:
     return f"pred_{subset}_sign_{sign_text}"
 
 
+def _read_target_cache(path: Path, *, checkpoint: str, target_function: str) -> tuple[float, dict[str, object]] | None:
+    if os.environ.get("LDS_TARGET_CACHE", "1") in ("0", "false", "False", "no", "No"):
+        return None
+    if not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text())
+        if str(payload.get("checkpoint")) != str(checkpoint):
+            return None
+        if str(payload.get("target_function")) != str(target_function):
+            return None
+        return float(payload["true_f"]), dict(payload.get("target_details", {}))
+    except Exception:
+        return None
+
+
+def _write_target_cache(
+    path: Path,
+    *,
+    checkpoint: str,
+    subset_dir: Path,
+    target_function: str,
+    true_f: float,
+    details: dict[str, object],
+) -> None:
+    if os.environ.get("LDS_TARGET_CACHE", "1") in ("0", "false", "False", "no", "No"):
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(
+        json.dumps(
+            {
+                "checkpoint": str(checkpoint),
+                "subset_dir": str(subset_dir),
+                "target_function": target_function,
+                "true_f": float(true_f),
+                "target_details": details,
+            },
+            indent=2,
+        )
+    )
+    tmp.replace(path)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate one or more reusable LDS model folders.")
     parser.add_argument("config", help="Dataset dataset_config.py")
@@ -275,6 +319,8 @@ def main() -> None:
     out_dirs = {target: out_dir_for_target(target) for target in target_functions}
     for out_dir in out_dirs.values():
         out_dir.mkdir(parents=True, exist_ok=True)
+    cache_root = Path(require_attr(dataset_cfg, eval_root_attr)) / "lds_target_cache" / names
+    cache_dirs = {target: cache_root / target for target in target_functions}
 
     rows_by_target = {target: [] for target in target_functions}
     started = time.time()
@@ -286,7 +332,27 @@ def main() -> None:
             prediction_indices = np.load(subset_dir / "excluded_attribution_indices.npy")
         prediction = sum_scores(prediction_indices, score_map, args.prediction_sign)
         checkpoint = latest_checkpoint(str(subset_dir))
-        values = evaluator.evaluate_many(checkpoint, target_functions)
+        values = {}
+        missing_targets = []
+        for target_function in target_functions:
+            cache_path = cache_dirs[target_function] / f"target_{global_id:04d}.json"
+            cached = _read_target_cache(cache_path, checkpoint=checkpoint, target_function=target_function)
+            if cached is None:
+                missing_targets.append(target_function)
+            else:
+                values[target_function] = cached
+        if missing_targets:
+            evaluated = evaluator.evaluate_many(checkpoint, missing_targets)
+            for target_function, (true_f, details) in evaluated.items():
+                values[target_function] = (true_f, details)
+                _write_target_cache(
+                    cache_dirs[target_function] / f"target_{global_id:04d}.json",
+                    checkpoint=checkpoint,
+                    subset_dir=subset_dir,
+                    target_function=target_function,
+                    true_f=true_f,
+                    details=details,
+                )
         for target_function in target_functions:
             true_f, details = values[target_function]
             row = {
@@ -309,7 +375,8 @@ def main() -> None:
             write_csv(str(out_dir / "lds_results.csv"), rows)
         print(
             f"[{global_id + 1}/{len(subset_records)}] {model_dir.name}/{subset_dir.name} "
-            f"targets={','.join(target_functions)}",
+            f"targets={','.join(target_functions)} cached={len(target_functions) - len(missing_targets)} "
+            f"computed={len(missing_targets)}",
             flush=True,
         )
 
