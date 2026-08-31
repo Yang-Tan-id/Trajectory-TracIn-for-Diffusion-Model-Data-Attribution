@@ -2175,6 +2175,18 @@ def run_attribution(cfg: TrajAttributionConfig):
                 )
             elif precomputed_traj is not None:
                 xt_refs_raw, t_seq, pos_seq, _ = precomputed_traj
+                if (
+                    stage_mode == "query"
+                    and os.environ.get("TRAJ_QUERY_USE_CONFIG_SNAPSHOTS", "0")
+                    in ("1", "true", "True", "yes")
+                ):
+                    xt_refs_raw, t_seq, pos_seq = select_precomputed_trajectory_snapshots(
+                        xt_refs_raw,
+                        t_seq,
+                        pos_seq,
+                        num_keep=cfg.num_traj_snapshots,
+                        snapshot_positions=cfg.traj_snapshot_positions,
+                    )
                 xt_refs = [array_to_device(x, device) for x in xt_refs_raw]
             else:
                 xt_refs, t_seq, pos_seq = compute_reference_trajectory_ddim(
