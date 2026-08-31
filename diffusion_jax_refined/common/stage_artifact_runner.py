@@ -150,15 +150,17 @@ def _combine_das_scores(
     query_path: Path,
     damping: float | None = None,
 ) -> np.ndarray:
+    score_dtype = _score_float_dtype()
+    use_denominator = _env_flag("DAS_SHERMAN_MORRISON_DENOMINATOR", "1")
     train = _first_array(train_payload, ("train_features", "features", "phi", "phis"), path=train_path)
-    train = np.asarray(train, dtype=np.float64)
+    train = np.asarray(train, dtype=score_dtype)
     if train.ndim == 2:
         train = train[None, :, :]
     if train.ndim != 3:
         raise ValueError(f"{train_path} DAS train features must be rank 2 or 3, got shape {train.shape}")
 
     query = _first_array(query_payload, ("query_features", "query_feature", "query_gradient", "query_gradients"), path=query_path)
-    query = np.asarray(query, dtype=np.float64)
+    query = np.asarray(query, dtype=score_dtype)
     if query.ndim == 1:
         query = query[None, :]
     if query.ndim != 2:
@@ -167,7 +169,7 @@ def _combine_das_scores(
         raise ValueError(f"feature dimension mismatch: train {train.shape} vs query {query.shape}")
 
     residual = _first_array(query_payload, ("residuals", "residual", "residual_scalar", "residual_scalars"), path=query_path)
-    residual = np.asarray(residual, dtype=np.float64)
+    residual = np.asarray(residual, dtype=score_dtype)
     if residual.ndim == 1:
         residual = residual[None, :]
     if residual.shape[0] == train.shape[0] and residual.shape[1] != train.shape[1]:
@@ -181,19 +183,19 @@ def _combine_das_scores(
     gram_inv = None
     gram = None
     if damping is not None and "gram_undamped" in train_payload:
-        gram = np.asarray(train_payload["gram_undamped"], dtype=np.float64)
+        gram = np.asarray(train_payload["gram_undamped"], dtype=score_dtype)
         if gram.ndim == 2:
             gram = gram[None, :, :]
-        eye = np.eye(gram.shape[-1], dtype=np.float64)
+        eye = np.eye(gram.shape[-1], dtype=score_dtype)
         gram = gram + float(damping) * eye[None, :, :]
     else:
         for key in ("gram", "gram_matrix", "H", "H_proj"):
             if key in train_payload:
-                gram = np.asarray(train_payload[key], dtype=np.float64)
+                gram = np.asarray(train_payload[key], dtype=score_dtype)
                 break
     for key in ("gram_inverse", "inverse_gram", "gram_inv", "h_inverse"):
         if key in train_payload:
-            gram_inv = np.asarray(train_payload[key], dtype=np.float64)
+            gram_inv = np.asarray(train_payload[key], dtype=score_dtype)
             break
     if gram_inv is not None and gram_inv.ndim == 2:
         gram_inv = gram_inv[None, :, :]
@@ -206,14 +208,18 @@ def _combine_das_scores(
             inv = gram_inv[i]
             u = inv @ query[i]
         elif gram is not None:
-            inv = np.linalg.inv(gram[i])
-            u = inv @ query[i]
+            inv = None
+            u = np.linalg.solve(gram[i], query[i])
         else:
             inv = None
             u = query[i]
         raw = (train[i] @ u) * residual[i]
-        if inv is not None:
-            leverage = np.einsum("md,dd,md->m", train[i], inv, train[i])
+        if use_denominator and (gram_inv is not None or gram is not None):
+            if inv is not None:
+                solved_train = train[i] @ inv.T
+            else:
+                solved_train = np.linalg.solve(gram[i], train[i].T).T
+            leverage = np.einsum("md,md->m", train[i], solved_train, dtype=np.float64)
             denom = np.maximum(1.0 - leverage, 1e-12)
             raw = raw / denom
         scores += np.square(raw)
@@ -276,6 +282,14 @@ def _damping_tag(value: float) -> str:
 
 def _parse_float_list(text: str) -> tuple[float, ...]:
     return tuple(float(part) for part in text.replace(",", " ").split() if part.strip())
+
+
+def _env_flag(name: str, default: str = "0") -> bool:
+    return os.environ.get(name, default) not in ("0", "false", "False", "no", "No")
+
+
+def _score_float_dtype() -> np.dtype:
+    return np.float64 if _env_flag("DAS_SCORE_FLOAT64", "0") else np.float32
 
 
 def _das_damping_values(config_path: Path, train_payload: dict[str, np.ndarray]) -> tuple[float, ...]:
