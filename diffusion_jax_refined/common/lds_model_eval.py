@@ -31,6 +31,24 @@ def _paths(text: str) -> list[Path]:
     return [Path(part.strip()).expanduser().resolve() for part in text.split(",") if part.strip()]
 
 
+def _current_base_checkpoint(dataset_cfg, *, unprompted: bool, recorded_checkpoint: str) -> str:
+    recorded = Path(recorded_checkpoint).expanduser()
+    if recorded.is_file():
+        return str(recorded.resolve())
+    attr = "UNPROMPTED_JAX_REFERENCE_CKPT" if unprompted else "REFERENCE_CKPT"
+    current = Path(require_attr(dataset_cfg, attr)).expanduser()
+    if current.is_file():
+        print(
+            f"[lds-eval] recorded base checkpoint is missing; using current {attr}: {current}",
+            flush=True,
+        )
+        return str(current.resolve())
+    raise FileNotFoundError(
+        f"Recorded base checkpoint is missing: {recorded}. "
+        f"Current {attr} is also missing: {current}"
+    )
+
+
 def _int_list_env(name: str) -> list[int] | None:
     text = os.environ.get(name)
     if text is None or not text.strip():
@@ -149,7 +167,14 @@ def main() -> None:
         for subset in cfg["subsets"]:
             subset_dir = model_dir / "models" / f"subset_{int(subset['subset_id']):04d}"
             subset_records.append((model_dir, subset_dir, subset))
-    base_checkpoints = {str(Path(cfg["base_checkpoint"]).resolve()) for cfg in configs}
+    base_checkpoints = {
+        _current_base_checkpoint(
+            dataset_cfg,
+            unprompted=args.unprompted,
+            recorded_checkpoint=cfg["base_checkpoint"],
+        )
+        for cfg in configs
+    }
     if len(base_checkpoints) != 1:
         raise ValueError("All selected LDS model folders must share the same base checkpoint")
     base_checkpoint = base_checkpoints.pop()
