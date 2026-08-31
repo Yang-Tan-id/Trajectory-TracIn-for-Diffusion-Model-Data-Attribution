@@ -215,10 +215,24 @@ def _combine_das_scores(
     if gram is not None and gram.ndim == 2:
         gram = gram[None, :, :]
 
+    backend = os.environ.get("DAS_SCORE_BACKEND", "numpy").strip().lower()
+    if backend in ("jax", "gpu"):
+        return _combine_das_scores_jax(
+            train=train,
+            query=query,
+            residual=residual,
+            gram=gram,
+            gram_inv=gram_inv,
+            damping=damping,
+            use_denominator=use_denominator,
+            use_tqdm=use_tqdm,
+            denom_batch_size=denom_batch_size,
+        )
+
     print(
         "[das-score] "
         f"terms={train.shape[0]} points={train.shape[1]} dim={train.shape[2]} "
-        f"damping={damping} dtype={np.dtype(score_dtype).name} denominator={int(use_denominator)} "
+        f"damping={damping} backend=numpy dtype={np.dtype(score_dtype).name} denominator={int(use_denominator)} "
         f"denom_batch={denom_batch_size}",
         flush=True,
     )
@@ -270,6 +284,90 @@ def _combine_das_scores(
             )
             raw = raw / denom
         scores += np.square(raw)
+        print(f"[das-score] term {i + 1}/{train.shape[0]} done", flush=True)
+    return scores / float(train.shape[0])
+
+
+def _combine_das_scores_jax(
+    *,
+    train: np.ndarray,
+    query: np.ndarray,
+    residual: np.ndarray,
+    gram: np.ndarray | None,
+    gram_inv: np.ndarray | None,
+    damping: float | None,
+    use_denominator: bool,
+    use_tqdm: bool,
+    denom_batch_size: int,
+) -> np.ndarray:
+    try:
+        import jax
+        import jax.numpy as jnp
+    except Exception as exc:
+        raise RuntimeError("DAS_SCORE_BACKEND=jax requires JAX in this environment") from exc
+
+    devices = jax.devices()
+    print(
+        "[das-score] "
+        f"terms={train.shape[0]} points={train.shape[1]} dim={train.shape[2]} "
+        f"damping={damping} backend=jax device={devices[0] if devices else 'none'} "
+        f"dtype={train.dtype} denominator={int(use_denominator)} denom_batch={denom_batch_size}",
+        flush=True,
+    )
+    scores = np.zeros((train.shape[1],), dtype=np.float64)
+    term_iter = _iter_with_tqdm(
+        range(train.shape[0]),
+        total=train.shape[0],
+        desc=f"DAS score lambda={_damping_tag(damping or 0)}",
+        enabled=use_tqdm,
+    )
+    for i in term_iter:
+        print(f"[das-score] term {i + 1}/{train.shape[0]} | transfer/solve query", flush=True)
+        train_i = jax.device_put(jnp.asarray(train[i]))
+        query_i = jax.device_put(jnp.asarray(query[i]))
+        residual_i = jax.device_put(jnp.asarray(residual[i]))
+        gram_i = None if gram is None else jax.device_put(jnp.asarray(gram[i]))
+        inv_i = None if gram_inv is None else jax.device_put(jnp.asarray(gram_inv[i]))
+        if inv_i is not None:
+            u = inv_i @ query_i
+        elif gram_i is not None:
+            u = jnp.linalg.solve(gram_i, query_i)
+        else:
+            u = query_i
+        u.block_until_ready()
+
+        if use_denominator and (inv_i is not None or gram_i is not None):
+            print(f"[das-score] term {i + 1}/{train.shape[0]} | denominator/scoring", flush=True)
+            starts = range(0, train.shape[1], denom_batch_size)
+            denom_iter = _iter_with_tqdm(
+                starts,
+                total=(train.shape[1] + denom_batch_size - 1) // denom_batch_size,
+                desc=f"DAS denom term={i + 1}/{train.shape[0]} lambda={_damping_tag(damping or 0)}",
+                enabled=use_tqdm,
+            )
+            for start in denom_iter:
+                end = min(start + denom_batch_size, train.shape[1])
+                phi_chunk = train_i[start:end]
+                raw = (phi_chunk @ u) * residual_i[start:end]
+                if inv_i is not None:
+                    solved_train = phi_chunk @ inv_i.T
+                else:
+                    solved_train = jnp.linalg.solve(gram_i, phi_chunk.T).T
+                leverage = jnp.einsum("md,md->m", phi_chunk, solved_train)
+                denom = 1.0 - leverage
+                denom = jnp.where(
+                    jnp.abs(denom) < 1e-6,
+                    jnp.where(denom >= 0.0, 1e-6, -1e-6),
+                    denom,
+                )
+                chunk_scores = jnp.square(raw / denom)
+                scores[start:end] += np.asarray(chunk_scores, dtype=np.float64)
+                if hasattr(denom_iter, "set_postfix"):
+                    denom_iter.set_postfix(samples=f"{end}/{train.shape[1]}")
+        else:
+            print(f"[das-score] term {i + 1}/{train.shape[0]} | scoring", flush=True)
+            raw = (train_i @ u) * residual_i
+            scores += np.asarray(jnp.square(raw), dtype=np.float64)
         print(f"[das-score] term {i + 1}/{train.shape[0]} done", flush=True)
     return scores / float(train.shape[0])
 
