@@ -197,6 +197,12 @@ def main() -> None:
     parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--sample-seeds", default="0")
     parser.add_argument("--query-seed", type=int, default=0)
+    parser.add_argument(
+        "--prompted-queries",
+        default=os.environ.get("PROMPTED_QUERIES", ""),
+        help="Comma/semicolon-separated prompted query list. Use semicolons between multi-label queries, e.g. 'bird,horse,cat;horse,dog,cat'.",
+    )
+    parser.add_argument("--no-unprompted", action="store_true", help="Run prompted queries only.")
     parser.add_argument("--lds-m", type=int, default=64)
     parser.add_argument("--lds-percentage", type=float, default=25)
     parser.add_argument("--lds-subset-seeds", default="0,1,2")
@@ -240,8 +246,15 @@ def main() -> None:
     env0.setdefault("JAX_PREFETCH_SIZE", "1")
     env0.setdefault("PYTHONUNBUFFERED", "1")
 
-    queries = choose_prompted_queries(args.query_seed, 2)
-    all_queries = queries + ["unprompted"]
+    if args.prompted_queries.strip():
+        queries = [
+            query.strip()
+            for query in args.prompted_queries.replace("|", ";").split(";")
+            if query.strip()
+        ]
+    else:
+        queries = choose_prompted_queries(args.query_seed, 2)
+    all_queries = queries if args.no_unprompted else queries + ["unprompted"]
     gpus = parse_gpus(args)
     worker_gpu_ids = worker_gpus(args, gpus)
     max_parallel = max(1, min(args.max_parallel or len(worker_gpu_ids), len(worker_gpu_ids)))
