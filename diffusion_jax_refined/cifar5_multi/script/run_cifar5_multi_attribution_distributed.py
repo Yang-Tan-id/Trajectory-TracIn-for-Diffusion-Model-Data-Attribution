@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 from pathlib import Path
 
 from run_cifar5_multi_experiment import (
@@ -142,6 +143,45 @@ def query_gradient_artifact_path(root: Path, args: argparse.Namespace, mode: str
         / algorithm
         / "query_gradient_artifact.npz"
     )
+
+
+def source_train_shards_for_range(
+    root: Path,
+    args: argparse.Namespace,
+    mode: str,
+    algorithm: str,
+    namespace: str,
+    start: int,
+    end: int,
+) -> list[Path]:
+    source_final = namespaced_train_artifact_path(root, args, mode, algorithm, namespace)
+    shard_root = source_final.parent / "datapoint_shards"
+    if not shard_root.is_dir():
+        return []
+    matched: list[tuple[int, int, Path]] = []
+    pattern = re.compile(r"^range_(\d+)_(\d+)$")
+    for child in shard_root.iterdir():
+        if not child.is_dir():
+            continue
+        match = pattern.match(child.name)
+        if not match:
+            continue
+        child_start, child_end = int(match.group(1)), int(match.group(2))
+        if child_start >= start and child_end <= end:
+            path = child / TRAIN_ARTIFACT
+            if path.is_file():
+                matched.append((child_start, child_end, path))
+    matched.sort(key=lambda item: item[0])
+    expected = start
+    out: list[Path] = []
+    for child_start, child_end, path in matched:
+        if child_start != expected:
+            return []
+        out.append(path)
+        expected = child_end + 1
+    if expected != end + 1:
+        return []
+    return out
 
 
 def shell_join(commands: list[list[str]]) -> list[str]:
@@ -399,21 +439,40 @@ def main() -> None:
             for shard_id, (start, end) in enumerate(ranges):
                 shard_path = shard_artifact_path(args.root, args, mode, "traj_tracin", start, end)
                 if source_namespace:
-                    source_final = namespaced_train_artifact_path(
-                        args.root,
-                        args,
-                        mode,
-                        "traj_tracin",
-                        source_namespace,
-                    )
-                    source_shard = source_final.parent / "datapoint_shards" / f"range_{start}_{end}" / TRAIN_ARTIFACT
                     if not train_artifact_complete(shard_path, expected_points=end - start + 1):
+                        source_shards = source_train_shards_for_range(
+                            args.root,
+                            args,
+                            mode,
+                            "traj_tracin",
+                            source_namespace,
+                            start,
+                            end,
+                        )
+                        if not source_shards:
+                            source_final = namespaced_train_artifact_path(
+                                args.root,
+                                args,
+                                mode,
+                                "traj_tracin",
+                                source_namespace,
+                            )
+                            if args.execute:
+                                raise FileNotFoundError(
+                                    f"No complete source TrajTracIn shards for {mode} range {start}-{end} "
+                                    f"under {source_final.parent / 'datapoint_shards'}"
+                                )
+                            source_shards = [
+                                source_final.parent / "datapoint_shards" / f"range_{start}_{end}" / TRAIN_ARTIFACT
+                            ]
+                        input_args = []
+                        for source_shard in source_shards:
+                            input_args.extend(["--input", str(source_shard)])
                         run(
                             [
                                 python_bin,
                                 str(args.root.parent / "common" / "aggregate_traj_train_by_checkpoint.py"),
-                                "--input",
-                                str(source_shard),
+                                *input_args,
                                 "--output",
                                 str(shard_path),
                             ],
