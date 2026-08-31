@@ -47,6 +47,10 @@ def prompted_combos() -> list[str]:
     return [",".join(combo) for combo in itertools.combinations(LABELS, 3)]
 
 
+def parse_query_list(text: str) -> list[str]:
+    return [query.strip() for query in text.replace("|", ";").split(";") if query.strip()]
+
+
 def build_query_specs(args: argparse.Namespace) -> list[dict[str, int | str]]:
     seeds = [int(x.strip()) for x in str(args.initial_seeds or "").replace(",", " ").split() if x.strip()]
     if seeds and len(seeds) != args.num_queries:
@@ -57,10 +61,20 @@ def build_query_specs(args: argparse.Namespace) -> list[dict[str, int | str]]:
     rng = random.Random(args.random_query_seed)
     combos = prompted_combos()
     queries = [rng.choice(combos) for _ in range(args.num_queries)]
-    return [
+    specs = [
         {"query_id": i, "query": query, "initial_seed": seeds[i], "query_tag": query_tag(query)}
         for i, query in enumerate(queries)
     ]
+    for query in parse_query_list(args.extra_prompted_queries):
+        specs.append(
+            {
+                "query_id": len(specs),
+                "query": query,
+                "initial_seed": int(args.extra_initial_seed),
+                "query_tag": query_tag(query),
+            }
+        )
+    return specs
 
 
 def args_for_seed(args: argparse.Namespace, seed: int, *, namespace: str = "") -> argparse.Namespace:
@@ -228,6 +242,8 @@ def main() -> None:
     parser.add_argument("--random-query-seed", type=int, default=0)
     parser.add_argument("--initial-seed-start", type=int, default=1000)
     parser.add_argument("--initial-seeds", default="")
+    parser.add_argument("--extra-prompted-queries", default=os.environ.get("EXTRA_PROMPTED_QUERIES", ""))
+    parser.add_argument("--extra-initial-seed", type=int, default=int(os.environ.get("EXTRA_INITIAL_SEED", "0")))
     parser.add_argument("--lds-m", type=int, default=64)
     parser.add_argument("--lds-percentage", type=float, default=25)
     parser.add_argument("--lds-subset-seeds", default="0,1,2")
