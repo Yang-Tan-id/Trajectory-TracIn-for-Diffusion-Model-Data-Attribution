@@ -100,6 +100,24 @@ def split_1based_ranges(size: int, shards: int) -> list[tuple[int, int]]:
     return out
 
 
+def parse_1based_ranges(text: str, *, size: int) -> list[tuple[int, int]]:
+    ranges: list[tuple[int, int]] = []
+    for raw_part in text.replace(";", ",").replace(" ", ",").split(","):
+        part = raw_part.strip()
+        if not part:
+            continue
+        start_end = part.replace(":", "-").split("-")
+        if len(start_end) != 2:
+            raise ValueError(f"Bad range {part!r}; expected START-END.")
+        start, end = int(start_end[0]), int(start_end[1])
+        if start < 1 or end < start or end > size:
+            raise ValueError(f"Bad range {part!r}; valid bounds are 1-{size}.")
+        ranges.append((start, end))
+    if not ranges:
+        raise ValueError("No ranges parsed from range override.")
+    return ranges
+
+
 def shard_artifact_path(root: Path, args: argparse.Namespace, mode: str, algorithm: str, start: int, end: int) -> Path:
     final_path = train_artifact_path(root, args, mode, algorithm)
     return final_path.parent / "datapoint_shards" / f"range_{start}_{end}" / TRAIN_ARTIFACT
@@ -227,6 +245,13 @@ def main() -> None:
     )
     parser.add_argument("--gpus", default=None)
     parser.add_argument("--slots", type=int, default=None)
+    parser.add_argument(
+        "--index-ranges",
+        "--score-index-ranges",
+        dest="index_ranges",
+        default=os.environ.get("ATTRIBUTION_INDEX_RANGES", os.environ.get("SCORE_INDEX_RANGES", "")),
+        help="Override train/score shard ranges, e.g. '1-625,626-1250'. Defaults to evenly splitting --size by worker slots.",
+    )
     parser.add_argument("--gpu-per-node", type=int, default=4)
     parser.add_argument("--cpus-per-worker", type=int, default=8)
     parser.add_argument("--max-parallel", type=int, default=int(os.environ.get("MAX_PARALLEL", "0")) or None)
@@ -271,7 +296,11 @@ def main() -> None:
     if args.only_train_gradient:
         args.skip_lds_eval = True
 
-    ranges = split_1based_ranges(args.size, len(worker_gpu_ids))
+    if args.index_ranges.strip():
+        ranges = parse_1based_ranges(args.index_ranges, size=args.size)
+    else:
+        ranges = split_1based_ranges(args.size, len(worker_gpu_ids))
+    print(f"index ranges={','.join(f'{start}-{end}' for start, end in ranges)}")
 
     if not args.skip_das:
         if not args.only_train_gradient and not args.skip_query_gradient:
