@@ -52,6 +52,10 @@ TRAJ_PARAMETER_SOURCE = os.environ.get(
     "TRAJ_PARAMETER_SOURCE",
     os.environ.get("TRACIN_PARAMETER_SOURCE", "ema"),
 )
+DAS_PARAMETER_SOURCE = os.environ.get(
+    "DAS_PARAMETER_SOURCE",
+    os.environ.get("ATTRIBUTION_PARAMETER_SOURCE", "ema"),
+)
 DATASET_DISPLAY_NAME = "CIFAR2 horse/automobile"
 EXPERIMENTS = ("experiment1", "experiment2", "experiment3")
 EXPERIMENT_TAG = os.environ.get("EXPERIMENT_TAG", "experiment1")
@@ -152,7 +156,7 @@ COMMON_CIFAR = {
     "task_type": "cifar10",
     "module_name": "DM__training_CIFAR10_pixel",
     "query": QUERY,
-    "seed": 42,
+    "seed": TRAIN_SEED,
     "data_root": DATA_ROOT,
     "class_names": CLASS_NAMES,
     "model_type": "unet",
@@ -180,6 +184,7 @@ ATTRIBUTION_CONFIGS = {
         "attribution_sample_seed": INITIAL_SEED,
         "attribution_sample_index": 0,
         "attribution_use_trajectory_endpoint": True,
+        "parameter_source": DAS_PARAMETER_SOURCE,
         "timesteps_total": 1000,
         "ddim_steps": 1000,
         "timesteps": _parse_int_list_env("DAS_TIMESTEPS", (0, 111, 222, 333, 444, 555, 666, 777, 888, 999)),

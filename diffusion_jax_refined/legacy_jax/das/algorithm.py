@@ -145,6 +145,17 @@ def tree_to_device(tree, device):
     return jax.tree_util.tree_map(lambda x: jax.device_put(x, device), tree)
 
 
+def select_state_params(state, parameter_source: str):
+    source = str(parameter_source or "ema").strip().lower()
+    if source in ("ema", "ema_params"):
+        return state.ema_params
+    if source in ("raw", "params", "train_state"):
+        return state.params
+    raise ValueError(
+        f"Unknown parameter_source={parameter_source!r}; expected 'ema' or 'raw'."
+    )
+
+
 def array_to_device(x, device):
     if x is None:
         return None
@@ -533,6 +544,7 @@ class EndpointProjectedDASJAXConfig:
 
     seed: int = 808
     query: Any = None
+    parameter_source: str = "ema"
 
     timesteps_total: int = 2000
     beta_start: float = 1e-4
@@ -1215,6 +1227,7 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
         print(f"sample_shape            : {precomputed_sample_meta.get('loaded_x0_ref_shape')}")
     print(f"seed                    : {cfg.seed}")
     print(f"query                   : {cfg.query}")
+    print(f"parameter_source        : {cfg.parameter_source}")
     print(f"timesteps_total         : {cfg.timesteps_total}")
     print(f"ddim_steps              : {cfg.ddim_steps}")
     print(f"timesteps               : {cfg.timesteps}")
@@ -1295,7 +1308,7 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
     if x0_ref is None and stage_mode != "train":
         print("[setup] restoring reference checkpoint...")
         ref_state, _ = adapter.restore_state(ref_ckpt, state_template)
-        ref_params = tree_to_device(ref_state.ema_params, device)
+        ref_params = tree_to_device(select_state_params(ref_state, cfg.parameter_source), device)
         print("[setup] reference checkpoint restored")
         print(f"[device-check] ref_params={first_leaf_device_str(ref_params)}")
 
@@ -1370,7 +1383,7 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
         print(f"[checkpoint] restoring {ckpt_name}...")
 
         state_k, _ = adapter.restore_state(ckpt_path, state_template)
-        params_k = tree_to_device(state_k.ema_params, device)
+        params_k = tree_to_device(select_state_params(state_k, cfg.parameter_source), device)
 
         print(f"[checkpoint] restored {ckpt_name}")
         print(f"[device-check] params={first_leaf_device_str(params_k)}")
