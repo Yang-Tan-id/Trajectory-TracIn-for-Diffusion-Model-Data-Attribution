@@ -26,7 +26,7 @@ def require_same(name: str, payloads: list[dict[str, np.ndarray]]) -> np.ndarray
 def merge_das_global_gram(shard_paths: list[Path], output: Path) -> None:
     payloads = [load_npz(path) for path in shard_paths]
     for path, payload in zip(shard_paths, payloads):
-        for key in ("train_features", "score_indices", "gram_undamped"):
+        for key in ("train_features", "residuals", "score_indices", "gram_undamped"):
             if key not in payload:
                 raise KeyError(f"{path} is missing {key}")
 
@@ -36,29 +36,44 @@ def merge_das_global_gram(shard_paths: list[Path], output: Path) -> None:
         if key in payloads[0]
     }
     gram_undamped = np.zeros_like(np.asarray(payloads[0]["gram_undamped"], dtype=np.float32))
+    term_count = int(gram_undamped.shape[0])
+    residual_by_index: dict[int, np.ndarray] = {}
     seen = set()
     for path, payload in zip(shard_paths, payloads):
         idx = np.asarray(payload["score_indices"], dtype=np.int64).reshape(-1)
         train = np.asarray(payload["train_features"])
+        residual = np.asarray(payload["residuals"], dtype=np.float32)
         if train.ndim != 3:
             raise ValueError(f"{path} train_features must be rank 3, got {train.shape}")
+        if residual.ndim != 2:
+            raise ValueError(f"{path} residuals must be rank 2, got {residual.shape}")
+        if residual.shape[0] != term_count:
+            raise ValueError(f"{path} residual term count {residual.shape[0]} != {term_count}")
         if train.shape[1] != len(idx):
             raise ValueError(f"{path} train feature count {train.shape[1]} != score_indices {len(idx)}")
+        if residual.shape[1] != len(idx):
+            raise ValueError(f"{path} residual count {residual.shape[1]} != score_indices {len(idx)}")
         overlap = sorted(set(int(x) for x in idx) & seen)
         if overlap:
             raise ValueError(f"{path} overlaps previous shards at indices {overlap[:10]}")
         seen.update(int(x) for x in idx)
+        for local_j, score_index in enumerate(idx):
+            residual_by_index[int(score_index)] = residual[:, local_j]
         gram_undamped += np.asarray(payload["gram_undamped"], dtype=np.float32)
 
     damping = float(np.asarray(common.get("damping", np.asarray(0.0))).reshape(()))
     eye = np.eye(gram_undamped.shape[-1], dtype=np.float32)
     gram = gram_undamped + damping * eye[None, :, :]
+    sorted_indices = np.asarray(sorted(residual_by_index), dtype=np.int64)
+    residuals = np.stack([residual_by_index[int(i)] for i in sorted_indices], axis=1).astype(np.float32)
 
     output.parent.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(
         output,
         gram=gram.astype(np.float32),
         gram_undamped=gram_undamped.astype(np.float32),
+        residuals=residuals,
+        score_indices=sorted_indices,
         **common,
         shard_paths=np.asarray([str(path) for path in shard_paths]),
         num_score_indices=np.asarray(len(seen), dtype=np.int64),

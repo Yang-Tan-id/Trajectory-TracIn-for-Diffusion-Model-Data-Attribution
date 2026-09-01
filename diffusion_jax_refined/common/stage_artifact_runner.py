@@ -558,7 +558,7 @@ def run_score_combination_stage(config_path: str | Path) -> Path:
         global_gram_path = os.environ.get("DAS_GLOBAL_GRAM_ARTIFACT_PATH")
         if global_gram_path:
             global_gram_payload = _load_npz(Path(global_gram_path))
-            for key in ("gram", "gram_undamped", "damping", "damping_sweep_values"):
+            for key in ("gram", "gram_undamped", "residuals", "score_indices", "damping", "damping_sweep_values"):
                 if key in global_gram_payload:
                     train_payload[key] = global_gram_payload[key]
         damping_values = _das_damping_values(config_path, train_payload)

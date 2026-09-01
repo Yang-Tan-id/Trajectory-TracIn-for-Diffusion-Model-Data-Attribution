@@ -63,7 +63,7 @@ def namespaced_train_artifact_path(
         args.artifact_namespace = current
 
 
-def train_artifact_complete(path: Path, *, expected_points: int) -> bool:
+def train_artifact_complete(path: Path, *, expected_points: int, require_residuals: bool = False) -> bool:
     if not path.is_file():
         return False
     try:
@@ -72,6 +72,23 @@ def train_artifact_complete(path: Path, *, expected_points: int) -> bool:
         with np.load(path, allow_pickle=False) as data:
             if "train_features" not in data or "score_indices" not in data:
                 return False
+            if require_residuals and "residuals" not in data:
+                return False
+            return int(np.asarray(data["score_indices"]).reshape(-1).shape[0]) == int(expected_points)
+    except Exception:
+        return False
+
+
+def das_global_train_complete(path: Path, *, expected_points: int) -> bool:
+    if not path.is_file():
+        return False
+    try:
+        import numpy as np
+
+        with np.load(path, allow_pickle=False) as data:
+            for key in ("gram", "gram_undamped", "residuals", "score_indices"):
+                if key not in data:
+                    return False
             return int(np.asarray(data["score_indices"]).reshape(-1).shape[0]) == int(expected_points)
     except Exception:
         return False
@@ -328,14 +345,17 @@ def main() -> None:
         for mode in ("prompted_solo", "unprompted_solo"):
             final_artifact = train_artifact_path(args.root, args, mode, "das")
             global_gram = das_global_gram_path(args.root, args, mode)
-            if final_artifact.is_file() or global_gram.is_file():
+            if train_artifact_complete(final_artifact, expected_points=args.size, require_residuals=True) or das_global_train_complete(
+                global_gram,
+                expected_points=args.size,
+            ):
                 print(f"[skip] complete/shared DAS train state for {mode}: {global_gram if global_gram.is_file() else final_artifact}")
                 continue
 
             shard_jobs: list[Job] = []
             for shard_id, (start, end) in enumerate(ranges):
                 shard_path = shard_artifact_path(args.root, args, mode, "das", start, end)
-                if train_artifact_complete(shard_path, expected_points=end - start + 1):
+                if train_artifact_complete(shard_path, expected_points=end - start + 1, require_residuals=True):
                     print(f"[skip] DAS train shard {mode} {start}-{end}: {shard_path}")
                     continue
                 env = env0 | {

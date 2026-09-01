@@ -31,6 +31,7 @@ from run_cifar5_multi_experiment import (
 
 from run_cifar5_multi_attribution_distributed import (
     das_global_gram_path,
+    das_global_train_complete,
     query_gradient_artifact_path,
     score_complete,
     shard_artifact_path,
@@ -193,12 +194,18 @@ def ensure_train_artifacts(args: argparse.Namespace) -> None:
         das_args = args_for_seed(args, args.initial_seed_start)
         for mode in ("prompted_solo",):
             gram = das_global_gram_path(args.root, das_args, mode)
-            if gram.is_file():
+            if das_global_train_complete(gram, expected_points=args.size):
                 print(f"[ok] DAS shared train gram for {mode}: {gram}")
-            elif args.execute:
-                raise FileNotFoundError(f"Missing DAS shared train gram: {gram}")
             else:
-                print(f"[warn] missing DAS shared train gram: {gram}")
+                print(f"[info] missing/stale DAS shared train state for {mode}; building once: {gram}")
+                run_distributed_for_query(
+                    args,
+                    query=parse_query_list(args.extra_prompted_queries)[0] if parse_query_list(args.extra_prompted_queries) else prompted_combos()[0],
+                    seed=args.initial_seed_start,
+                    namespace=artifact_namespace(args),
+                    extra=["--skip-traj-tracin", "--skip-query-gradient", "--skip-lds-eval", "--only-train-gradient"],
+                    env=base_env(args.root),
+                )
 
     if args.skip_traj_tracin:
         print("[skip] TrajTracIn train artifact check")
