@@ -49,7 +49,7 @@ IMAGE_SIZE = 64
 NUM_CLASSES = 5
 TRAJ_QUERY_OBJECTIVE = os.environ.get(
     "TRAJ_QUERY_OBJECTIVE",
-    os.environ.get("QUERY_OBJECTIVE", "trajectory_noise_squared_deviation"),
+    os.environ.get("QUERY_OBJECTIVE", "trajectory_next_checkpoint_noise_mse"),
 )
 TRAJ_PARAMETER_SOURCE = os.environ.get(
     "TRAJ_PARAMETER_SOURCE",
