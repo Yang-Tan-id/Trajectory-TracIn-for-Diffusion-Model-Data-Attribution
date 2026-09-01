@@ -256,9 +256,22 @@ def _combine_das_scores(
         residual = residual[None, :]
     if residual.shape[0] == train.shape[0] and residual.shape[1] != train.shape[1]:
         train_indices = np.asarray(train_payload.get("score_indices", ()), dtype=np.int64).reshape(-1)
+        global_indices = np.asarray(train_payload.get("_global_score_indices", ()), dtype=np.int64).reshape(-1)
         max_index = int(train_indices.max()) if train_indices.size else -1
         if train_indices.shape[0] == train.shape[1] and residual.shape[1] > max_index:
             residual = residual[:, train_indices]
+        elif (
+            train_indices.shape[0] == train.shape[1]
+            and global_indices.shape[0] == residual.shape[1]
+        ):
+            position_by_index = {int(idx): pos for pos, idx in enumerate(global_indices)}
+            try:
+                residual_positions = np.asarray([position_by_index[int(idx)] for idx in train_indices], dtype=np.int64)
+            except KeyError as exc:
+                raise ValueError(
+                    f"residual indices from {residual_path} do not cover shard indices from {train_path}"
+                ) from exc
+            residual = residual[:, residual_positions]
     if residual.shape[0] != train.shape[0] or residual.shape[1] != train.shape[1]:
         raise ValueError(
             f"residual shape {residual.shape} from {residual_path} does not match train features {train.shape}"
@@ -560,7 +573,10 @@ def run_score_combination_stage(config_path: str | Path) -> Path:
             global_gram_payload = _load_npz(Path(global_gram_path))
             for key in ("gram", "gram_undamped", "residuals", "score_indices", "damping", "damping_sweep_values"):
                 if key in global_gram_payload:
-                    train_payload[key] = global_gram_payload[key]
+                    if key == "score_indices":
+                        train_payload["_global_score_indices"] = global_gram_payload[key]
+                    else:
+                        train_payload[key] = global_gram_payload[key]
         damping_values = _das_damping_values(config_path, train_payload)
         written_dirs = []
         sweep = len(damping_values) > 1 or os.environ.get("DAS_DAMPING_SWEEP", "0") in ("1", "true", "True", "yes")
