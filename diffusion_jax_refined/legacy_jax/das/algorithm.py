@@ -1371,6 +1371,7 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
     stage_grams_undamped = []
     stage_query_features = []
     stage_residuals = []
+    stage_query_residuals = []
     stage_ckpt_indices = []
     stage_timestep_values = []
     stage_mc_indices = []
@@ -1454,7 +1455,16 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
                     phi_q = None
                     query_residual = 0.0
 
-                if stage_mode in ("train", "query"):
+                if stage_mode == "query":
+                    stage_query_features.append(np.asarray(phi_q, dtype=np.float32))
+                    stage_query_residuals.append(float(query_residual))
+                    stage_ckpt_indices.append(int(ckpt_i))
+                    stage_timestep_values.append(int(t_value))
+                    stage_mc_indices.append(int(mc_i))
+                    print("[mc] DAS query artifact term cached; skipping train-point scan")
+                    continue
+
+                if stage_mode == "train":
                     phi_cache = np.empty((M, proj_dim), dtype=np.float32)
                     residual_cache = np.empty((M,), dtype=np.float32)
                     H_proj = np.zeros((proj_dim, proj_dim), dtype=np.float32)
@@ -1487,13 +1497,11 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
                         stage_train_features.append(phi_cache)
                         stage_grams.append(H_proj)
                         stage_grams_undamped.append(H_proj_undamped)
-                    else:
-                        stage_query_features.append(np.asarray(phi_q, dtype=np.float32))
                         stage_residuals.append(residual_cache)
                     stage_ckpt_indices.append(int(ckpt_i))
                     stage_timestep_values.append(int(t_value))
                     stage_mc_indices.append(int(mc_i))
-                    print(f"[mc] DAS {stage_mode} artifact term cached; skipping score")
+                    print("[mc] DAS train artifact term cached; skipping score")
                     continue
 
                 if cfg.use_batched_per_example_grads:
@@ -1658,6 +1666,7 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
         np.savez_compressed(
             stage_artifact_path,
             train_features=np.stack(stage_train_features, axis=0).astype(np.float32),
+            residuals=np.stack(stage_residuals, axis=0).astype(np.float32),
             gram=np.stack(stage_grams, axis=0).astype(np.float32),
             gram_undamped=np.stack(stage_grams_undamped, axis=0).astype(np.float32),
             score_indices=np.asarray(picked, dtype=np.int64),
@@ -1676,7 +1685,7 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
         np.savez_compressed(
             stage_artifact_path,
             query_features=np.stack(stage_query_features, axis=0).astype(np.float32),
-            residuals=np.stack(stage_residuals, axis=0).astype(np.float32),
+            query_residuals=np.asarray(stage_query_residuals, dtype=np.float32),
             ckpt_indices=np.asarray(stage_ckpt_indices, dtype=np.int32),
             timesteps=np.asarray(stage_timestep_values, dtype=np.int32),
             mc_indices=np.asarray(stage_mc_indices, dtype=np.int32),

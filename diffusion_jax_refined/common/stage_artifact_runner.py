@@ -237,7 +237,20 @@ def _combine_das_scores(
     if train.shape[0] != query.shape[0] or train.shape[2] != query.shape[1]:
         raise ValueError(f"feature dimension mismatch: train {train.shape} vs query {query.shape}")
 
-    residual = _first_array(query_payload, ("residuals", "residual", "residual_scalar", "residual_scalars"), path=query_path)
+    residual_path = train_path
+    try:
+        residual = _first_array(
+            train_payload,
+            ("residuals", "residual", "residual_scalar", "residual_scalars"),
+            path=train_path,
+        )
+    except KeyError:
+        residual_path = query_path
+        residual = _first_array(
+            query_payload,
+            ("residuals", "residual", "residual_scalar", "residual_scalars"),
+            path=query_path,
+        )
     residual = np.asarray(residual, dtype=score_dtype)
     if residual.ndim == 1:
         residual = residual[None, :]
@@ -247,7 +260,9 @@ def _combine_das_scores(
         if train_indices.shape[0] == train.shape[1] and residual.shape[1] > max_index:
             residual = residual[:, train_indices]
     if residual.shape[0] != train.shape[0] or residual.shape[1] != train.shape[1]:
-        raise ValueError(f"residual shape {residual.shape} does not match train features {train.shape}")
+        raise ValueError(
+            f"residual shape {residual.shape} from {residual_path} does not match train features {train.shape}"
+        )
 
     gram_inv = None
     gram = None
