@@ -320,6 +320,22 @@ def _combine_das_scores(
         f"denom_batch={denom_batch_size}",
         flush=True,
     )
+    train_indices = _score_indices(train_payload, train.shape[1])
+    denominator_cache_path = _das_denominator_cache_path(
+        train_path,
+        damping=damping,
+        train_indices=train_indices,
+    )
+    denominator_cache = None
+    computed_denominator = None
+    if use_denominator and (gram_inv is not None or gram is not None):
+        denominator_cache = _load_das_denominator_cache(
+            denominator_cache_path,
+            terms=train.shape[0],
+            train_indices=train_indices,
+        )
+        if denominator_cache is None:
+            computed_denominator = np.empty((train.shape[0], train.shape[1]), dtype=np.float32)
     scores = np.zeros((train.shape[1],), dtype=np.float64)
     term_iter = _iter_with_tqdm(
         range(train.shape[0]),
@@ -340,35 +356,47 @@ def _combine_das_scores(
             u = query[i]
         raw = (train[i] @ u) * residual[i]
         if use_denominator and (gram_inv is not None or gram is not None):
-            print(f"[das-score] term {i + 1}/{train.shape[0]} | denominator", flush=True)
-            if inv is not None:
-                solved_train = train[i] @ inv.T
-                leverage = np.einsum("md,md->m", train[i], solved_train, dtype=np.float64)
+            if denominator_cache is not None:
+                denom = denominator_cache[i]
             else:
-                leverage = np.empty((train.shape[1],), dtype=np.float64)
-                starts = range(0, train.shape[1], denom_batch_size)
-                denom_iter = _iter_with_tqdm(
-                    starts,
-                    total=(train.shape[1] + denom_batch_size - 1) // denom_batch_size,
-                    desc=f"DAS denom term={i + 1}/{train.shape[0]} lambda={_damping_tag(damping or 0)}",
-                    enabled=use_tqdm,
+                print(f"[das-score] term {i + 1}/{train.shape[0]} | denominator", flush=True)
+                if inv is not None:
+                    solved_train = train[i] @ inv.T
+                    leverage = np.einsum("md,md->m", train[i], solved_train, dtype=np.float64)
+                else:
+                    leverage = np.empty((train.shape[1],), dtype=np.float64)
+                    starts = range(0, train.shape[1], denom_batch_size)
+                    denom_iter = _iter_with_tqdm(
+                        starts,
+                        total=(train.shape[1] + denom_batch_size - 1) // denom_batch_size,
+                        desc=f"DAS denom term={i + 1}/{train.shape[0]} lambda={_damping_tag(damping or 0)}",
+                        enabled=use_tqdm,
+                    )
+                    for start in denom_iter:
+                        end = min(start + denom_batch_size, train.shape[1])
+                        phi_chunk = train[i, start:end]
+                        solved_train = np.linalg.solve(gram[i], phi_chunk.T).T
+                        leverage[start:end] = np.einsum("md,md->m", phi_chunk, solved_train, dtype=np.float64)
+                        if hasattr(denom_iter, "set_postfix"):
+                            denom_iter.set_postfix(samples=f"{end}/{train.shape[1]}")
+                denom = 1.0 - leverage
+                denom = np.where(
+                    np.abs(denom) < 1e-6,
+                    np.where(denom >= 0.0, 1e-6, -1e-6),
+                    denom,
                 )
-                for start in denom_iter:
-                    end = min(start + denom_batch_size, train.shape[1])
-                    phi_chunk = train[i, start:end]
-                    solved_train = np.linalg.solve(gram[i], phi_chunk.T).T
-                    leverage[start:end] = np.einsum("md,md->m", phi_chunk, solved_train, dtype=np.float64)
-                    if hasattr(denom_iter, "set_postfix"):
-                        denom_iter.set_postfix(samples=f"{end}/{train.shape[1]}")
-            denom = 1.0 - leverage
-            denom = np.where(
-                np.abs(denom) < 1e-6,
-                np.where(denom >= 0.0, 1e-6, -1e-6),
-                denom,
-            )
+                if computed_denominator is not None:
+                    computed_denominator[i] = denom.astype(np.float32)
             raw = raw / denom
         scores += np.square(raw)
         print(f"[das-score] term {i + 1}/{train.shape[0]} done", flush=True)
+    if computed_denominator is not None:
+        _write_das_denominator_cache(
+            denominator_cache_path,
+            denominator=computed_denominator,
+            train_indices=train_indices,
+            damping=damping,
+        )
     return scores / float(train.shape[0])
 
 
@@ -508,6 +536,64 @@ def _write_score_outputs(
 def _damping_tag(value: float) -> str:
     text = f"{float(value):g}".replace("+", "").replace("-", "neg_").replace(".", "p")
     return text or "0"
+
+
+def _das_denominator_cache_path(
+    train_path: Path,
+    *,
+    damping: float | None,
+    train_indices: np.ndarray,
+) -> Path | None:
+    if not _env_flag("DAS_SCORE_DENOMINATOR_CACHE", "1"):
+        return None
+    root = os.environ.get("DAS_SCORE_DENOMINATOR_CACHE_DIR", "").strip()
+    cache_root = Path(root) if root else train_path.parent / "das_denominator_cache"
+    if root:
+        cache_root = cache_root / train_path.parent.name
+    return cache_root / f"lambda_{_damping_tag(damping or 0)}_n{train_indices.shape[0]}.npz"
+
+
+def _load_das_denominator_cache(
+    cache_path: Path | None,
+    *,
+    terms: int,
+    train_indices: np.ndarray,
+) -> np.ndarray | None:
+    if cache_path is None or not cache_path.is_file():
+        return None
+    try:
+        with np.load(cache_path, allow_pickle=False) as data:
+            denominator = np.asarray(data["denominator"], dtype=np.float64)
+            cached_indices = np.asarray(data["score_indices"], dtype=np.int64).reshape(-1)
+    except Exception as exc:
+        print(f"[das-score] ignoring unreadable denominator cache {cache_path}: {exc}", flush=True)
+        return None
+    if denominator.shape != (terms, train_indices.shape[0]) or not np.array_equal(cached_indices, train_indices):
+        print(f"[das-score] ignoring stale denominator cache {cache_path}", flush=True)
+        return None
+    print(f"[das-score] loaded denominator cache: {cache_path}", flush=True)
+    return denominator
+
+
+def _write_das_denominator_cache(
+    cache_path: Path | None,
+    *,
+    denominator: np.ndarray,
+    train_indices: np.ndarray,
+    damping: float | None,
+) -> None:
+    if cache_path is None:
+        return
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = cache_path.with_name(f"{cache_path.name}.tmp.{os.getpid()}.npz")
+    np.savez_compressed(
+        tmp,
+        denominator=np.asarray(denominator, dtype=np.float32),
+        score_indices=np.asarray(train_indices, dtype=np.int64),
+        damping=np.asarray(float(damping or 0), dtype=np.float32),
+    )
+    tmp.replace(cache_path)
+    print(f"[das-score] saved denominator cache: {cache_path}", flush=True)
 
 
 def _parse_float_list(text: str) -> tuple[float, ...]:
