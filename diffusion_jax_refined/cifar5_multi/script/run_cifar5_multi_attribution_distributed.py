@@ -297,12 +297,15 @@ def main() -> None:
     else:
         queries = choose_prompted_queries(args.query_seed, 2)
     all_queries = queries if args.no_unprompted else queries + ["unprompted"]
+    train_modes = ("prompted_solo",) if args.no_unprompted else ("prompted_solo", "unprompted_solo")
     gpus = parse_gpus(args)
     worker_gpu_ids = worker_gpus(args, gpus)
     max_parallel = max(1, min(args.max_parallel or len(worker_gpu_ids), len(worker_gpu_ids)))
     python_bin = os.environ.get("PYTHON_BIN", "python3")
     print(f"prompted queries: {queries}")
+    print(f"train modes={list(train_modes)}")
     print(f"worker slots={len(worker_gpu_ids)} | worker_gpus={worker_gpu_ids} | max_parallel={max_parallel} | backend={args.slot_backend}")
+    print(f"tracin shared train={env0.get('TRACIN_USE_SHARED_TRAIN_GRADIENT', '1')}")
     if artifact_namespace(args):
         print(f"artifact namespace={artifact_namespace(args)}")
 
@@ -342,7 +345,7 @@ def main() -> None:
                 )
             run_parallel_jobs(das_query_jobs, args=args, execute=args.execute, max_parallel=max_parallel)
 
-        for mode in ("prompted_solo", "unprompted_solo"):
+        for mode in train_modes:
             final_artifact = train_artifact_path(args.root, args, mode, "das")
             global_gram = das_global_gram_path(args.root, args, mode)
             if train_artifact_complete(final_artifact, expected_points=args.size, require_residuals=True) or das_global_train_complete(
@@ -494,7 +497,7 @@ def main() -> None:
                 )
             run_parallel_jobs(query_jobs, args=args, execute=args.execute, max_parallel=max_parallel)
 
-        for mode in ("prompted_solo", "unprompted_solo"):
+        for mode in train_modes:
             final_artifact = train_artifact_path(args.root, args, mode, "traj_tracin")
             if train_artifact_complete(final_artifact, expected_points=args.size):
                 print(f"[skip] complete shared TrajTracIn train artifact for {mode}: {final_artifact}")
@@ -555,7 +558,7 @@ def main() -> None:
                     "ATTRIBUTION_SCORE_MODEL_MODE": mode,
                     "SCORE_INDEX_RANGES": f"{start}-{end}",
                     "TRAIN_DATAPOINT_GRADIENT_ARTIFACT_PATH": str(shard_path),
-                    "TRACIN_USE_SHARED_TRAIN_GRADIENT": "1",
+                    "TRACIN_USE_SHARED_TRAIN_GRADIENT": env0.get("TRACIN_USE_SHARED_TRAIN_GRADIENT", "1"),
                     "TRAJ_USE_SAVED_TRAJECTORY": "0",
                 }
                 if mode.startswith("unprompted"):
