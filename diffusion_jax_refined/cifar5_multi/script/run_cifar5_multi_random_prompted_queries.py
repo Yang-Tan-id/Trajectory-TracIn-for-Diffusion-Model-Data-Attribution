@@ -261,6 +261,7 @@ def main() -> None:
     parser.add_argument("--skip-traj-tracin", action="store_true")
     parser.add_argument("--skip-lds-eval", action="store_true")
     parser.add_argument("--only-lds-eval", action="store_true")
+    parser.add_argument("--artifact-namespace", default=os.environ.get("ATTRIBUTION_ARTIFACT_NAMESPACE", ""))
     parser.add_argument("--namespace-query-gradient", action="store_true")
     parser.add_argument("--traj-artifact-namespace", default=os.environ.get("TRAJ_ATTRIBUTION_ARTIFACT_NAMESPACE", "h100_traj_ckptshared_10x10"))
     parser.add_argument("--aggregate-traj-train-from-namespace", default=os.environ.get("AGGREGATE_TRAJ_TRAIN_FROM_NAMESPACE", ""))
@@ -363,7 +364,12 @@ def main() -> None:
                     continue
                 if algorithm == "traj_tracin" and args.skip_traj_tracin:
                     continue
-                ns = args.traj_artifact_namespace if algorithm == "traj_tracin" and args.namespace_query_gradient else ""
+                ns = ""
+                if args.namespace_query_gradient:
+                    if algorithm == "das":
+                        ns = artifact_namespace(args)
+                    elif algorithm == "traj_tracin":
+                        ns = args.traj_artifact_namespace
                 q_args = args_for_seed(args, seed, namespace=ns)
                 q_args.namespace_query_gradient = args.namespace_query_gradient
                 path = query_gradient_artifact_path(args.root, q_args, "prompted_solo", query, algorithm)
@@ -397,12 +403,18 @@ def main() -> None:
         query = str(spec["query"])
         seed = int(spec["initial_seed"])
         if not args.skip_das:
+            das_namespace = artifact_namespace(args) if args.namespace_query_gradient else ""
+            das_extra = ["--skip-traj-tracin", "--skip-query-gradient"] + (
+                ["--skip-lds-eval"] if args.skip_lds_eval else []
+            )
+            if args.namespace_query_gradient:
+                das_extra.append("--namespace-query-gradient")
             run_distributed_for_query(
                 args,
                 query=query,
                 seed=seed,
-                namespace="",
-                extra=["--skip-traj-tracin", "--skip-query-gradient"] + (["--skip-lds-eval"] if args.skip_lds_eval else []),
+                namespace=das_namespace,
+                extra=das_extra,
                 env=env0,
             )
         if not args.skip_traj_tracin:
