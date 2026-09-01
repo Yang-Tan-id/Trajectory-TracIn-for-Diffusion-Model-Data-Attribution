@@ -191,7 +191,7 @@ def ensure_train_artifacts(args: argparse.Namespace) -> None:
     if args.skip_das:
         print("[skip] DAS train artifact check")
     else:
-        das_args = args_for_seed(args, args.initial_seed_start)
+        das_args = args_for_seed(args, args.initial_seed_start, namespace=artifact_namespace(args))
         for mode in ("prompted_solo",):
             gram = das_global_gram_path(args.root, das_args, mode)
             if das_global_train_complete(gram, expected_points=args.size):
@@ -204,7 +204,7 @@ def ensure_train_artifacts(args: argparse.Namespace) -> None:
                     seed=args.initial_seed_start,
                     namespace=artifact_namespace(args),
                     extra=["--skip-traj-tracin", "--skip-query-gradient", "--skip-lds-eval", "--only-train-gradient"],
-                    env=base_env(args.root),
+                    env=base_env(args),
                 )
 
     if args.skip_traj_tracin:
