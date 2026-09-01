@@ -314,6 +314,7 @@ def main() -> None:
         "traj_score_query_normalize="
         f"{int(args.tracin_score_query_normalize)} eps={args.tracin_score_query_normalize_eps:g}"
     )
+    print(f"das_damping_sweep_values={args.das_damping_sweep_values}")
 
     specs = build_query_specs(args)
     manifest_dir = args.root / "result" / args.experiment / "query_sets"

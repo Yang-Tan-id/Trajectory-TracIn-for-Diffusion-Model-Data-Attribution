@@ -54,6 +54,7 @@ echo "repo=${REPO_ROOT}"
 echo "experiment=${EXPERIMENT_TAG}; train_seed=${TRAIN_SEED}; slots=${GPU_SLOTS:-2}"
 echo "traj_namespace=${TRAJ_ATTRIBUTION_ARTIFACT_NAMESPACE:-h100_traj_ckptshared_10x10}"
 echo "traj_score_query_normalize=${TRACIN_SCORE_QUERY_NORMALIZE:-0}; eps=${TRACIN_SCORE_QUERY_NORMALIZE_EPS:-1e-8}"
+echo "das_damping_sweep_values=${DAS_DAMPING_SWEEP_VALUES}"
 echo "python=$(${PYTHON_BIN} -c 'import sys; print(sys.executable)')"
 
 TRACIN_QN_ARGS=()
