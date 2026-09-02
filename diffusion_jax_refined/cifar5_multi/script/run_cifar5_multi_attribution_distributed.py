@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import zipfile
 from pathlib import Path
 
 from run_cifar5_multi_experiment import (
@@ -29,6 +30,24 @@ from run_cifar5_multi_experiment import (
 
 
 TRAIN_ARTIFACT = "train_datapoint_gradient_artifact.npz"
+
+
+def npz_array_shape(path: Path, key: str) -> tuple[int, ...] | None:
+    try:
+        import numpy as np
+
+        with zipfile.ZipFile(path) as zf:
+            with zf.open(f"{key}.npy") as fh:
+                version = np.lib.format.read_magic(fh)
+                if version == (1, 0):
+                    shape, _, _ = np.lib.format.read_array_header_1_0(fh)
+                elif version == (2, 0):
+                    shape, _, _ = np.lib.format.read_array_header_2_0(fh)
+                else:
+                    shape, _, _ = np.lib.format.read_array_header_2_0(fh)
+        return tuple(int(x) for x in shape)
+    except Exception:
+        return None
 
 
 def train_artifact_path(root: Path, args: argparse.Namespace, mode: str, algorithm: str) -> Path:
@@ -77,9 +96,9 @@ def train_artifact_complete(path: Path, *, expected_points: int, require_residua
             score_index_count = int(np.asarray(data["score_indices"]).reshape(-1).shape[0])
             if score_index_count == int(expected_points):
                 return True
-            train_features = np.asarray(data["train_features"])
-            if train_features.ndim >= 2:
-                return int(train_features.shape[-2]) == int(expected_points)
+            train_shape = npz_array_shape(path, "train_features")
+            if train_shape is not None and len(train_shape) >= 2:
+                return int(train_shape[-2]) == int(expected_points)
             return False
     except Exception:
         return False
