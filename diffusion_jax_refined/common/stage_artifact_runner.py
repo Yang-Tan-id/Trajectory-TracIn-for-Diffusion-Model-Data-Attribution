@@ -187,6 +187,61 @@ def _combine_multiterm_dot_scores(
             if (i + 1) % 100 == 0 or i + 1 == query.shape[0]:
                 print(f"[traj-score] broadcast term {i + 1}/{query.shape[0]}", flush=True)
         return scores
+    if train.shape[0] != query.shape[0] and _env_flag("TRACIN_ALIGN_TERMS_BY_CKPT_TIMESTEP", "0"):
+        query_ckpts = np.asarray(query_payload.get("ckpt_indices", ()), dtype=np.int32).reshape(-1)
+        query_timesteps = np.asarray(query_payload.get("timesteps", ()), dtype=np.int32).reshape(-1)
+        if (
+            train_ckpts.shape[0] != train.shape[0]
+            or train_timesteps.shape[0] != train.shape[0]
+            or query_ckpts.shape[0] != query.shape[0]
+            or query_timesteps.shape[0] != query.shape[0]
+        ):
+            raise ValueError("term alignment requires ckpt_indices and timesteps on both train and query artifacts")
+        if train.shape[2] != query.shape[1]:
+            raise ValueError(f"feature dimension mismatch: train {train.shape} vs query {query.shape}")
+        query_by_term = {(int(ckpt), int(timestep)): i for i, (ckpt, timestep) in enumerate(zip(query_ckpts, query_timesteps))}
+        train_keep = []
+        query_keep = []
+        missing = []
+        for i, (ckpt, timestep) in enumerate(zip(train_ckpts, train_timesteps)):
+            key = (int(ckpt), int(timestep))
+            query_i = query_by_term.get(key)
+            if query_i is None:
+                missing.append(key)
+                continue
+            train_keep.append(i)
+            query_keep.append(query_i)
+        if not train_keep:
+            raise ValueError("term alignment found no shared (ckpt_index, timestep) terms between train and query")
+        print(
+            "[traj-score] "
+            f"aligned_terms={len(train_keep)} train_terms={train.shape[0]} query_terms={query.shape[0]} "
+            f"missing_train_terms={len(missing)} points={train.shape[1]} dim={train.shape[2]} "
+            f"dtype={np.dtype(score_dtype).name} query_normalized={int(normalize_query)}",
+            flush=True,
+        )
+        if missing:
+            print(f"[traj-score] first missing train terms: {missing[:10]}", flush=True)
+        weights = np.asarray(
+            train_payload.get("term_weights", np.full((train.shape[0],), 1.0 / float(train.shape[0]))),
+            dtype=np.float64,
+        ).reshape(-1)
+        if weights.shape[0] != train.shape[0]:
+            raise ValueError(f"train term_weights length {weights.shape[0]} does not match train terms {train.shape[0]}")
+        scores = np.zeros((train.shape[1],), dtype=np.float64)
+        term_iter = _iter_with_tqdm(
+            range(len(train_keep)),
+            total=len(train_keep),
+            desc="TrajTracIn score aligned terms",
+            enabled=use_tqdm,
+        )
+        for j in term_iter:
+            train_i = train_keep[j]
+            query_i = query_keep[j]
+            scores += float(weights[train_i]) * (train[train_i] @ query[query_i])
+            if (j + 1) % 100 == 0 or j + 1 == len(train_keep):
+                print(f"[traj-score] aligned term {j + 1}/{len(train_keep)}", flush=True)
+        return scores
     if train.shape[0] != query.shape[0] or train.shape[2] != query.shape[1]:
         raise ValueError(f"feature dimension mismatch: train {train.shape} vs query {query.shape}")
     weights = np.asarray(query_payload.get("term_weights", np.full((train.shape[0],), 1.0 / float(train.shape[0]))), dtype=np.float64).reshape(-1)

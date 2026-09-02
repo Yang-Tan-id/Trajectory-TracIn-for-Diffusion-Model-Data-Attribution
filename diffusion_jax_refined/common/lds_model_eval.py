@@ -92,8 +92,8 @@ def _read_target_cache(path: Path, *, checkpoint: str | None, target_function: s
         return None
     try:
         payload = json.loads(path.read_text())
-        if checkpoint is not None and str(payload.get("checkpoint")) != str(checkpoint):
-            return None
+        # Cache files may be transferred across machines, so absolute checkpoint
+        # paths are not stable. The cache path and target_function are the keys.
         if str(payload.get("target_function")) != str(target_function):
             return None
         return float(payload["true_f"]), dict(payload.get("target_details", {}))
