@@ -74,7 +74,13 @@ def train_artifact_complete(path: Path, *, expected_points: int, require_residua
                 return False
             if require_residuals and "residuals" not in data:
                 return False
-            return int(np.asarray(data["score_indices"]).reshape(-1).shape[0]) == int(expected_points)
+            score_index_count = int(np.asarray(data["score_indices"]).reshape(-1).shape[0])
+            if score_index_count == int(expected_points):
+                return True
+            train_features = np.asarray(data["train_features"])
+            if train_features.ndim >= 2:
+                return int(train_features.shape[-2]) == int(expected_points)
+            return False
     except Exception:
         return False
 
