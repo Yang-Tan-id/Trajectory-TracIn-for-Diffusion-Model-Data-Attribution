@@ -142,8 +142,17 @@ def _combine_multiterm_dot_scores(
         raise ValueError(f"{query_path} query features must be rank 1 or 2, got shape {query.shape}")
     if normalize_query:
         query = _normalize_rows(query, query_normalize_eps)
-    if train.shape[0] != query.shape[0] and "checkpoint_shared_train_gradient" in train_payload:
-        train_ckpts = np.asarray(train_payload.get("ckpt_indices"), dtype=np.int32).reshape(-1)
+    train_ckpts = np.asarray(train_payload.get("ckpt_indices", ()), dtype=np.int32).reshape(-1)
+    train_timesteps = np.asarray(train_payload.get("timesteps", ()), dtype=np.int32).reshape(-1)
+    inferred_checkpoint_shared = (
+        train_ckpts.shape[0] == train.shape[0]
+        and train_timesteps.shape[0] == train.shape[0]
+        and train_timesteps.size > 0
+        and np.all(train_timesteps == -1)
+    )
+    if train.shape[0] != query.shape[0] and (
+        "checkpoint_shared_train_gradient" in train_payload or inferred_checkpoint_shared
+    ):
         query_ckpts = np.asarray(query_payload.get("ckpt_indices"), dtype=np.int32).reshape(-1)
         if train_ckpts.shape[0] != train.shape[0] or query_ckpts.shape[0] != query.shape[0]:
             raise ValueError("checkpoint-shared TrajTracIn artifacts require ckpt_indices on train and query")
