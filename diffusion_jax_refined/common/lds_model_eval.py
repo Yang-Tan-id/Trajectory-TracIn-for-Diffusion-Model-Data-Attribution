@@ -85,14 +85,14 @@ def _prediction_tag(subset: str, sign: float) -> str:
     return f"pred_{subset}_sign_{sign_text}"
 
 
-def _read_target_cache(path: Path, *, checkpoint: str, target_function: str) -> tuple[float, dict[str, object]] | None:
+def _read_target_cache(path: Path, *, checkpoint: str | None, target_function: str) -> tuple[float, dict[str, object]] | None:
     if os.environ.get("LDS_TARGET_CACHE", "1") in ("0", "false", "False", "no", "No"):
         return None
     if not path.is_file():
         return None
     try:
         payload = json.loads(path.read_text())
-        if str(payload.get("checkpoint")) != str(checkpoint):
+        if checkpoint is not None and str(payload.get("checkpoint")) != str(checkpoint):
             return None
         if str(payload.get("target_function")) != str(target_function):
             return None
@@ -331,7 +331,10 @@ def main() -> None:
         else:
             prediction_indices = np.load(subset_dir / "excluded_attribution_indices.npy")
         prediction = sum_scores(prediction_indices, score_map, args.prediction_sign)
-        checkpoint = latest_checkpoint(str(subset_dir))
+        try:
+            checkpoint = latest_checkpoint(str(subset_dir))
+        except FileNotFoundError:
+            checkpoint = None
         values = {}
         missing_targets = []
         for target_function in target_functions:
@@ -341,6 +344,12 @@ def main() -> None:
                 missing_targets.append(target_function)
             else:
                 values[target_function] = cached
+        if missing_targets and checkpoint is None:
+            raise FileNotFoundError(
+                f"No LDS checkpoint found in {subset_dir}, and target cache is missing "
+                f"{','.join(missing_targets)} for target_{global_id:04d}. "
+                "Upload lds_target_cache or lds_model before running LDS eval."
+            )
         if missing_targets:
             evaluated = evaluator.evaluate_many(checkpoint, missing_targets)
             for target_function, (true_f, details) in evaluated.items():
