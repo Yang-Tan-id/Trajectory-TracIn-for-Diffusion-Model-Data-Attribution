@@ -173,6 +173,8 @@ def run_distributed_for_query(
         str(args.max_parallel),
         *extra,
     ]
+    if args.index_ranges.strip():
+        cmd.extend(["--score-index-ranges", args.index_ranges])
     if namespace:
         cmd.extend(["--artifact-namespace", namespace])
     if namespace and args.namespace_query_gradient:
@@ -262,6 +264,13 @@ def main() -> None:
     parser.add_argument("--max-parallel", type=int, default=int(os.environ.get("MAX_PARALLEL", "0")) or None)
     parser.add_argument("--slot-backend", choices=("local", "ibrun", "srun"), default=os.environ.get("TACC_SLOT_BACKEND", "local"))
     parser.add_argument("--use-task-affinity", action="store_true")
+    parser.add_argument(
+        "--index-ranges",
+        "--score-index-ranges",
+        dest="index_ranges",
+        default=os.environ.get("ATTRIBUTION_INDEX_RANGES", os.environ.get("SCORE_INDEX_RANGES", "")),
+        help="Forward train/score shard ranges to the per-query distributed runner.",
+    )
     parser.add_argument("--skip-sampling", action="store_true")
     parser.add_argument("--skip-query-gradient", action="store_true")
     parser.add_argument("--skip-das", action="store_true")
