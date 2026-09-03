@@ -127,6 +127,23 @@ def query_artifact_complete(path: Path, *, algorithm: str, expected_terms: int) 
     return True
 
 
+def traj_query_expected_terms() -> int:
+    snapshots = max(1, int(os.environ.get("TRAJ_NUM_SNAPSHOTS", "10")))
+    checkpoints = max(1, int(os.environ.get("TRAJ_TRACIN_NUM_CHECKPOINTS", "50")))
+    objective = os.environ.get("TRAJ_QUERY_OBJECTIVE", "")
+    next_checkpoint_objectives = (
+        "trajectory_next_checkpoint_noise_mse",
+        "next_checkpoint_noise_mse",
+        "next_ckpt_noise_mse",
+        "trajectory_next_checkpoint_ref_projection",
+        "next_checkpoint_ref_projection",
+        "next_ckpt_ref_projection",
+    )
+    if objective in next_checkpoint_objectives:
+        checkpoints -= 1
+    return max(1, checkpoints) * snapshots
+
+
 def run_distributed_for_query(
     args: argparse.Namespace,
     *,
@@ -390,7 +407,7 @@ def main() -> None:
                 q_args = args_for_seed(args, seed, namespace=ns)
                 q_args.namespace_query_gradient = args.namespace_query_gradient
                 path = query_gradient_artifact_path(args.root, q_args, "prompted_solo", query, algorithm)
-                expected_terms = 100 if algorithm == "das" else 5000
+                expected_terms = 100 if algorithm == "das" else traj_query_expected_terms()
                 if query_artifact_complete(path, algorithm=algorithm, expected_terms=expected_terms):
                     print(f"[skip] {algorithm} query gradient exists: {path}")
                     continue
