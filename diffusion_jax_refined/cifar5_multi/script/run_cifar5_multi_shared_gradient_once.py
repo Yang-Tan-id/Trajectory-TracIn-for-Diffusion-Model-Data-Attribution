@@ -64,6 +64,18 @@ def main() -> None:
     parser.add_argument("--only-lds-eval", action="store_true")
     parser.add_argument("--tracin-score-query-normalize", action="store_true")
     parser.add_argument("--tracin-score-query-normalize-eps", type=float, default=float(os.environ.get("TRACIN_SCORE_QUERY_NORMALIZE_EPS", "1e-8")))
+    parser.add_argument(
+        "--train-score-batch-size",
+        type=int,
+        default=int(os.environ.get("TRAJ_SCORE_BATCH_SIZE", "8")),
+        help="Datapoints per train-gradient batch. Keep this small for aggregate timestamp backprop.",
+    )
+    parser.add_argument(
+        "--timestamp-chunk-size",
+        type=int,
+        default=int(os.environ.get("TRAJ_TRACIN_TRAIN_TIMESTAMP_CHUNK_SIZE", "20")),
+        help="Number of timesteps per aggregate backward pass.",
+    )
     args = parser.parse_args()
 
     root = Path(__file__).resolve().parents[1]
@@ -83,9 +95,10 @@ def main() -> None:
     env["TRACIN_USE_SHARED_TRAIN_GRADIENT"] = "1"
     env["TRAJ_TRACIN_TRAIN_AGGREGATE_TIMESTAMPS"] = "1"
     env["TRAJ_TRACIN_TRAIN_AGGREGATE_NUM_TIMESTEPS"] = "100"
-    env["TRAJ_TRACIN_TRAIN_TIMESTAMP_CHUNK_SIZE"] = "100"
+    env["TRAJ_TRACIN_TRAIN_TIMESTAMP_CHUNK_SIZE"] = str(args.timestamp_chunk_size)
     env["TRAJ_NUM_SNAPSHOTS"] = "100"
     env["TRAJ_TRAIN_MC_SAMPLES"] = "1"
+    env["TRAJ_SCORE_BATCH_SIZE"] = str(args.train_score_batch_size)
     env["TRACIN_SCORE_QUERY_NORMALIZE"] = env_flag(args.tracin_score_query_normalize)
     env["TRACIN_SCORE_QUERY_NORMALIZE_EPS"] = str(args.tracin_score_query_normalize_eps)
 
@@ -112,6 +125,8 @@ def main() -> None:
     print(f"namespace={args.namespace}")
     print("mode=raw + next checkpoint")
     print("train gradient=100 evenly spaced timesteps, 1 MC/timestep, one backward per checkpoint")
+    print(f"train_score_batch_size={args.train_score_batch_size}")
+    print(f"timestamp_chunk_size={args.timestamp_chunk_size}")
     print("expected train terms=49 for next-checkpoint objective")
     print(f"index ranges={args.index_ranges}")
 
