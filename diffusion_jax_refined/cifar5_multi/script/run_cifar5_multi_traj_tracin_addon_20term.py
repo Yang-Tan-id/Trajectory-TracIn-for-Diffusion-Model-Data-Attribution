@@ -7,14 +7,11 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from run_cifar5_multi_attribution_distributed import shard_artifact_path, split_1based_ranges
 from run_cifar5_multi_random_prompted_queries import build_query_specs, query_tag
 
 
-DEFAULT_BASE_TRAIN_NS = "raw_nextckpt_school_traj_aligned_10x10"
 DEFAULT_QUERY_NS = "raw_nextckpt_school_traj_10x10"
 DEFAULT_ADDON_NS = "raw_nextckpt_school_traj_addon_mid10"
-DEFAULT_OUTPUT_NS = "raw_nextckpt_school_traj_20term_mid10"
 DEFAULT_RANGES = "1-2500,2501-5000,5001-7500,7501-10000"
 DEFAULT_ADDON_100GRID_INDICES = (5, 16, 27, 38, 49, 60, 71, 82, 93, 98)
 
@@ -24,17 +21,6 @@ def run(cmd: list[str], *, cwd: Path, env: dict[str, str], execute: bool) -> Non
     print(f"[{prefix}] {' '.join(cmd)}", flush=True)
     if execute:
         subprocess.run(cmd, cwd=str(cwd), env=env, check=True)
-
-
-def parse_ranges(text: str) -> list[tuple[int, int]]:
-    ranges = []
-    for part in text.replace(";", ",").replace(" ", ",").split(","):
-        part = part.strip()
-        if not part:
-            continue
-        start, end = part.replace(":", "-").split("-")
-        ranges.append((int(start), int(end)))
-    return ranges
 
 
 def snapshot_positions_from_100grid(indices: tuple[int, ...]) -> tuple[int, ...]:
@@ -75,7 +61,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
             "Build a raw next-checkpoint TrajTracIn add-on train-gradient artifact at 10 extra "
-            "midpoint timesteps, combine it with the previous 10-timestep train artifact, then score/LDS."
+            "midpoint timesteps, then score/LDS the add-on contribution only."
         )
     )
     parser.add_argument("--execute", action="store_true")
@@ -83,10 +69,8 @@ def main() -> None:
     parser.add_argument("--size", type=int, default=int(os.environ.get("CIFAR5_MULTI_SIZE", "10000")))
     parser.add_argument("--train-seed", type=int, default=int(os.environ.get("TRAIN_SEED", "42")))
     parser.add_argument("--epochs", type=int, default=int(os.environ.get("JAX_EPOCHS", "200")))
-    parser.add_argument("--base-train-namespace", default=os.environ.get("BASE_TRAJ_TRAIN_NAMESPACE", DEFAULT_BASE_TRAIN_NS))
     parser.add_argument("--query-namespace", default=os.environ.get("TRAJ_QUERY_NAMESPACE", DEFAULT_QUERY_NS))
     parser.add_argument("--addon-namespace", default=os.environ.get("ADDON_TRAJ_TRAIN_NAMESPACE", DEFAULT_ADDON_NS))
-    parser.add_argument("--output-namespace", default=os.environ.get("ATTRIBUTION_ARTIFACT_NAMESPACE", DEFAULT_OUTPUT_NS))
     parser.add_argument("--num-queries", type=int, default=int(os.environ.get("NUM_RANDOM_PROMPTED_QUERIES", "20")))
     parser.add_argument("--random-query-seed", type=int, default=int(os.environ.get("RANDOM_QUERY_SEED", "0")))
     parser.add_argument("--initial-seed-start", type=int, default=int(os.environ.get("INITIAL_SEED_START", "1000")))
@@ -105,7 +89,6 @@ def main() -> None:
     parser.add_argument("--score-index-ranges", default=os.environ.get("ATTRIBUTION_INDEX_RANGES", os.environ.get("SCORE_INDEX_RANGES", DEFAULT_RANGES)))
     parser.add_argument("--python-bin", default=os.environ.get("PYTHON_BIN", "python3"))
     parser.add_argument("--skip-addon-train", action="store_true")
-    parser.add_argument("--skip-combine", action="store_true")
     parser.add_argument("--skip-query-copy", action="store_true")
     parser.add_argument("--skip-lds-eval", action="store_true")
     parser.add_argument("--only-train-gradient", action="store_true")
@@ -116,7 +99,6 @@ def main() -> None:
     repo_root = root.parent.parent
     addon_indices = tuple(int(x) for x in args.addon_100grid_indices.replace(",", " ").split() if x.strip())
     addon_positions = snapshot_positions_from_100grid(addon_indices)
-    ranges = parse_ranges(args.score_index_ranges) if args.score_index_ranges.strip() else split_1based_ranges(args.size, args.slots or 1)
 
     env = os.environ.copy()
     env.setdefault("PYTHONUNBUFFERED", "1")
@@ -169,10 +151,8 @@ def main() -> None:
 
     print("CIFAR5 raw next-checkpoint TrajTracIn add-on 20-term runner")
     print(f"repo={repo_root}")
-    print(f"base_train_namespace={args.base_train_namespace}")
     print(f"query_namespace={args.query_namespace}")
     print(f"addon_namespace={args.addon_namespace}")
-    print(f"output_namespace={args.output_namespace}")
     print(f"addon_100grid_indices={addon_indices}")
     print(f"addon_snapshot_positions={addon_positions}")
     print(f"score_index_ranges={args.score_index_ranges}")
@@ -195,45 +175,6 @@ def main() -> None:
         ]
         run(train_cmd, cwd=root, env=env, execute=args.execute)
 
-    if not args.skip_combine:
-        combine_env = env.copy()
-        combine_env["TRAJ_NUM_SNAPSHOTS"] = "100"
-        for start, end in ranges:
-            dummy = argparse.Namespace(
-                artifact_namespace=args.output_namespace,
-                train_seed=args.train_seed,
-                experiment=args.experiment,
-            )
-            base_dummy = argparse.Namespace(
-                artifact_namespace=args.base_train_namespace,
-                train_seed=args.train_seed,
-                experiment=args.experiment,
-            )
-            addon_dummy = argparse.Namespace(
-                artifact_namespace=args.addon_namespace,
-                train_seed=args.train_seed,
-                experiment=args.experiment,
-            )
-            output = shard_artifact_path(root, dummy, "prompted_solo", "traj_tracin", start, end)
-            if output.is_file():
-                print(f"[skip] combined train shard exists: {output}", flush=True)
-                continue
-            run(
-                [
-                    args.python_bin,
-                    str(root.parent / "common" / "combine_traj_train_addon.py"),
-                    "--base",
-                    str(shard_artifact_path(root, base_dummy, "prompted_solo", "traj_tracin", start, end)),
-                    "--addon",
-                    str(shard_artifact_path(root, addon_dummy, "prompted_solo", "traj_tracin", start, end)),
-                    "--output",
-                    str(output),
-                ],
-                cwd=root,
-                env=combine_env,
-                execute=args.execute,
-            )
-
     specs = build_query_specs(args)
     if not args.skip_query_copy:
         copy_query_artifacts(
@@ -242,18 +183,16 @@ def main() -> None:
             train_seed=args.train_seed,
             epochs=args.epochs,
             old_ns=args.query_namespace,
-            new_ns=args.output_namespace,
+            new_ns=args.addon_namespace,
             specs=specs,
             execute=args.execute,
         )
 
     if args.only_train_gradient:
-        print("[done] add-on train/combine only")
+        print("[done] add-on train only")
         return
 
     score_env = env.copy()
-    score_env["TRAJ_NUM_SNAPSHOTS"] = "100"
-    score_env.pop("TRAJ_SNAPSHOT_POSITIONS", None)
     score_cmd = [
         args.python_bin,
         str(root / "script" / "run_cifar5_multi_random_prompted_queries.py"),
@@ -271,9 +210,9 @@ def main() -> None:
         "--lds-subset-seeds",
         args.lds_subset_seeds,
         "--artifact-namespace",
-        args.output_namespace,
+        args.addon_namespace,
         "--traj-artifact-namespace",
-        args.output_namespace,
+        args.addon_namespace,
         "--namespace-query-gradient",
         *gpu_args,
         "--skip-das",
