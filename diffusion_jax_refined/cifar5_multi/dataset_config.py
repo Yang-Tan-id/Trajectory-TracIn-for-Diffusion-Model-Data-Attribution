@@ -37,6 +37,13 @@ def _parse_int_list_env(name: str, default: tuple[int, ...]) -> tuple[int, ...]:
     return tuple(int(part) for part in text.replace(",", " ").split() if part.strip())
 
 
+def _parse_optional_int_list_env(name: str) -> tuple[int, ...] | None:
+    text = os.environ.get(name)
+    if not text:
+        return None
+    return tuple(int(part) for part in text.replace(",", " ").split() if part.strip())
+
+
 def _prompt_path_tag(prompt: str) -> str:
     text = str(prompt).strip().replace(",", "__")
     text = re.sub(r"[^A-Za-z0-9._-]+", "_", text)
@@ -220,6 +227,7 @@ ATTRIBUTION_CONFIGS = {
         "sync_config_from_checkpoint": True,
         "ddim_steps": 1000,
         "num_traj_snapshots": int(os.environ.get("TRAJ_NUM_SNAPSHOTS", "10")),
+        "traj_snapshot_positions": _parse_optional_int_list_env("TRAJ_SNAPSHOT_POSITIONS"),
         "snapshot_chunk_size": int(os.environ.get("TRAJ_SNAPSHOT_CHUNK_SIZE", "8")),
         "train_mc_samples": int(os.environ.get("TRAJ_TRAIN_MC_SAMPLES", "10")),
         "tracin_use_learning_rate_weights": os.environ.get(
