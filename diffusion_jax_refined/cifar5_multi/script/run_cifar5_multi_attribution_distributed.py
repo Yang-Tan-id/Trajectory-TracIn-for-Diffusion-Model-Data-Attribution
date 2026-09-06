@@ -303,6 +303,10 @@ def main() -> None:
 
     args.root = Path(__file__).resolve().parents[1]
     env0 = base_env(args)
+    namespace = artifact_namespace(args)
+    if namespace:
+        env0["ATTRIBUTION_ARTIFACT_NAMESPACE"] = namespace
+        env0["TRAJ_ATTRIBUTION_ARTIFACT_NAMESPACE"] = namespace
     env0.setdefault("TRACIN_USE_SHARED_TRAIN_GRADIENT", "1")
     env0.setdefault("TRAJ_TRACIN_PROJ_DIM", "4096")
     env0.setdefault("PROJECTED_CACHE_DIM", "4096")
@@ -331,8 +335,8 @@ def main() -> None:
     print(f"train modes={list(train_modes)}")
     print(f"worker slots={len(worker_gpu_ids)} | worker_gpus={worker_gpu_ids} | max_parallel={max_parallel} | backend={args.slot_backend}")
     print(f"tracin shared train={env0.get('TRACIN_USE_SHARED_TRAIN_GRADIENT', '1')}")
-    if artifact_namespace(args):
-        print(f"artifact namespace={artifact_namespace(args)}")
+    if namespace:
+        print(f"artifact namespace={namespace}")
 
     if args.only_lds_eval:
         args.skip_das = True
