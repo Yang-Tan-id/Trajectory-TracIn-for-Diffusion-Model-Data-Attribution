@@ -703,7 +703,10 @@ def run_score_combination_stage(config_path: str | Path) -> Path:
     out_dir = run_stage_config(config_path, "score")
     train_dir = stage_root(config_path, "train_datapoint_gradient")
     query_dir = stage_root(config_path, "query_gradient")
-    out_dir = Path(os.environ.get("SCORE_OUTPUT_DIR", out_dir))
+    score_output_override = os.environ.get("SCORE_OUTPUT_DIR")
+    if score_output_override:
+        out_dir = Path(score_output_override)
+        print(f"[stage] SCORE_OUTPUT_DIR override: {out_dir}", flush=True)
 
     train_path = Path(os.environ.get("TRAIN_DATAPOINT_GRADIENT_ARTIFACT_PATH", train_dir / TRAIN_ARTIFACT))
     query_path = Path(os.environ.get("QUERY_GRADIENT_ARTIFACT_PATH", query_dir / QUERY_ARTIFACT))
