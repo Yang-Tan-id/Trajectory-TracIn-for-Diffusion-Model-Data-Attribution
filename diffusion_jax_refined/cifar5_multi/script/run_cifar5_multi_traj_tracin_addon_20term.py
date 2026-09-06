@@ -111,6 +111,8 @@ def main() -> None:
     env["TRAJ_QUERY_OBJECTIVE"] = "trajectory_next_checkpoint_noise_mse"
     env["TRAJ_PARAMETER_SOURCE"] = "raw"
     env["TRACIN_PARAMETER_SOURCE"] = "raw"
+    env["ATTRIBUTION_ARTIFACT_NAMESPACE"] = args.addon_namespace
+    env["TRAJ_ATTRIBUTION_ARTIFACT_NAMESPACE"] = args.addon_namespace
     env["TRACIN_USE_SHARED_TRAIN_GRADIENT"] = "0"
     env["TRACIN_ALIGN_TERMS_BY_CKPT_TIMESTEP"] = "1"
     env["TRAJ_NUM_SNAPSHOTS"] = str(len(addon_positions))
