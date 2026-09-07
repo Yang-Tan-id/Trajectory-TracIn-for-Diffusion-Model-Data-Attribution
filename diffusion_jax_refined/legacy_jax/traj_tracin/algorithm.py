@@ -86,10 +86,28 @@ def merge_train_checkpoint_parts_atomic(
         archive.writestr(f"{name}.npy", buffer.getvalue())
 
     try:
+        compression_name = os.environ.get(
+            "TRAJ_TRACIN_MERGE_COMPRESSION", "stored"
+        ).strip().lower()
+        if compression_name not in ("stored", "deflated"):
+            raise ValueError(
+                "TRAJ_TRACIN_MERGE_COMPRESSION must be 'stored' or 'deflated', "
+                f"got {compression_name!r}"
+            )
+        compression = (
+            zipfile.ZIP_STORED
+            if compression_name == "stored"
+            else zipfile.ZIP_DEFLATED
+        )
+        print(
+            f"[stage:train] streaming checkpoint merge | compression={compression_name} | "
+            f"terms={total_terms} points={score_indices.shape[0]} proj_dim={proj_dim}",
+            flush=True,
+        )
         with zipfile.ZipFile(
             tmp_path,
             mode="w",
-            compression=zipfile.ZIP_DEFLATED,
+            compression=compression,
             allowZip64=True,
         ) as archive:
             feature_shape = (total_terms, int(score_indices.shape[0]), int(proj_dim))
