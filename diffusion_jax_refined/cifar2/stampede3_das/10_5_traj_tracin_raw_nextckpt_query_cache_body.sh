@@ -44,6 +44,9 @@ LOG_ROOT="${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/stampede3_das_logs/10_5_traj_t
 mkdir -p "${LOG_ROOT}"
 
 export XLA_FLAGS="${XLA_FLAGS:---xla_gpu_autotune_level=0}"
+export JAX_BFLOAT16="${JAX_BFLOAT16:-1}"
+export JAX_PREFETCH_SIZE="${JAX_PREFETCH_SIZE:-1}"
+export TF_GPU_ALLOCATOR="${TF_GPU_ALLOCATOR:-cuda_malloc_async}"
 export TF_CUDNN_USE_AUTOTUNE="${TF_CUDNN_USE_AUTOTUNE:-0}"
 export XLA_PYTHON_CLIENT_PREALLOCATE="${XLA_PYTHON_CLIENT_PREALLOCATE:-false}"
 
