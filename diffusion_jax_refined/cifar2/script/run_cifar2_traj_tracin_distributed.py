@@ -237,6 +237,21 @@ def score_complete(score_dir: Path) -> bool:
     return (score_dir / "scores.npy").is_file()
 
 
+def query_normalized_score_dir(out_dir: Path) -> Path:
+    parts = list(out_dir.parts)
+    if "score" in parts:
+        idx = len(parts) - 1 - parts[::-1].index("score")
+        parts[idx] = "score_query_normalized"
+        return Path(*parts)
+    return out_dir.parent / f"{out_dir.name}_query_normalized"
+
+
+def requested_score_complete(score_dir: Path, *, normalize_query: bool) -> bool:
+    return score_complete(score_dir) and (
+        not normalize_query or score_complete(query_normalized_score_dir(score_dir))
+    )
+
+
 def eval_complete(out_dir: Path) -> bool:
     return (out_dir / "lds_summary.json").is_file()
 
@@ -515,6 +530,7 @@ def main() -> None:
     args.root = Path(__file__).resolve().parents[1]
     specs = query_specs(args)
     env0 = base_env(args)
+    normalize_query = env0["TRACIN_SCORE_QUERY_NORMALIZE"] not in ("0", "false", "False", "no", "No")
     gpus = parse_gpus(args)
     worker_gpu_ids = worker_gpus(args, gpus)
     max_parallel = max(1, min(args.max_parallel or len(worker_gpu_ids), len(worker_gpu_ids)))
@@ -624,10 +640,12 @@ def main() -> None:
             for start, end in ranges:
                 batch_jobs = []
                 for spec in mode_specs:
-                    if score_complete(score_dir(args.root, args, spec)):
+                    if requested_score_complete(
+                        score_dir(args.root, args, spec), normalize_query=normalize_query
+                    ):
                         continue
                     shard_score = score_shard_dir(args.root, args, spec, start, end)
-                    if score_complete(shard_score):
+                    if requested_score_complete(shard_score, normalize_query=normalize_query):
                         print(
                             f"[skip] score shard {spec.query} seed={spec.seed} "
                             f"{start}-{end}: {shard_score}",
@@ -669,7 +687,7 @@ def main() -> None:
 
         for spec in specs:
             final_score_dir = score_dir(args.root, args, spec)
-            if score_complete(final_score_dir):
+            if requested_score_complete(final_score_dir, normalize_query=normalize_query):
                 print(f"[skip] score complete {spec.query} seed={spec.seed}: {final_score_dir}", flush=True)
                 continue
             shard_dirs = [score_shard_dir(args.root, args, spec, start, end) for start, end in ranges]
@@ -677,48 +695,73 @@ def main() -> None:
                 missing = [str(path / "scores.npy") for path in shard_dirs if not score_complete(path)]
                 if missing:
                     raise FileNotFoundError(f"Missing score shard(s) for {spec.query} seed={spec.seed}: {missing[:3]}")
-            run(
-                [
-                    args.python_bin,
-                    str(args.root.parent / "common" / "merge_score_shards.py"),
-                    "--output-dir",
-                    str(final_score_dir),
-                    *map(str, shard_dirs),
-                ],
-                env0,
-                cwd=args.root,
-                execute=args.execute,
-            )
+            merge_variants = [(final_score_dir, shard_dirs)]
+            if normalize_query:
+                merge_variants.append(
+                    (
+                        query_normalized_score_dir(final_score_dir),
+                        [query_normalized_score_dir(path) for path in shard_dirs],
+                    )
+                )
+            for variant_out, variant_shards in merge_variants:
+                if score_complete(variant_out):
+                    continue
+                run(
+                    [
+                        args.python_bin,
+                        str(args.root.parent / "common" / "merge_score_shards.py"),
+                        "--output-dir",
+                        str(variant_out),
+                        *map(str, variant_shards),
+                    ],
+                    env0,
+                    cwd=args.root,
+                    execute=args.execute,
+                )
 
     if not args.skip_lds_eval:
         target_functions = [part.strip() for part in args.target_functions.replace(",", " ").split() if part.strip()]
         for spec in specs:
-            score_path = score_dir(args.root, args, spec) / "scores.npy"
-            if not score_path.is_file():
-                print(f"[skip] missing score for LDS eval: {score_path}", flush=True)
-                continue
-            for target in target_functions:
-                out_dir = lds_eval_out_dir(args.root, args, spec, target)
-                if eval_complete(out_dir):
-                    print(f"[skip] LDS eval complete: {out_dir}", flush=True)
+            score_variants = [
+                ("traj_tracin", score_dir(args.root, args, spec), "traj_tracin")
+            ]
+            if normalize_query:
+                score_variants.append(
+                    (
+                        "traj_tracin_query_normalized",
+                        query_normalized_score_dir(score_dir(args.root, args, spec)),
+                        "traj_tracin_query_normalized",
+                    )
+                )
+            for algorithm_name, variant_score_dir, eval_component in score_variants:
+                score_path = variant_score_dir / "scores.npy"
+                if not score_path.is_file():
+                    print(f"[skip] missing score for LDS eval: {score_path}", flush=True)
                     continue
-                cmd = [
-                    args.python_bin,
-                    "lds/run_eval.py",
-                    "--algorithm",
-                    "traj_tracin",
-                    "--lds-model-dirs",
-                    lds_model_dirs(args.root, args, spec.score_mode),
-                    "--score-file",
-                    str(score_path),
-                    "--target-function",
-                    target,
-                    "--out-dir",
-                    str(out_dir),
-                ]
-                if spec.unprompted:
-                    cmd.insert(2, "--unprompted")
-                run(cmd, query_env(args, env0, spec), cwd=args.root, execute=args.execute)
+                for target in target_functions:
+                    out_dir = lds_eval_out_dir(args.root, args, spec, target)
+                    if eval_component != "traj_tracin":
+                        out_dir = out_dir.parent.parent / eval_component / target
+                    if eval_complete(out_dir):
+                        print(f"[skip] LDS eval complete: {out_dir}", flush=True)
+                        continue
+                    cmd = [
+                        args.python_bin,
+                        "lds/run_eval.py",
+                        "--algorithm",
+                        algorithm_name,
+                        "--lds-model-dirs",
+                        lds_model_dirs(args.root, args, spec.score_mode),
+                        "--score-file",
+                        str(score_path),
+                        "--target-function",
+                        target,
+                        "--out-dir",
+                        str(out_dir),
+                    ]
+                    if spec.unprompted:
+                        cmd.insert(2, "--unprompted")
+                    run(cmd, query_env(args, env0, spec), cwd=args.root, execute=args.execute)
 
     print("[done] CIFAR2 TrajTracIn distributed flow complete", flush=True)
 

@@ -832,7 +832,12 @@ def run_traj_score_batch_stage(config_path: str | Path) -> None:
         query_path = Path(job["query_path"])
         out_dir = Path(job["output_dir"])
         label = str(job.get("label", query_path))
-        if (out_dir / "scores.npy").is_file():
+        normalize_query = _env_flag("TRACIN_SCORE_QUERY_NORMALIZE", "0")
+        raw_complete = (out_dir / "scores.npy").is_file()
+        normalized_complete = (
+            _query_normalized_score_dir(out_dir) / "scores.npy"
+        ).is_file()
+        if raw_complete and (not normalize_query or normalized_complete):
             print(f"[traj-score-batch] skip existing {job_i}/{len(batch_jobs)}: {label}", flush=True)
             continue
         if not query_path.is_file():
@@ -842,22 +847,23 @@ def run_traj_score_batch_stage(config_path: str | Path) -> None:
             flush=True,
         )
         query_payload = _load_npz(query_path)
-        scores = _combine_multiterm_dot_scores(
-            train_payload,
-            query_payload,
-            train_path=train_path,
-            query_path=query_path,
-        )
-        _write_score_outputs(
-            out_dir,
-            scores,
-            indices,
-            train_dir=train_path.parent,
-            query_dir=query_path.parent,
-            algorithm="traj_tracin",
-            extra_manifest={"batched_query_scoring": True},
-        )
-        if _env_flag("TRACIN_SCORE_QUERY_NORMALIZE", "0"):
+        if not raw_complete:
+            scores = _combine_multiterm_dot_scores(
+                train_payload,
+                query_payload,
+                train_path=train_path,
+                query_path=query_path,
+            )
+            _write_score_outputs(
+                out_dir,
+                scores,
+                indices,
+                train_dir=train_path.parent,
+                query_dir=query_path.parent,
+                algorithm="traj_tracin",
+                extra_manifest={"batched_query_scoring": True},
+            )
+        if normalize_query and not normalized_complete:
             eps = float(os.environ.get("TRACIN_SCORE_QUERY_NORMALIZE_EPS", "1e-8"))
             normalized_scores = _combine_multiterm_dot_scores(
                 train_payload,
