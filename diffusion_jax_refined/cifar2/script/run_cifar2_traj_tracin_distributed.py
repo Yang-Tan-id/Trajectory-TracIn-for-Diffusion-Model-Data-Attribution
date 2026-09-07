@@ -249,8 +249,6 @@ def base_env(args: argparse.Namespace) -> dict[str, str]:
     env.setdefault("JAX_BFLOAT16", "1")
     env.setdefault("JAX_PREFETCH_SIZE", "1")
     env.setdefault("TF_GPU_ALLOCATOR", "cuda_malloc_async")
-    env.setdefault("TF_CUDNN_USE_AUTOTUNE", "0")
-    env.setdefault("XLA_FLAGS", "--xla_gpu_autotune_level=0")
     env.setdefault("TRAJ_TRACIN_PROJ_DIM", "4096")
     env.setdefault("PROJECTED_CACHE_DIM", "4096")
     env.setdefault("PROJECTED_DIMS", "4096")
@@ -550,6 +548,11 @@ def main() -> None:
         f"train_batch_mode={env0['TRAJ_TRACIN_TRAIN_BATCH_MODE']} "
         f"train_batch_dtype={env0['TRAJ_TRACIN_TRAIN_BATCH_DTYPE']} "
         f"countsketch_mode={env0['DTRAK_COUNT_SKETCH_MODE']}",
+        flush=True,
+    )
+    print(
+        f"xla_flags={env0.get('XLA_FLAGS', '(default)')} "
+        f"cudnn_autotune={env0.get('TF_CUDNN_USE_AUTOTUNE', '(default)')}",
         flush=True,
     )
 
