@@ -348,9 +348,12 @@ def main() -> None:
     parser.add_argument("--base-query-namespace", default="raw_nextckpt_school_traj_10x10")
     parser.add_argument("--addon-a-namespace", default="raw_nextckpt_school_traj_addon_mid10")
     parser.add_argument("--addon-b-namespace", default="raw_nextckpt_school_traj_addon_mid10_b")
+    parser.add_argument("--addon-c-namespace", default="raw_nextckpt_school_traj_addon_mid10_c")
     parser.add_argument("--combined-a-namespace", default="raw_nextckpt_school_traj_combined20_mid10_a")
     parser.add_argument("--combined-b-namespace", default="raw_nextckpt_school_traj_combined20_mid10_b")
+    parser.add_argument("--combined-c-namespace", default="raw_nextckpt_school_traj_combined20_mid10_c")
     parser.add_argument("--combined-ab-namespace", default="raw_nextckpt_school_traj_combined30_mid10_ab")
+    parser.add_argument("--combined-abc-namespace", default="raw_nextckpt_school_traj_combined40_mid10_abc")
     parser.add_argument("--score-index-ranges", default="1-2500,2501-5000,5001-7500,7501-10000")
     parser.add_argument("--gpus", default="0,1,2,3")
     parser.add_argument("--slots", type=int, default=4)
@@ -374,11 +377,14 @@ def main() -> None:
         "base": Component("base", args.base_train_namespace, args.base_query_namespace, args.base_train_namespace),
         "addon_a": Component("addon_a", args.addon_a_namespace, args.addon_a_namespace, args.addon_a_namespace),
         "addon_b": Component("addon_b", args.addon_b_namespace, args.addon_b_namespace, args.addon_b_namespace),
+        "addon_c": Component("addon_c", args.addon_c_namespace, args.addon_c_namespace, args.addon_c_namespace),
     }
     combinations = {
         args.combined_a_namespace: ("base", "addon_a"),
         args.combined_b_namespace: ("base", "addon_b"),
+        args.combined_c_namespace: ("base", "addon_c"),
         args.combined_ab_namespace: ("base", "addon_a", "addon_b"),
+        args.combined_abc_namespace: ("base", "addon_a", "addon_b", "addon_c"),
     }
     all_score_namespaces = [component.score_namespace for component in components.values()] + list(combinations)
 
