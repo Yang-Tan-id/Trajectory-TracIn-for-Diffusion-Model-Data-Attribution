@@ -237,18 +237,39 @@ def score_complete(score_dir: Path) -> bool:
     return (score_dir / "scores.npy").is_file()
 
 
-def query_normalized_score_dir(out_dir: Path) -> Path:
+def score_variant_dir(out_dir: Path, component: str) -> Path:
     parts = list(out_dir.parts)
     if "score" in parts:
         idx = len(parts) - 1 - parts[::-1].index("score")
-        parts[idx] = "score_query_normalized"
+        parts[idx] = component
         return Path(*parts)
-    return out_dir.parent / f"{out_dir.name}_query_normalized"
+    return out_dir.parent / component
 
 
-def requested_score_complete(score_dir: Path, *, normalize_query: bool) -> bool:
-    return score_complete(score_dir) and (
-        not normalize_query or score_complete(query_normalized_score_dir(score_dir))
+def requested_score_variants(score_dir: Path, *, normalize_query: bool, normalize_train: bool) -> list[tuple[str, Path]]:
+    variants = [("traj_tracin", score_dir)]
+    if normalize_query:
+        variants.append(("traj_tracin_query_normalized", score_variant_dir(score_dir, "score_query_normalized")))
+    if normalize_train:
+        variants.append(("traj_tracin_train_l2_normalized", score_variant_dir(score_dir, "score_train_l2_normalized")))
+    if normalize_query and normalize_train:
+        variants.append(
+            (
+                "traj_tracin_query_train_l2_normalized",
+                score_variant_dir(score_dir, "score_query_train_l2_normalized"),
+            )
+        )
+    return variants
+
+
+def requested_score_complete(score_dir: Path, *, normalize_query: bool, normalize_train: bool) -> bool:
+    return all(
+        score_complete(path)
+        for _, path in requested_score_variants(
+            score_dir,
+            normalize_query=normalize_query,
+            normalize_train=normalize_train,
+        )
     )
 
 
@@ -531,6 +552,7 @@ def main() -> None:
     specs = query_specs(args)
     env0 = base_env(args)
     normalize_query = env0["TRACIN_SCORE_QUERY_NORMALIZE"] not in ("0", "false", "False", "no", "No")
+    normalize_train = env0.get("TRACIN_SCORE_TRAIN_NORMALIZE", "0") not in ("0", "false", "False", "no", "No")
     gpus = parse_gpus(args)
     worker_gpu_ids = worker_gpus(args, gpus)
     max_parallel = max(1, min(args.max_parallel or len(worker_gpu_ids), len(worker_gpu_ids)))
@@ -641,11 +663,17 @@ def main() -> None:
                 batch_jobs = []
                 for spec in mode_specs:
                     if requested_score_complete(
-                        score_dir(args.root, args, spec), normalize_query=normalize_query
+                        score_dir(args.root, args, spec),
+                        normalize_query=normalize_query,
+                        normalize_train=normalize_train,
                     ):
                         continue
                     shard_score = score_shard_dir(args.root, args, spec, start, end)
-                    if requested_score_complete(shard_score, normalize_query=normalize_query):
+                    if requested_score_complete(
+                        shard_score,
+                        normalize_query=normalize_query,
+                        normalize_train=normalize_train,
+                    ):
                         print(
                             f"[skip] score shard {spec.query} seed={spec.seed} "
                             f"{start}-{end}: {shard_score}",
@@ -687,7 +715,11 @@ def main() -> None:
 
         for spec in specs:
             final_score_dir = score_dir(args.root, args, spec)
-            if requested_score_complete(final_score_dir, normalize_query=normalize_query):
+            if requested_score_complete(
+                final_score_dir,
+                normalize_query=normalize_query,
+                normalize_train=normalize_train,
+            ):
                 print(f"[skip] score complete {spec.query} seed={spec.seed}: {final_score_dir}", flush=True)
                 continue
             shard_dirs = [score_shard_dir(args.root, args, spec, start, end) for start, end in ranges]
@@ -695,17 +727,17 @@ def main() -> None:
                 missing = [str(path / "scores.npy") for path in shard_dirs if not score_complete(path)]
                 if missing:
                     raise FileNotFoundError(f"Missing score shard(s) for {spec.query} seed={spec.seed}: {missing[:3]}")
-            merge_variants = [(final_score_dir, shard_dirs)]
-            if normalize_query:
-                merge_variants.append(
-                    (
-                        query_normalized_score_dir(final_score_dir),
-                        [query_normalized_score_dir(path) for path in shard_dirs],
-                    )
-                )
-            for variant_out, variant_shards in merge_variants:
+            for _, variant_out in requested_score_variants(
+                final_score_dir,
+                normalize_query=normalize_query,
+                normalize_train=normalize_train,
+            ):
                 if score_complete(variant_out):
                     continue
+                component = next(
+                    part for part in variant_out.parts if part.startswith("score")
+                )
+                variant_shards = [score_variant_dir(path, component) for path in shard_dirs]
                 run(
                     [
                         args.python_bin,
@@ -722,26 +754,20 @@ def main() -> None:
     if not args.skip_lds_eval:
         target_functions = [part.strip() for part in args.target_functions.replace(",", " ").split() if part.strip()]
         for spec in specs:
-            score_variants = [
-                ("traj_tracin", score_dir(args.root, args, spec), "traj_tracin")
-            ]
-            if normalize_query:
-                score_variants.append(
-                    (
-                        "traj_tracin_query_normalized",
-                        query_normalized_score_dir(score_dir(args.root, args, spec)),
-                        "traj_tracin_query_normalized",
-                    )
-                )
-            for algorithm_name, variant_score_dir, eval_component in score_variants:
-                score_path = variant_score_dir / "scores.npy"
+            score_variants = requested_score_variants(
+                score_dir(args.root, args, spec),
+                normalize_query=normalize_query,
+                normalize_train=normalize_train,
+            )
+            for algorithm_name, variant_dir in score_variants:
+                score_path = variant_dir / "scores.npy"
                 if not score_path.is_file():
                     print(f"[skip] missing score for LDS eval: {score_path}", flush=True)
                     continue
                 for target in target_functions:
                     out_dir = lds_eval_out_dir(args.root, args, spec, target)
-                    if eval_component != "traj_tracin":
-                        out_dir = out_dir.parent.parent / eval_component / target
+                    if algorithm_name != "traj_tracin":
+                        out_dir = out_dir.parent.parent / algorithm_name / target
                     if eval_complete(out_dir):
                         print(f"[skip] LDS eval complete: {out_dir}", flush=True)
                         continue
