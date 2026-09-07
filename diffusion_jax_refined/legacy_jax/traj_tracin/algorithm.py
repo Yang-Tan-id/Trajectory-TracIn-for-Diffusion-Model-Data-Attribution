@@ -1639,6 +1639,7 @@ def run_attribution(cfg: TrajAttributionConfig):
     print(f"snapshot_chunk_size  : {cfg.snapshot_chunk_size}")
     print(f"train_mc_samples     : {cfg.train_mc_samples}")
     print(f"train_batch_dtype    : {'bfloat16' if bool(cfg.use_bfloat16) else 'float32'}")
+    print(f"train_batch_mode     : {os.environ.get('TRAJ_TRACIN_TRAIN_BATCH_MODE', 'vmap')}")
     print(f"max_train_points     : {cfg.max_train_points}")
     print(f"random_subset        : {cfg.random_subset}")
     print(f"score_index_ranges   : {cfg.score_index_ranges}")
@@ -2483,8 +2484,24 @@ def run_attribution(cfg: TrajAttributionConfig):
                     _loss, grads = jax.value_and_grad(loss_fn)(p)
                     return projector(grads)
 
-                train_phi_batch = jax.jit(jax.vmap(train_phi_one, in_axes=(None, 0, 0, 0, None)))
                 bs_stage = max(1, int(cfg.score_batch_size))
+                train_batch_mode = os.environ.get("TRAJ_TRACIN_TRAIN_BATCH_MODE", "vmap").strip().lower()
+                if train_batch_mode not in ("vmap", "loop"):
+                    raise ValueError("TRAJ_TRACIN_TRAIN_BATCH_MODE must be 'vmap' or 'loop'.")
+                if train_batch_mode == "loop":
+                    train_phi_single = jax.jit(train_phi_one)
+                    print(
+                        "[stage:train] using looped per-example train gradients "
+                        f"inside each score batch | batch_size={bs_stage}",
+                        flush=True,
+                    )
+                else:
+                    train_phi_batch = jax.jit(jax.vmap(train_phi_one, in_axes=(None, 0, 0, 0, None)))
+                    print(
+                        "[stage:train] using vmapped per-example train gradients "
+                        f"inside each score batch | batch_size={bs_stage}",
+                        flush=True,
+                    )
                 for snap_id, t_value in enumerate(t_seq):
                     term_features = np.empty((len(picked), proj_dim), dtype=np.float32)
                     t_scalar = array_to_device(jnp.asarray(int(t_value), dtype=jnp.int32), device)
@@ -2522,7 +2539,21 @@ def run_attribution(cfg: TrajAttributionConfig):
                                 f"elapsed={format_seconds(time.time() - stage_start_time)}",
                                 flush=True,
                             )
-                        phi_batch = train_phi_batch(params, x_batch, cond_batch, rngs, t_scalar)
+                        if train_batch_mode == "loop":
+                            phi_rows = []
+                            for local_i in range(bs_stage):
+                                phi_rows.append(
+                                    train_phi_single(
+                                        params,
+                                        x_batch[local_i],
+                                        cond_batch[local_i],
+                                        rngs[local_i],
+                                        t_scalar,
+                                    )
+                                )
+                            phi_batch = jnp.stack(phi_rows, axis=0)
+                        else:
+                            phi_batch = train_phi_batch(params, x_batch, cond_batch, rngs, t_scalar)
                         if batch_id == 1 or batch_id % 10 == 0 or end == len(picked):
                             print(
                                 f"[stage:train] batch returned {batch_id}/{total_batches} | "
