@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
 import subprocess
@@ -616,40 +617,61 @@ def main() -> None:
         run_parallel_jobs(jobs, args=args, execute=args.execute, max_parallel=max_parallel)
 
     if not args.skip_score:
+        jobs = []
+        shard_job_id = 0
+        for mode in train_modes(specs):
+            mode_specs = [spec for spec in specs if spec.score_mode == mode]
+            for start, end in ranges:
+                batch_jobs = []
+                for spec in mode_specs:
+                    if score_complete(score_dir(args.root, args, spec)):
+                        continue
+                    shard_score = score_shard_dir(args.root, args, spec, start, end)
+                    if score_complete(shard_score):
+                        print(
+                            f"[skip] score shard {spec.query} seed={spec.seed} "
+                            f"{start}-{end}: {shard_score}",
+                            flush=True,
+                        )
+                        continue
+                    batch_jobs.append(
+                        {
+                            "query_path": str(query_artifact_path(args.root, args, spec)),
+                            "output_dir": str(shard_score),
+                            "label": f"{spec.query} seed={spec.seed}",
+                        }
+                    )
+                if not batch_jobs:
+                    continue
+                train_path = shard_artifact_path(args.root, args, mode, start, end)
+                slot = slot_for(shard_job_id, len(worker_gpu_ids))
+                env = env0 | {
+                    "DATAPOINT_MODEL_MODE": mode,
+                    "ATTRIBUTION_SCORE_MODEL_MODE": mode,
+                    "TRAIN_DATAPOINT_GRADIENT_ARTIFACT_PATH": str(train_path),
+                    "TRACIN_SCORE_BATCH_JOBS": json.dumps(batch_jobs),
+                }
+                jobs.append(
+                    Job(
+                        name=f"traj_score_batch_{mode}_range_{start}_{end}",
+                        cmd=[args.python_bin, "03_score_batch.py"],
+                        cwd=args.root / "data_attribution" / "traj_tracin",
+                        env=gpu_env(env, worker_gpu_ids[slot]),
+                        log_path=resume_log_root(args)
+                        / "score_batches"
+                        / mode
+                        / f"range_{start}_{end}_slot_{slot}_gpu_{worker_gpu_ids[slot]}.log",
+                        slot=slot,
+                    )
+                )
+                shard_job_id += 1
+        run_parallel_jobs(jobs, args=args, execute=args.execute, max_parallel=max_parallel)
+
         for spec in specs:
             final_score_dir = score_dir(args.root, args, spec)
             if score_complete(final_score_dir):
                 print(f"[skip] score complete {spec.query} seed={spec.seed}: {final_score_dir}", flush=True)
                 continue
-            jobs = []
-            for shard_id, (start, end) in enumerate(ranges):
-                shard_score = score_shard_dir(args.root, args, spec, start, end)
-                if score_complete(shard_score):
-                    print(f"[skip] score shard {spec.query} seed={spec.seed} {start}-{end}: {shard_score}", flush=True)
-                    continue
-                train_path = shard_artifact_path(args.root, args, spec.score_mode, start, end)
-                query_path = query_artifact_path(args.root, args, spec)
-                env = query_env(args, env0, spec) | {
-                    "TRAIN_DATAPOINT_GRADIENT_ARTIFACT_PATH": str(train_path),
-                    "QUERY_GRADIENT_ARTIFACT_PATH": str(query_path),
-                    "SCORE_OUTPUT_DIR": str(shard_score),
-                }
-                slot = slot_for(shard_id, len(worker_gpu_ids))
-                jobs.append(
-                    Job(
-                        name=f"traj_score_{query_tag(spec.query)}_seed_{spec.seed}_range_{start}_{end}",
-                        cmd=[args.python_bin, "03_score.py"],
-                        cwd=args.root / "data_attribution" / "traj_tracin",
-                        env=gpu_env(env, worker_gpu_ids[slot]),
-                        log_path=resume_log_root(args)
-                        / "score_shards"
-                        / f"{query_tag(spec.query)}_seed_{spec.seed}"
-                        / f"range_{start}_{end}_slot_{slot}_gpu_{worker_gpu_ids[slot]}.log",
-                        slot=slot,
-                    )
-                )
-            run_parallel_jobs(jobs, args=args, execute=args.execute, max_parallel=max_parallel)
-
             shard_dirs = [score_shard_dir(args.root, args, spec, start, end) for start, end in ranges]
             if args.execute:
                 missing = [str(path / "scores.npy") for path in shard_dirs if not score_complete(path)]

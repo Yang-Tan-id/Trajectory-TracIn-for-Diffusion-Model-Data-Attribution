@@ -795,3 +795,90 @@ def run_score_combination_stage(config_path: str | Path) -> Path:
     _write_score_outputs(out_dir, scores, indices, train_dir=train_dir, query_dir=query_dir, algorithm=algorithm)
     print(f"[score] combined {len(scores)} scores from stage artifacts")
     return out_dir
+
+
+def run_traj_score_batch_stage(config_path: str | Path) -> None:
+    """Score several queries while retaining one large train shard in memory."""
+    config_path = Path(config_path)
+    if config_path.parent.name != "traj_tracin":
+        raise ValueError(f"Batched query scoring only supports traj_tracin: {config_path}")
+    train_path = Path(os.environ["TRAIN_DATAPOINT_GRADIENT_ARTIFACT_PATH"])
+    batch_jobs = json.loads(os.environ.get("TRACIN_SCORE_BATCH_JOBS", "[]"))
+    if not batch_jobs:
+        raise ValueError("TRACIN_SCORE_BATCH_JOBS is empty")
+    if not train_path.is_file():
+        raise FileNotFoundError(str(train_path))
+
+    print(
+        f"[traj-score-batch] loading train artifact once: {train_path} | "
+        f"queries={len(batch_jobs)}",
+        flush=True,
+    )
+    train_payload = _load_npz(train_path)
+    train = _first_array(
+        train_payload,
+        ("train_features", "features", "train_gradients", "gradients"),
+        path=train_path,
+    )
+    if train.ndim != 3:
+        raise ValueError(f"{train_path} train features must be rank 3, got {train.shape}")
+    print(
+        f"[traj-score-batch] train loaded | shape={train.shape} dtype={train.dtype}",
+        flush=True,
+    )
+    indices = _score_indices(train_payload, int(train.shape[1]))
+
+    for job_i, job in enumerate(batch_jobs, start=1):
+        query_path = Path(job["query_path"])
+        out_dir = Path(job["output_dir"])
+        label = str(job.get("label", query_path))
+        if (out_dir / "scores.npy").is_file():
+            print(f"[traj-score-batch] skip existing {job_i}/{len(batch_jobs)}: {label}", flush=True)
+            continue
+        if not query_path.is_file():
+            raise FileNotFoundError(str(query_path))
+        print(
+            f"[traj-score-batch] query {job_i}/{len(batch_jobs)}: {label}",
+            flush=True,
+        )
+        query_payload = _load_npz(query_path)
+        scores = _combine_multiterm_dot_scores(
+            train_payload,
+            query_payload,
+            train_path=train_path,
+            query_path=query_path,
+        )
+        _write_score_outputs(
+            out_dir,
+            scores,
+            indices,
+            train_dir=train_path.parent,
+            query_dir=query_path.parent,
+            algorithm="traj_tracin",
+            extra_manifest={"batched_query_scoring": True},
+        )
+        if _env_flag("TRACIN_SCORE_QUERY_NORMALIZE", "0"):
+            eps = float(os.environ.get("TRACIN_SCORE_QUERY_NORMALIZE_EPS", "1e-8"))
+            normalized_scores = _combine_multiterm_dot_scores(
+                train_payload,
+                query_payload,
+                train_path=train_path,
+                query_path=query_path,
+                normalize_query=True,
+                query_normalize_eps=eps,
+            )
+            _write_score_outputs(
+                _query_normalized_score_dir(out_dir),
+                normalized_scores,
+                indices,
+                train_dir=train_path.parent,
+                query_dir=query_path.parent,
+                algorithm="traj_tracin",
+                extra_manifest={
+                    "batched_query_scoring": True,
+                    "query_gradient": "l2",
+                    "query_normalize_eps": eps,
+                    "raw_score_dir": str(out_dir),
+                },
+            )
+        print(f"[traj-score-batch] query done {job_i}/{len(batch_jobs)}: {label}", flush=True)
