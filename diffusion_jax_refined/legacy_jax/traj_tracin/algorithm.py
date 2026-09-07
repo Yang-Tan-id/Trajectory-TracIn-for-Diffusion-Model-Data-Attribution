@@ -3,8 +3,10 @@ import sys
 import time
 import math
 import json
+import io
 import pickle
 import re
+import zipfile
 from dataclasses import dataclass, asdict
 from typing import Any, Dict, List, Optional, Sequence, Tuple, Union
 
@@ -33,6 +35,110 @@ def save_npz_compressed_atomic(path: str, **arrays) -> None:
     tmp_path = f"{path}.tmp.npz"
     np.savez_compressed(tmp_path, **arrays)
     os.replace(tmp_path, path)
+
+
+def merge_train_checkpoint_parts_atomic(
+    path: str,
+    part_paths: Sequence[str],
+    *,
+    proj_dim: int,
+    query_objective: str,
+    query_target_checkpoint: str,
+) -> None:
+    """Merge large checkpoint parts without holding the full artifact in RAM."""
+    score_indices = None
+    metadata_parts = {
+        "ckpt_indices": [],
+        "timesteps": [],
+        "snapshot_positions": [],
+        "term_weights": [],
+        "ckpt_paths": [],
+    }
+    total_terms = 0
+    for part_path in part_paths:
+        with np.load(part_path, allow_pickle=True) as part:
+            part_score_indices = np.asarray(part["score_indices"], dtype=np.int64)
+            if score_indices is None:
+                score_indices = part_score_indices
+            elif not np.array_equal(score_indices, part_score_indices):
+                raise ValueError(f"score_indices mismatch in checkpoint part: {part_path}")
+            for key, dtype in (
+                ("ckpt_indices", np.int32),
+                ("timesteps", np.int32),
+                ("snapshot_positions", np.int32),
+                ("term_weights", np.float32),
+            ):
+                metadata_parts[key].append(np.asarray(part[key], dtype=dtype))
+            metadata_parts["ckpt_paths"].append(np.asarray(part["ckpt_paths"]))
+            total_terms += int(metadata_parts["ckpt_indices"][-1].shape[0])
+
+    if score_indices is None:
+        raise RuntimeError("No checkpoint parts were provided for merge.")
+
+    ensure_dir(os.path.dirname(path))
+    tmp_path = f"{path}.tmp.npz"
+    if os.path.exists(tmp_path):
+        os.remove(tmp_path)
+
+    def write_small_array(archive, name, value):
+        buffer = io.BytesIO()
+        np.save(buffer, np.asarray(value), allow_pickle=False)
+        archive.writestr(f"{name}.npy", buffer.getvalue())
+
+    try:
+        with zipfile.ZipFile(
+            tmp_path,
+            mode="w",
+            compression=zipfile.ZIP_DEFLATED,
+            allowZip64=True,
+        ) as archive:
+            feature_shape = (total_terms, int(score_indices.shape[0]), int(proj_dim))
+            with archive.open("train_features.npy", mode="w", force_zip64=True) as member:
+                np.lib.format.write_array_header_2_0(
+                    member,
+                    {
+                        "descr": np.lib.format.dtype_to_descr(np.dtype(np.float32)),
+                        "fortran_order": False,
+                        "shape": feature_shape,
+                    },
+                )
+                term_offset = 0
+                for part_i, part_path in enumerate(part_paths, start=1):
+                    with np.load(part_path, allow_pickle=False) as part:
+                        features = np.asarray(part["train_features"], dtype=np.float32, order="C")
+                    expected_shape = (
+                        metadata_parts["ckpt_indices"][part_i - 1].shape[0],
+                        score_indices.shape[0],
+                        proj_dim,
+                    )
+                    if features.shape != expected_shape:
+                        raise ValueError(
+                            f"train_features shape mismatch in {part_path}: "
+                            f"got {features.shape}, expected {expected_shape}"
+                        )
+                    member.write(memoryview(features).cast("B"))
+                    term_offset += features.shape[0]
+                    print(
+                        f"[stage:train] merge wrote part {part_i}/{len(part_paths)} | "
+                        f"terms={term_offset}/{total_terms}",
+                        flush=True,
+                    )
+
+            write_small_array(archive, "score_indices", score_indices)
+            for key in metadata_parts:
+                write_small_array(archive, key, np.concatenate(metadata_parts[key], axis=0))
+            write_small_array(archive, "proj_dim", np.asarray(proj_dim, dtype=np.int32))
+            write_small_array(archive, "query_objective", np.asarray(query_objective))
+            write_small_array(
+                archive,
+                "query_target_checkpoint",
+                np.asarray(query_target_checkpoint),
+            )
+        os.replace(tmp_path, path)
+    except Exception:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+        raise
 
 
 def load_stream_query_bank(paths_text: str, *, expected_proj_dim: int) -> Dict[str, Any]:
@@ -2659,38 +2765,12 @@ def run_attribution(cfg: TrajAttributionConfig):
                     f"{len(part_paths)}/{expected_stage_parts} present. First missing: {missing_parts[:3]}"
                 )
             print(f"[stage:train] merging {len(part_paths)} checkpoint parts into {stage_artifact_path}")
-            train_features_parts = []
-            ckpt_indices_parts = []
-            timesteps_parts = []
-            snapshot_positions_parts = []
-            ckpt_paths_parts = []
-            term_weights_parts = []
-            score_indices = None
-            for part_path in part_paths:
-                with np.load(part_path, allow_pickle=True) as part:
-                    part_score_indices = np.asarray(part["score_indices"], dtype=np.int64)
-                    if score_indices is None:
-                        score_indices = part_score_indices
-                    elif not np.array_equal(score_indices, part_score_indices):
-                        raise ValueError(f"score_indices mismatch in checkpoint part: {part_path}")
-                    train_features_parts.append(np.asarray(part["train_features"], dtype=np.float32))
-                    ckpt_indices_parts.append(np.asarray(part["ckpt_indices"], dtype=np.int32))
-                    timesteps_parts.append(np.asarray(part["timesteps"], dtype=np.int32))
-                    snapshot_positions_parts.append(np.asarray(part["snapshot_positions"], dtype=np.int32))
-                    ckpt_paths_parts.append(np.asarray(part["ckpt_paths"]))
-                    term_weights_parts.append(np.asarray(part["term_weights"], dtype=np.float32))
-            save_npz_compressed_atomic(
+            merge_train_checkpoint_parts_atomic(
                 stage_artifact_path,
-                train_features=np.concatenate(train_features_parts, axis=0).astype(np.float32),
-                score_indices=np.asarray(score_indices, dtype=np.int64),
-                ckpt_indices=np.concatenate(ckpt_indices_parts, axis=0).astype(np.int32),
-                timesteps=np.concatenate(timesteps_parts, axis=0).astype(np.int32),
-                snapshot_positions=np.concatenate(snapshot_positions_parts, axis=0).astype(np.int32),
-                term_weights=np.concatenate(term_weights_parts, axis=0).astype(np.float32),
-                ckpt_paths=np.concatenate(ckpt_paths_parts, axis=0),
-                proj_dim=np.asarray(proj_dim, dtype=np.int32),
-                query_objective=np.asarray(cfg.query_objective),
-                query_target_checkpoint=np.asarray(
+                part_paths,
+                proj_dim=proj_dim,
+                query_objective=cfg.query_objective,
+                query_target_checkpoint=(
                     "next_checkpoint" if uses_next_checkpoint_target else "reference_checkpoint"
                 ),
             )
