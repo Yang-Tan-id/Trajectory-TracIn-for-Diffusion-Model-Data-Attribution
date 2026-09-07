@@ -872,6 +872,18 @@ def make_train_batch(adapter, ds, indices: Sequence[int], device, *, use_bfloat1
     return array_to_device(x_batch, device), array_to_device(cond_batch, device)
 
 
+def train_batch_uses_bfloat16() -> bool:
+    dtype = os.environ.get("TRAJ_TRACIN_TRAIN_BATCH_DTYPE", "float32").strip().lower()
+    if dtype in ("float32", "fp32", "f32"):
+        return False
+    if dtype in ("bfloat16", "bf16"):
+        return True
+    raise ValueError(
+        "TRAJ_TRACIN_TRAIN_BATCH_DTYPE must be one of "
+        "float32, fp32, f32, bfloat16, or bf16."
+    )
+
+
 def pad_indices_to_batch(indices: Sequence[int], batch_size: int) -> List[int]:
     out = [int(i) for i in indices]
     if not out:
@@ -1638,7 +1650,8 @@ def run_attribution(cfg: TrajAttributionConfig):
     print(f"num_traj_snapshots   : {cfg.num_traj_snapshots}")
     print(f"snapshot_chunk_size  : {cfg.snapshot_chunk_size}")
     print(f"train_mc_samples     : {cfg.train_mc_samples}")
-    print(f"train_batch_dtype    : {'bfloat16' if bool(cfg.use_bfloat16) else 'float32'}")
+    use_bfloat16_train_batch = train_batch_uses_bfloat16()
+    print(f"train_batch_dtype    : {'bfloat16' if use_bfloat16_train_batch else 'float32'}")
     print(f"train_batch_mode     : {os.environ.get('TRAJ_TRACIN_TRAIN_BATCH_MODE', 'vmap')}")
     print(f"countsketch_mode     : {os.environ.get('DTRAK_COUNT_SKETCH_MODE', 'scatter')}")
     print(f"max_train_points     : {cfg.max_train_points}")
@@ -1990,7 +2003,7 @@ def run_attribution(cfg: TrajAttributionConfig):
                         ds,
                         padded_indices,
                         device,
-                        use_bfloat16=bool(cfg.use_bfloat16),
+                        use_bfloat16=use_bfloat16_train_batch,
                     )
                     rngs = array_to_device(
                         jnp.stack(
@@ -2370,7 +2383,7 @@ def run_attribution(cfg: TrajAttributionConfig):
                             ds,
                             padded_indices,
                             device,
-                            use_bfloat16=bool(cfg.use_bfloat16),
+                            use_bfloat16=use_bfloat16_train_batch,
                         )
                         phi_accum = np.zeros((bs_stage, proj_dim), dtype=np.float64)
                         for chunk_id, t_values_chunk in enumerate(t_chunks):
@@ -2517,7 +2530,7 @@ def run_attribution(cfg: TrajAttributionConfig):
                             ds,
                             padded_indices,
                             device,
-                            use_bfloat16=bool(cfg.use_bfloat16),
+                            use_bfloat16=use_bfloat16_train_batch,
                         )
                         rngs = array_to_device(
                             jnp.stack(
@@ -3007,7 +3020,7 @@ def run_attribution(cfg: TrajAttributionConfig):
                     ds,
                     padded_indices,
                     device,
-                    use_bfloat16=bool(cfg.use_bfloat16),
+                    use_bfloat16=use_bfloat16_train_batch,
                 )
                 if batch_no == 1:
                     print(
@@ -3117,7 +3130,7 @@ def run_attribution(cfg: TrajAttributionConfig):
                     ds,
                     padded_indices,
                     device,
-                    use_bfloat16=bool(cfg.use_bfloat16),
+                    use_bfloat16=use_bfloat16_train_batch,
                 )
                 if chunk_start == 0 and batch_no == 1:
                     print(

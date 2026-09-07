@@ -262,6 +262,8 @@ def base_env(args: argparse.Namespace) -> dict[str, str]:
     env.setdefault("TRAJ_SCORE_BATCH_SIZE", str(args.train_score_batch_size))
     env.setdefault("TRAJ_SNAPSHOT_CHUNK_SIZE", str(args.snapshot_chunk_size))
     env.setdefault("TRAJ_TRACIN_TRAIN_BATCH_MODE", args.train_batch_mode)
+    env.setdefault("TRAJ_TRACIN_TRAIN_BATCH_DTYPE", args.train_batch_dtype)
+    env.setdefault("DTRAK_COUNT_SKETCH_MODE", args.countsketch_mode)
     env.setdefault("TRAJ_USE_SAVED_TRAJECTORY", "0")
     env.setdefault("TRACIN_USE_SHARED_TRAIN_GRADIENT", "1")
     env.setdefault("TRACIN_SCORE_QUERY_NORMALIZE", "0")
@@ -496,6 +498,18 @@ def main() -> None:
         default=os.environ.get("TRAJ_TRACIN_TRAIN_BATCH_MODE", "vmap"),
         help="vmap matches the original batched per-example gradient path; loop runs the same per-example gradient one item at a time inside each score batch.",
     )
+    parser.add_argument(
+        "--train-batch-dtype",
+        choices=("float32", "bfloat16"),
+        default=os.environ.get("TRAJ_TRACIN_TRAIN_BATCH_DTYPE", "float32"),
+        help="Input dtype for TrajTracIn train-gradient batches. float32 matches the original CIFAR5 10x10 path.",
+    )
+    parser.add_argument(
+        "--countsketch-mode",
+        choices=("scatter", "segment_sum"),
+        default=os.environ.get("DTRAK_COUNT_SKETCH_MODE", "scatter"),
+        help="CountSketch implementation for projected gradients. scatter matches the original CIFAR5 10x10 path.",
+    )
     parser.add_argument("--python-bin", default=os.environ.get("PYTHON_BIN", "python3"))
     args = parser.parse_args()
 
@@ -532,7 +546,10 @@ def main() -> None:
         "traj settings: "
         f"objective={env0['TRAJ_QUERY_OBJECTIVE']} parameter_source={env0['TRAJ_PARAMETER_SOURCE']} "
         f"snapshots={env0['TRAJ_NUM_SNAPSHOTS']} mc={env0['TRAJ_TRAIN_MC_SAMPLES']} "
-        f"train_batch={env0['TRAJ_SCORE_BATCH_SIZE']} train_batch_mode={env0['TRAJ_TRACIN_TRAIN_BATCH_MODE']}",
+        f"train_batch={env0['TRAJ_SCORE_BATCH_SIZE']} "
+        f"train_batch_mode={env0['TRAJ_TRACIN_TRAIN_BATCH_MODE']} "
+        f"train_batch_dtype={env0['TRAJ_TRACIN_TRAIN_BATCH_DTYPE']} "
+        f"countsketch_mode={env0['DTRAK_COUNT_SKETCH_MODE']}",
         flush=True,
     )
 
