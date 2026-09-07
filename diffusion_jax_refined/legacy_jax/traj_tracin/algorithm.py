@@ -854,7 +854,7 @@ def load_attribution_trajectory(cfg: "TrajAttributionConfig") -> Tuple[List[jnp.
     return xt_refs, t_seq, pos_seq, meta
 
 
-def make_train_batch(adapter, ds, indices: Sequence[int], device):
+def make_train_batch(adapter, ds, indices: Sequence[int], device, *, use_bfloat16: bool = False):
     xs = []
     conds = []
     for idx in indices:
@@ -862,12 +862,13 @@ def make_train_batch(adapter, ds, indices: Sequence[int], device):
         xs.append(np.asarray(x[0], dtype=np.float32))
         conds.append(np.asarray(cond)[0])
 
-    x_batch = jnp.asarray(np.stack(xs, axis=0), dtype=jnp.float32)
+    x_dtype = jnp.bfloat16 if use_bfloat16 else jnp.float32
+    x_batch = jnp.asarray(np.stack(xs, axis=0), dtype=x_dtype)
     cond_arr = np.stack(conds, axis=0)
     if cond_arr.ndim == 1:
         cond_batch = jnp.asarray(cond_arr, dtype=jnp.int32)
     else:
-        cond_batch = jnp.asarray(cond_arr, dtype=jnp.float32)
+        cond_batch = jnp.asarray(cond_arr, dtype=x_dtype)
     return array_to_device(x_batch, device), array_to_device(cond_batch, device)
 
 
@@ -1637,6 +1638,7 @@ def run_attribution(cfg: TrajAttributionConfig):
     print(f"num_traj_snapshots   : {cfg.num_traj_snapshots}")
     print(f"snapshot_chunk_size  : {cfg.snapshot_chunk_size}")
     print(f"train_mc_samples     : {cfg.train_mc_samples}")
+    print(f"train_batch_dtype    : {'bfloat16' if bool(cfg.use_bfloat16) else 'float32'}")
     print(f"max_train_points     : {cfg.max_train_points}")
     print(f"random_subset        : {cfg.random_subset}")
     print(f"score_index_ranges   : {cfg.score_index_ranges}")
@@ -1981,7 +1983,13 @@ def run_attribution(cfg: TrajAttributionConfig):
                     end = min(start + batch_size_stream, len(picked))
                     real_indices = picked[start:end]
                     padded_indices = pad_indices_to_batch(real_indices, batch_size_stream)
-                    x_batch, cond_batch = make_train_batch(adapter, ds, padded_indices, device)
+                    x_batch, cond_batch = make_train_batch(
+                        adapter,
+                        ds,
+                        padded_indices,
+                        device,
+                        use_bfloat16=bool(cfg.use_bfloat16),
+                    )
                     rngs = array_to_device(
                         jnp.stack(
                             [
@@ -2355,7 +2363,13 @@ def run_attribution(cfg: TrajAttributionConfig):
                         end = min(len(picked), start + bs_stage)
                         real_indices = picked[start:end]
                         padded_indices = pad_indices_to_batch(real_indices, bs_stage)
-                        x_batch, cond_batch = make_train_batch(adapter, ds, padded_indices, device)
+                        x_batch, cond_batch = make_train_batch(
+                            adapter,
+                            ds,
+                            padded_indices,
+                            device,
+                            use_bfloat16=bool(cfg.use_bfloat16),
+                        )
                         phi_accum = np.zeros((bs_stage, proj_dim), dtype=np.float64)
                         for chunk_id, t_values_chunk in enumerate(t_chunks):
                             chunk_len = int(t_values_chunk.shape[0])
@@ -2480,7 +2494,13 @@ def run_attribution(cfg: TrajAttributionConfig):
                         batch_id = start // bs_stage + 1
                         real_indices = picked[start:end]
                         padded_indices = pad_indices_to_batch(real_indices, bs_stage)
-                        x_batch, cond_batch = make_train_batch(adapter, ds, padded_indices, device)
+                        x_batch, cond_batch = make_train_batch(
+                            adapter,
+                            ds,
+                            padded_indices,
+                            device,
+                            use_bfloat16=bool(cfg.use_bfloat16),
+                        )
                         rngs = array_to_device(
                             jnp.stack(
                                 [
@@ -2950,7 +2970,13 @@ def run_attribution(cfg: TrajAttributionConfig):
                 end = min(start + batch_size, len(picked))
                 real_indices = picked[start:end]
                 padded_indices = pad_indices_to_batch(real_indices, batch_size)
-                x_batch, cond_batch = make_train_batch(adapter, ds, padded_indices, device)
+                x_batch, cond_batch = make_train_batch(
+                    adapter,
+                    ds,
+                    padded_indices,
+                    device,
+                    use_bfloat16=bool(cfg.use_bfloat16),
+                )
                 if batch_no == 1:
                     print(
                         "[device-check] "
@@ -3054,7 +3080,13 @@ def run_attribution(cfg: TrajAttributionConfig):
                 end = min(start + batch_size, len(picked))
                 real_indices = picked[start:end]
                 padded_indices = pad_indices_to_batch(real_indices, batch_size)
-                x_batch, cond_batch = make_train_batch(adapter, ds, padded_indices, device)
+                x_batch, cond_batch = make_train_batch(
+                    adapter,
+                    ds,
+                    padded_indices,
+                    device,
+                    use_bfloat16=bool(cfg.use_bfloat16),
+                )
                 if chunk_start == 0 and batch_no == 1:
                     print(
                         "[device-check] "
