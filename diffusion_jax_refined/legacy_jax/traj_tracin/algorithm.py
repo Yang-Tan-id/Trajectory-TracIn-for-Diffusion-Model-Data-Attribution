@@ -2474,8 +2474,10 @@ def run_attribution(cfg: TrajAttributionConfig):
                 for snap_id, t_value in enumerate(t_seq):
                     term_features = np.empty((len(picked), proj_dim), dtype=np.float32)
                     t_scalar = array_to_device(jnp.asarray(int(t_value), dtype=jnp.int32), device)
+                    total_batches = math.ceil(len(picked) / bs_stage)
                     for start in range(0, len(picked), bs_stage):
                         end = min(len(picked), start + bs_stage)
+                        batch_id = start // bs_stage + 1
                         real_indices = picked[start:end]
                         padded_indices = pad_indices_to_batch(real_indices, bs_stage)
                         x_batch, cond_batch = make_train_batch(adapter, ds, padded_indices, device)
@@ -2489,9 +2491,38 @@ def run_attribution(cfg: TrajAttributionConfig):
                             ),
                             device,
                         )
+                        if batch_id == 1 or batch_id % 10 == 0 or end == len(picked):
+                            print(
+                                f"[stage:train] batch start {batch_id}/{total_batches} | "
+                                f"ckpt={ckpt_i + 1}/{len(ckpts)} | "
+                                f"snapshot={snap_id + 1}/{len(t_seq)} | "
+                                f"datapoints={end}/{len(picked)} | "
+                                f"batch_size={bs_stage} | "
+                                f"t={int(t_value)} | "
+                                f"elapsed={format_seconds(time.time() - stage_start_time)}",
+                                flush=True,
+                            )
                         phi_batch = train_phi_batch(params, x_batch, cond_batch, rngs, t_scalar)
+                        if batch_id == 1 or batch_id % 10 == 0 or end == len(picked):
+                            print(
+                                f"[stage:train] batch returned {batch_id}/{total_batches} | "
+                                f"ckpt={ckpt_i + 1}/{len(ckpts)} | "
+                                f"snapshot={snap_id + 1}/{len(t_seq)} | "
+                                f"datapoints={end}/{len(picked)} | "
+                                f"elapsed={format_seconds(time.time() - stage_start_time)}",
+                                flush=True,
+                            )
                         phi_batch.block_until_ready()
                         term_features[start:end] = np.asarray(phi_batch[: end - start], dtype=np.float32)
+                        if batch_id == 1 or batch_id % 10 == 0 or end == len(picked):
+                            print(
+                                f"[stage:train] batch done {batch_id}/{total_batches} | "
+                                f"ckpt={ckpt_i + 1}/{len(ckpts)} | "
+                                f"snapshot={snap_id + 1}/{len(t_seq)} | "
+                                f"datapoints={end}/{len(picked)} | "
+                                f"elapsed={format_seconds(time.time() - stage_start_time)}",
+                                flush=True,
+                            )
                     train_phi_terms.append(term_features)
                     train_ckpt_indices.append(int(ckpt_i))
                     train_timesteps.append(int(t_value))

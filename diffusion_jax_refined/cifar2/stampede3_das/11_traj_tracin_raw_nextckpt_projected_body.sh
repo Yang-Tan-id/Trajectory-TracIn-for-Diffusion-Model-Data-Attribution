@@ -29,7 +29,7 @@ fi
 ATTR_NUM_SLOTS="${ATTR_NUM_SLOTS:-${GPU_SLOTS:-2}}"
 GPU_PER_NODE="${GPU_PER_NODE:-2}"
 PROMPTED_SEEDS_TEXT="${PROMPTED_INITIAL_SEEDS:-$(seq -s ' ' 0 7)}"
-UNPROMPTED_SEEDS_TEXT="${UNPROMPTED_INITIAL_SEEDS:-$(seq -s ' ' 0 23)}"
+UNPROMPTED_SEEDS_TEXT="${UNPROMPTED_INITIAL_SEEDS-$(seq -s ' ' 0 23)}"
 TRAJ_RANGES_TEXT="${TRAJ_RANGES:-1-2500 2501-5000 5001-7500 7501-10000}"
 TRAJ_SCORE_BATCH_SIZE="${TRAJ_SCORE_BATCH_SIZE:-8}"
 TRAJ_SNAPSHOT_CHUNK_SIZE="${TRAJ_SNAPSHOT_CHUNK_SIZE:-4}"
@@ -45,6 +45,8 @@ PROJECTED_ARTIFACT_DIR_NAME_VALUE="${PROJECTED_ARTIFACT_DIR_NAME:-projected_traj
 TRAIN_SCORE_INDEX_RANGES="${TRAIN_SCORE_INDEX_RANGES:-1-10000}"
 TRAIN_SCORE_INDEX_RANGES_MODE="${TRAIN_SCORE_INDEX_RANGES_MODE:-task}"
 TRAJ_TRACIN_TRAIN_AGGREGATE_TIMESTAMPS="${TRAJ_TRACIN_TRAIN_AGGREGATE_TIMESTAMPS:-1}"
+PROJECTED_TRAIN_PARALLEL_AXIS="${PROJECTED_TRAIN_PARALLEL_AXIS:-score_index}"
+PROJECTED_TRAIN_EXPECTED_CKPT_PARTS="${PROJECTED_TRAIN_EXPECTED_CKPT_PARTS:-49}"
 PROJECTED_11_STAGE="${PROJECTED_11_STAGE:-all}"
 LOG_ROOT="${CIFAR2_ROOT}/result/${EXPERIMENT_TAG}/stampede3_das_logs/11_traj_tracin_raw_nextckpt_projected/${SLURM_JOB_ID:-local}"
 mkdir -p "${LOG_ROOT}"
@@ -63,11 +65,13 @@ range_tag() {
 
 task_lines() {
   local seed range
-  for seed in ${UNPROMPTED_SEEDS_TEXT}; do
-    for range in ${TRAJ_RANGES_TEXT}; do
-      printf 'unprompted_solo|unprompted_solo|unprompted|%s|1|%s\n' "${seed}" "${range}"
+  if [[ -n "${UNPROMPTED_SEEDS_TEXT}" ]]; then
+    for seed in ${UNPROMPTED_SEEDS_TEXT}; do
+      for range in ${TRAJ_RANGES_TEXT}; do
+        printf 'unprompted_solo|unprompted_solo|unprompted|%s|1|%s\n' "${seed}" "${range}"
+      done
     done
-  done
+  fi
   for seed in ${PROMPTED_SEEDS_TEXT}; do
     for range in ${TRAJ_RANGES_TEXT}; do
       printf 'prompted_solo|prompted_solo|horse|%s|0|%s\n' "${seed}" "${range}"
@@ -78,12 +82,26 @@ task_lines() {
 }
 
 train_task_lines() {
-  local range
+  local range shard
+  if [[ -n "${UNPROMPTED_SEEDS_TEXT}" ]]; then
+    for range in ${TRAJ_RANGES_TEXT}; do
+      if [[ "${PROJECTED_TRAIN_PARALLEL_AXIS}" == "checkpoint" ]]; then
+        for ((shard = 0; shard < ATTR_NUM_SLOTS; shard++)); do
+          printf 'unprompted_solo|unprompted_solo|unprompted|0|1|%s|%s\n' "${range}" "${shard}"
+        done
+      else
+        printf 'unprompted_solo|unprompted_solo|unprompted|0|1|%s|\n' "${range}"
+      fi
+    done
+  fi
   for range in ${TRAJ_RANGES_TEXT}; do
-    printf 'unprompted_solo|unprompted_solo|unprompted|0|1|%s\n' "${range}"
-  done
-  for range in ${TRAJ_RANGES_TEXT}; do
-    printf 'prompted_solo|prompted_solo|horse|0|0|%s\n' "${range}"
+    if [[ "${PROJECTED_TRAIN_PARALLEL_AXIS}" == "checkpoint" ]]; then
+      for ((shard = 0; shard < ATTR_NUM_SLOTS; shard++)); do
+        printf 'prompted_solo|prompted_solo|horse|0|0|%s|%s\n' "${range}" "${shard}"
+      done
+    else
+      printf 'prompted_solo|prompted_solo|horse|0|0|%s|\n' "${range}"
+    fi
   done
 }
 
@@ -310,11 +328,12 @@ run_one_task() {
   local slot="$2"
   local gpu="$3"
   local task_stage="${4:-score}"
-  local sample_mode score_mode query seed unprompted_flag range
+  local sample_mode score_mode query seed unprompted_flag range ckpt_shard_index
   if [[ "${task_stage}" == "train" ]]; then
-    IFS='|' read -r sample_mode score_mode query seed unprompted_flag range <<<"${TRAIN_TASKS[$i]}"
+    IFS='|' read -r sample_mode score_mode query seed unprompted_flag range ckpt_shard_index <<<"${TRAIN_TASKS[$i]}"
   else
     IFS='|' read -r sample_mode score_mode query seed unprompted_flag range <<<"${TASKS[$i]}"
+    ckpt_shard_index=""
   fi
   local score_file
   score_file="$(raw_compat_score_file_for_task "${score_mode}" "${query}" "${seed}" "${unprompted_flag}" "${range}")"
@@ -361,7 +380,19 @@ run_one_task() {
     run_score_sweep=0
   fi
 
-  echo "[worker ${slot}] stage=${task_stage} task=${i} range=${range} sample_mode=${sample_mode} score_mode=${score_mode} query=${query} seed=${seed} gpu=${gpu} -> ${log}"
+  local train_parallel_axis ckpt_shard_count skip_stage_merge
+  train_parallel_axis="${PROJECTED_TRAIN_PARALLEL_AXIS}"
+  ckpt_shard_count=1
+  skip_stage_merge=0
+  if [[ "${task_stage}" == "train" && "${PROJECTED_TRAIN_PARALLEL_AXIS}" == "checkpoint" ]]; then
+    ckpt_shard_count="${ATTR_NUM_SLOTS}"
+    skip_stage_merge=1
+    ckpt_shard_index="${ckpt_shard_index:-${slot}}"
+  else
+    ckpt_shard_index=0
+  fi
+
+  echo "[worker ${slot}] stage=${task_stage} task=${i} range=${range} ckpt_shard=${ckpt_shard_index}/${ckpt_shard_count} sample_mode=${sample_mode} score_mode=${score_mode} query=${query} seed=${seed} gpu=${gpu} -> ${log}"
   run_gpu_slot "${slot}" env \
     CUDA_VISIBLE_DEVICES="${gpu}" \
     GPU_IDS="${gpu}" \
@@ -386,7 +417,10 @@ run_one_task() {
     RUN_TRAIN_STAGE="${run_train_stage}" \
     RUN_QUERY_STAGE=0 \
     RUN_SCORE_SWEEP="${run_score_sweep}" \
-    PROJECTED_TRAIN_PARALLEL_AXIS=score_index \
+    PROJECTED_TRAIN_PARALLEL_AXIS="${train_parallel_axis}" \
+    TRAJ_TRACIN_CKPT_SHARD_INDEX="${ckpt_shard_index}" \
+    TRAJ_TRACIN_CKPT_SHARD_COUNT="${ckpt_shard_count}" \
+    TRAJ_TRACIN_SKIP_STAGE_MERGE="${skip_stage_merge}" \
     SCORE_ALGORITHM_DIR="${algorithm_dir}" \
     ATTRIBUTION_SAMPLE_DIR="${sample_run_root}" \
     CIFAR2_ROOT="${CIFAR2_ROOT}" \
@@ -419,12 +453,124 @@ total_train_tasks="${#TRAIN_TASKS[@]}"
 
 train_artifact_for_task_line() {
   local task_line="$1"
-  local _sample_mode score_mode _query _seed _unprompted_flag range tag
-  IFS='|' read -r _sample_mode score_mode _query _seed _unprompted_flag range <<<"${task_line}"
+  local _sample_mode score_mode _query _seed _unprompted_flag range _ckpt_shard_index tag
+  IFS='|' read -r _sample_mode score_mode _query _seed _unprompted_flag range _ckpt_shard_index <<<"${task_line}"
   tag="$(range_tag "${range}")"
   printf '%s/result/%s/%s/%s/train_seed_%s/shared_train/%s/proj_%s/train_datapoint_gradient_artifact.npz' \
     "${CIFAR2_ROOT}" "${EXPERIMENT_TAG}" "${PROJECTED_ARTIFACT_DIR_NAME_VALUE}" \
     "${score_mode}" "${TRAIN_SEED}" "${tag}" "${PROJECTED_CACHE_DIM}"
+}
+
+merge_train_artifact_for_task_line() {
+  local task_line="$1"
+  local sample_mode score_mode query seed unprompted_flag range _ckpt_shard_index tag artifact part_dir lock_dir waited part_count train_score_index_ranges_for_task query_env sample_run_root
+  IFS='|' read -r sample_mode score_mode query seed unprompted_flag range _ckpt_shard_index <<<"${task_line}"
+  artifact="$(train_artifact_for_task_line "${task_line}")"
+  if [[ -f "${artifact}" ]]; then
+    echo "[train-merge] existing ${artifact}"
+    return 0
+  fi
+
+  part_dir="${artifact}.parts"
+  waited=0
+  while true; do
+    part_count="$(find "${part_dir}" -maxdepth 1 -type f -name 'ckpt_*.npz' 2>/dev/null | wc -l | tr -d ' ')"
+    if (( part_count >= PROJECTED_TRAIN_EXPECTED_CKPT_PARTS )); then
+      break
+    fi
+    if (( waited >= ${PROJECTED_11_TRAIN_WAIT_SECONDS:-86400} )); then
+      echo "Timed out waiting for checkpoint parts for ${artifact}: ${part_count}/${PROJECTED_TRAIN_EXPECTED_CKPT_PARTS}" >&2
+      return 1
+    fi
+    echo "[train-merge] waiting for checkpoint parts ${part_count}/${PROJECTED_TRAIN_EXPECTED_CKPT_PARTS}: ${part_dir}"
+    sleep 30
+    waited=$((waited + 30))
+  done
+
+  lock_dir="${artifact}.merge.lock"
+  if mkdir "${lock_dir}" 2>/dev/null; then
+    trap 'rm -rf "${lock_dir}"' RETURN
+    if [[ -f "${artifact}" ]]; then
+      echo "[train-merge] artifact appeared after merge lock: ${artifact}"
+    else
+      if [[ "${TRAIN_SCORE_INDEX_RANGES_MODE}" == "full" ]]; then
+        train_score_index_ranges_for_task="${TRAIN_SCORE_INDEX_RANGES}"
+      else
+        train_score_index_ranges_for_task="${range}"
+      fi
+      query_env="${query}"
+      if [[ "${unprompted_flag}" == "1" ]]; then
+        query_env="unconditional"
+      fi
+      sample_run_root="$(sample_root_for_task "${sample_mode}" "${query_env}" "${seed}")"
+      tag="$(range_tag "${range}")"
+      echo "[train-merge] merging ${part_count} checkpoint parts into ${artifact}"
+      run_gpu_slot 0 env \
+        CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES%%,*}" \
+        GPU_IDS="${CUDA_VISIBLE_DEVICES%%,*}" \
+        JAX_NUM_DEVICES=1 \
+        PYTHONUNBUFFERED=1 \
+        SCORE_INDEX_RANGES="${range}" \
+        ATTRIBUTION_RANGES="${range}" \
+        PROJECTED_SCORE_INDEX_RANGES="${range}" \
+        TRAIN_SCORE_INDEX_RANGES="${train_score_index_ranges_for_task}" \
+        TRAJ_QUERY_OBJECTIVE="${TRAJ_QUERY_OBJECTIVE_VALUE}" \
+        TRAJ_PARAMETER_SOURCE="${TRAJ_PARAMETER_SOURCE_VALUE}" \
+        TRAJ_SCORE_BATCH_SIZE="${TRAJ_SCORE_BATCH_SIZE}" \
+        TRAJ_SNAPSHOT_CHUNK_SIZE="${TRAJ_SNAPSHOT_CHUNK_SIZE}" \
+        TRAJ_TRACIN_TRAIN_AGGREGATE_TIMESTAMPS="${TRAJ_TRACIN_TRAIN_AGGREGATE_TIMESTAMPS}" \
+        TRAJ_TRACIN_CKPT_SHARD_INDEX=0 \
+        TRAJ_TRACIN_CKPT_SHARD_COUNT=1 \
+        TRAJ_TRACIN_SKIP_STAGE_MERGE=0 \
+        TRAJ_SAVE_QUERY_NORMALIZED_SCORES=0 \
+        PROJECTED_CACHE_DIM="${PROJECTED_CACHE_DIM}" \
+        PROJECTED_DIMS="${PROJECTED_DIMS}" \
+        PROJECTED_ARTIFACT_DIR_NAME="${PROJECTED_ARTIFACT_DIR_NAME_VALUE}" \
+        INCLUDE_RAW=1 \
+        RUN_TRAIN_STAGE=1 \
+        RUN_QUERY_STAGE=0 \
+        RUN_SCORE_SWEEP=0 \
+        PROJECTED_TRAIN_PARALLEL_AXIS=checkpoint \
+        SCORE_ALGORITHM_DIR="$(algorithm_dir_for_task "${unprompted_flag}" "${range}")" \
+        ATTRIBUTION_SAMPLE_DIR="${sample_run_root}" \
+        CIFAR2_ROOT="${CIFAR2_ROOT}" \
+        REFINE_ROOT="${REFINE_ROOT}" \
+        PYTHON_BIN="${PYTHON_BIN}" \
+        EXPERIMENT_TAG="${EXPERIMENT_TAG}" \
+        TRAIN_SEED="${TRAIN_SEED}" \
+        SAMPLE_MODEL_MODE="${sample_mode}" \
+        UNPROMPTED_SAMPLE_MODEL_MODE="${sample_mode}" \
+        ATTRIBUTION_SAMPLE_MODEL_MODE="${sample_mode}" \
+        ATTRIBUTION_SCORE_MODEL_MODE="${score_mode}" \
+        UNPROMPTED_SCORE_MODEL_MODE="${score_mode}" \
+        QUERY="${query_env}" \
+        INITIAL_SEED="${seed}" \
+        SAMPLE_SEED="${seed}" \
+        SAMPLE_SEEDS="${seed}" \
+        UNPROMPTED="${unprompted_flag}" \
+        bash "${PROJECTED_SCRIPT}"
+    fi
+    rm -rf "${lock_dir}"
+    trap - RETURN
+  else
+    echo "[train-merge] another worker is merging ${artifact}; waiting"
+    while [[ ! -f "${artifact}" ]]; do
+      sleep 30
+    done
+  fi
+}
+
+ensure_checkpoint_parallel_train_artifacts() {
+  local seen task_line artifact
+  declare -A seen=()
+  for task_line in "${TRAIN_TASKS[@]}"; do
+    artifact="$(train_artifact_for_task_line "${task_line}")"
+    if [[ -n "${seen[${artifact}]:-}" ]]; then
+      continue
+    fi
+    seen["${artifact}"]=1
+    merge_train_artifact_for_task_line "${task_line}"
+  done
 }
 
 wait_for_train_artifacts() {
@@ -459,6 +605,7 @@ echo "projected_cache_dim=${PROJECTED_CACHE_DIM}; projected_dims=${PROJECTED_DIM
 echo "projected_artifact_dir_name=${PROJECTED_ARTIFACT_DIR_NAME_VALUE}"
 echo "train_score_index_ranges_mode=${TRAIN_SCORE_INDEX_RANGES_MODE}; full_train_range=${TRAIN_SCORE_INDEX_RANGES}"
 echo "train_aggregate_timestamps=${TRAJ_TRACIN_TRAIN_AGGREGATE_TIMESTAMPS}"
+echo "train_parallel_axis=${PROJECTED_TRAIN_PARALLEL_AXIS}; expected_ckpt_parts=${PROJECTED_TRAIN_EXPECTED_CKPT_PARTS}"
 
 if [[ "${STAMPEDE3_DAS_SRUN_WORKER:-0}" == "1" ]]; then
   worker_index="${STAMPEDE3_DAS_WORKER_INDEX:-${SLURM_PROCID:-0}}"
@@ -474,7 +621,11 @@ if [[ "${STAMPEDE3_DAS_SRUN_WORKER:-0}" == "1" ]]; then
       done
     fi
     if [[ "${PROJECTED_11_STAGE}" == "all" || "${PROJECTED_11_STAGE}" == "score" ]]; then
-      wait_for_train_artifacts
+      if [[ "${PROJECTED_TRAIN_PARALLEL_AXIS}" == "checkpoint" ]]; then
+        ensure_checkpoint_parallel_train_artifacts
+      else
+        wait_for_train_artifacts
+      fi
       for ((i = worker_index; i < total_tasks; i += worker_count)); do
         run_one_task "${i}" "${worker_index}" "${gpu}" score
       done
@@ -495,7 +646,11 @@ for ((slot = 0; slot < ATTR_NUM_SLOTS; slot++)); do
       done
     fi
     if [[ "${PROJECTED_11_STAGE}" == "all" || "${PROJECTED_11_STAGE}" == "score" ]]; then
-      wait_for_train_artifacts
+      if [[ "${PROJECTED_TRAIN_PARALLEL_AXIS}" == "checkpoint" ]]; then
+        ensure_checkpoint_parallel_train_artifacts
+      else
+        wait_for_train_artifacts
+      fi
       for ((i = slot; i < total_tasks; i += ATTR_NUM_SLOTS)); do
         run_one_task "${i}" "${slot}" "${gpu}" score
       done
