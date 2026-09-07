@@ -713,6 +713,189 @@ def _query_train_normalized_score_dir(out_dir: Path) -> Path:
     return _score_variant_dir(out_dir, "score_query_train_l2_normalized")
 
 
+def _aligned_query_terms_for_fused_score(
+    train_payload: dict[str, np.ndarray],
+    query_payload: dict[str, np.ndarray],
+    *,
+    train: np.ndarray,
+    train_path: Path,
+    query_path: Path,
+) -> tuple[np.ndarray, np.ndarray] | None:
+    query = _first_array(
+        query_payload,
+        ("query_features", "query_feature", "query_gradient", "query_gradients"),
+        path=query_path,
+    )
+    query = np.asarray(query, dtype=np.float32)
+    if query.ndim == 1:
+        query = query[None, :]
+    if query.ndim != 2 or query.shape[1] != train.shape[2]:
+        return None
+
+    if query.shape[0] == train.shape[0]:
+        weights = np.asarray(
+            query_payload.get("term_weights", np.full((train.shape[0],), 1.0 / train.shape[0])),
+            dtype=np.float64,
+        ).reshape(-1)
+        if weights.shape[0] != train.shape[0]:
+            return None
+        return query, weights
+
+    if not _env_flag("TRACIN_ALIGN_TERMS_BY_CKPT_TIMESTEP", "0"):
+        return None
+    train_ckpts = np.asarray(train_payload.get("ckpt_indices", ()), dtype=np.int32).reshape(-1)
+    train_timesteps = np.asarray(train_payload.get("timesteps", ()), dtype=np.int32).reshape(-1)
+    query_ckpts = np.asarray(query_payload.get("ckpt_indices", ()), dtype=np.int32).reshape(-1)
+    query_timesteps = np.asarray(query_payload.get("timesteps", ()), dtype=np.int32).reshape(-1)
+    if (
+        train_ckpts.shape[0] != train.shape[0]
+        or train_timesteps.shape[0] != train.shape[0]
+        or query_ckpts.shape[0] != query.shape[0]
+        or query_timesteps.shape[0] != query.shape[0]
+    ):
+        return None
+    query_by_term = {
+        (int(ckpt), int(timestep)): i
+        for i, (ckpt, timestep) in enumerate(zip(query_ckpts, query_timesteps))
+    }
+    query_keep = [
+        query_by_term.get((int(ckpt), int(timestep)))
+        for ckpt, timestep in zip(train_ckpts, train_timesteps)
+    ]
+    if any(index is None for index in query_keep):
+        return None
+    weights = np.asarray(
+        train_payload.get("term_weights", np.full((train.shape[0],), 1.0 / train.shape[0])),
+        dtype=np.float64,
+    ).reshape(-1)
+    if weights.shape[0] != train.shape[0]:
+        return None
+    return query[np.asarray(query_keep, dtype=np.int64)], weights
+
+
+def _run_fused_traj_score_batch(
+    *,
+    train_payload: dict[str, np.ndarray],
+    train: np.ndarray,
+    train_path: Path,
+    indices: np.ndarray,
+    jobs: list[dict[str, Any]],
+    normalize_query: bool,
+    normalize_train: bool,
+) -> bool:
+    if train.ndim != 3 or not jobs:
+        return False
+    query_terms = []
+    term_weights = []
+    query_payloads = []
+    for job in jobs:
+        query_path = Path(job["query_path"])
+        if not query_path.is_file():
+            raise FileNotFoundError(str(query_path))
+        payload = _load_npz(query_path)
+        aligned = _aligned_query_terms_for_fused_score(
+            train_payload,
+            payload,
+            train=train,
+            train_path=train_path,
+            query_path=query_path,
+        )
+        if aligned is None:
+            return False
+        query, weights = aligned
+        query_terms.append(query)
+        term_weights.append(weights)
+        query_payloads.append(payload)
+
+    query_all = np.stack(query_terms, axis=0).astype(np.float32, copy=False)
+    weights_all = np.stack(term_weights, axis=0).astype(np.float64, copy=False)
+    query_norm_all = _normalize_rows(query_all, float(os.environ.get("TRACIN_SCORE_QUERY_NORMALIZE_EPS", "1e-8")))
+    num_queries, num_terms, _ = query_all.shape
+    num_points = train.shape[1]
+    raw_scores = np.zeros((num_queries, num_points), dtype=np.float64)
+    query_scores = np.zeros_like(raw_scores) if normalize_query else None
+    train_scores = np.zeros_like(raw_scores) if normalize_train else None
+    both_scores = np.zeros_like(raw_scores) if normalize_query and normalize_train else None
+    train_eps = float(os.environ.get("TRACIN_SCORE_TRAIN_NORMALIZE_EPS", "1e-8"))
+
+    print(
+        f"[traj-score-fused] queries={num_queries} terms={num_terms} points={num_points} "
+        f"dim={train.shape[2]} raw=1 query_l2={int(normalize_query)} "
+        f"train_l2={int(normalize_train)} both_l2={int(normalize_query and normalize_train)}",
+        flush=True,
+    )
+    term_iter = _iter_with_tqdm(
+        range(num_terms),
+        total=num_terms,
+        desc="TrajTracIn fused score terms",
+        enabled=_env_flag("TRACIN_SCORE_TQDM", "1"),
+    )
+    for term_i in term_iter:
+        train_term = np.asarray(train[term_i], dtype=np.float32)
+        raw_dot = train_term @ query_all[:, term_i, :].T
+        weighted_raw = raw_dot * weights_all[:, term_i][None, :]
+        raw_scores += weighted_raw.T
+        if normalize_train:
+            train_norm = np.sqrt(np.einsum("ij,ij->i", train_term, train_term, optimize=True))
+            train_denom = np.maximum(train_norm, train_eps)[:, None]
+            train_scores += (weighted_raw / train_denom).T
+        if normalize_query:
+            query_dot = train_term @ query_norm_all[:, term_i, :].T
+            weighted_query = query_dot * weights_all[:, term_i][None, :]
+            query_scores += weighted_query.T
+            if normalize_train:
+                both_scores += (weighted_query / train_denom).T
+        if (term_i + 1) % 25 == 0 or term_i + 1 == num_terms:
+            print(f"[traj-score-fused] term {term_i + 1}/{num_terms}", flush=True)
+
+    for job_i, (job, query_payload) in enumerate(zip(jobs, query_payloads), start=1):
+        out_dir = Path(job["output_dir"])
+        query_path = Path(job["query_path"])
+        variants = [(out_dir, raw_scores[job_i - 1], {"score_variant": "raw"})]
+        if normalize_query:
+            variants.append(
+                (
+                    _query_normalized_score_dir(out_dir),
+                    query_scores[job_i - 1],
+                    {"score_variant": "query_l2_normalized", "query_gradient": "l2"},
+                )
+            )
+        if normalize_train:
+            variants.append(
+                (
+                    _train_normalized_score_dir(out_dir),
+                    train_scores[job_i - 1],
+                    {"score_variant": "train_l2_normalized", "train_gradient": "l2"},
+                )
+            )
+        if normalize_query and normalize_train:
+            variants.append(
+                (
+                    _query_train_normalized_score_dir(out_dir),
+                    both_scores[job_i - 1],
+                    {
+                        "score_variant": "query_train_l2_normalized",
+                        "query_gradient": "l2",
+                        "train_gradient": "l2",
+                    },
+                )
+            )
+        for target_dir, scores, metadata in variants:
+            if (target_dir / "scores.npy").is_file():
+                continue
+            _write_score_outputs(
+                target_dir,
+                scores,
+                indices,
+                train_dir=train_path.parent,
+                query_dir=query_path.parent,
+                algorithm="traj_tracin",
+                extra_manifest={"batched_query_scoring": True, "fused_query_scoring": True, **metadata},
+            )
+        print(f"[traj-score-fused] query done {job_i}/{len(jobs)}: {job.get('label', query_path)}", flush=True)
+    return True
+
+
 def _das_damping_values(config_path: Path, train_payload: dict[str, np.ndarray]) -> tuple[float, ...]:
     if os.environ.get("DAS_DAMPING_SWEEP", "0") not in ("1", "true", "True", "yes"):
         if "damping" in train_payload:
@@ -861,6 +1044,35 @@ def run_traj_score_batch_stage(config_path: str | Path) -> None:
     indices = _score_indices(train_payload, int(train.shape[1]))
     normalize_query = _env_flag("TRACIN_SCORE_QUERY_NORMALIZE", "0")
     normalize_train = _env_flag("TRACIN_SCORE_TRAIN_NORMALIZE", "0")
+    pending_jobs = []
+    for job in batch_jobs:
+        out_dir = Path(job["output_dir"])
+        complete = (
+            (out_dir / "scores.npy").is_file()
+            and (not normalize_query or (_query_normalized_score_dir(out_dir) / "scores.npy").is_file())
+            and (not normalize_train or (_train_normalized_score_dir(out_dir) / "scores.npy").is_file())
+            and (
+                not (normalize_query and normalize_train)
+                or (_query_train_normalized_score_dir(out_dir) / "scores.npy").is_file()
+            )
+        )
+        if complete:
+            print(f"[traj-score-batch] skip existing: {job.get('label', out_dir)}", flush=True)
+        else:
+            pending_jobs.append(job)
+    if not pending_jobs:
+        return
+    if _env_flag("TRACIN_SCORE_FUSED_BATCH", "1") and _run_fused_traj_score_batch(
+        train_payload=train_payload,
+        train=train,
+        train_path=train_path,
+        indices=indices,
+        jobs=pending_jobs,
+        normalize_query=normalize_query,
+        normalize_train=normalize_train,
+    ):
+        return
+    batch_jobs = pending_jobs
     train_norms = None
     if normalize_train:
         print("[traj-score-batch] computing reusable train L2 norms", flush=True)
