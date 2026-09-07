@@ -1640,6 +1640,7 @@ def run_attribution(cfg: TrajAttributionConfig):
     print(f"train_mc_samples     : {cfg.train_mc_samples}")
     print(f"train_batch_dtype    : {'bfloat16' if bool(cfg.use_bfloat16) else 'float32'}")
     print(f"train_batch_mode     : {os.environ.get('TRAJ_TRACIN_TRAIN_BATCH_MODE', 'vmap')}")
+    print(f"countsketch_mode     : {os.environ.get('DTRAK_COUNT_SKETCH_MODE', 'scatter')}")
     print(f"max_train_points     : {cfg.max_train_points}")
     print(f"random_subset        : {cfg.random_subset}")
     print(f"score_index_ranges   : {cfg.score_index_ranges}")

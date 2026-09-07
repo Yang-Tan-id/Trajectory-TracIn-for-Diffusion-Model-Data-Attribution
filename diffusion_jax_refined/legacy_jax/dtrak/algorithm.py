@@ -788,17 +788,26 @@ def build_countsketch_projector_jax(params, d: int, *, seed_parts: Tuple[Any, ..
     param_leaves, _ = jax.tree_util.tree_flatten(params)
     idx_specs = []
     sign_specs = []
+    order_specs = []
+    projector_mode = os.environ.get("DTRAK_COUNT_SKETCH_MODE", "scatter").strip().lower()
+    if projector_mode not in ("scatter", "segment_sum"):
+        raise ValueError("DTRAK_COUNT_SKETCH_MODE must be 'scatter' or 'segment_sum'.")
     for t_idx, p in enumerate(param_leaves):
         n = int(np.prod(tuple(p.shape)))
         rng = np.random.default_rng(_stable_int_seed(*seed_parts, "tensor", t_idx, n, d))
         idx = rng.integers(0, d, size=n, dtype=np.int32)
         sign = rng.integers(0, 2, size=n, dtype=np.int8).astype(np.float32) * 2.0 - 1.0
+        if projector_mode == "segment_sum":
+            order = np.argsort(idx, kind="stable").astype(np.int32)
+            idx = idx[order]
+            sign = sign[order]
+            order_specs.append(array_to_device(jnp.asarray(order, dtype=jnp.int32), device))
         idx_specs.append(array_to_device(jnp.asarray(idx, dtype=jnp.int32), device))
         sign_specs.append(array_to_device(jnp.asarray(sign, dtype=jnp.float32), device))
 
     scale = jnp.asarray(1.0 / np.sqrt(float(d)), dtype=jnp.float32)
 
-    def project(grads):
+    def project_scatter(grads):
         grad_leaves, _ = jax.tree_util.tree_flatten(grads)
         out = jnp.zeros((d,), dtype=jnp.float32)
         for g, idx, sign in zip(grad_leaves, idx_specs, sign_specs):
@@ -806,7 +815,23 @@ def build_countsketch_projector_jax(params, d: int, *, seed_parts: Tuple[Any, ..
             out = out.at[idx].add(sign * flat)
         return out * scale
 
-    return jax.jit(project)
+    def project_segment_sum(grads):
+        grad_leaves, _ = jax.tree_util.tree_flatten(grads)
+        out = jnp.zeros((d,), dtype=jnp.float32)
+        for g, idx, sign, order in zip(grad_leaves, idx_specs, sign_specs, order_specs):
+            flat = jnp.ravel(g).astype(jnp.float32)
+            contribution = jax.ops.segment_sum(
+                sign * flat[order],
+                idx,
+                num_segments=d,
+                indices_are_sorted=True,
+            )
+            out = out + contribution
+        return out * scale
+
+    if projector_mode == "segment_sum":
+        return jax.jit(project_segment_sum)
+    return jax.jit(project_scatter)
 
 
 def grad_feature_phi_jax(
