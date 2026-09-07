@@ -720,7 +720,7 @@ def _aligned_query_terms_for_fused_score(
     train: np.ndarray,
     train_path: Path,
     query_path: Path,
-) -> tuple[np.ndarray, np.ndarray] | None:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
     query = _first_array(
         query_payload,
         ("query_features", "query_feature", "query_gradient", "query_gradients"),
@@ -739,7 +739,7 @@ def _aligned_query_terms_for_fused_score(
         ).reshape(-1)
         if weights.shape[0] != train.shape[0]:
             return None
-        return query, weights
+        return query, weights, np.arange(train.shape[0], dtype=np.int64)
 
     if not _env_flag("TRACIN_ALIGN_TERMS_BY_CKPT_TIMESTEP", "0"):
         return None
@@ -758,11 +758,15 @@ def _aligned_query_terms_for_fused_score(
         (int(ckpt), int(timestep)): i
         for i, (ckpt, timestep) in enumerate(zip(query_ckpts, query_timesteps))
     }
-    query_keep = [
-        query_by_term.get((int(ckpt), int(timestep)))
-        for ckpt, timestep in zip(train_ckpts, train_timesteps)
-    ]
-    if any(index is None for index in query_keep):
+    train_keep = []
+    query_keep = []
+    for train_i, (ckpt, timestep) in enumerate(zip(train_ckpts, train_timesteps)):
+        query_i = query_by_term.get((int(ckpt), int(timestep)))
+        if query_i is None:
+            continue
+        train_keep.append(train_i)
+        query_keep.append(query_i)
+    if not train_keep:
         return None
     weights = np.asarray(
         train_payload.get("term_weights", np.full((train.shape[0],), 1.0 / train.shape[0])),
@@ -770,7 +774,12 @@ def _aligned_query_terms_for_fused_score(
     ).reshape(-1)
     if weights.shape[0] != train.shape[0]:
         return None
-    return query[np.asarray(query_keep, dtype=np.int64)], weights
+    train_keep_array = np.asarray(train_keep, dtype=np.int64)
+    return (
+        query[np.asarray(query_keep, dtype=np.int64)],
+        weights[train_keep_array],
+        train_keep_array,
+    )
 
 
 def _run_fused_traj_score_batch(
@@ -787,6 +796,7 @@ def _run_fused_traj_score_batch(
         return False
     query_terms = []
     term_weights = []
+    train_term_indices = None
     query_payloads = []
     for job in jobs:
         query_path = Path(job["query_path"])
@@ -802,7 +812,11 @@ def _run_fused_traj_score_batch(
         )
         if aligned is None:
             return False
-        query, weights = aligned
+        query, weights, current_train_indices = aligned
+        if train_term_indices is None:
+            train_term_indices = current_train_indices
+        elif not np.array_equal(train_term_indices, current_train_indices):
+            return False
         query_terms.append(query)
         term_weights.append(weights)
         query_payloads.append(payload)
@@ -831,7 +845,8 @@ def _run_fused_traj_score_batch(
         enabled=_env_flag("TRACIN_SCORE_TQDM", "1"),
     )
     for term_i in term_iter:
-        train_term = np.asarray(train[term_i], dtype=np.float32)
+        train_i = int(train_term_indices[term_i])
+        train_term = np.asarray(train[train_i], dtype=np.float32)
         raw_dot = train_term @ query_all[:, term_i, :].T
         weighted_raw = raw_dot * weights_all[:, term_i][None, :]
         raw_scores += weighted_raw.T
