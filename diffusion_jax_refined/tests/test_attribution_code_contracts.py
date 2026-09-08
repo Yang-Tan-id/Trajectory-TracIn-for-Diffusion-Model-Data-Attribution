@@ -80,6 +80,25 @@ class TestAttributionCodeContracts(unittest.TestCase):
         self.assertIn("no next-checkpoint query target", text)
         self.assertIn('"target_checkpoint"', text)
 
+    def test_traj_tracin_has_checkpoint_trajectory_implied_noise_target(self):
+        text = (LEGACY / "traj_tracin" / "algorithm.py").read_text()
+        self.assertIn('"trajectory_next_checkpoint_implied_noise_mse"', text)
+        self.assertIn("def implied_noise_target_from_step(", text)
+        self.assertIn("def compute_checkpoint_trajectory_pairs_ddim(", text)
+        self.assertIn("next_trajectory[\"xprev\"]", text)
+        self.assertIn("TRAJ_TRACIN_DELETE_CHECKPOINT_TRAJECTORY_CACHE", text)
+        self.assertIn("shutil.rmtree(checkpoint_trajectory_cache_dir", text)
+
+        runner = (
+            ROOT
+            / "cifar5_multi"
+            / "script"
+            / "run_cifar5_multi_traj_next_implied_noise.py"
+        ).read_text()
+        self.assertIn("target.symlink_to(source.resolve())", runner)
+        self.assertIn('"--cleanup-trajectory-cache-only"', runner)
+        self.assertIn('"--skip-sampling"', runner)
+
     def test_traj_tracin_can_write_paired_query_normalized_scores(self):
         text = (LEGACY / "traj_tracin" / "algorithm.py").read_text()
         self.assertIn("save_query_normalized_scores: bool = False", text)
