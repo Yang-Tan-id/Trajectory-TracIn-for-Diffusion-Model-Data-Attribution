@@ -99,6 +99,22 @@ class TestAttributionCodeContracts(unittest.TestCase):
         self.assertIn('"--cleanup-trajectory-cache-only"', runner)
         self.assertIn('"--skip-sampling"', runner)
 
+    def test_traj_tracin_has_next_checkpoint_trajectory_noise_target(self):
+        text = (LEGACY / "traj_tracin" / "algorithm.py").read_text()
+        self.assertIn('"trajectory_next_checkpoint_trajectory_noise_mse"', text)
+        self.assertIn("next_trajectory = load_or_build_checkpoint_trajectory(ckpt_i + 1)", text)
+        self.assertIn('next_trajectory["eps"]', text)
+        self.assertIn('"eps": saved_eps', text)
+        self.assertIn("uses_next_trajectory_reference_target", text)
+
+        runner = (
+            ROOT
+            / "cifar5_multi"
+            / "script"
+            / "run_cifar5_multi_traj_next_implied_noise.py"
+        ).read_text()
+        self.assertIn('"--query-objective"', runner)
+
     def test_traj_tracin_can_write_paired_query_normalized_scores(self):
         text = (LEGACY / "traj_tracin" / "algorithm.py").read_text()
         self.assertIn("save_query_normalized_scores: bool = False", text)

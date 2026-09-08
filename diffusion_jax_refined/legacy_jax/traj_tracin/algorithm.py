@@ -568,11 +568,13 @@ def compute_checkpoint_trajectory_pairs_ddim(
         trajectory_fn = make_checkpoint_trajectory_pairs_ddim_fn(
             eps_fn, schedule, cond, shape, ddim_steps
         )
-    xt_all, xprev_all = trajectory_fn(params, jax.random.PRNGKey(seed))
+    xt_all, xprev_all, eps_all = trajectory_fn(params, jax.random.PRNGKey(seed))
     xt_all.block_until_ready()
     xprev_all.block_until_ready()
+    eps_all.block_until_ready()
     saved_xt = np.asarray(jax.device_get(xt_all[keep_pos]), dtype=np.float32)
     saved_xprev = np.asarray(jax.device_get(xprev_all[keep_pos]), dtype=np.float32)
+    saved_eps = np.asarray(jax.device_get(eps_all[keep_pos]), dtype=np.float32)
     prev_ts = np.concatenate([ddim_ts[1:], np.asarray([-1], dtype=np.int32)])
     print(
         f"[checkpoint-trajectory] scan done | steps={ddim_steps} saved={len(keep_pos)} | "
@@ -583,6 +585,7 @@ def compute_checkpoint_trajectory_pairs_ddim(
     return {
         "xt": saved_xt,
         "xprev": saved_xprev,
+        "eps": saved_eps,
         "timesteps": ddim_ts[keep_pos].astype(np.int32),
         "prev_timesteps": prev_ts[keep_pos].astype(np.int32),
         "snapshot_positions": keep_pos,
@@ -618,10 +621,10 @@ def make_checkpoint_trajectory_pairs_ddim_fn(
             )
             x0_pred = (x_t - jnp.sqrt(1.0 - abar_t) * eps) / jnp.sqrt(abar_t)
             x_prev = jnp.sqrt(abar_prev) * x0_pred + jnp.sqrt(1.0 - abar_prev) * eps
-            return x_prev, (x_t, x_prev)
+            return x_prev, (x_t, x_prev, eps)
 
-        _, (xt_all, xprev_all) = jax.lax.scan(step, initial_x, (ddim_ts, prev_ts))
-        return xt_all, xprev_all
+        _, (xt_all, xprev_all, eps_all) = jax.lax.scan(step, initial_x, (ddim_ts, prev_ts))
+        return xt_all, xprev_all, eps_all
 
     return jax.jit(sample)
 
@@ -1352,6 +1355,10 @@ def normalize_query_objective_name(name: str) -> str:
         "next_checkpoint_implied_noise_mse": "trajectory_next_checkpoint_implied_noise_mse",
         "next_ckpt_implied_noise_mse": "trajectory_next_checkpoint_implied_noise_mse",
         "trajectory_targeted_implied_noise_mse": "trajectory_next_checkpoint_implied_noise_mse",
+        "trajectory_next_checkpoint_trajectory_noise_mse": "trajectory_next_checkpoint_trajectory_noise_mse",
+        "next_checkpoint_trajectory_noise_mse": "trajectory_next_checkpoint_trajectory_noise_mse",
+        "next_ckpt_trajectory_noise_mse": "trajectory_next_checkpoint_trajectory_noise_mse",
+        "next_trajectory_reference_noise_mse": "trajectory_next_checkpoint_trajectory_noise_mse",
         "trajectory_next_checkpoint_ref_projection": "trajectory_next_checkpoint_ref_projection",
         "next_checkpoint_ref_projection": "trajectory_next_checkpoint_ref_projection",
         "next_ckpt_ref_projection": "trajectory_next_checkpoint_ref_projection",
@@ -1376,6 +1383,7 @@ def normalize_query_objective_name(name: str) -> str:
             "query_objective must be one of "
             "trajectory_noise_squared_deviation, trajectory_next_checkpoint_noise_mse, "
             "trajectory_next_checkpoint_implied_noise_mse, "
+            "trajectory_next_checkpoint_trajectory_noise_mse, "
             "trajectory_next_checkpoint_ref_projection, trajectory_future_residual_mixture, "
             "eps_deviation_l1_mean, eps_deviation_l2_sq_mean, "
             "trajectory_noise_squared_deviation_normalized"
@@ -1386,6 +1394,7 @@ def query_objective_uses_next_checkpoint(name: str) -> bool:
     return normalize_query_objective_name(name) in {
         "trajectory_next_checkpoint_noise_mse",
         "trajectory_next_checkpoint_implied_noise_mse",
+        "trajectory_next_checkpoint_trajectory_noise_mse",
         "trajectory_next_checkpoint_ref_projection",
         "trajectory_future_residual_mixture",
     }
@@ -1401,6 +1410,12 @@ def query_objective_formula(name: str) -> str:
         return (
             "sum_k w_k mean((eps_theta_c(x_c_k,k)-stopgrad((x_c_plus_1_k_minus_1-"
             "A_k*x_c_k)/B_k))^2), with both checkpoint trajectories fixed"
+        )
+    if name == "trajectory_next_checkpoint_trajectory_noise_mse":
+        return (
+            "sum_k w_k mean((eps_theta_c(x_c_plus_1_k,k)-"
+            "stopgrad(eps_theta_c_plus_1(x_c_plus_1_k,k)))^2), "
+            "with the next-checkpoint trajectory and teacher prediction fixed"
         )
     if name == "trajectory_next_checkpoint_ref_projection":
         return "sum_k w_k mean((stopgrad(eps_theta_c_plus_1)-eps_theta_c)*(stopgrad(eps_theta_ref)-eps_theta_c))"
@@ -1842,8 +1857,14 @@ def run_attribution(cfg: TrajAttributionConfig):
         raise ValueError("TRAJ_TRACIN_STAGE_ARTIFACT_PATH is required when TRAJ_TRACIN_STAGE_MODE is set.")
     cfg.query_objective = normalize_query_objective_name(cfg.query_objective)
     uses_next_checkpoint_target = query_objective_uses_next_checkpoint(cfg.query_objective)
-    uses_checkpoint_trajectory_target = (
+    uses_implied_noise_trajectory_target = (
         cfg.query_objective == "trajectory_next_checkpoint_implied_noise_mse"
+    )
+    uses_next_trajectory_reference_target = (
+        cfg.query_objective == "trajectory_next_checkpoint_trajectory_noise_mse"
+    )
+    uses_checkpoint_trajectory_target = (
+        uses_implied_noise_trajectory_target or uses_next_trajectory_reference_target
     )
     subset_suffix = apply_score_subset_suffix_to_out_dir(cfg)
     os.makedirs(cfg.out_dir, exist_ok=True)
@@ -2105,19 +2126,29 @@ def run_attribution(cfg: TrajAttributionConfig):
             try:
                 with np.load(cache_path, allow_pickle=False) as payload:
                     if str(np.asarray(payload["ckpt_path"]).item()) == expected_ckpt:
+                        cache_keys = [
+                            "xt",
+                            "xprev",
+                            "timesteps",
+                            "prev_timesteps",
+                            "snapshot_positions",
+                        ]
+                        if "eps" in payload.files:
+                            cache_keys.append("eps")
                         cached = {
                             key: np.asarray(payload[key])
-                            for key in (
-                                "xt",
-                                "xprev",
-                                "timesteps",
-                                "prev_timesteps",
-                                "snapshot_positions",
-                            )
+                            for key in cache_keys
                         }
                         if (
                             cached["xt"].shape[0] == len(expected_positions)
                             and np.array_equal(cached["snapshot_positions"], expected_positions)
+                            and (
+                                not uses_next_trajectory_reference_target
+                                or (
+                                    "eps" in cached
+                                    and cached["eps"].shape[0] == len(expected_positions)
+                                )
+                            )
                         ):
                             print(
                                 f"[checkpoint-trajectory] cache hit {cache_ckpt_i + 1}/{len(ckpts)}: "
@@ -2132,7 +2163,7 @@ def run_attribution(cfg: TrajAttributionConfig):
                 )
 
         trajectory = None
-        if cache_ckpt_i == len(ckpts) - 1:
+        if cache_ckpt_i == len(ckpts) - 1 and not uses_next_trajectory_reference_target:
             trajectory = precomputed_reference_trajectory_pairs()
             if trajectory is not None:
                 print(
@@ -2645,37 +2676,54 @@ def run_attribution(cfg: TrajAttributionConfig):
                     flush=True,
                 )
             elif stage_mode == "query" and uses_checkpoint_trajectory_target:
-                current_trajectory = load_or_build_checkpoint_trajectory(ckpt_i, params)
                 next_trajectory = load_or_build_checkpoint_trajectory(ckpt_i + 1)
-                for key in ("timesteps", "prev_timesteps", "snapshot_positions"):
-                    if not np.array_equal(current_trajectory[key], next_trajectory[key]):
-                        raise ValueError(
-                            f"checkpoint trajectory {key} mismatch between checkpoints "
-                            f"{ckpt_i} and {ckpt_i + 1}"
-                        )
-                xt_refs = [
-                    array_to_device(x, device) for x in current_trajectory["xt"]
-                ]
-                t_seq = np.asarray(current_trajectory["timesteps"], dtype=np.int32)
-                t_prev_seq = np.asarray(current_trajectory["prev_timesteps"], dtype=np.int32)
-                pos_seq = np.asarray(current_trajectory["snapshot_positions"], dtype=np.int32)
-                implied_noise_targets = []
-                for snap_i, (xt_value, target_xprev) in enumerate(
-                    zip(current_trajectory["xt"], next_trajectory["xprev"])
-                ):
-                    target = implied_noise_target_from_step(
-                        schedule,
-                        array_to_device(jnp.asarray(xt_value), device),
-                        array_to_device(jnp.asarray(target_xprev), device),
-                        jnp.asarray(int(t_seq[snap_i]), dtype=jnp.int32),
-                        jnp.asarray(int(t_prev_seq[snap_i]), dtype=jnp.int32),
+                if uses_next_trajectory_reference_target:
+                    xt_refs = [
+                        array_to_device(x, device) for x in next_trajectory["xt"]
+                    ]
+                    t_seq = np.asarray(next_trajectory["timesteps"], dtype=np.int32)
+                    pos_seq = np.asarray(next_trajectory["snapshot_positions"], dtype=np.int32)
+                    implied_noise_targets = [
+                        array_to_device(jnp.asarray(eps), device)
+                        for eps in next_trajectory["eps"]
+                    ]
+                    print(
+                        "[stage:query] next-checkpoint trajectory states and fixed teacher-noise "
+                        f"targets ready | transition={ckpt_i + 1}->{ckpt_i + 2} "
+                        f"snapshots={len(t_seq)}",
+                        flush=True,
                     )
-                    implied_noise_targets.append(target)
-                print(
-                    f"[stage:query] trajectory-targeted implied-noise targets ready | "
-                    f"transition={ckpt_i + 1}->{ckpt_i + 2} snapshots={len(t_seq)}",
-                    flush=True,
-                )
+                else:
+                    current_trajectory = load_or_build_checkpoint_trajectory(ckpt_i, params)
+                    for key in ("timesteps", "prev_timesteps", "snapshot_positions"):
+                        if not np.array_equal(current_trajectory[key], next_trajectory[key]):
+                            raise ValueError(
+                                f"checkpoint trajectory {key} mismatch between checkpoints "
+                                f"{ckpt_i} and {ckpt_i + 1}"
+                            )
+                    xt_refs = [
+                        array_to_device(x, device) for x in current_trajectory["xt"]
+                    ]
+                    t_seq = np.asarray(current_trajectory["timesteps"], dtype=np.int32)
+                    t_prev_seq = np.asarray(current_trajectory["prev_timesteps"], dtype=np.int32)
+                    pos_seq = np.asarray(current_trajectory["snapshot_positions"], dtype=np.int32)
+                    implied_noise_targets = []
+                    for snap_i, (xt_value, target_xprev) in enumerate(
+                        zip(current_trajectory["xt"], next_trajectory["xprev"])
+                    ):
+                        target = implied_noise_target_from_step(
+                            schedule,
+                            array_to_device(jnp.asarray(xt_value), device),
+                            array_to_device(jnp.asarray(target_xprev), device),
+                            jnp.asarray(int(t_seq[snap_i]), dtype=jnp.int32),
+                            jnp.asarray(int(t_prev_seq[snap_i]), dtype=jnp.int32),
+                        )
+                        implied_noise_targets.append(target)
+                    print(
+                        f"[stage:query] trajectory-targeted implied-noise targets ready | "
+                        f"transition={ckpt_i + 1}->{ckpt_i + 2} snapshots={len(t_seq)}",
+                        flush=True,
+                    )
             elif precomputed_traj is not None:
                 xt_refs_raw, t_seq, pos_seq, _ = precomputed_traj
                 if (
@@ -3196,10 +3244,20 @@ def run_attribution(cfg: TrajAttributionConfig):
                     checkpoint_trajectory_cache_dir=np.asarray(
                         "" if checkpoint_trajectory_cache_dir is None else checkpoint_trajectory_cache_dir
                     ),
-                    implied_noise_target_rule=np.asarray(
-                        "invert deterministic DDIM step from fixed x_c[t] to fixed x_c_plus_1[t_prev]"
-                    ),
                 )
+                if uses_next_trajectory_reference_target:
+                    query_payload.update(
+                        next_trajectory_reference_target_rule=np.asarray(
+                            "evaluate eps_theta_c on fixed x_c_plus_1[t] and compare with "
+                            "fixed eps_theta_c_plus_1(x_c_plus_1[t])"
+                        )
+                    )
+                else:
+                    query_payload.update(
+                        implied_noise_target_rule=np.asarray(
+                            "invert deterministic DDIM step from fixed x_c[t] to fixed x_c_plus_1[t_prev]"
+                        )
+                    )
             save_npz_compressed_atomic(stage_artifact_path, **query_payload)
         else:
             save_npz_compressed_atomic(

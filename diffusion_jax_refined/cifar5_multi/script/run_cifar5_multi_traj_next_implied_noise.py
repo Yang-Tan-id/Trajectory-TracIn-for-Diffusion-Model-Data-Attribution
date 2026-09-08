@@ -91,6 +91,14 @@ def main() -> None:
     parser.add_argument("--namespace", default="raw_nextckpt_school_traj_next_trajectory_implied_noise_10x10")
     parser.add_argument("--train-namespace", default="raw_nextckpt_school_traj_aligned_10x10")
     parser.add_argument(
+        "--query-objective",
+        choices=(
+            "trajectory_next_checkpoint_implied_noise_mse",
+            "trajectory_next_checkpoint_trajectory_noise_mse",
+        ),
+        default="trajectory_next_checkpoint_implied_noise_mse",
+    )
+    parser.add_argument(
         "--num-traj-snapshots",
         type=int,
         default=10,
@@ -117,11 +125,11 @@ def main() -> None:
         parser.error("--only-query-gradient cannot be combined with --skip-query-gradient")
     if args.num_traj_snapshots < 1 or args.num_traj_snapshots > 1000:
         parser.error("--num-traj-snapshots must be between 1 and 1000")
-    if (
+    if args.namespace == "raw_nextckpt_school_traj_next_trajectory_implied_noise_10x10" and (
         args.num_traj_snapshots != 10
-        and args.namespace == "raw_nextckpt_school_traj_next_trajectory_implied_noise_10x10"
+        or args.query_objective != "trajectory_next_checkpoint_implied_noise_mse"
     ):
-        parser.error("set a distinct --namespace when --num-traj-snapshots is not 10")
+        parser.error("set a distinct --namespace for a different objective or snapshot count")
 
     args.root = Path(__file__).resolve().parents[1]
     if args.cleanup_trajectory_cache_only:
@@ -138,7 +146,7 @@ def main() -> None:
     env.setdefault("TRAJ_TRACIN_PROJ_DIM", "4096")
     env.setdefault("PROJECTED_CACHE_DIM", "4096")
     env.setdefault("PROJECTED_DIMS", "4096")
-    env["TRAJ_QUERY_OBJECTIVE"] = "trajectory_next_checkpoint_implied_noise_mse"
+    env["TRAJ_QUERY_OBJECTIVE"] = args.query_objective
     env["TRAJ_PARAMETER_SOURCE"] = "raw"
     env["TRACIN_PARAMETER_SOURCE"] = "raw"
     env["TRAJ_NUM_SNAPSHOTS"] = str(args.num_traj_snapshots)
@@ -205,6 +213,7 @@ def main() -> None:
 
     print("CIFAR5 next-checkpoint trajectory implied-noise TrajTracIn", flush=True)
     print(f"namespace={args.namespace}", flush=True)
+    print(f"query_objective={args.query_objective}", flush=True)
     print(f"reused_train_namespace={args.train_namespace}", flush=True)
     print(f"query_trajectory_snapshots={args.num_traj_snapshots}", flush=True)
     print(f"delete_cache_after_success={int(not args.keep_trajectory_cache)}", flush=True)
