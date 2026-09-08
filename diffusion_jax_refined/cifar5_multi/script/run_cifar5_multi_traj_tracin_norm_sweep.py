@@ -354,6 +354,10 @@ def main() -> None:
     parser.add_argument("--addon-a-namespace", default="raw_nextckpt_school_traj_addon_mid10")
     parser.add_argument("--addon-b-namespace", default="raw_nextckpt_school_traj_addon_mid10_b")
     parser.add_argument("--addon-c-namespace", default="raw_nextckpt_school_traj_addon_mid10_c")
+    for label in ("a", "b", "c"):
+        parser.add_argument(f"--addon-{label}-train-namespace", default="")
+        parser.add_argument(f"--addon-{label}-query-namespace", default="")
+        parser.add_argument(f"--addon-{label}-score-namespace", default="")
     parser.add_argument("--combined-a-namespace", default="raw_nextckpt_school_traj_combined20_mid10_a")
     parser.add_argument("--combined-b-namespace", default="raw_nextckpt_school_traj_combined20_mid10_b")
     parser.add_argument("--combined-c-namespace", default="raw_nextckpt_school_traj_combined20_mid10_c")
@@ -376,6 +380,11 @@ def main() -> None:
         action="store_true",
         help="Score only the base train/query pair and do not require add-on artifacts.",
     )
+    parser.add_argument(
+        "--components",
+        default="base,addon_a,addon_b,addon_c",
+        help="Comma-separated components to score (base, addon_a, addon_b, addon_c).",
+    )
     parser.add_argument("--fast-lds", action="store_true")
     args = parser.parse_args()
 
@@ -383,16 +392,31 @@ def main() -> None:
     repo_root = root.parent.parent
     specs = build_query_specs(args)
     ranges = parse_ranges(args.score_index_ranges, size=args.size)
-    components = {
+    component_defaults = {
         "base": Component(
             "base",
             args.base_train_namespace,
             args.base_query_namespace,
             args.base_score_namespace or args.base_train_namespace,
         ),
-        "addon_a": Component("addon_a", args.addon_a_namespace, args.addon_a_namespace, args.addon_a_namespace),
-        "addon_b": Component("addon_b", args.addon_b_namespace, args.addon_b_namespace, args.addon_b_namespace),
-        "addon_c": Component("addon_c", args.addon_c_namespace, args.addon_c_namespace, args.addon_c_namespace),
+        "addon_a": Component(
+            "addon_a",
+            args.addon_a_train_namespace or args.addon_a_namespace,
+            args.addon_a_query_namespace or args.addon_a_namespace,
+            args.addon_a_score_namespace or args.addon_a_namespace,
+        ),
+        "addon_b": Component(
+            "addon_b",
+            args.addon_b_train_namespace or args.addon_b_namespace,
+            args.addon_b_query_namespace or args.addon_b_namespace,
+            args.addon_b_score_namespace or args.addon_b_namespace,
+        ),
+        "addon_c": Component(
+            "addon_c",
+            args.addon_c_train_namespace or args.addon_c_namespace,
+            args.addon_c_query_namespace or args.addon_c_namespace,
+            args.addon_c_score_namespace or args.addon_c_namespace,
+        ),
     }
     combinations = {
         args.combined_a_namespace: ("base", "addon_a"),
@@ -402,7 +426,19 @@ def main() -> None:
         args.combined_abc_namespace: ("base", "addon_a", "addon_b", "addon_c"),
     }
     if args.only_base:
-        components = {"base": components["base"]}
+        selected_components = ("base",)
+    else:
+        selected_components = tuple(item.strip() for item in args.components.split(",") if item.strip())
+    unknown_components = sorted(set(selected_components) - set(component_defaults))
+    if unknown_components:
+        parser.error(f"unknown --components: {','.join(unknown_components)}")
+    components = {label: component_defaults[label] for label in selected_components}
+    combinations = {
+        namespace: labels
+        for namespace, labels in combinations.items()
+        if all(label in components for label in labels)
+    }
+    if args.only_base:
         combinations = {}
     all_score_namespaces = [component.score_namespace for component in components.values()] + list(combinations)
 

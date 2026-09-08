@@ -90,6 +90,12 @@ def main() -> None:
     parser.add_argument("--initial-seeds", default="")
     parser.add_argument("--namespace", default="raw_nextckpt_school_traj_next_trajectory_implied_noise_10x10")
     parser.add_argument("--train-namespace", default="raw_nextckpt_school_traj_aligned_10x10")
+    parser.add_argument(
+        "--num-traj-snapshots",
+        type=int,
+        default=10,
+        help="Number of uniformly spaced trajectory timesteps in each query artifact.",
+    )
     parser.add_argument("--gpus", default="0,1,2,3")
     parser.add_argument("--slots", type=int, default=4)
     parser.add_argument("--gpu-per-node", type=int, default=4)
@@ -100,11 +106,22 @@ def main() -> None:
     parser.add_argument("--lds-percentage", type=float, default=25.0)
     parser.add_argument("--lds-subset-seeds", default="0,1,2")
     parser.add_argument("--skip-query-gradient", action="store_true")
+    parser.add_argument("--only-query-gradient", action="store_true")
     parser.add_argument("--skip-lds-eval", action="store_true")
     parser.add_argument("--keep-trajectory-cache", action="store_true")
     parser.add_argument("--cleanup-trajectory-cache-only", action="store_true")
     parser.add_argument("--python-bin", default=os.environ.get("PYTHON_BIN", "python3"))
     args = parser.parse_args()
+
+    if args.only_query_gradient and args.skip_query_gradient:
+        parser.error("--only-query-gradient cannot be combined with --skip-query-gradient")
+    if args.num_traj_snapshots < 1 or args.num_traj_snapshots > 1000:
+        parser.error("--num-traj-snapshots must be between 1 and 1000")
+    if (
+        args.num_traj_snapshots != 10
+        and args.namespace == "raw_nextckpt_school_traj_next_trajectory_implied_noise_10x10"
+    ):
+        parser.error("set a distinct --namespace when --num-traj-snapshots is not 10")
 
     args.root = Path(__file__).resolve().parents[1]
     if args.cleanup_trajectory_cache_only:
@@ -124,7 +141,7 @@ def main() -> None:
     env["TRAJ_QUERY_OBJECTIVE"] = "trajectory_next_checkpoint_implied_noise_mse"
     env["TRAJ_PARAMETER_SOURCE"] = "raw"
     env["TRACIN_PARAMETER_SOURCE"] = "raw"
-    env["TRAJ_NUM_SNAPSHOTS"] = "10"
+    env["TRAJ_NUM_SNAPSHOTS"] = str(args.num_traj_snapshots)
     env["TRAJ_TRAIN_MC_SAMPLES"] = "10"
     env["TRAJ_QUERY_USE_CONFIG_SNAPSHOTS"] = "1"
     env["TRACIN_ALIGN_TERMS_BY_CKPT_TIMESTEP"] = "1"
@@ -179,6 +196,8 @@ def main() -> None:
         cmd.extend(["--initial-seeds", args.initial_seeds])
     if args.skip_query_gradient:
         cmd.append("--skip-query-gradient")
+    if args.only_query_gradient:
+        cmd.append("--only-query-gradient")
     if args.skip_lds_eval:
         cmd.append("--skip-lds-eval")
     if args.execute:
@@ -187,6 +206,7 @@ def main() -> None:
     print("CIFAR5 next-checkpoint trajectory implied-noise TrajTracIn", flush=True)
     print(f"namespace={args.namespace}", flush=True)
     print(f"reused_train_namespace={args.train_namespace}", flush=True)
+    print(f"query_trajectory_snapshots={args.num_traj_snapshots}", flush=True)
     print(f"delete_cache_after_success={int(not args.keep_trajectory_cache)}", flush=True)
     print("command:", " ".join(cmd), flush=True)
     if args.execute:

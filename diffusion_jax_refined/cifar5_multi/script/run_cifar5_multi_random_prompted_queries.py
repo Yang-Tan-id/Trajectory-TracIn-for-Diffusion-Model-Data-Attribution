@@ -294,6 +294,7 @@ def main() -> None:
     )
     parser.add_argument("--skip-sampling", action="store_true")
     parser.add_argument("--skip-query-gradient", action="store_true")
+    parser.add_argument("--only-query-gradient", action="store_true")
     parser.add_argument("--skip-das", action="store_true")
     parser.add_argument("--skip-traj-tracin", action="store_true")
     parser.add_argument("--skip-lds-eval", action="store_true")
@@ -315,6 +316,8 @@ def main() -> None:
     parser.add_argument("--das-damping-sweep-values", default=os.environ.get("DAS_DAMPING_SWEEP_VALUES", DEFAULT_DAS_SWEEP))
     parser.add_argument("--python-bin", default=os.environ.get("PYTHON_BIN", "python3"))
     args = parser.parse_args()
+    if args.only_query_gradient and args.skip_query_gradient:
+        parser.error("--only-query-gradient cannot be combined with --skip-query-gradient")
 
     args.root = Path(__file__).resolve().parents[1]
     gpus = parse_gpus(args)
@@ -436,6 +439,10 @@ def main() -> None:
                     )
                 )
         run_parallel_jobs(q_jobs, args=args, execute=args.execute, max_parallel=args.max_parallel)
+
+    if args.only_query_gradient:
+        print("[done] random prompted query gradients complete" if args.execute else "[dry-run] query-gradient-only flow")
+        return
 
     for spec in specs:
         query = str(spec["query"])
