@@ -37,8 +37,10 @@ export JAX_DATA_PARALLEL=0
 export JAX_NUM_DEVICES=1
 export TF_GPU_ALLOCATOR="${TF_GPU_ALLOCATOR:-cuda_malloc_async}"
 
-NAMESPACE="${DDIM_NAMESPACE:-raw_nextckpt_school_traj_ddim_eta0_10x10_fixed}"
+NAMESPACE="${DDIM_NAMESPACE:-raw_nextckpt_school_traj_ddim_eta0_10x10_fixed_v2}"
 SAMPLE_ROOT_NAME="${DDIM_SAMPLE_ROOT_NAME:-sample_ddim_eta0}"
+export SAMPLE_ROOT="${REPO_ROOT}/diffusion_jax_refined/cifar5_multi/result/cifar5_multi_exp1/${SAMPLE_ROOT_NAME}"
+unset ATTRIBUTION_SAMPLE_DIR UNPROMPTED_ATTRIBUTION_SAMPLE_DIR
 
 echo "CIFAR5 DDIM eta=0 DAS + TrajTracIn query gradients"
 echo "repo=${REPO_ROOT}"

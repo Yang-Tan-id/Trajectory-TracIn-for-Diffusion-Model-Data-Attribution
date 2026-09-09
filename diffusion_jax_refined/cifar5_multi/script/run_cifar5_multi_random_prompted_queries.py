@@ -431,6 +431,9 @@ def main() -> None:
 
     env0 = base_env(args)
     env0["SAMPLE_ROOT"] = str(args.root / "result" / args.experiment / args.sample_root_name)
+    # Do not let a stale submit-shell override bypass --sample-root-name.
+    env0.pop("ATTRIBUTION_SAMPLE_DIR", None)
+    env0.pop("UNPROMPTED_ATTRIBUTION_SAMPLE_DIR", None)
     env0.setdefault("PYTHONUNBUFFERED", "1")
     env0.setdefault("JAX_BFLOAT16", "1")
     env0.setdefault("JAX_PREFETCH_SIZE", "1")
@@ -532,6 +535,7 @@ def main() -> None:
                     "SAMPLE_MODEL_MODE": "prompted_solo",
                     "ATTRIBUTION_SAMPLE_MODEL_MODE": "prompted_solo",
                     "ATTRIBUTION_SCORE_MODEL_MODE": "prompted_solo",
+                    "ATTRIBUTION_SAMPLE_DIR": str(sample_seed_dir(args.root, args, query, seed).parent),
                     "QUERY_GRADIENT_ARTIFACT_PATH": str(path),
                 }
                 slot = slot_for(len(q_jobs), len(worker_gpu_ids))
