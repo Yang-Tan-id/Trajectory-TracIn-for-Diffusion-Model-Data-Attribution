@@ -99,6 +99,7 @@ CUDA_VISIBLE_DEVICES=0,1 "${PYTHON_BIN}" \
   --skip-query-gradient \
   --skip-traj-tracin \
   --skip-lds-eval \
+  --das-batch-score \
   --gpus 0,1 \
   --slots 2 \
   --gpu-per-node 2 \

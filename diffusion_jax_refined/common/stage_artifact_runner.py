@@ -721,6 +721,12 @@ def _aligned_query_terms_for_fused_score(
     train_path: Path,
     query_path: Path,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+    timestep_allowlist_text = os.environ.get("TRACIN_SCORE_TIMESTEP_ALLOWLIST", "").strip()
+    timestep_allowlist = {
+        int(value)
+        for value in timestep_allowlist_text.replace(",", " ").split()
+        if value.strip()
+    }
     query = _first_array(
         query_payload,
         ("query_features", "query_feature", "query_gradient", "query_gradients"),
@@ -732,7 +738,7 @@ def _aligned_query_terms_for_fused_score(
     if query.ndim != 2 or query.shape[1] != train.shape[2]:
         return None
 
-    if query.shape[0] == train.shape[0]:
+    if query.shape[0] == train.shape[0] and not timestep_allowlist:
         weights = np.asarray(
             query_payload.get("term_weights", np.full((train.shape[0],), 1.0 / train.shape[0])),
             dtype=np.float64,
@@ -761,6 +767,8 @@ def _aligned_query_terms_for_fused_score(
     train_keep = []
     query_keep = []
     for train_i, (ckpt, timestep) in enumerate(zip(train_ckpts, train_timesteps)):
+        if timestep_allowlist and int(timestep) not in timestep_allowlist:
+            continue
         query_i = query_by_term.get((int(ckpt), int(timestep)))
         if query_i is None:
             continue
@@ -866,13 +874,23 @@ def _run_fused_traj_score_batch(
     for job_i, (job, query_payload) in enumerate(zip(jobs, query_payloads), start=1):
         out_dir = Path(job["output_dir"])
         query_path = Path(job["query_path"])
-        variants = [(out_dir, raw_scores[job_i - 1], {"score_variant": "raw"})]
+        timestep_allowlist = os.environ.get("TRACIN_SCORE_TIMESTEP_ALLOWLIST", "").strip()
+        shared_metadata = {
+            "timestep_allowlist": [
+                int(value)
+                for value in timestep_allowlist.replace(",", " ").split()
+                if value.strip()
+            ]
+        }
+        variants = [
+            (out_dir, raw_scores[job_i - 1], {"score_variant": "raw", **shared_metadata})
+        ]
         if normalize_query:
             variants.append(
                 (
                     _query_normalized_score_dir(out_dir),
                     query_scores[job_i - 1],
-                    {"score_variant": "query_l2_normalized", "query_gradient": "l2"},
+                    {"score_variant": "query_l2_normalized", "query_gradient": "l2", **shared_metadata},
                 )
             )
         if normalize_train:
@@ -880,7 +898,7 @@ def _run_fused_traj_score_batch(
                 (
                     _train_normalized_score_dir(out_dir),
                     train_scores[job_i - 1],
-                    {"score_variant": "train_l2_normalized", "train_gradient": "l2"},
+                    {"score_variant": "train_l2_normalized", "train_gradient": "l2", **shared_metadata},
                 )
             )
         if normalize_query and normalize_train:
@@ -892,6 +910,7 @@ def _run_fused_traj_score_batch(
                         "score_variant": "query_train_l2_normalized",
                         "query_gradient": "l2",
                         "train_gradient": "l2",
+                        **shared_metadata,
                     },
                 )
             )
@@ -1025,6 +1044,179 @@ def run_score_combination_stage(config_path: str | Path) -> Path:
     _write_score_outputs(out_dir, scores, indices, train_dir=train_dir, query_dir=query_dir, algorithm=algorithm)
     print(f"[score] combined {len(scores)} scores from stage artifacts")
     return out_dir
+
+
+def run_das_score_batch_stage(config_path: str | Path) -> None:
+    """Score several DAS queries while retaining one train shard and Gram in memory."""
+    config_path = Path(config_path)
+    if config_path.parent.name != "das":
+        raise ValueError(f"Batched DAS scoring requires a DAS config: {config_path}")
+
+    train_path = Path(os.environ["TRAIN_DATAPOINT_GRADIENT_ARTIFACT_PATH"])
+    gram_path = Path(os.environ["DAS_GLOBAL_GRAM_ARTIFACT_PATH"])
+    jobs = json.loads(os.environ.get("DAS_SCORE_BATCH_JOBS", "[]"))
+    if not jobs:
+        raise ValueError("DAS_SCORE_BATCH_JOBS is empty")
+    for path in (train_path, gram_path):
+        if not path.is_file():
+            raise FileNotFoundError(str(path))
+
+    print(
+        f"[das-score-batch] loading train/residual once: {train_path} | queries={len(jobs)}",
+        flush=True,
+    )
+    train_payload = _load_npz(train_path)
+    train = np.asarray(
+        _first_array(train_payload, ("train_features", "features", "phi", "phis"), path=train_path),
+        dtype=_score_float_dtype(),
+    )
+    residual = np.asarray(
+        _first_array(
+            train_payload,
+            ("residuals", "residual", "residual_scalar", "residual_scalars"),
+            path=train_path,
+        ),
+        dtype=_score_float_dtype(),
+    )
+    if train.ndim == 2:
+        train = train[None, :, :]
+    if residual.ndim == 1:
+        residual = residual[None, :]
+    if residual.shape != train.shape[:2]:
+        raise ValueError(f"residual shape {residual.shape} does not match train shape {train.shape}")
+
+    print(f"[das-score-batch] loading global Gram once: {gram_path}", flush=True)
+    gram_payload = _load_npz(gram_path)
+    gram_undamped = np.asarray(gram_payload["gram_undamped"], dtype=_score_float_dtype())
+    if gram_undamped.ndim == 2:
+        gram_undamped = gram_undamped[None, :, :]
+    if gram_undamped.shape[0] != train.shape[0] or gram_undamped.shape[1:] != (train.shape[2], train.shape[2]):
+        raise ValueError(f"Gram shape {gram_undamped.shape} does not match train shape {train.shape}")
+
+    query_payloads = []
+    query_rows = []
+    for job in jobs:
+        query_path = Path(job["query_path"])
+        if not query_path.is_file():
+            raise FileNotFoundError(str(query_path))
+        payload = _load_npz(query_path)
+        query = np.asarray(
+            _first_array(payload, ("query_features", "query_feature", "query_gradient", "query_gradients"), path=query_path),
+            dtype=_score_float_dtype(),
+        )
+        if query.ndim == 1:
+            query = query[None, :]
+        if query.shape != (train.shape[0], train.shape[2]):
+            raise ValueError(f"query shape {query.shape} does not match train shape {train.shape}")
+        query_payloads.append(payload)
+        query_rows.append(query)
+    queries = np.stack(query_rows, axis=0)
+
+    damping_values = _das_damping_values(config_path, {**gram_payload, **train_payload})
+    indices = _score_indices(train_payload, train.shape[1])
+    use_denominator = _env_flag("DAS_SHERMAN_MORRISON_DENOMINATOR", "1")
+    denom_batch_size = max(1, int(os.environ.get("DAS_SCORE_DENOM_BATCH_SIZE", "256")))
+    use_jax = os.environ.get("DAS_SCORE_BACKEND", "numpy").strip().lower() in ("jax", "gpu")
+    if use_jax:
+        try:
+            import jax
+            import jax.numpy as jnp
+        except Exception as exc:
+            raise RuntimeError("DAS_SCORE_BACKEND=jax requires JAX") from exc
+
+    print(
+        f"[das-score-batch] ready | train={train.shape} queries={queries.shape} "
+        f"lambdas={len(damping_values)} backend={'jax' if use_jax else 'numpy'} denominator={int(use_denominator)}",
+        flush=True,
+    )
+    eye = np.eye(train.shape[2], dtype=train.dtype)
+    for damping_i, damping in enumerate(damping_values, start=1):
+        scores = np.zeros((len(jobs), train.shape[1]), dtype=np.float64)
+        cache_path = _das_denominator_cache_path(train_path, damping=float(damping), train_indices=indices)
+        denominator = None
+        computed_denominator = False
+        denominator_cache_hit = False
+        if use_denominator:
+            denominator = _load_das_denominator_cache(
+                cache_path,
+                terms=train.shape[0],
+                train_indices=indices,
+            )
+            if denominator is None:
+                computed_denominator = True
+                denominator = np.empty(train.shape[:2], dtype=np.float32)
+            else:
+                denominator_cache_hit = True
+
+        print(
+            f"[das-score-batch] lambda {damping_i}/{len(damping_values)}={damping:g} "
+            f"denominator_cache={'hit' if denominator_cache_hit else 'miss'}",
+            flush=True,
+        )
+        for term_i in range(train.shape[0]):
+            gram_i = gram_undamped[term_i] + float(damping) * eye
+            query_rhs = queries[:, term_i, :].T
+            if use_jax:
+                gram_device = jax.device_put(jnp.asarray(gram_i))
+                rhs_device = jax.device_put(jnp.asarray(query_rhs))
+                solved = jnp.linalg.solve(gram_device, rhs_device)
+                train_device = jax.device_put(jnp.asarray(train[term_i]))
+                raw = np.asarray(train_device @ solved, dtype=np.float32)
+            else:
+                solved = np.linalg.solve(gram_i, query_rhs)
+                raw = train[term_i] @ solved
+            raw *= residual[term_i, :, None]
+
+            if use_denominator:
+                if computed_denominator:
+                    leverage = np.empty((train.shape[1],), dtype=np.float64)
+                    for start in range(0, train.shape[1], denom_batch_size):
+                        end = min(start + denom_batch_size, train.shape[1])
+                        phi = train[term_i, start:end]
+                        if use_jax:
+                            phi_device = jax.device_put(jnp.asarray(phi))
+                            solved_phi = jnp.linalg.solve(gram_device, phi_device.T).T
+                            leverage[start:end] = np.asarray(
+                                jnp.einsum("md,md->m", phi_device, solved_phi), dtype=np.float64
+                            )
+                        else:
+                            solved_phi = np.linalg.solve(gram_i, phi.T).T
+                            leverage[start:end] = np.einsum("md,md->m", phi, solved_phi, dtype=np.float64)
+                    denom = 1.0 - leverage
+                    denom = np.where(np.abs(denom) < 1e-6, np.where(denom >= 0, 1e-6, -1e-6), denom)
+                    denominator[term_i] = denom.astype(np.float32)
+                raw /= denominator[term_i, :, None]
+            scores += np.square(raw.T, dtype=np.float64)
+            if (term_i + 1) % 10 == 0 or term_i + 1 == train.shape[0]:
+                print(f"[das-score-batch] lambda={damping:g} term {term_i + 1}/{train.shape[0]}", flush=True)
+
+        if computed_denominator:
+            _write_das_denominator_cache(
+                cache_path,
+                denominator=denominator,
+                train_indices=indices,
+                damping=float(damping),
+            )
+        scores /= float(train.shape[0])
+        for job_i, job in enumerate(jobs):
+            output_dir = Path(job["output_dir"]) / f"lambda_{_damping_tag(damping)}"
+            _write_score_outputs(
+                output_dir,
+                scores[job_i],
+                indices,
+                train_dir=train_path.parent,
+                query_dir=Path(job["query_path"]).parent,
+                algorithm="das",
+                extra_manifest={
+                    "damping": float(damping),
+                    "damping_sweep_enabled": True,
+                    "damping_sweep_values": [float(value) for value in damping_values],
+                    "batched_query_scoring": True,
+                    "shared_train_gram_load": True,
+                    "batch_query_count": len(jobs),
+                },
+            )
+        print(f"[das-score-batch] lambda={damping:g} complete for {len(jobs)} queries", flush=True)
 
 
 def run_traj_score_batch_stage(config_path: str | Path) -> None:

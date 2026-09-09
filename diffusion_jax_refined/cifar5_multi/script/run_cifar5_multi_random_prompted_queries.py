@@ -17,6 +17,7 @@ from run_cifar5_multi_experiment import (
     artifact_namespace,
     attribution_score_dirs,
     base_env,
+    damping_tag,
     gpu_env,
     lds_eval_out_dir,
     lds_model_dirs,
@@ -33,7 +34,9 @@ from run_cifar5_multi_attribution_distributed import (
     das_global_gram_path,
     das_global_train_complete,
     query_gradient_artifact_path,
+    parse_1based_ranges,
     score_complete,
+    score_shard_dir,
     shard_artifact_path,
     split_1based_ranges,
     train_artifact_complete,
@@ -150,6 +153,92 @@ def traj_query_expected_terms() -> int:
     if objective in next_checkpoint_objectives:
         checkpoints -= 1
     return max(1, checkpoints) * snapshots
+
+
+def run_batched_das_scores(
+    args: argparse.Namespace,
+    specs: list[dict[str, int | str]],
+    env0: dict[str, str],
+    worker_gpu_ids: list[str],
+) -> None:
+    """Load each DAS train shard and global Gram once for all prompted queries."""
+    if args.index_ranges.strip():
+        ranges = parse_1based_ranges(args.index_ranges, size=args.size)
+    else:
+        ranges = [(1, args.size)]
+    damping_values = [
+        float(value)
+        for value in args.das_damping_sweep_values.replace(",", " ").split()
+        if value.strip()
+    ]
+    namespace = artifact_namespace(args)
+    mode = "prompted_solo"
+    global_gram = das_global_gram_path(args.root, args, mode)
+    jobs: list[Job] = []
+    for shard_id, (start, end) in enumerate(ranges):
+        train_path = shard_artifact_path(args.root, args, mode, "das", start, end)
+        batch_jobs = []
+        for spec in specs:
+            query = str(spec["query"])
+            seed = int(spec["initial_seed"])
+            query_args = args_for_seed(args, seed, namespace=namespace)
+            query_args.namespace_query_gradient = True
+            query_path = query_gradient_artifact_path(args.root, query_args, mode, query, "das")
+            final_dirs = attribution_score_dirs(args.root, query_args, mode=mode, query=query, algorithm="das")
+            score_base = final_dirs[0][1].parent
+            shard_base = score_shard_dir(score_base, start, end)
+            if all((shard_base / f"lambda_{damping_tag(value)}" / "scores.npy").is_file() for value in damping_values):
+                continue
+            batch_jobs.append(
+                {
+                    "query_path": str(query_path),
+                    "output_dir": str(shard_base),
+                    "label": f"{query_tag(query)} seed={seed}",
+                }
+            )
+        if not batch_jobs:
+            continue
+        slot = slot_for(shard_id, len(worker_gpu_ids))
+        env = env0 | {
+            "TRAIN_DATAPOINT_GRADIENT_ARTIFACT_PATH": str(train_path),
+            "DAS_GLOBAL_GRAM_ARTIFACT_PATH": str(global_gram),
+            "DAS_SCORE_BATCH_JOBS": json.dumps(batch_jobs),
+            "DAS_SCORE_BACKEND": os.environ.get("DAS_SCORE_BACKEND", "jax"),
+        }
+        jobs.append(
+            Job(
+                name=f"das_score_batch_{start}_{end}",
+                cmd=[args.python_bin, "03_score_batch.py"],
+                cwd=args.root / "data_attribution" / "das",
+                env=gpu_env(env, worker_gpu_ids[slot]),
+                log_path=log_root(args) / "random_prompted_20" / "score_batch" / "das" / f"range_{start}_{end}.log",
+                slot=slot,
+            )
+        )
+    run_parallel_jobs(jobs, args=args, execute=args.execute, max_parallel=args.max_parallel)
+
+    for spec in specs:
+        query = str(spec["query"])
+        seed = int(spec["initial_seed"])
+        query_args = args_for_seed(args, seed, namespace=namespace)
+        for damping in damping_values:
+            final_dir = attribution_score_dirs(args.root, query_args, mode=mode, query=query, algorithm="das")[0][1].parent / f"lambda_{damping_tag(damping)}"
+            shard_dirs = [
+                score_shard_dir(final_dir.parent, start, end) / f"lambda_{damping_tag(damping)}"
+                for start, end in ranges
+            ]
+            run(
+                [
+                    args.python_bin,
+                    str(args.root.parent / "common" / "merge_score_shards.py"),
+                    "--output-dir",
+                    str(final_dir),
+                    *map(str, shard_dirs),
+                ],
+                env0,
+                cwd=args.root,
+                execute=args.execute,
+            )
 
 
 def run_distributed_for_query(
@@ -305,6 +394,11 @@ def main() -> None:
     parser.add_argument("--skip-query-gradient", action="store_true")
     parser.add_argument("--only-query-gradient", action="store_true")
     parser.add_argument("--skip-das", action="store_true")
+    parser.add_argument(
+        "--das-batch-score",
+        action="store_true",
+        help="Score every DAS query together so each train shard and Gram are loaded once.",
+    )
     parser.add_argument("--skip-traj-tracin", action="store_true")
     parser.add_argument("--skip-lds-eval", action="store_true")
     parser.add_argument("--only-lds-eval", action="store_true")
@@ -457,10 +551,13 @@ def main() -> None:
         print("[done] random prompted query gradients complete" if args.execute else "[dry-run] query-gradient-only flow")
         return
 
+    if args.das_batch_score and not args.skip_das:
+        run_batched_das_scores(args, specs, env0, worker_gpu_ids)
+
     for spec in specs:
         query = str(spec["query"])
         seed = int(spec["initial_seed"])
-        if not args.skip_das:
+        if not args.skip_das and not args.das_batch_score:
             das_namespace = artifact_namespace(args) if args.namespace_query_gradient else ""
             das_extra = ["--skip-traj-tracin", "--skip-query-gradient"] + (
                 ["--skip-lds-eval"] if args.skip_lds_eval else []
