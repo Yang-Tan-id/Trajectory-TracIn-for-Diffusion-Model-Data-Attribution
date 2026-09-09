@@ -46,18 +46,44 @@ echo "namespace=${NAMESPACE}"
 echo "sample_root=${SAMPLE_ROOT_NAME}"
 echo "python=$(${PYTHON_BIN} -c 'import sys; print(sys.executable)')"
 
-# Phase 1: make the shared DDIM samples and both query-gradient families.
-CUDA_VISIBLE_DEVICES=0,1 "${PYTHON_BIN}" \
-  diffusion_jax_refined/cifar5_multi/script/run_cifar5_multi_traj_tracin_ddim.py \
-  --execute \
-  --include-das \
-  --only-query-gradient \
-  --namespace "${NAMESPACE}" \
-  --sample-root-name "${SAMPLE_ROOT_NAME}" \
-  --gpus 0,1 \
-  --slots 2 \
-  --gpu-per-node 2 \
-  --max-parallel 2
+# Phase 1: make the shared DDIM samples and query gradients. DAS_ONLY=1
+# bypasses TrajTracIn and resumes only missing DAS query artifacts.
+if [[ "${DAS_ONLY:-0}" == "1" ]]; then
+  DIFFUSION_TRAJECTORY_SAMPLER=ddim_eta0 \
+  LDS_TRAJECTORY_SAMPLER=ddim_eta0 \
+  CUDA_VISIBLE_DEVICES=0,1 "${PYTHON_BIN}" \
+    diffusion_jax_refined/cifar5_multi/script/run_cifar5_multi_random_prompted_queries.py \
+    --execute \
+    --experiment cifar5_multi_exp1 \
+    --size 10000 \
+    --train-seed 42 \
+    --epochs 200 \
+    --num-queries 20 \
+    --random-query-seed 0 \
+    --initial-seed-start 1000 \
+    --sample-root-name "${SAMPLE_ROOT_NAME}" \
+    --artifact-namespace "${NAMESPACE}" \
+    --namespace-query-gradient \
+    --skip-sampling \
+    --skip-traj-tracin \
+    --only-query-gradient \
+    --gpus 0,1 \
+    --slots 2 \
+    --gpu-per-node 2 \
+    --max-parallel 2
+else
+  CUDA_VISIBLE_DEVICES=0,1 "${PYTHON_BIN}" \
+    diffusion_jax_refined/cifar5_multi/script/run_cifar5_multi_traj_tracin_ddim.py \
+    --execute \
+    --include-das \
+    --only-query-gradient \
+    --namespace "${NAMESPACE}" \
+    --sample-root-name "${SAMPLE_ROOT_NAME}" \
+    --gpus 0,1 \
+    --slots 2 \
+    --gpu-per-node 2 \
+    --max-parallel 2
+fi
 
 # Phase 2: reuse the existing 10x10 residual-aware DAS train state and score.
 MODEL_ROOT="diffusion_jax_refined/cifar5_multi/result/cifar5_multi_exp1/model/prompted_solo"
@@ -105,6 +131,34 @@ CUDA_VISIBLE_DEVICES=0,1 "${PYTHON_BIN}" \
   --gpu-per-node 2 \
   --max-parallel 2 \
   --score-index-ranges 1-5000,5001-10000
+
+# Phase 3: score directories now exist, so the ordinary per-query runner skips
+# scoring and only evaluates every lambda against the cached LDS models.
+if [[ "${RUN_LDS_EVAL:-1}" == "1" ]]; then
+  DIFFUSION_TRAJECTORY_SAMPLER=ddim_eta0 \
+  LDS_TRAJECTORY_SAMPLER=ddim_eta0 \
+  CUDA_VISIBLE_DEVICES=0,1 "${PYTHON_BIN}" \
+    diffusion_jax_refined/cifar5_multi/script/run_cifar5_multi_random_prompted_queries.py \
+    --execute \
+    --experiment cifar5_multi_exp1 \
+    --size 10000 \
+    --train-seed 42 \
+    --epochs 200 \
+    --num-queries 20 \
+    --random-query-seed 0 \
+    --initial-seed-start 1000 \
+    --sample-root-name "${SAMPLE_ROOT_NAME}" \
+    --artifact-namespace "${NAMESPACE}" \
+    --namespace-query-gradient \
+    --skip-sampling \
+    --skip-query-gradient \
+    --skip-traj-tracin \
+    --gpus 0,1 \
+    --slots 2 \
+    --gpu-per-node 2 \
+    --max-parallel 2 \
+    --score-index-ranges 1-5000,5001-10000
+fi
 
 RESULT_ROOT="diffusion_jax_refined/cifar5_multi/result/cifar5_multi_exp1"
 ARCHIVE="${REPO_ROOT}/cifar5_ddim_eta0_query_and_das_scores.tar"
