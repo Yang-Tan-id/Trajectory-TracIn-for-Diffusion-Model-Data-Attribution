@@ -37,13 +37,26 @@ def run_checked(cmd: list[str], *, cwd: Path, env: dict[str, str]) -> None:
     subprocess.run(cmd, cwd=cwd, env=env, check=True)
 
 
-def merge_query_artifacts(source: Path, supplement: Path, output: Path) -> None:
+def merge_query_artifacts(
+    source: Path,
+    supplement: Path,
+    output: Path,
+    *,
+    supplement_timestep: int,
+) -> None:
     with np.load(source, allow_pickle=False) as payload:
         source_data = {key: np.asarray(payload[key]) for key in payload.files}
     with np.load(supplement, allow_pickle=False) as payload:
         supplement_data = {key: np.asarray(payload[key]) for key in payload.files}
     source_terms = int(source_data["query_features"].shape[0])
     supplement_terms = int(supplement_data["query_features"].shape[0])
+    supplement_timesteps = np.asarray(supplement_data["timesteps"]).reshape(-1)
+    supplement_mask = supplement_timesteps == int(supplement_timestep)
+    if int(supplement_mask.sum()) != 49:
+        raise ValueError(
+            f"expected 49 supplemental t={supplement_timestep} terms in {supplement}, "
+            f"found {int(supplement_mask.sum())}"
+        )
     merged = {}
     for key, source_value in source_data.items():
         supplement_value = supplement_data.get(key)
@@ -55,7 +68,9 @@ def merge_query_artifacts(source: Path, supplement: Path, output: Path) -> None:
             and supplement_value.shape[0] == supplement_terms
             and source_value.shape[1:] == supplement_value.shape[1:]
         ):
-            merged[key] = np.concatenate([source_value, supplement_value], axis=0)
+            merged[key] = np.concatenate(
+                [source_value, supplement_value[supplement_mask]], axis=0
+            )
         else:
             merged[key] = source_value
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -101,7 +116,7 @@ def run_worker(root: Path, args: argparse.Namespace, spec_index: int) -> None:
             "TRACIN_PARAMETER_SOURCE": "raw",
             "TRAJ_USE_SAVED_TRAJECTORY": "1",
             "TRAJ_QUERY_USE_CONFIG_SNAPSHOTS": "1",
-            "TRAJ_NUM_SNAPSHOTS": "1",
+            "TRAJ_NUM_SNAPSHOTS": "2",
             "TRAJ_SNAPSHOT_CHUNK_SIZE": str(args.snapshot_chunk_size),
             "TRAJ_TRACIN_PROJ_DIM": "4096",
             "PROJECTED_CACHE_DIM": "4096",
@@ -116,19 +131,17 @@ def run_worker(root: Path, args: argparse.Namespace, spec_index: int) -> None:
         (
             args.addon_a_source_namespace,
             args.addon_a_query_namespace,
-            f"{args.addon_a_query_namespace}_supplement_t11",
-            ADDON_A_POSITIONS[-1],
+            11,
         ),
         (
             args.addon_b_source_namespace,
             args.addon_b_query_namespace,
-            f"{args.addon_b_query_namespace}_supplement_t31",
-            ADDON_B_POSITIONS[-1],
+            31,
         ),
     )
     if all(
         artifact_complete(query_artifact(root, args, spec, exact_namespace), expected_terms=4949)
-        for _source_namespace, exact_namespace, _supplement_namespace, _position in outputs
+        for _source_namespace, exact_namespace, _timestep in outputs
     ):
         print(f"[repair] both exact query artifacts already complete: {tag} seed={seed}", flush=True)
         return
@@ -143,10 +156,32 @@ def run_worker(root: Path, args: argparse.Namespace, spec_index: int) -> None:
         if not (sample_dir / "trajectory_xt.npy").is_file():
             raise FileNotFoundError(f"full temporary trajectory was not created: {sample_dir}")
 
-        for source_namespace, exact_namespace, supplement_namespace, position in outputs:
+        supplement_namespace = args.supplement_namespace
+        supplement = query_artifact(root, args, spec, supplement_namespace)
+        if not artifact_complete(supplement, expected_terms=98):
+            if supplement.exists():
+                supplement.unlink()
+            env = base_env.copy()
+            env.update(
+                {
+                    "ATTRIBUTION_ARTIFACT_NAMESPACE": supplement_namespace,
+                    "TRAJ_ATTRIBUTION_ARTIFACT_NAMESPACE": supplement_namespace,
+                    "ATTRIBUTION_SAMPLE_DIR": str(model_root),
+                    "TRAJ_SNAPSHOT_POSITIONS": "968,988",
+                    "QUERY_GRADIENT_ARTIFACT_PATH": str(supplement),
+                }
+            )
+            run_checked(
+                [args.python_bin, "02_query_gradient.py"],
+                cwd=root / "data_attribution" / "traj_tracin",
+                env=env,
+            )
+        if not artifact_complete(supplement, expected_terms=98):
+            raise RuntimeError(f"combined supplement has unexpected shape: {supplement}")
+
+        for source_namespace, exact_namespace, timestep in outputs:
             source = query_artifact(root, args, spec, source_namespace)
             output = query_artifact(root, args, spec, exact_namespace)
-            supplement = query_artifact(root, args, spec, supplement_namespace)
             if artifact_complete(output, expected_terms=4949):
                 print(f"[repair] exact query artifact already complete: {output}", flush=True)
                 continue
@@ -154,31 +189,16 @@ def run_worker(root: Path, args: argparse.Namespace, spec_index: int) -> None:
                 raise FileNotFoundError(f"missing original 100-grid query artifact: {source}")
             if output.exists():
                 output.unlink()
-            if not artifact_complete(supplement, expected_terms=49):
-                if supplement.exists():
-                    supplement.unlink()
-                env = base_env.copy()
-                env.update(
-                    {
-                        "ATTRIBUTION_ARTIFACT_NAMESPACE": supplement_namespace,
-                        "TRAJ_ATTRIBUTION_ARTIFACT_NAMESPACE": supplement_namespace,
-                        "ATTRIBUTION_SAMPLE_DIR": str(model_root),
-                        "TRAJ_SNAPSHOT_POSITIONS": str(position),
-                        "QUERY_GRADIENT_ARTIFACT_PATH": str(supplement),
-                    }
-                )
-                run_checked(
-                    [args.python_bin, "02_query_gradient.py"],
-                    cwd=root / "data_attribution" / "traj_tracin",
-                    env=env,
-                )
-            if not artifact_complete(supplement, expected_terms=49):
-                raise RuntimeError(f"supplement query artifact has unexpected shape: {supplement}")
-            merge_query_artifacts(source, supplement, output)
+            merge_query_artifacts(
+                source,
+                supplement,
+                output,
+                supplement_timestep=timestep,
+            )
             if not artifact_complete(output, expected_terms=4949):
                 raise RuntimeError(f"merged query artifact has unexpected shape: {output}")
             print(f"[repair] wrote exact 10-timestep query artifact: {output}", flush=True)
-            shutil.rmtree(supplement.parent.parent, ignore_errors=True)
+        shutil.rmtree(supplement.parent.parent, ignore_errors=True)
     finally:
         if not args.keep_temporary_trajectories and temp_root.exists():
             shutil.rmtree(temp_root)
@@ -215,6 +235,10 @@ def main() -> None:
     parser.add_argument(
         "--addon-b-query-namespace",
         default="raw_nextckpt_school_traj_addon_mid10_b_exact10",
+    )
+    parser.add_argument(
+        "--supplement-namespace",
+        default="raw_nextckpt_school_traj_addon_ab_missing2",
     )
     parser.add_argument("--snapshot-chunk-size", type=int, default=10)
     parser.add_argument("--gpus", default="0,1,2,3")
