@@ -128,6 +128,7 @@ def score_worker(root: Path, args: argparse.Namespace, start: int, end: int) -> 
     result = None
     score_indices = None
     term_counts = np.zeros(len(positions), dtype=np.int32)
+    skipped_terms: list[tuple[str, int, int, int]] = []
 
     for component in components(args):
         print(f"[timestamp-lds] loading queries: {component.query_namespace}", flush=True)
@@ -160,15 +161,23 @@ def score_worker(root: Path, args: argparse.Namespace, start: int, end: int) -> 
             timestamp_i = position_index.get(int(position))
             if timestamp_i is None:
                 continue
-            query_rows = []
-            for features, mapping in zip(query_features, query_maps):
-                query_i = mapping.get((int(ckpt), int(timestep)))
-                if query_i is None:
-                    raise ValueError(
-                        f"missing query term component={component.label} "
-                        f"ckpt={int(ckpt)} timestep={int(timestep)} position={int(position)}"
-                    )
-                query_rows.append(features[query_i])
+            query_indices = [
+                mapping.get((int(ckpt), int(timestep))) for mapping in query_maps
+            ]
+            if all(query_i is None for query_i in query_indices):
+                skipped_terms.append(
+                    (component.label, int(ckpt), int(timestep), int(position))
+                )
+                continue
+            if any(query_i is None for query_i in query_indices):
+                raise ValueError(
+                    f"query artifacts disagree for component={component.label} "
+                    f"ckpt={int(ckpt)} timestep={int(timestep)} position={int(position)}"
+                )
+            query_rows = [
+                features[int(query_i)]
+                for features, query_i in zip(query_features, query_indices)
+            ]
             query_matrix = np.stack(query_rows).astype(np.float32, copy=False)
             train_term = np.asarray(train[term_i], dtype=np.float32)
 
@@ -195,6 +204,13 @@ def score_worker(root: Path, args: argparse.Namespace, start: int, end: int) -> 
     if not np.all(term_counts == 49):
         bad = [(positions[i], int(count)) for i, count in enumerate(term_counts) if count != 49]
         raise ValueError(f"expected 49 checkpoint terms per timestamp; bad={bad}")
+    if skipped_terms:
+        skipped_ckpts = sorted({ckpt for _label, ckpt, _timestep, _position in skipped_terms})
+        print(
+            f"[timestamp-lds] skipped {len(skipped_terms)} train-only terms; "
+            f"checkpoint indices={skipped_ckpts}",
+            flush=True,
+        )
     output.parent.mkdir(parents=True, exist_ok=True)
     np.savez(
         output,
