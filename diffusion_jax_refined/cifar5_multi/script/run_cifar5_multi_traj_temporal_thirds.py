@@ -85,28 +85,10 @@ def load_query_payload(path: Path) -> dict[str, np.ndarray]:
 def run_worker(root: Path, args: argparse.Namespace, start: int, end: int) -> None:
     specs = build_query_specs(args)
     position_to_segment = segment_position_map()
-    query_payloads = [
-        load_query_payload(query_artifact(root, args, spec, args.query_namespace))
-        for spec in specs
-    ]
-    query_maps = [
-        {
-            (int(ckpt), int(timestep)): i
-            for i, (ckpt, timestep) in enumerate(
-                zip(payload["ckpt_indices"], payload["timesteps"])
-            )
-        }
-        for payload in query_payloads
-    ]
-    query_features = [
-        np.asarray(payload["query_features"], dtype=np.float32)
-        for payload in query_payloads
-    ]
-
     components = (
-        Component("base", args.base_train_namespace, args.query_namespace, args.output_namespace),
-        Component("addon_a", args.addon_a_train_namespace, args.query_namespace, args.output_namespace),
-        Component("addon_b", args.addon_b_train_namespace, args.query_namespace, args.output_namespace),
+        Component("base", args.base_train_namespace, args.base_query_namespace, args.output_namespace),
+        Component("addon_a", args.addon_a_train_namespace, args.addon_a_query_namespace, args.output_namespace),
+        Component("addon_b", args.addon_b_train_namespace, args.addon_b_query_namespace, args.output_namespace),
     )
     num_queries = len(specs)
     scores: dict[tuple[str, str], np.ndarray] = {}
@@ -116,6 +98,29 @@ def run_worker(root: Path, args: argparse.Namespace, start: int, end: int) -> No
     train_eps = float(args.train_normalize_eps)
 
     for component in components:
+        print(
+            f"[temporal-thirds] loading query namespace once: {component.query_namespace}",
+            flush=True,
+        )
+        query_payloads = [
+            load_query_payload(query_artifact(root, args, spec, component.query_namespace))
+            for spec in specs
+        ]
+        query_maps = [
+            {
+                (int(ckpt), int(timestep)): i
+                for i, (ckpt, timestep) in enumerate(
+                    zip(payload["ckpt_indices"], payload["timesteps"])
+                )
+            }
+            for payload in query_payloads
+        ]
+        query_features = [
+            np.asarray(payload["query_features"], dtype=np.float32)
+            for payload in query_payloads
+        ]
+        del query_payloads
+
         path = train_shard(root, args, component, start, end)
         print(f"[temporal-thirds] loading {component.label}: {path}", flush=True)
         with np.load(path, allow_pickle=False) as payload:
@@ -192,7 +197,7 @@ def run_worker(root: Path, args: argparse.Namespace, start: int, end: int) -> No
                     f"[temporal-thirds] {component.label} term {term_i + 1}/{len(train)}",
                     flush=True,
                 )
-        del train
+        del train, query_maps, query_features
         gc.collect()
 
     bad_counts = {
@@ -224,7 +229,10 @@ def run_worker(root: Path, args: argparse.Namespace, start: int, end: int) -> No
                             args.addon_a_train_namespace,
                             args.addon_b_train_namespace,
                         ],
-                        "query_namespace": args.query_namespace,
+                        "query_namespaces": {
+                            component.label: component.query_namespace
+                            for component in components
+                        },
                     },
                 )
     print(f"[temporal-thirds] worker done range={start}-{end}", flush=True)
@@ -327,7 +335,14 @@ def main() -> None:
     parser.add_argument("--base-train-namespace", default="raw_nextckpt_school_traj_aligned_10x10")
     parser.add_argument("--addon-a-train-namespace", default="raw_nextckpt_school_traj_addon_mid10")
     parser.add_argument("--addon-b-train-namespace", default="raw_nextckpt_school_traj_addon_mid10_b")
-    parser.add_argument("--query-namespace", default="raw_nextckpt_school_traj_10x10")
+    parser.add_argument(
+        "--base-query-namespace",
+        "--query-namespace",
+        dest="base_query_namespace",
+        default="raw_nextckpt_school_traj_10x10",
+    )
+    parser.add_argument("--addon-a-query-namespace", default="raw_nextckpt_school_traj_addon_mid10")
+    parser.add_argument("--addon-b-query-namespace", default="raw_nextckpt_school_traj_addon_mid10_b")
     parser.add_argument("--output-namespace", default="raw_nextckpt_school_traj_temporal_thirds_30term")
     parser.add_argument("--score-index-ranges", default="1-2500,2501-5000,5001-7500,7501-10000")
     parser.add_argument("--gpus", default="0,1,2,3")
