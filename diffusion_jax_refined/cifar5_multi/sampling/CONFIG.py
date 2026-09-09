@@ -42,6 +42,7 @@ SAMPLE_CHECKPOINT = UNPROMPTED_JAX_REFERENCE_CKPT if UNPROMPTED else REFERENCE_C
 SAMPLE_PROMPT = "unconditional" if UNPROMPTED else QUERY
 MODEL_TAG = SAMPLE_MODEL_MODE
 SAMPLE_ROOT = Path(os.environ.get("SAMPLE_ROOT", str(RESULT_ROOT / "sample")))
+TRAJECTORY_SAMPLER = os.environ.get("DIFFUSION_TRAJECTORY_SAMPLER", "ddpm")
 
 COMMAND_CWD = "legacy_jax"
 COMMANDS = {
@@ -59,5 +60,6 @@ COMMANDS = {
         "--prefer-device=gpu",
         f"--outdir={SAMPLE_ROOT}",
         f"--num-trajectory-steps={SAMPLE_TRAJECTORY_STEPS}",
+        f"--trajectory-sampler={TRAJECTORY_SAMPLER}",
     ]
 }

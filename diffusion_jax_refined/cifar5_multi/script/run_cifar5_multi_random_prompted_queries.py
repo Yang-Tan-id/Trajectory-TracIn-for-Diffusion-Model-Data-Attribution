@@ -91,7 +91,7 @@ def sample_seed_dir(root: Path, args: argparse.Namespace, query: str, seed: int)
         root
         / "result"
         / args.experiment
-        / "sample"
+        / args.sample_root_name
         / "cifar"
         / f"prompt_{query_tag(query)}"
         / f"model_prompted_solo__ckpt_seed_{args.train_seed}_epoch_{args.epochs:04d}"
@@ -276,6 +276,11 @@ def main() -> None:
     parser.add_argument("--random-query-seed", type=int, default=0)
     parser.add_argument("--initial-seed-start", type=int, default=1000)
     parser.add_argument("--initial-seeds", default="")
+    parser.add_argument(
+        "--sample-root-name",
+        default=os.environ.get("ATTRIBUTION_SAMPLE_ROOT_NAME", "sample"),
+        help="Result subdirectory containing reference trajectories.",
+    )
     parser.add_argument("--extra-prompted-queries", default=os.environ.get("EXTRA_PROMPTED_QUERIES", ""))
     parser.add_argument("--extra-initial-seed", type=int, default=int(os.environ.get("EXTRA_INITIAL_SEED", "0")))
     parser.add_argument("--lds-m", type=int, default=64)
@@ -331,6 +336,7 @@ def main() -> None:
     args.max_parallel = max(1, min(args.max_parallel or len(worker_gpu_ids), len(worker_gpu_ids)))
 
     env0 = base_env(args)
+    env0["SAMPLE_ROOT"] = str(args.root / "result" / args.experiment / args.sample_root_name)
     env0.setdefault("PYTHONUNBUFFERED", "1")
     env0.setdefault("JAX_BFLOAT16", "1")
     env0.setdefault("JAX_PREFETCH_SIZE", "1")
@@ -364,7 +370,10 @@ def main() -> None:
     for spec in specs:
         print(f"[query {spec['query_id']:02d}] seed={spec['initial_seed']} prompt={spec['query']}")
 
-    ensure_train_artifacts(args)
+    if args.only_query_gradient:
+        print("[skip] train artifact checks are not needed for query-gradient-only mode")
+    else:
+        ensure_train_artifacts(args)
 
     if args.only_lds_eval:
         args.skip_sampling = True

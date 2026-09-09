@@ -85,7 +85,7 @@ def _prediction_tag(subset: str, sign: float) -> str:
     return f"pred_{subset}_sign_{sign_text}"
 
 
-def _read_target_cache(path: Path, *, checkpoint: str | None, target_function: str) -> tuple[float, dict[str, object]] | None:
+def _read_target_cache(path: Path, *, checkpoint: str | None, target_function: str, trajectory_sampler: str) -> tuple[float, dict[str, object]] | None:
     if os.environ.get("LDS_TARGET_CACHE", "1") in ("0", "false", "False", "no", "No"):
         return None
     if not path.is_file():
@@ -95,6 +95,9 @@ def _read_target_cache(path: Path, *, checkpoint: str | None, target_function: s
         # Cache files may be transferred across machines, so absolute checkpoint
         # paths are not stable. The cache path and target_function are the keys.
         if str(payload.get("target_function")) != str(target_function):
+            return None
+        cached_sampler = str(payload.get("trajectory_sampler", "ddpm"))
+        if cached_sampler != str(trajectory_sampler):
             return None
         return float(payload["true_f"]), dict(payload.get("target_details", {}))
     except Exception:
@@ -109,6 +112,7 @@ def _write_target_cache(
     target_function: str,
     true_f: float,
     details: dict[str, object],
+    trajectory_sampler: str,
 ) -> None:
     if os.environ.get("LDS_TARGET_CACHE", "1") in ("0", "false", "False", "no", "No"):
         return
@@ -122,6 +126,7 @@ def _write_target_cache(
                 "target_function": target_function,
                 "true_f": float(true_f),
                 "target_details": details,
+                "trajectory_sampler": trajectory_sampler,
             },
             indent=2,
         )
@@ -153,6 +158,11 @@ def main() -> None:
         help="Target function, or comma/space-separated target functions to evaluate in one pass.",
     )
     parser.add_argument("--trajectory-reduction", choices=["mean", "sum", "snapshot_mean"], default=None)
+    parser.add_argument(
+        "--trajectory-sampler",
+        choices=("ddpm", "ddim_eta0"),
+        default=os.environ.get("LDS_TRAJECTORY_SAMPLER", os.environ.get("DIFFUSION_TRAJECTORY_SAMPLER", "ddpm")),
+    )
     parser.add_argument("--out-dir", default=None)
     args = parser.parse_args()
 
@@ -283,6 +293,7 @@ def main() -> None:
         simple_loss_noise_seeds=simple_loss_noise_seeds,
         simple_loss_num_mc=int(os.environ.get("LDS_SIMPLE_LOSS_NUM_MC", "10")),
         simple_loss_mc_seed=int(os.environ.get("LDS_SIMPLE_LOSS_MC_SEED", "0")),
+        trajectory_sampler=args.trajectory_sampler,
     )
     saved_prompt = (
         evaluator.target_meta.get("seed_info", {}).get("prompt")
@@ -319,7 +330,10 @@ def main() -> None:
     out_dirs = {target: out_dir_for_target(target) for target in target_functions}
     for out_dir in out_dirs.values():
         out_dir.mkdir(parents=True, exist_ok=True)
-    cache_root = Path(require_attr(dataset_cfg, eval_root_attr)) / "lds_target_cache" / names
+    cache_root = Path(require_attr(dataset_cfg, eval_root_attr)) / "lds_target_cache"
+    if args.trajectory_sampler != "ddpm":
+        cache_root = cache_root / args.trajectory_sampler
+    cache_root = cache_root / names
     cache_dirs = {target: cache_root / target for target in target_functions}
 
     rows_by_target = {target: [] for target in target_functions}
@@ -339,7 +353,12 @@ def main() -> None:
         missing_targets = []
         for target_function in target_functions:
             cache_path = cache_dirs[target_function] / f"target_{global_id:04d}.json"
-            cached = _read_target_cache(cache_path, checkpoint=checkpoint, target_function=target_function)
+            cached = _read_target_cache(
+                cache_path,
+                checkpoint=checkpoint,
+                target_function=target_function,
+                trajectory_sampler=args.trajectory_sampler,
+            )
             if cached is None:
                 missing_targets.append(target_function)
             else:
@@ -361,6 +380,7 @@ def main() -> None:
                     target_function=target_function,
                     true_f=true_f,
                     details=details,
+                    trajectory_sampler=args.trajectory_sampler,
                 )
         for target_function in target_functions:
             true_f, details = values[target_function]
@@ -405,6 +425,7 @@ def main() -> None:
             "target_function": target_function,
             "target_functions_evaluated_in_pass": target_functions,
             "trajectory_reduction": reduction,
+            "trajectory_sampler": args.trajectory_sampler,
             "prediction_subset": args.prediction_subset,
             "prediction_sign": args.prediction_sign,
             "elapsed_sec": time.time() - started,

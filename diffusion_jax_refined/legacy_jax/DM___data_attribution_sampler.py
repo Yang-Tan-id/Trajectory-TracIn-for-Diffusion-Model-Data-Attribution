@@ -86,7 +86,11 @@ def sample_model_space_trajectory(
     prompt: str,
     batch_size: int,
     save_timesteps: Sequence[int],
+    trajectory_sampler: str = "ddpm",
 ) -> Tuple[np.ndarray, Dict[int, np.ndarray], np.ndarray]:
+    trajectory_sampler = str(trajectory_sampler).strip().lower()
+    if trajectory_sampler not in ("ddpm", "ddim_eta0"):
+        raise ValueError("trajectory_sampler must be 'ddpm' or 'ddim_eta0'.")
     rng = jax.random.PRNGKey(seed)
     cond = adapter.make_condition(prompt=prompt, batch_size=batch_size)
     shape = adapter.sample_shape(batch_size)
@@ -117,21 +121,34 @@ def sample_model_space_trajectory(
                 x_t - jnp.sqrt(alphas_cumprod[i]) * x0_pred
             ) / jnp.sqrt(1.0 - alphas_cumprod[i])
 
-            alpha_t = alphas[i]
-            abar_t = alphas_cumprod[i]
-            beta_t = betas[i]
-            coef1 = 1.0 / jnp.sqrt(alpha_t)
-            coef2 = beta_t / jnp.sqrt(1.0 - abar_t)
-            mean = coef1 * (x_t - coef2 * eps)
+            if trajectory_sampler == "ddim_eta0":
+                prev_i = jnp.maximum(i - 1, 0)
+                abar_prev = jax.lax.cond(
+                    i > 0,
+                    lambda _: alphas_cumprod[prev_i],
+                    lambda _: jnp.asarray(1.0, dtype=alphas_cumprod.dtype),
+                    operand=None,
+                )
+                next_x = (
+                    jnp.sqrt(abar_prev) * x0_pred
+                    + jnp.sqrt(jnp.maximum(1.0 - abar_prev, 0.0)) * eps
+                )
+            else:
+                alpha_t = alphas[i]
+                abar_t = alphas_cumprod[i]
+                beta_t = betas[i]
+                coef1 = 1.0 / jnp.sqrt(alpha_t)
+                coef2 = beta_t / jnp.sqrt(1.0 - abar_t)
+                mean = coef1 * (x_t - coef2 * eps)
 
-            loop_rng, step_rng = jax.random.split(loop_rng)
-            noise = jax.random.normal(step_rng, shape)
-            next_x = jax.lax.cond(
-                i > 0,
-                lambda _: mean + jnp.sqrt(beta_t) * noise,
-                lambda _: mean,
-                operand=None,
-            )
+                loop_rng, step_rng = jax.random.split(loop_rng)
+                noise = jax.random.normal(step_rng, shape)
+                next_x = jax.lax.cond(
+                    i > 0,
+                    lambda _: mean + jnp.sqrt(beta_t) * noise,
+                    lambda _: mean,
+                    operand=None,
+                )
             return (next_x, loop_rng), x_t
 
         (final_x, _), xt_seq = jax.lax.scan(body_fn, (init_x, init_rng), t_seq)
@@ -168,6 +185,7 @@ def save_seed_outputs(
     decoded_final: np.ndarray,
     upscale: int,
     max_png_side: int,
+    trajectory_sampler: str,
 ):
     os.makedirs(seed_dir, exist_ok=True)
 
@@ -202,6 +220,7 @@ def save_seed_outputs(
         "trajectory_xt_shape": list(traj_stack.shape),
         "final_state_shape": list(final_state.shape),
         "decoded_final_shape": list(decoded_final.shape),
+        "trajectory_sampler": trajectory_sampler,
     }
     with open(os.path.join(seed_dir, "seed_info.json"), "w") as f:
         json.dump(info, f, indent=2)
@@ -227,6 +246,12 @@ def main():
     parser.add_argument("--prefer-device", type=str, default="auto", choices=["auto", "cpu", "gpu"])
     parser.add_argument("--outdir", type=str, default="./attribution_samples")
     parser.add_argument("--num-trajectory-steps", type=int, default=100)
+    parser.add_argument(
+        "--trajectory-sampler",
+        choices=("ddpm", "ddim_eta0"),
+        default=os.environ.get("DIFFUSION_TRAJECTORY_SAMPLER", "ddpm"),
+        help="Reverse sampler used for the saved reference trajectory.",
+    )
     parser.add_argument("--upscale", type=int, default=4)
     parser.add_argument(
         "--max-png-side",
@@ -273,6 +298,7 @@ def main():
         "timesteps_total": int(adapter.cfg.timesteps),
         "num_trajectory_steps_requested": int(args.num_trajectory_steps),
         "saved_timesteps": [int(x) for x in ordered_timesteps],
+        "trajectory_sampler": args.trajectory_sampler,
         "metadata": adapter.metadata(),
     }
     with open(os.path.join(run_root, "manifest.json"), "w") as f:
@@ -283,6 +309,7 @@ def main():
     print(f"[setup] prompt={args.prompt}")
     print(f"[setup] num_seeds={len(seeds)} | batch_size={args.batch_size}")
     print(f"[setup] saving {len(ordered_timesteps)} evenly spaced timesteps")
+    print(f"[setup] trajectory_sampler={args.trajectory_sampler}")
     print(f"[setup] output_root={run_root}")
 
     all_start = time.time()
@@ -296,6 +323,7 @@ def main():
             prompt=args.prompt,
             batch_size=args.batch_size,
             save_timesteps=ordered_timesteps,
+            trajectory_sampler=args.trajectory_sampler,
         )
 
         seed_dir = os.path.join(run_root, f"seed_{seed:06d}")
@@ -312,6 +340,7 @@ def main():
             decoded_final=decoded_final,
             upscale=args.upscale,
             max_png_side=args.max_png_side,
+            trajectory_sampler=args.trajectory_sampler,
         )
 
         elapsed = time.time() - seed_start
@@ -328,4 +357,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

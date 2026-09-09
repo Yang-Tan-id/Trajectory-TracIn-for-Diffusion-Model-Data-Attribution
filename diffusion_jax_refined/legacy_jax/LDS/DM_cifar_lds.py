@@ -664,6 +664,7 @@ class CifarTargetEvaluator:
         simple_loss_noise_seeds: Optional[Sequence[int]],
         simple_loss_num_mc: int,
         simple_loss_mc_seed: int,
+        trajectory_sampler: str = "ddpm",
     ):
         self.code_file = code_file
         self.base_checkpoint = base_checkpoint
@@ -681,6 +682,9 @@ class CifarTargetEvaluator:
         self.simple_loss_noise_seeds = None if simple_loss_noise_seeds is None else [int(s) for s in simple_loss_noise_seeds]
         self.simple_loss_num_mc = int(simple_loss_num_mc)
         self.simple_loss_mc_seed = int(simple_loss_mc_seed)
+        self.trajectory_sampler = str(trajectory_sampler).strip().lower()
+        if self.trajectory_sampler not in ("ddpm", "ddim_eta0"):
+            raise ValueError("trajectory_sampler must be 'ddpm' or 'ddim_eta0'.")
         if not self.simple_loss_timesteps:
             raise ValueError("simple_loss_timesteps must contain at least one timestep.")
         if self.simple_loss_num_mc <= 0:
@@ -720,6 +724,18 @@ class CifarTargetEvaluator:
                 self.t_seq = self.t_seq[-1:]
             self.xt_ref = jax.device_put(jnp.asarray(self.xt_ref, dtype=jnp.float32), self.device)
             self.t_seq = np.asarray(self.t_seq, dtype=np.int32)
+            saved_sampler = str(
+                self.target_meta.get("seed_info", {}).get(
+                    "trajectory_sampler",
+                    self.target_meta.get("manifest", {}).get("trajectory_sampler", "ddpm"),
+                )
+            )
+            if saved_sampler != self.trajectory_sampler:
+                raise ValueError(
+                    "Reference trajectory sampler mismatch: "
+                    f"saved={saved_sampler!r}, requested={self.trajectory_sampler!r}."
+                )
+        self.target_meta["trajectory_sampler"] = self.trajectory_sampler
 
         self._noise_fn = jax.jit(self._noise_objective)
         self._projected_fn = jax.jit(self._projected_trajectory_objective)
@@ -855,21 +871,34 @@ class CifarTargetEvaluator:
                     x - jnp.sqrt(alphas_cumprod[i]) * x0_pred
                 ) / jnp.sqrt(1.0 - alphas_cumprod[i])
 
-                alpha_t = alphas[i]
-                abar_t = alphas_cumprod[i]
-                beta_t = betas[i]
-                coef1 = 1.0 / jnp.sqrt(alpha_t)
-                coef2 = beta_t / jnp.sqrt(1.0 - abar_t)
-                mean = coef1 * (x - coef2 * eps)
+                if self.trajectory_sampler == "ddim_eta0":
+                    prev_i = jnp.maximum(i - 1, 0)
+                    abar_prev = jax.lax.cond(
+                        i > 0,
+                        lambda _: alphas_cumprod[prev_i],
+                        lambda _: jnp.asarray(1.0, dtype=alphas_cumprod.dtype),
+                        operand=None,
+                    )
+                    next_x = (
+                        jnp.sqrt(abar_prev) * x0_pred
+                        + jnp.sqrt(jnp.maximum(1.0 - abar_prev, 0.0)) * eps
+                    )
+                else:
+                    alpha_t = alphas[i]
+                    abar_t = alphas_cumprod[i]
+                    beta_t = betas[i]
+                    coef1 = 1.0 / jnp.sqrt(alpha_t)
+                    coef2 = beta_t / jnp.sqrt(1.0 - abar_t)
+                    mean = coef1 * (x - coef2 * eps)
 
-                loop_rng, step_rng = jax.random.split(loop_rng)
-                noise = jax.random.normal(step_rng, shape, dtype=x.dtype)
-                next_x = jax.lax.cond(
-                    i > 0,
-                    lambda _: mean + jnp.sqrt(beta_t) * noise,
-                    lambda _: mean,
-                    operand=None,
-                )
+                    loop_rng, step_rng = jax.random.split(loop_rng)
+                    noise = jax.random.normal(step_rng, shape, dtype=x.dtype)
+                    next_x = jax.lax.cond(
+                        i > 0,
+                        lambda _: mean + jnp.sqrt(beta_t) * noise,
+                        lambda _: mean,
+                        operand=None,
+                    )
                 return (next_x, loop_rng), x
 
             (_final_x, _), xt_seq = jax.lax.scan(body_fn, (init_x, init_rng), t_seq)
