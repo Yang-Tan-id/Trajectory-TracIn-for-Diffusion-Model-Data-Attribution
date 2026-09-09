@@ -120,13 +120,16 @@ def run_worker(root: Path, args: argparse.Namespace, spec_index: int) -> None:
         state_template = adapter.build_state_template(cfg, model, device)
 
         params = {}
-        for label, checkpoint in (
-            ("initial", checkpoints[0]),
-            ("next", checkpoints[1]),
-            ("final", checkpoints[-1]),
+        for label, checkpoint, source in (
+            ("initial", checkpoints[0], "raw"),
+            ("next", checkpoints[1], "raw"),
+            ("final", checkpoints[-1], "raw"),
+            # Sampling uses the final checkpoint's EMA parameters, so this is
+            # the model that actually generated x_t^ref.
+            ("reference_trajectory", checkpoints[-1], "ema"),
         ):
             state, _ = adapter.restore_state(checkpoint, state_template)
-            params[label] = tree_to_device(select_state_params(state, "raw"), device)
+            params[label] = tree_to_device(select_state_params(state, source), device)
 
         xt_all, timestep_all, position_all, _ = load_attribution_trajectory(cfg)
         by_position = {int(position): i for i, position in enumerate(position_all)}
@@ -157,7 +160,7 @@ def run_worker(root: Path, args: argparse.Namespace, spec_index: int) -> None:
             )(states, ts)
 
         predictions = {}
-        for label in ("initial", "next", "final"):
+        for label in ("initial", "next", "final", "reference_trajectory"):
             value = predict(params[label], xt, t_device)
             value.block_until_ready()
             predictions[label] = np.asarray(jax.device_get(value), dtype=np.float32)
@@ -172,7 +175,7 @@ def run_worker(root: Path, args: argparse.Namespace, spec_index: int) -> None:
                 "segment": position_segments[int(position)],
                 "initial_rms": float(np.sqrt(np.mean(initial * initial))),
             }
-            for reference in ("next", "final"):
+            for reference in ("next", "final", "reference_trajectory"):
                 target = predictions[reference][i]
                 difference = initial - target
                 target_rms = float(np.sqrt(np.mean(target * target)))
@@ -198,6 +201,10 @@ def run_worker(root: Path, args: argparse.Namespace, spec_index: int) -> None:
                     "delta_final_rms",
                     "delta_final_mse",
                     "delta_final_relative_rms",
+                    "reference_trajectory_rms",
+                    "delta_reference_trajectory_rms",
+                    "delta_reference_trajectory_mse",
+                    "delta_reference_trajectory_relative_rms",
                 )
             }
         output.parent.mkdir(parents=True, exist_ok=True)
@@ -209,6 +216,7 @@ def run_worker(root: Path, args: argparse.Namespace, spec_index: int) -> None:
                     "initial_checkpoint": str(checkpoints[0]),
                     "next_checkpoint": str(checkpoints[1]),
                     "final_checkpoint": str(checkpoints[-1]),
+                    "reference_trajectory_parameter_source": "final_checkpoint_ema",
                     "rows": rows,
                     "summary": summary,
                 },
@@ -238,19 +246,19 @@ def print_summary(root: Path, args: argparse.Namespace) -> None:
             for key, value in values.items():
                 grouped[(segment, key)].append(float(value))
     print(f"\nresults={len(files)}/{len(build_query_specs(args))}")
-    print("\nPer timestep, current next-raw comparison (ckpt0 vs ckpt1):")
+    print("\nPer timestep, ckpt0 raw vs reference-trajectory model (final checkpoint EMA):")
     print(
         f"{'segment':15s} {'position':>8s} {'t':>5s} {'eps0_rms':>10s} "
-        f"{'next_rms':>10s} {'delta_rms':>10s} {'delta_mse':>10s} {'relative':>10s} {'n':>4s}"
+        f"{'ref_rms':>10s} {'delta_rms':>10s} {'delta_mse':>10s} {'relative':>10s} {'n':>4s}"
     )
     print("-" * 102)
     for (position, timestep, segment), rows in sorted(by_timestep.items()):
         keys = (
             "initial_rms",
-            "next_rms",
-            "delta_next_rms",
-            "delta_next_mse",
-            "delta_next_relative_rms",
+            "reference_trajectory_rms",
+            "delta_reference_trajectory_rms",
+            "delta_reference_trajectory_mse",
+            "delta_reference_trajectory_relative_rms",
         )
         means = [float(np.mean([row[key] for row in rows])) for key in keys]
         print(
@@ -261,12 +269,12 @@ def print_summary(root: Path, args: argparse.Namespace) -> None:
 
     print("\nMean by temporal third:")
     print(
-        f"{'segment':15s} {'comparison':12s} {'eps0_rms':>10s} "
+        f"{'segment':15s} {'comparison':26s} {'eps0_rms':>10s} "
         f"{'ref_rms':>10s} {'delta_rms':>10s} {'delta_mse':>10s} {'relative':>10s} {'n':>4s}"
     )
-    print("-" * 92)
+    print("-" * 106)
     for segment in SEGMENTS:
-        for reference in ("next", "final"):
+        for reference in ("next", "final", "reference_trajectory"):
             keys = (
                 "initial_rms",
                 f"{reference}_rms",
@@ -277,7 +285,7 @@ def print_summary(root: Path, args: argparse.Namespace) -> None:
             arrays = [grouped[(segment, key)] for key in keys]
             means = [sum(values) / len(values) if values else float("nan") for values in arrays]
             print(
-                f"{segment:15s} {'ckpt0-'+reference:12s} "
+                f"{segment:15s} {'ckpt0-'+reference:26s} "
                 f"{means[0]:10.5f} {means[1]:10.5f} {means[2]:10.5f} "
                 f"{means[3]:10.6f} {means[4]:10.5f} {len(arrays[0]):4d}"
             )
@@ -285,7 +293,10 @@ def print_summary(root: Path, args: argparse.Namespace) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Compare initial-checkpoint predicted noise with next/final checkpoints by temporal third."
+        description=(
+            "Compare initial-checkpoint raw predicted noise with next raw, final raw, "
+            "and the final EMA model that generated the reference trajectory."
+        )
     )
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--experiment", default="cifar5_multi_exp1")
@@ -298,7 +309,10 @@ def main() -> None:
     parser.add_argument("--initial-seeds", default="")
     parser.add_argument("--extra-prompted-queries", default="")
     parser.add_argument("--extra-initial-seed", type=int, default=0)
-    parser.add_argument("--output-name", default="initial_checkpoint_noise_temporal_thirds")
+    parser.add_argument(
+        "--output-name",
+        default="initial_checkpoint_noise_temporal_thirds_reference_ema",
+    )
     parser.add_argument("--gpus", default="0,1,2,3")
     parser.add_argument("--slots", type=int, default=4)
     parser.add_argument("--gpu-per-node", type=int, default=4)
