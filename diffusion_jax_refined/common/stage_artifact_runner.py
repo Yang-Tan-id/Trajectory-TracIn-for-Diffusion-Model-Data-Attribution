@@ -1165,7 +1165,8 @@ def run_das_score_batch_stage(config_path: str | Path) -> None:
             else:
                 solved = np.linalg.solve(gram_i, query_rhs)
                 raw = train[term_i] @ solved
-            raw *= residual[term_i, :, None]
+            # Arrays materialized from JAX may be read-only NumPy views.
+            raw = raw * residual[term_i, :, None]
 
             if use_denominator:
                 if computed_denominator:
@@ -1185,7 +1186,7 @@ def run_das_score_batch_stage(config_path: str | Path) -> None:
                     denom = 1.0 - leverage
                     denom = np.where(np.abs(denom) < 1e-6, np.where(denom >= 0, 1e-6, -1e-6), denom)
                     denominator[term_i] = denom.astype(np.float32)
-                raw /= denominator[term_i, :, None]
+                raw = raw / denominator[term_i, :, None]
             scores += np.square(raw.T, dtype=np.float64)
             if (term_i + 1) % 10 == 0 or term_i + 1 == train.shape[0]:
                 print(f"[das-score-batch] lambda={damping:g} term {term_i + 1}/{train.shape[0]}", flush=True)
