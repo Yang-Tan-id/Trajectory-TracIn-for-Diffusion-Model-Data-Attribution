@@ -84,7 +84,7 @@ EVAL_ROOT = RESULT_ROOT / "eval"
 PROMPTED_JAX_MODEL_ROOT = MODEL_ROOT / "prompted_jax"
 UNPROMPTED_JAX_MODEL_ROOT = MODEL_ROOT / "unprompted_jax"
 SAMPLING_ROOT = EVAL_ROOT / "sampling"
-SAMPLE_ROOT = RESULT_ROOT / "sample"
+SAMPLE_ROOT = Path(os.environ.get("SAMPLE_ROOT", str(RESULT_ROOT / "sample")))
 
 CLASS_NAMES = ("bird", "horse", "automobile", "dog", "cat")
 DAS_DAMPING_SWEEP_VALUES = _parse_float_list_env(

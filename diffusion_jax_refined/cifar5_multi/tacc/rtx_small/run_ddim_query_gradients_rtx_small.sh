@@ -37,7 +37,7 @@ export JAX_DATA_PARALLEL=0
 export JAX_NUM_DEVICES=1
 export TF_GPU_ALLOCATOR="${TF_GPU_ALLOCATOR:-cuda_malloc_async}"
 
-NAMESPACE="${DDIM_NAMESPACE:-raw_nextckpt_school_traj_ddim_eta0_10x10}"
+NAMESPACE="${DDIM_NAMESPACE:-raw_nextckpt_school_traj_ddim_eta0_10x10_fixed}"
 SAMPLE_ROOT_NAME="${DDIM_SAMPLE_ROOT_NAME:-sample_ddim_eta0}"
 
 echo "CIFAR5 DDIM eta=0 DAS + TrajTracIn query gradients"
@@ -64,7 +64,6 @@ if [[ "${DAS_ONLY:-0}" == "1" ]]; then
     --sample-root-name "${SAMPLE_ROOT_NAME}" \
     --artifact-namespace "${NAMESPACE}" \
     --namespace-query-gradient \
-    --skip-sampling \
     --skip-traj-tracin \
     --only-query-gradient \
     --gpus 0,1 \
@@ -135,8 +134,11 @@ CUDA_VISIBLE_DEVICES=0,1 "${PYTHON_BIN}" \
 # Phase 3: score directories now exist, so the ordinary per-query runner skips
 # scoring and only evaluates every lambda against the cached LDS models.
 if [[ "${RUN_LDS_EVAL:-1}" == "1" ]]; then
+  # Reuse LDS subset checkpoints, but compute sampler-specific DDIM targets in
+  # the separate ddim_eta0 target cache.
+  LDS_EVAL_TRAJECTORY_SAMPLER="${LDS_EVAL_TRAJECTORY_SAMPLER:-ddim_eta0}"
   DIFFUSION_TRAJECTORY_SAMPLER=ddim_eta0 \
-  LDS_TRAJECTORY_SAMPLER=ddim_eta0 \
+  LDS_TRAJECTORY_SAMPLER="${LDS_EVAL_TRAJECTORY_SAMPLER}" \
   CUDA_VISIBLE_DEVICES=0,1 "${PYTHON_BIN}" \
     diffusion_jax_refined/cifar5_multi/script/run_cifar5_multi_random_prompted_queries.py \
     --execute \
