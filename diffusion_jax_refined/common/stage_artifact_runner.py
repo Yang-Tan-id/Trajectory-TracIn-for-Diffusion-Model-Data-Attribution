@@ -1158,31 +1158,40 @@ def run_das_score_batch_stage(config_path: str | Path) -> None:
             query_rhs = queries[:, term_i, :].T
             if use_jax:
                 gram_device = jax.device_put(jnp.asarray(gram_i))
-                rhs_device = jax.device_put(jnp.asarray(query_rhs))
-                solved = jnp.linalg.solve(gram_device, rhs_device)
                 train_device = jax.device_put(jnp.asarray(train[term_i]))
+                if computed_denominator:
+                    rhs_device = jnp.concatenate(
+                        (jnp.asarray(query_rhs), train_device.T), axis=1
+                    )
+                    solved_all = jnp.linalg.solve(gram_device, rhs_device)
+                    solved_all.block_until_ready()
+                    solved = solved_all[:, : len(jobs)]
+                    solved_train = solved_all[:, len(jobs) :].T
+                    leverage = np.asarray(
+                        jnp.einsum("md,md->m", train_device, solved_train),
+                        dtype=np.float64,
+                    )
+                else:
+                    rhs_device = jax.device_put(jnp.asarray(query_rhs))
+                    solved = jnp.linalg.solve(gram_device, rhs_device)
                 raw = np.asarray(train_device @ solved, dtype=np.float32)
             else:
-                solved = np.linalg.solve(gram_i, query_rhs)
+                if computed_denominator:
+                    rhs = np.concatenate((query_rhs, train[term_i].T), axis=1)
+                    solved_all = np.linalg.solve(gram_i, rhs)
+                    solved = solved_all[:, : len(jobs)]
+                    solved_train = solved_all[:, len(jobs) :].T
+                    leverage = np.einsum(
+                        "md,md->m", train[term_i], solved_train, dtype=np.float64
+                    )
+                else:
+                    solved = np.linalg.solve(gram_i, query_rhs)
                 raw = train[term_i] @ solved
             # Arrays materialized from JAX may be read-only NumPy views.
             raw = raw * residual[term_i, :, None]
 
             if use_denominator:
                 if computed_denominator:
-                    leverage = np.empty((train.shape[1],), dtype=np.float64)
-                    for start in range(0, train.shape[1], denom_batch_size):
-                        end = min(start + denom_batch_size, train.shape[1])
-                        phi = train[term_i, start:end]
-                        if use_jax:
-                            phi_device = jax.device_put(jnp.asarray(phi))
-                            solved_phi = jnp.linalg.solve(gram_device, phi_device.T).T
-                            leverage[start:end] = np.asarray(
-                                jnp.einsum("md,md->m", phi_device, solved_phi), dtype=np.float64
-                            )
-                        else:
-                            solved_phi = np.linalg.solve(gram_i, phi.T).T
-                            leverage[start:end] = np.einsum("md,md->m", phi, solved_phi, dtype=np.float64)
                     denom = 1.0 - leverage
                     denom = np.where(np.abs(denom) < 1e-6, np.where(denom >= 0, 1e-6, -1e-6), denom)
                     denominator[term_i] = denom.astype(np.float32)
