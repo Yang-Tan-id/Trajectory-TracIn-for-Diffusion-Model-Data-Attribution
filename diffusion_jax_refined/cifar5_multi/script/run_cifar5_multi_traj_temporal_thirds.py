@@ -94,6 +94,7 @@ def run_worker(root: Path, args: argparse.Namespace, start: int, end: int) -> No
     scores: dict[tuple[str, str], np.ndarray] = {}
     score_indices = None
     segment_term_counts: dict[tuple[int, str], int] = {}
+    skipped_terms: set[tuple[str, int, int]] = set()
     query_eps = float(args.query_normalize_eps)
     train_eps = float(args.train_normalize_eps)
 
@@ -159,6 +160,8 @@ def run_worker(root: Path, args: argparse.Namespace, start: int, end: int) -> No
                 for query_map in query_maps
             ]
             if all(query_i is None for query_i in query_indices):
+                if int(ckpt) == 0:
+                    skipped_terms.add((component.label, int(position), int(timestep)))
                 continue
             if any(query_i is None for query_i in query_indices):
                 raise ValueError(
@@ -200,12 +203,31 @@ def run_worker(root: Path, args: argparse.Namespace, start: int, end: int) -> No
         del train, query_maps, query_features
         gc.collect()
 
-    bad_counts = {
-        key: count for key, count in segment_term_counts.items() if count != 10
+    expected_counts = {
+        segment: segment_term_counts.get((0, segment), 0) for segment in SEGMENTS
     }
-    if bad_counts:
+    bad_counts = {}
+    for ckpt in range(49):
+        for segment in SEGMENTS:
+            count = segment_term_counts.get((ckpt, segment), 0)
+            if count != expected_counts[segment]:
+                bad_counts[(ckpt, segment)] = count
+    if any(count == 0 for count in expected_counts.values()) or bad_counts:
         preview = list(sorted(bad_counts.items()))[:10]
-        raise ValueError(f"each checkpoint/segment must contain 10 terms; bad={preview}")
+        raise ValueError(
+            f"inconsistent checkpoint/segment term counts; "
+            f"expected={expected_counts} bad={preview}"
+        )
+    print(
+        f"[temporal-thirds] effective terms per checkpoint: {expected_counts}",
+        flush=True,
+    )
+    if skipped_terms:
+        print(
+            "[temporal-thirds] train terms absent from existing query artifacts "
+            f"(checkpoint 1 shown): {sorted(skipped_terms)}",
+            flush=True,
+        )
     if score_indices is None:
         raise RuntimeError("no train artifacts were loaded")
 
@@ -223,7 +245,7 @@ def run_worker(root: Path, args: argparse.Namespace, start: int, end: int) -> No
                         "mode": "aligned_temporal_thirds",
                         "segment": segment,
                         "variant": variant,
-                        "positions_per_segment": 10,
+                        "effective_terms_per_checkpoint": expected_counts,
                         "train_namespaces": [
                             args.base_train_namespace,
                             args.addon_a_train_namespace,
@@ -341,8 +363,14 @@ def main() -> None:
         dest="base_query_namespace",
         default="raw_nextckpt_school_traj_10x10",
     )
-    parser.add_argument("--addon-a-query-namespace", default="raw_nextckpt_school_traj_addon_mid10")
-    parser.add_argument("--addon-b-query-namespace", default="raw_nextckpt_school_traj_addon_mid10_b")
+    parser.add_argument(
+        "--addon-a-query-namespace",
+        default="raw_nextckpt_school_traj_addon_mid10_exact10",
+    )
+    parser.add_argument(
+        "--addon-b-query-namespace",
+        default="raw_nextckpt_school_traj_addon_mid10_b_exact10",
+    )
     parser.add_argument("--output-namespace", default="raw_nextckpt_school_traj_temporal_thirds_30term")
     parser.add_argument("--score-index-ranges", default="1-2500,2501-5000,5001-7500,7501-10000")
     parser.add_argument("--gpus", default="0,1,2,3")
