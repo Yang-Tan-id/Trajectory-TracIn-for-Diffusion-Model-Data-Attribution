@@ -111,10 +111,26 @@ def das_global_train_complete(path: Path, *, expected_points: int) -> bool:
         import numpy as np
 
         with np.load(path, allow_pickle=False) as data:
-            for key in ("gram", "gram_undamped", "residuals", "score_indices"):
-                if key not in data:
-                    return False
-            return int(np.asarray(data["score_indices"]).reshape(-1).shape[0]) == int(expected_points)
+            keys = set(data.files)
+            if {"gram", "gram_undamped", "residuals", "score_indices"} <= keys:
+                return int(np.asarray(data["score_indices"]).reshape(-1).shape[0]) == int(expected_points)
+
+            # Older merged DAS artifacts keep point-wise features/residuals in
+            # datapoint_shards and only store the global Gram plus shard paths.
+            legacy_keys = {"gram", "gram_undamped", "shard_paths", "num_score_indices"}
+            if not legacy_keys <= keys:
+                return False
+            if int(np.asarray(data["num_score_indices"]).reshape(())) != int(expected_points):
+                return False
+            recorded_paths = [Path(str(value)) for value in np.asarray(data["shard_paths"]).reshape(-1)]
+
+        for recorded in recorded_paths:
+            local = recorded
+            if not local.is_file():
+                local = path.parent / "datapoint_shards" / recorded.parent.name / recorded.name
+            if not local.is_file():
+                return False
+        return bool(recorded_paths)
     except Exception:
         return False
 
