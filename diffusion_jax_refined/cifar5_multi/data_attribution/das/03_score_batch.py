@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
 from pathlib import Path
+import sys
+
+REFINE_ROOT = Path(__file__).resolve().parents[3]
+if str(REFINE_ROOT) not in sys.path:
+    sys.path.insert(0, str(REFINE_ROOT))
 
 from common.stage_artifact_runner import run_das_score_batch_stage
 
