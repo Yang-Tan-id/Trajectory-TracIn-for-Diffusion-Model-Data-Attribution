@@ -46,6 +46,7 @@ echo "namespace=${NAMESPACE}"
 echo "sample_root=${SAMPLE_ROOT_NAME}"
 echo "python=$(${PYTHON_BIN} -c 'import sys; print(sys.executable)')"
 
+# Phase 1: make the shared DDIM samples and both query-gradient families.
 CUDA_VISIBLE_DEVICES=0,1 "${PYTHON_BIN}" \
   diffusion_jax_refined/cifar5_multi/script/run_cifar5_multi_traj_tracin_ddim.py \
   --execute \
@@ -58,8 +59,54 @@ CUDA_VISIBLE_DEVICES=0,1 "${PYTHON_BIN}" \
   --gpu-per-node 2 \
   --max-parallel 2
 
+# Phase 2: reuse the existing 10x10 residual-aware DAS train state and score.
+MODEL_ROOT="diffusion_jax_refined/cifar5_multi/result/cifar5_multi_exp1/model/prompted_solo"
+DAS_SOURCE="${MODEL_ROOT}/seed_42_train_gradient_ema_r20_das_10x10_residtrain/das"
+DAS_TARGET="${MODEL_ROOT}/seed_42_train_gradient_${NAMESPACE}/das"
+if [[ ! -f "${DAS_SOURCE}/global_gram_artifact.npz" ]]; then
+  echo "Missing reusable DAS global Gram: ${DAS_SOURCE}" >&2
+  exit 1
+fi
+mkdir -p "$(dirname "${DAS_TARGET}")"
+if [[ -L "${DAS_TARGET}" ]]; then
+  if [[ "$(readlink -f "${DAS_TARGET}")" != "$(readlink -f "${DAS_SOURCE}")" ]]; then
+    echo "DAS target symlink points to the wrong source: ${DAS_TARGET}" >&2
+    exit 1
+  fi
+elif [[ -e "${DAS_TARGET}" ]]; then
+  echo "Refusing to replace existing DAS target: ${DAS_TARGET}" >&2
+  exit 1
+else
+  ln -s "$(readlink -f "${DAS_SOURCE}")" "${DAS_TARGET}"
+fi
+
+DIFFUSION_TRAJECTORY_SAMPLER=ddim_eta0 \
+LDS_TRAJECTORY_SAMPLER=ddim_eta0 \
+CUDA_VISIBLE_DEVICES=0,1 "${PYTHON_BIN}" \
+  diffusion_jax_refined/cifar5_multi/script/run_cifar5_multi_random_prompted_queries.py \
+  --execute \
+  --experiment cifar5_multi_exp1 \
+  --size 10000 \
+  --train-seed 42 \
+  --epochs 200 \
+  --num-queries 20 \
+  --random-query-seed 0 \
+  --initial-seed-start 1000 \
+  --sample-root-name "${SAMPLE_ROOT_NAME}" \
+  --artifact-namespace "${NAMESPACE}" \
+  --namespace-query-gradient \
+  --skip-sampling \
+  --skip-query-gradient \
+  --skip-traj-tracin \
+  --skip-lds-eval \
+  --gpus 0,1 \
+  --slots 2 \
+  --gpu-per-node 2 \
+  --max-parallel 2 \
+  --score-index-ranges 1-5000,5001-10000
+
 RESULT_ROOT="diffusion_jax_refined/cifar5_multi/result/cifar5_multi_exp1"
-ARCHIVE="${REPO_ROOT}/cifar5_ddim_eta0_query_gradients.tar"
+ARCHIVE="${REPO_ROOT}/cifar5_ddim_eta0_query_and_das_scores.tar"
 FILE_LIST="$(mktemp)"
 trap 'rm -f "${FILE_LIST}"' EXIT
 
@@ -68,6 +115,9 @@ trap 'rm -f "${FILE_LIST}"' EXIT
   printf '%s\n' "${SAMPLE_ROOT_NAME}" > "${FILE_LIST}"
   find sample/cifar -type d \
     -name "seed_*_query_gradient_${NAMESPACE}" \
+    -print >> "${FILE_LIST}"
+  find attribution_score/prompted_solo -type d \
+    -name "${NAMESPACE}" \
     -print >> "${FILE_LIST}"
   tar -cf "${ARCHIVE}" -T "${FILE_LIST}"
 )
