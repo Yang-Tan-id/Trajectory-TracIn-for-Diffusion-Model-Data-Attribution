@@ -404,6 +404,16 @@ def main() -> None:
         default="base,addon_a,addon_b,addon_c",
         help="Comma-separated components to score (base, addon_a, addon_b, addon_c).",
     )
+    parser.add_argument(
+        "--score-components",
+        default="",
+        help="Only calculate these selected components; defaults to all --components.",
+    )
+    parser.add_argument(
+        "--combinations",
+        default="",
+        help="Only build these combinations: a,b,c,ab,abc. Defaults to all available.",
+    )
     parser.add_argument("--fast-lds", action="store_true")
     args = parser.parse_args()
 
@@ -437,12 +447,12 @@ def main() -> None:
             args.addon_c_score_namespace or args.addon_c_namespace,
         ),
     }
-    combinations = {
-        args.combined_a_namespace: ("base", "addon_a"),
-        args.combined_b_namespace: ("base", "addon_b"),
-        args.combined_c_namespace: ("base", "addon_c"),
-        args.combined_ab_namespace: ("base", "addon_a", "addon_b"),
-        args.combined_abc_namespace: ("base", "addon_a", "addon_b", "addon_c"),
+    combination_defaults = {
+        "a": (args.combined_a_namespace, ("base", "addon_a")),
+        "b": (args.combined_b_namespace, ("base", "addon_b")),
+        "c": (args.combined_c_namespace, ("base", "addon_c")),
+        "ab": (args.combined_ab_namespace, ("base", "addon_a", "addon_b")),
+        "abc": (args.combined_abc_namespace, ("base", "addon_a", "addon_b", "addon_c")),
     }
     if args.only_base:
         selected_components = ("base",)
@@ -452,9 +462,33 @@ def main() -> None:
     if unknown_components:
         parser.error(f"unknown --components: {','.join(unknown_components)}")
     components = {label: component_defaults[label] for label in selected_components}
+
+    if args.score_components:
+        score_component_labels = tuple(
+            item.strip() for item in args.score_components.split(",") if item.strip()
+        )
+    else:
+        score_component_labels = selected_components
+    unknown_score_components = sorted(set(score_component_labels) - set(components))
+    if unknown_score_components:
+        parser.error(
+            "--score-components must be included in --components: "
+            + ",".join(unknown_score_components)
+        )
+
+    if args.combinations:
+        selected_combinations = tuple(
+            item.strip() for item in args.combinations.split(",") if item.strip()
+        )
+        unknown_combinations = sorted(set(selected_combinations) - set(combination_defaults))
+        if unknown_combinations:
+            parser.error(f"unknown --combinations: {','.join(unknown_combinations)}")
+    else:
+        selected_combinations = tuple(combination_defaults)
     combinations = {
         namespace: labels
-        for namespace, labels in combinations.items()
+        for key in selected_combinations
+        for namespace, labels in (combination_defaults[key],)
         if all(label in components for label in labels)
     }
     if args.only_base:
@@ -483,7 +517,9 @@ def main() -> None:
             f"allowlist={timestep_allowlist}",
             flush=True,
         )
-    all_score_namespaces = [component.score_namespace for component in components.values()] + list(combinations)
+    all_score_namespaces = [
+        components[label].score_namespace for label in score_component_labels
+    ] + list(combinations)
 
     print(f"queries={len(specs)} components={list(components)} ranges={ranges}", flush=True)
     print("variants=raw,query_l2,train_l2,query_train_l2", flush=True)
@@ -495,7 +531,8 @@ def main() -> None:
         gpus = parse_gpus(args)
         worker_gpu_ids = worker_gpus(args, gpus)
         max_parallel = max(1, min(args.max_parallel, len(worker_gpu_ids)))
-        for component in components.values():
+        for component_label in score_component_labels:
+            component = components[component_label]
             jobs = []
             for range_i, (start, end) in enumerate(ranges):
                 train_path = train_shard(root, args, component, start, end)
