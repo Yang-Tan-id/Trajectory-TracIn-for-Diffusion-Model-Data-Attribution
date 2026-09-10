@@ -112,6 +112,40 @@ def score_complete(path: Path) -> bool:
     return (path / "scores.npy").is_file() and (path / "score_indices.npy").is_file()
 
 
+def ddim_step_squared_mass(timesteps: np.ndarray, args: argparse.Namespace) -> float:
+    betas = np.linspace(args.beta_start, args.beta_end, args.timesteps_total, dtype=np.float64)
+    alpha_bars = np.cumprod(1.0 - betas)
+    mass = 0.0
+    for timestep in np.unique(np.asarray(timesteps, dtype=np.int64)):
+        alpha_bar_t = alpha_bars[timestep]
+        alpha_bar_prev = alpha_bars[timestep - 1] if timestep > 0 else 1.0
+        coefficient = (
+            np.sqrt(1.0 - alpha_bar_prev)
+            - np.sqrt(alpha_bar_prev / alpha_bar_t) * np.sqrt(1.0 - alpha_bar_t)
+        )
+        mass += float(coefficient * coefficient)
+    if mass <= 0.0:
+        raise ValueError("selected component has no positive DDIM step-squared mass")
+    return mass
+
+
+def component_score_mass(
+    root: Path,
+    args: argparse.Namespace,
+    component: Component,
+) -> float:
+    if args.timestep_weighting == "uniform":
+        return 1.0
+    start, end = parse_ranges(args.score_index_ranges, size=args.size)[0]
+    path = train_shard(root, args, component, start, end)
+    with np.load(path, allow_pickle=False) as payload:
+        timesteps = np.asarray(payload["timesteps"], dtype=np.int64)
+    if args.timestep_region != "all":
+        allowed = set(args.resolved_timestep_allowlist)
+        timesteps = np.asarray([value for value in timesteps if int(value) in allowed])
+    return ddim_step_squared_mass(timesteps, args)
+
+
 def write_scores(out_dir: Path, scores: np.ndarray, indices: np.ndarray, metadata: dict[str, object]) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     np.save(out_dir / "scores.npy", np.asarray(scores, dtype=np.float64))
@@ -163,6 +197,10 @@ def combine_components(
     components: dict[str, Component],
     combinations: dict[str, tuple[str, ...]],
 ) -> None:
+    component_masses = {
+        label: component_score_mass(root, args, component)
+        for label, component in components.items()
+    }
     for output_namespace, labels in combinations.items():
         for spec in specs:
             output_base = score_root(root, args, spec, output_namespace)
@@ -184,13 +222,26 @@ def combine_components(
                 indices = payloads[0][1]
                 if any(not np.array_equal(indices, item_indices) for _, item_indices in payloads[1:]):
                     raise ValueError(f"score indices differ for combination {output_namespace}/{variant}")
-                scores = np.mean(np.stack([item_scores for item_scores, _ in payloads]), axis=0)
+                masses = np.asarray([component_masses[label] for label in labels], dtype=np.float64)
+                scores = np.average(
+                    np.stack([item_scores for item_scores, _ in payloads]),
+                    axis=0,
+                    weights=masses,
+                )
                 write_scores(
                     out_dir,
                     scores,
                     indices,
                     {
-                        "mode": "equal_term_component_average",
+                        "mode": (
+                            "ddim_step_squared_global_average"
+                            if args.timestep_weighting == "ddim_step_squared"
+                            else "equal_term_component_average"
+                        ),
+                        "timestep_weighting": args.timestep_weighting,
+                        "component_masses": {
+                            label: float(mass) for label, mass in zip(labels, masses)
+                        },
                         "variant": variant,
                         "components": labels,
                         "component_score_dirs": [str(path) for path in inputs],
@@ -386,6 +437,15 @@ def main() -> None:
     parser.add_argument("--query-normalize-eps", type=float, default=1e-8)
     parser.add_argument("--train-normalize-eps", type=float, default=1e-8)
     parser.add_argument(
+        "--timestep-weighting",
+        choices=("uniform", "ddim_step_squared"),
+        default="uniform",
+        help="Weight timesteps uniformly or by the squared deterministic DDIM step coefficient.",
+    )
+    parser.add_argument("--timesteps-total", type=int, default=1000)
+    parser.add_argument("--beta-start", type=float, default=0.0001)
+    parser.add_argument("--beta-end", type=float, default=0.02)
+    parser.add_argument(
         "--timestep-region",
         choices=("all", "initial", "end"),
         default="all",
@@ -517,6 +577,7 @@ def main() -> None:
             f"allowlist={timestep_allowlist}",
             flush=True,
         )
+    args.resolved_timestep_allowlist = timestep_allowlist
     all_score_namespaces = [
         components[label].score_namespace for label in score_component_labels
     ] + list(combinations)
@@ -568,6 +629,10 @@ def main() -> None:
                         "TRACIN_SCORE_TIMESTEP_ALLOWLIST": ",".join(
                             str(value) for value in timestep_allowlist
                         ),
+                        "TRACIN_SCORE_TIMESTEP_WEIGHTING": args.timestep_weighting,
+                        "TRACIN_SCORE_TIMESTEPS_TOTAL": str(args.timesteps_total),
+                        "TRACIN_SCORE_BETA_START": str(args.beta_start),
+                        "TRACIN_SCORE_BETA_END": str(args.beta_end),
                         "TRAIN_DATAPOINT_GRADIENT_ARTIFACT_PATH": str(train_path),
                         "TRACIN_SCORE_BATCH_JOBS": json.dumps(batch_jobs),
                     }

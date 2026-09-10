@@ -78,6 +78,60 @@ def _normalize_rows(x: np.ndarray, eps: float) -> np.ndarray:
     return x / np.maximum(denom, float(eps))
 
 
+def _ddim_step_squared_weights(timesteps: np.ndarray) -> np.ndarray:
+    total = int(os.environ.get("TRACIN_SCORE_TIMESTEPS_TOTAL", "1000"))
+    beta_start = float(os.environ.get("TRACIN_SCORE_BETA_START", "0.0001"))
+    beta_end = float(os.environ.get("TRACIN_SCORE_BETA_END", "0.02"))
+    if total < 2:
+        raise ValueError(f"TRACIN_SCORE_TIMESTEPS_TOTAL must be at least 2, got {total}")
+    betas = np.linspace(beta_start, beta_end, total, dtype=np.float64)
+    alpha_bars = np.cumprod(1.0 - betas)
+    flat_timesteps = np.asarray(timesteps, dtype=np.int64).reshape(-1)
+    result = np.zeros(flat_timesteps.shape, dtype=np.float64)
+    for i, timestep in enumerate(flat_timesteps):
+        if timestep < 0 or timestep >= total:
+            raise ValueError(f"DDIM score timestep {int(timestep)} is outside 0-{total - 1}")
+        alpha_bar_t = alpha_bars[timestep]
+        alpha_bar_prev = alpha_bars[timestep - 1] if timestep > 0 else 1.0
+        coefficient = (
+            np.sqrt(1.0 - alpha_bar_prev)
+            - np.sqrt(alpha_bar_prev / alpha_bar_t) * np.sqrt(1.0 - alpha_bar_t)
+        )
+        result[i] = coefficient * coefficient
+    return result
+
+
+def _apply_traj_timestep_weighting(
+    weights: np.ndarray,
+    ckpt_indices: np.ndarray,
+    timesteps: np.ndarray,
+) -> np.ndarray:
+    mode = os.environ.get("TRACIN_SCORE_TIMESTEP_WEIGHTING", "uniform").strip().lower()
+    weights = np.asarray(weights, dtype=np.float64).reshape(-1)
+    if mode in ("", "uniform"):
+        return weights
+    if mode != "ddim_step_squared":
+        raise ValueError(f"unknown TRACIN_SCORE_TIMESTEP_WEIGHTING={mode!r}")
+    ckpt_indices = np.asarray(ckpt_indices, dtype=np.int64).reshape(-1)
+    timesteps = np.asarray(timesteps, dtype=np.int64).reshape(-1)
+    if ckpt_indices.shape != weights.shape or timesteps.shape != weights.shape:
+        raise ValueError(
+            "DDIM timestep weighting requires one ckpt_index and timestep per score term"
+        )
+    step_weights = _ddim_step_squared_weights(timesteps)
+    result = np.zeros_like(weights)
+    for ckpt in np.unique(ckpt_indices):
+        mask = ckpt_indices == ckpt
+        denominator = float(np.sum(step_weights[mask]))
+        if denominator <= 0.0:
+            raise ValueError(
+                f"checkpoint {int(ckpt)} has no positive DDIM step-squared weight"
+            )
+        checkpoint_weight = float(np.sum(weights[mask]))
+        result[mask] = checkpoint_weight * step_weights[mask] / denominator
+    return result
+
+
 def _query_vector(query_payload: dict[str, np.ndarray], *, path: Path, normalize: bool = False, eps: float = 1e-8) -> np.ndarray:
     q = _first_array(query_payload, ("query_feature", "query_features", "query_gradient", "query_gradients"), path=path)
     q = np.asarray(q, dtype=np.float64)
@@ -206,6 +260,8 @@ def _combine_multiterm_dot_scores(
         ).reshape(-1)
         if weights.shape[0] != query.shape[0]:
             raise ValueError(f"query term_weights length {weights.shape[0]} does not match query terms {query.shape[0]}")
+        query_timesteps = np.asarray(query_payload.get("timesteps", ()), dtype=np.int32).reshape(-1)
+        weights = _apply_traj_timestep_weighting(weights, query_ckpts, query_timesteps)
         by_ckpt = {int(ckpt): i for i, ckpt in enumerate(train_ckpts)}
         missing = sorted({int(ckpt) for ckpt in query_ckpts if int(ckpt) not in by_ckpt})
         if missing:
@@ -271,6 +327,12 @@ def _combine_multiterm_dot_scores(
         ).reshape(-1)
         if weights.shape[0] != train.shape[0]:
             raise ValueError(f"train term_weights length {weights.shape[0]} does not match train terms {train.shape[0]}")
+        train_keep_array = np.asarray(train_keep, dtype=np.int64)
+        aligned_weights = _apply_traj_timestep_weighting(
+            weights[train_keep_array],
+            train_ckpts[train_keep_array],
+            train_timesteps[train_keep_array],
+        )
         scores = np.zeros((train.shape[1],), dtype=np.float64)
         term_iter = _iter_with_tqdm(
             range(len(train_keep)),
@@ -281,7 +343,7 @@ def _combine_multiterm_dot_scores(
         for j in term_iter:
             train_i = train_keep[j]
             query_i = query_keep[j]
-            scores += float(weights[train_i]) * term_scores(train_i, query_i)
+            scores += float(aligned_weights[j]) * term_scores(train_i, query_i)
             if (j + 1) % 100 == 0 or j + 1 == len(train_keep):
                 print(f"[traj-score] aligned term {j + 1}/{len(train_keep)}", flush=True)
         return scores
@@ -296,6 +358,7 @@ def _combine_multiterm_dot_scores(
             raise ValueError(f"train term_weights length {train_weights.shape[0]} does not match terms {train.shape[0]}")
         if not np.allclose(train_weights, weights, rtol=1e-5, atol=1e-12):
             raise ValueError("train/query term_weights differ; regenerate both Traj TracIn artifacts with the same LR schedule")
+    weights = _apply_traj_timestep_weighting(weights, train_ckpts, train_timesteps)
     scores = np.zeros((train.shape[1],), dtype=np.float64)
     print(
         "[traj-score] "
@@ -768,6 +831,9 @@ def _aligned_query_terms_for_fused_score(
         ).reshape(-1)
         if weights.shape[0] != train.shape[0]:
             return None
+        train_ckpts = np.asarray(train_payload.get("ckpt_indices", ()), dtype=np.int32).reshape(-1)
+        train_timesteps = np.asarray(train_payload.get("timesteps", ()), dtype=np.int32).reshape(-1)
+        weights = _apply_traj_timestep_weighting(weights, train_ckpts, train_timesteps)
         return query, weights, np.arange(train.shape[0], dtype=np.int64)
 
     if not _env_flag("TRACIN_ALIGN_TERMS_BY_CKPT_TIMESTEP", "0"):
@@ -806,9 +872,14 @@ def _aligned_query_terms_for_fused_score(
     if weights.shape[0] != train.shape[0]:
         return None
     train_keep_array = np.asarray(train_keep, dtype=np.int64)
+    aligned_weights = _apply_traj_timestep_weighting(
+        weights[train_keep_array],
+        train_ckpts[train_keep_array],
+        train_timesteps[train_keep_array],
+    )
     return (
         query[np.asarray(query_keep, dtype=np.int64)],
-        weights[train_keep_array],
+        aligned_weights,
         train_keep_array,
     )
 
@@ -866,7 +937,8 @@ def _run_fused_traj_score_batch(
     print(
         f"[traj-score-fused] queries={num_queries} terms={num_terms} points={num_points} "
         f"dim={train.shape[2]} raw=1 query_l2={int(normalize_query)} "
-        f"train_l2={int(normalize_train)} both_l2={int(normalize_query and normalize_train)}",
+        f"train_l2={int(normalize_train)} both_l2={int(normalize_query and normalize_train)} "
+        f"timestep_weighting={os.environ.get('TRACIN_SCORE_TIMESTEP_WEIGHTING', 'uniform')}",
         flush=True,
     )
     term_iter = _iter_with_tqdm(
@@ -899,6 +971,9 @@ def _run_fused_traj_score_batch(
         query_path = Path(job["query_path"])
         timestep_allowlist = os.environ.get("TRACIN_SCORE_TIMESTEP_ALLOWLIST", "").strip()
         shared_metadata = {
+            "timestep_weighting": os.environ.get(
+                "TRACIN_SCORE_TIMESTEP_WEIGHTING", "uniform"
+            ),
             "timestep_allowlist": [
                 int(value)
                 for value in timestep_allowlist.replace(",", " ").split()
