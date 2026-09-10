@@ -72,6 +72,33 @@ def link_reusable_train_shards(args: argparse.Namespace) -> None:
         target.symlink_to(source.resolve())
 
 
+def link_reusable_das_train(args: argparse.Namespace) -> None:
+    model_root = (
+        args.root
+        / "result"
+        / args.experiment
+        / "model"
+        / "prompted_solo"
+    )
+    source = model_root / f"seed_{args.train_seed}_train_gradient" / "das"
+    target = (
+        model_root
+        / f"seed_{args.train_seed}_train_gradient_{args.namespace}"
+        / "das"
+    )
+    print(f"[das-train-reuse] {target} -> {source}", flush=True)
+    if not args.execute:
+        return
+    if not (source / "global_gram_artifact.npz").is_file():
+        raise FileNotFoundError(f"missing reusable DAS global Gram: {source}")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.is_symlink() and target.resolve() == source.resolve():
+        return
+    if target.exists() or target.is_symlink():
+        raise FileExistsError(f"refusing to replace existing DAS train path: {target}")
+    target.symlink_to(source.resolve(), target_is_directory=True)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description=(
@@ -97,6 +124,8 @@ def main() -> None:
         default="raw_nextckpt_school_traj_aligned_10x10",
     )
     parser.add_argument("--sample-root-name", default="sample_ddim_eta0")
+    parser.add_argument("--num-traj-snapshots", type=int, default=10)
+    parser.add_argument("--train-mc-samples", type=int, default=10)
     parser.add_argument("--gpus", default="0,1,2,3")
     parser.add_argument("--slots", type=int, default=4)
     parser.add_argument("--gpu-per-node", type=int, default=4)
@@ -119,6 +148,8 @@ def main() -> None:
     args.root = Path(__file__).resolve().parents[1]
     if not args.only_query_gradient:
         link_reusable_train_shards(args)
+        if args.include_das:
+            link_reusable_das_train(args)
 
     env = os.environ.copy()
     env.setdefault("PYTHONUNBUFFERED", "1")
@@ -128,8 +159,8 @@ def main() -> None:
     env["TRAJ_QUERY_OBJECTIVE"] = "trajectory_next_checkpoint_noise_mse"
     env["TRAJ_PARAMETER_SOURCE"] = "raw"
     env["TRACIN_PARAMETER_SOURCE"] = "raw"
-    env["TRAJ_NUM_SNAPSHOTS"] = "10"
-    env["TRAJ_TRAIN_MC_SAMPLES"] = "10"
+    env["TRAJ_NUM_SNAPSHOTS"] = str(args.num_traj_snapshots)
+    env["TRAJ_TRAIN_MC_SAMPLES"] = str(args.train_mc_samples)
     env["TRACIN_ALIGN_TERMS_BY_CKPT_TIMESTEP"] = "1"
 
     cmd = [
