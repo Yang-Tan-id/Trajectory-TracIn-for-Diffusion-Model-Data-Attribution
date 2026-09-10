@@ -297,6 +297,7 @@ def run_lds(repo_root: Path, root: Path, args: argparse.Namespace) -> None:
     dataset_config = root / "dataset_config.py"
     env = os.environ.copy()
     env["PYTHONPATH"] = str(root.parent)
+    env["EXPERIMENT_TAG"] = args.experiment
     for spec in build_query_specs(args):
         query = f"query_{query_tag(str(spec['query']))}"
         seed = f"initial_seed_{int(spec['initial_seed'])}"
@@ -317,6 +318,8 @@ def run_lds(repo_root: Path, root: Path, args: argparse.Namespace) -> None:
                 score_dir = score_final_dir(root, args, spec, segment, variant)
                 for target_csv in target_csvs:
                     out_dir = eval_root / algorithm / target_csv.parent.name
+                    if (out_dir / "lds_summary.json").is_file():
+                        continue
                     subprocess.run(
                         [
                             sys.executable,
@@ -383,6 +386,11 @@ def main() -> None:
         description="Compare initial, middle, and end temporal thirds of CIFAR5 TrajTracIn."
     )
     parser.add_argument("--execute", action="store_true")
+    parser.add_argument(
+        "--only-lds",
+        action="store_true",
+        help="Reuse merged temporal scores and run only missing LDS evaluations.",
+    )
     parser.add_argument("--experiment", default="cifar5_multi_exp1")
     parser.add_argument("--size", type=int, default=10000)
     parser.add_argument("--train-seed", type=int, default=42)
@@ -450,6 +458,11 @@ def main() -> None:
         print(f"  {segment}: positions={current}", flush=True)
     if not args.execute:
         print("[dry-run] add --execute to calculate scores and LDS", flush=True)
+        return
+    if args.only_lds:
+        run_lds(repo_root, root, args)
+        print_summary(root, args)
+        print("[done] temporal-third LDS comparison complete", flush=True)
         return
 
     ranges = parse_ranges(args.score_index_ranges, size=args.size)
