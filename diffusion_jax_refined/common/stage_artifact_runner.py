@@ -50,6 +50,29 @@ def _score_indices(train_payload: dict[str, np.ndarray], n: int) -> np.ndarray:
     return np.arange(n, dtype=np.int64)
 
 
+def _das_term_ids(payload: dict[str, np.ndarray], *, path: Path, expected_terms: int) -> np.ndarray:
+    keys = ("ckpt_indices", "timesteps", "mc_indices")
+    missing = [key for key in keys if key not in payload]
+    if missing:
+        raise ValueError(f"{path} is missing DAS term metadata: {', '.join(missing)}")
+    columns = [np.asarray(payload[key], dtype=np.int64).reshape(-1) for key in keys]
+    bad = {key: len(column) for key, column in zip(keys, columns) if len(column) != expected_terms}
+    if bad:
+        raise ValueError(f"{path} DAS term metadata lengths {bad} do not match {expected_terms} terms")
+    return np.stack(columns, axis=1)
+
+
+def _require_matching_das_terms(reference: np.ndarray, candidate: np.ndarray, *, path: Path) -> None:
+    if np.array_equal(reference, candidate):
+        return
+    mismatch = np.flatnonzero(np.any(reference != candidate, axis=1))
+    first = int(mismatch[0]) if mismatch.size else -1
+    raise ValueError(
+        f"DAS term ordering mismatch at term {first}: train={reference[first].tolist()} "
+        f"vs {path}={candidate[first].tolist()}"
+    )
+
+
 def _normalize_rows(x: np.ndarray, eps: float) -> np.ndarray:
     denom = np.linalg.norm(x, axis=-1, keepdims=True)
     return x / np.maximum(denom, float(eps))
@@ -1084,6 +1107,7 @@ def run_das_score_batch_stage(config_path: str | Path) -> None:
         residual = residual[None, :]
     if residual.shape != train.shape[:2]:
         raise ValueError(f"residual shape {residual.shape} does not match train shape {train.shape}")
+    train_term_ids = _das_term_ids(train_payload, path=train_path, expected_terms=train.shape[0])
 
     print(f"[das-score-batch] loading global Gram once: {gram_path}", flush=True)
     gram_payload = _load_npz(gram_path)
@@ -1092,6 +1116,8 @@ def run_das_score_batch_stage(config_path: str | Path) -> None:
         gram_undamped = gram_undamped[None, :, :]
     if gram_undamped.shape[0] != train.shape[0] or gram_undamped.shape[1:] != (train.shape[2], train.shape[2]):
         raise ValueError(f"Gram shape {gram_undamped.shape} does not match train shape {train.shape}")
+    gram_term_ids = _das_term_ids(gram_payload, path=gram_path, expected_terms=gram_undamped.shape[0])
+    _require_matching_das_terms(train_term_ids, gram_term_ids, path=gram_path)
 
     query_payloads = []
     query_rows = []
@@ -1108,6 +1134,8 @@ def run_das_score_batch_stage(config_path: str | Path) -> None:
             query = query[None, :]
         if query.shape != (train.shape[0], train.shape[2]):
             raise ValueError(f"query shape {query.shape} does not match train shape {train.shape}")
+        query_term_ids = _das_term_ids(payload, path=query_path, expected_terms=query.shape[0])
+        _require_matching_das_terms(train_term_ids, query_term_ids, path=query_path)
         query_payloads.append(payload)
         query_rows.append(query)
     queries = np.stack(query_rows, axis=0)

@@ -223,9 +223,9 @@ def run_fast_lds(
             / "prompted_solo"
             / query_component
             / seed_component
-            / args.base_train_namespace
+            / (args.lds_target_namespace or args.base_train_namespace)
             / "lds"
-            / "traj_tracin"
+            / args.lds_target_algorithm
         )
         target_csvs = sorted(target_root.glob("*/lds_results.csv"))
         if not target_csvs:
@@ -347,6 +347,16 @@ def main() -> None:
     parser.add_argument("--base-train-namespace", default="raw_nextckpt_school_traj_aligned_10x10")
     parser.add_argument("--base-query-namespace", default="raw_nextckpt_school_traj_10x10")
     parser.add_argument(
+        "--lds-target-namespace",
+        default="",
+        help="Namespace containing reusable LDS result CSVs; defaults to --base-train-namespace.",
+    )
+    parser.add_argument(
+        "--lds-target-algorithm",
+        default="traj_tracin",
+        help="LDS subdirectory supplying target CSVs, e.g. das_lambda_500.",
+    )
+    parser.add_argument(
         "--base-score-namespace",
         default="",
         help="Output namespace for base scores; defaults to --base-train-namespace.",
@@ -373,6 +383,13 @@ def main() -> None:
     parser.add_argument("--use-task-affinity", action="store_true")
     parser.add_argument("--query-normalize-eps", type=float, default=1e-8)
     parser.add_argument("--train-normalize-eps", type=float, default=1e-8)
+    parser.add_argument(
+        "--timestep-region",
+        choices=("all", "initial", "end"),
+        default="all",
+        help="Restrict scoring to the largest-t (initial) or smallest-t (end) timesteps.",
+    )
+    parser.add_argument("--region-terms", type=int, default=10)
     parser.add_argument("--skip-component-score", action="store_true")
     parser.add_argument("--skip-combine", action="store_true")
     parser.add_argument(
@@ -440,6 +457,30 @@ def main() -> None:
     }
     if args.only_base:
         combinations = {}
+    timestep_allowlist: tuple[int, ...] = ()
+    if args.timestep_region != "all":
+        all_timesteps = set()
+        first_start, first_end = ranges[0]
+        for component in components.values():
+            path = train_shard(root, args, component, first_start, first_end)
+            if not path.is_file():
+                raise FileNotFoundError(str(path))
+            with np.load(path, allow_pickle=False) as payload:
+                all_timesteps.update(int(value) for value in np.asarray(payload["timesteps"]).reshape(-1))
+        ordered_timesteps = sorted(all_timesteps)
+        if args.region_terms < 1 or args.region_terms > len(ordered_timesteps):
+            parser.error(
+                f"--region-terms must be within 1-{len(ordered_timesteps)} for selected components"
+            )
+        if args.timestep_region == "initial":
+            timestep_allowlist = tuple(ordered_timesteps[-args.region_terms :])
+        else:
+            timestep_allowlist = tuple(ordered_timesteps[: args.region_terms])
+        print(
+            f"timestep_region={args.timestep_region} terms={len(timestep_allowlist)} "
+            f"allowlist={timestep_allowlist}",
+            flush=True,
+        )
     all_score_namespaces = [component.score_namespace for component in components.values()] + list(combinations)
 
     print(f"queries={len(specs)} components={list(components)} ranges={ranges}", flush=True)
@@ -485,6 +526,9 @@ def main() -> None:
                         "TRACIN_SCORE_TRAIN_NORMALIZE": "1",
                         "TRACIN_SCORE_QUERY_NORMALIZE_EPS": str(args.query_normalize_eps),
                         "TRACIN_SCORE_TRAIN_NORMALIZE_EPS": str(args.train_normalize_eps),
+                        "TRACIN_SCORE_TIMESTEP_ALLOWLIST": ",".join(
+                            str(value) for value in timestep_allowlist
+                        ),
                         "TRAIN_DATAPOINT_GRADIENT_ARTIFACT_PATH": str(train_path),
                         "TRACIN_SCORE_BATCH_JOBS": json.dumps(batch_jobs),
                     }
