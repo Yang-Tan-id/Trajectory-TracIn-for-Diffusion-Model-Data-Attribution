@@ -288,7 +288,7 @@ def run_lds(repo_root: Path, root: Path, args: argparse.Namespace) -> None:
         seed = f"initial_seed_{int(spec['initial_seed'])}"
         target_root = (
             root / "result" / args.experiment / "eval" / "prompted_solo"
-            / query / seed / args.base_train_namespace / "lds" / "traj_tracin"
+            / query / seed / args.lds_target_namespace / "lds" / args.lds_target_algorithm
         )
         target_csvs = sorted(target_root.glob("*/lds_results.csv"))
         if not target_csvs:
@@ -324,19 +324,44 @@ def run_lds(repo_root: Path, root: Path, args: argparse.Namespace) -> None:
 
 def print_summary(root: Path, args: argparse.Namespace) -> None:
     print("\nMean LDS by temporal third:")
-    print(f"{'segment':14s} {'variant':16s} {'mean':>8s} {'n':>4s}")
-    print("-" * 46)
+    targets = (
+        "endpoint_counterfactual",
+        "noise_trajectory",
+        "traj_counterfactual",
+        "simple_loss",
+    )
+    print(
+        f"{'segment':14s} {'variant':16s} {'end':>8s} {'noise':>8s} "
+        f"{'traj':>8s} {'simple':>8s} {'overall':>8s} {'n':>4s}"
+    )
+    print("-" * 88)
     for segment in SEGMENTS:
         for variant in VARIANTS:
             algorithm = f"traj_tracin_{segment}_{variant}"
-            values = []
-            for path in (root / "result" / args.experiment / "eval").glob(
-                f"prompted_solo/query_*/initial_seed_*/{args.output_namespace}/"
-                f"lds/{algorithm}/*/lds_summary.json"
-            ):
-                values.append(float(json.loads(path.read_text())["lds_spearman"]))
-            mean = sum(values) / len(values) if values else float("nan")
-            print(f"{segment:14s} {variant:16s} {mean:8.3f} {len(values):4d}")
+            target_values = {}
+            all_values = []
+            for target in targets:
+                values = []
+                for path in (root / "result" / args.experiment / "eval").glob(
+                    f"prompted_solo/query_*/initial_seed_*/{args.output_namespace}/"
+                    f"lds/{algorithm}/{target}/lds_summary.json"
+                ):
+                    values.append(float(json.loads(path.read_text())["lds_spearman"]))
+                target_values[target] = values
+                all_values.extend(values)
+            means = {
+                target: sum(values) / len(values) if values else float("nan")
+                for target, values in target_values.items()
+            }
+            overall = sum(all_values) / len(all_values) if all_values else float("nan")
+            print(
+                f"{segment:14s} {variant:16s} "
+                f"{means['endpoint_counterfactual']:8.3f} "
+                f"{means['noise_trajectory']:8.3f} "
+                f"{means['traj_counterfactual']:8.3f} "
+                f"{means['simple_loss']:8.3f} "
+                f"{overall:8.3f} {len(all_values):4d}"
+            )
 
 
 def main() -> None:
@@ -357,6 +382,16 @@ def main() -> None:
     parser.add_argument("--base-train-namespace", default="raw_nextckpt_school_traj_aligned_10x10")
     parser.add_argument("--addon-a-train-namespace", default="raw_nextckpt_school_traj_addon_mid10")
     parser.add_argument("--addon-b-train-namespace", default="raw_nextckpt_school_traj_addon_mid10_b")
+    parser.add_argument(
+        "--lds-target-namespace",
+        default="",
+        help="Namespace containing cached LDS target CSVs; defaults to --base-train-namespace.",
+    )
+    parser.add_argument(
+        "--lds-target-algorithm",
+        default="traj_tracin",
+        help="Algorithm directory containing cached LDS target CSVs.",
+    )
     parser.add_argument(
         "--base-query-namespace",
         "--query-namespace",
@@ -384,6 +419,8 @@ def main() -> None:
     parser.add_argument("--train-normalize-eps", type=float, default=1e-8)
     parser.add_argument("--worker-range", default="")
     args = parser.parse_args()
+    if not args.lds_target_namespace:
+        args.lds_target_namespace = args.base_train_namespace
 
     root = Path(__file__).resolve().parents[1]
     repo_root = root.parent.parent
