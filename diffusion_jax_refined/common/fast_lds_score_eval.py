@@ -25,7 +25,19 @@ def _read_rows(path: Path) -> list[dict[str, str]]:
         return list(csv.DictReader(f))
 
 
-def _prediction_indices(subset_dir: Path, subset: str) -> np.ndarray:
+def _relocate_subset_dir(subset_dir: Path, lds_model_root: Path) -> Path:
+    if subset_dir.is_dir():
+        return subset_dir
+    parts = subset_dir.parts
+    if "lds_model" in parts:
+        relocated = lds_model_root.joinpath(*parts[parts.index("lds_model") + 1 :])
+        if relocated.is_dir():
+            return relocated
+    raise FileNotFoundError(f"LDS subset directory not found: {subset_dir}")
+
+
+def _prediction_indices(subset_dir: Path, subset: str, *, lds_model_root: Path) -> np.ndarray:
+    subset_dir = _relocate_subset_dir(subset_dir, lds_model_root)
     filename = (
         "kept_attribution_indices.npy"
         if subset == "kept"
@@ -62,6 +74,7 @@ def main() -> None:
 
     dataset_cfg = load_config(args.config)
     legacy_root = Path(require_attr(dataset_cfg, "LEGACY_JAX_ROOT"))
+    lds_model_root = Path(require_attr(dataset_cfg, "LDS_MODEL_ROOT"))
     if str(legacy_root) not in sys.path:
         sys.path.insert(0, str(legacy_root))
 
@@ -91,7 +104,11 @@ def main() -> None:
     started = time.time()
     for source_row in target_rows:
         subset_dir = Path(source_row["subset_dir"])
-        prediction_indices = _prediction_indices(subset_dir, args.prediction_subset)
+        prediction_indices = _prediction_indices(
+            subset_dir,
+            args.prediction_subset,
+            lds_model_root=lds_model_root,
+        )
         row = dict(source_row)
         row["prediction_subset"] = args.prediction_subset
         row["prediction_sign"] = args.prediction_sign

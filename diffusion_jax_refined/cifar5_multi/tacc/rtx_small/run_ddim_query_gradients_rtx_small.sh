@@ -178,6 +178,9 @@ trap 'rm -f "${FILE_LIST}"' EXIT
   find attribution_score/prompted_solo -type d \
     -name "${NAMESPACE}" \
     -print >> "${FILE_LIST}"
+  find eval/prompted_solo -type f \
+    -path "*/${NAMESPACE}/lds/das_lambda_500/*/lds_results.csv" \
+    -print >> "${FILE_LIST}"
   tar -cf "${ARCHIVE}" -T "${FILE_LIST}"
 )
 
