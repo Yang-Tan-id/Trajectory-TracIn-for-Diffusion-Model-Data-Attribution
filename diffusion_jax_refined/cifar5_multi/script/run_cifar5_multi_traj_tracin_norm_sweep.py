@@ -210,6 +210,8 @@ def run_fast_lds(
 ) -> None:
     env = os.environ.copy()
     env["PYTHONPATH"] = str(root.parent)
+    env["EXPERIMENT_TAG"] = args.experiment
+    env["TRAIN_SEED"] = str(args.train_seed)
     evaluator = root.parent / "common" / "fast_lds_score_eval.py"
     dataset_config = root / "dataset_config.py"
     for spec in specs:
