@@ -200,6 +200,20 @@ def run_worker(root: Path, args: argparse.Namespace, start: int, end: int) -> No
                     f"[temporal-thirds] {component.label} term {term_i + 1}/{len(train)}",
                     flush=True,
                 )
+            # train_term is a view into the full artifact. Release it before
+            # loading the next component so the previous 19 GB array can die.
+            del (
+                train_term,
+                train_denominator,
+                train_norms,
+                raw,
+                query_l2,
+                query_matrix,
+                query_normalized,
+                query_norms,
+                query_rows,
+                query_indices,
+            )
         del train, query_maps, query_features
         gc.collect()
 
