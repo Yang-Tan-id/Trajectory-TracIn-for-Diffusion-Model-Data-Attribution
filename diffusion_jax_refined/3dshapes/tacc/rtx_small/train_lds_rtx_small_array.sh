@@ -1,15 +1,20 @@
 #!/usr/bin/env bash
 #SBATCH -J 3d-lds-rtx
-#SBATCH -o 3d-lds-rtx-%A_%a.out
-#SBATCH -e 3d-lds-rtx-%A_%a.err
+#SBATCH -o 3d-lds-rtx-%j.out
+#SBATCH -e 3d-lds-rtx-%j.err
 #SBATCH -p rtx-small
 #SBATCH -N 1
 #SBATCH -n 2
 #SBATCH --cpus-per-task=8
 #SBATCH -t 48:00:00
-#SBATCH --array=0-2%1
 
 set -euo pipefail
+
+SUBSET_SEED="${LDS_SUBSET_SEED:?Set LDS_SUBSET_SEED to 0, 1, or 2}"
+if [[ ! "${SUBSET_SEED}" =~ ^[012]$ ]]; then
+  echo "LDS_SUBSET_SEED must be 0, 1, or 2; got ${SUBSET_SEED}" >&2
+  exit 2
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="${REPO_ROOT:-$(cd "${SCRIPT_DIR}/../../../.." && pwd)}"
@@ -47,12 +52,28 @@ export TF_GPU_ALLOCATOR="${TF_GPU_ALLOCATOR:-cuda_malloc_async}"
 
 echo "3D Shapes LDS training on TACC RTX-small"
 echo "repo=${REPO_ROOT}; experiment=${EXPERIMENT_TAG}; train_seed=${TRAIN_SEED}"
-echo "subset_seed=${SLURM_ARRAY_TASK_ID}; independent GPUs=0,1"
+echo "subset_seed=${SUBSET_SEED}; independent GPUs=0,1"
 echo "python=$(${PYTHON_BIN} -c 'import sys; print(sys.executable)')"
 nvidia-smi
 
 "${PYTHON_BIN}" lds/run_training_multi_gpu.py \
   --gpus 0,1 \
-  --subset-seed "${SLURM_ARRAY_TASK_ID}" \
+  --subset-seed "${SUBSET_SEED}" \
   --m 64 \
   --k 2500
+
+if (( SUBSET_SEED < 2 )) && [[ "${AUTO_SUBMIT_LDS:-1}" == "1" ]]; then
+  next_seed="$((SUBSET_SEED + 1))"
+  account_args=()
+  if [[ -n "${TACC_ACCOUNT:-${ACCOUNT:-}}" ]]; then
+    account_args=(-A "${TACC_ACCOUNT:-${ACCOUNT}}")
+  fi
+  next_job="$(
+    sbatch --parsable "${account_args[@]}" \
+      --export=ALL,LDS_SUBSET_SEED="${next_seed}" \
+      "${SCRIPT_DIR}/train_lds_rtx_small_array.sh"
+  )"
+  echo "LDS subset seed ${SUBSET_SEED} complete; submitted seed ${next_seed} as job ${next_job}"
+else
+  echo "LDS subset seed ${SUBSET_SEED} complete; training pipeline finished"
+fi

@@ -109,8 +109,10 @@ Useful overrides include `JAX_BATCH_SIZE`, `DAS_PROJ_DIM`,
 
 Stampede3's `rtx-small` nodes expose two GPUs. The TACC launcher therefore
 runs two independent LDS workers on GPU 0 and GPU 1. Because the account limit
-permits only one concurrent `rtx-small` node, subset-seed array tasks 0, 1, and
-2 are throttled to one active task and run sequentially after the base job:
+permits only two submitted jobs and one concurrent `rtx-small` node, the base
+job submits subset seed 0 only after training succeeds. Each successful LDS
+job then submits the next seed. This keeps at most one running and one pending
+job while giving every seed its own 48-hour wall-clock allocation:
 
 ```bash
 cd diffusion_jax_refined/3dshapes/tacc/rtx_small

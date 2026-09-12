@@ -53,3 +53,19 @@ nvidia-smi
   --skip-sampling \
   --skip-attribution \
   --skip-eval
+
+# rtx-small allows only two submitted jobs per user. Submit only the next
+# stage here, after base training has succeeded, instead of submitting a
+# three-element LDS array up front.
+if [[ "${AUTO_SUBMIT_LDS:-1}" == "1" ]]; then
+  account_args=()
+  if [[ -n "${TACC_ACCOUNT:-${ACCOUNT:-}}" ]]; then
+    account_args=(-A "${TACC_ACCOUNT:-${ACCOUNT}}")
+  fi
+  lds_job="$(
+    sbatch --parsable "${account_args[@]}" \
+      --export=ALL,LDS_SUBSET_SEED=0 \
+      "${SCRIPT_DIR}/train_lds_rtx_small_array.sh"
+  )"
+  echo "Base training complete; submitted LDS subset seed 0 as job ${lds_job}"
+fi
