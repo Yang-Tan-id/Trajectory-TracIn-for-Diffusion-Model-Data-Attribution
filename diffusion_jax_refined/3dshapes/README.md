@@ -26,14 +26,19 @@ contracts.
   constraint. Sampling is deterministic DDIM (`eta=0`) and saves all 1,000
   trajectory states.
 - LDS models: for each subset seed 0, 1, and 2, train 64 random 2,500-of-5,000
-  subset models. Only epoch 200 is retained for each model.
+  subset models. Each GPU runs an independent model-training process (four GPUs
+  handle 16 subset IDs each); models are not shared across GPUs. Only epoch 200
+  is retained for each model.
 - DAS: projected train gradients, residuals, undamped Gram, query gradients,
-  and denominator caches are persisted. Lambda sweep:
+  and denominator caches are persisted. It uses 100 uniformly spaced timestamps
+  over `0..999` and 1 Monte Carlo sample per timestamp. Lambda sweep:
   `0.1,0.2,0.5,1,2,5,10,20,50,100,200,500,1000,2000,5000,10000`.
 - Trajectory TracIn: next-checkpoint target, raw parameters, and one shared
-  train-gradient artifact. Scores are emitted as `raw`, `query_l2`, `train_l2`,
-  and `query_train_l2`. The objective remains an environment setting so future
-  target functions can be selected with `TRAJ_QUERY_OBJECTIVE`.
+  train-gradient artifact. Attribution uses 10 uniformly selected trajectory
+  timestamps and 10 train Monte Carlo samples per timestamp; the full 1,000-step
+  DDIM trajectory is still retained. Scores are emitted as `raw`, `query_l2`,
+  `train_l2`, and `query_train_l2`. The objective remains an environment setting
+  so future target functions can be selected with `TRAJ_QUERY_OBJECTIVE`.
 - LDS true functions: endpoint counterfactual, trajectory counterfactual,
   simple-loss counterfactual, and noise trajectory. True values are cached by
   query and LDS model group and reused by every DAS lambda and TracIn variant.
@@ -75,12 +80,27 @@ python script/run_3dshapes_experiment.py --execute \
 ```
 
 Every phase has a `--skip-*` flag, so cluster runs can be resumed at phase
-boundaries. Outputs live below `3dshapes/result/<EXPERIMENT_TAG>/`. The runner is
-serial and scheduler-neutral; independent LDS subset IDs and queries may be
-distributed across GPUs by setting `LDS_SUBSET_INDICES` and invoking the stage
-entrypoints directly, following the CIFAR5 launch pattern.
+boundaries. Outputs live below `3dshapes/result/<EXPERIMENT_TAG>/`. On one node,
+the LDS phase uses `lds/run_training_multi_gpu.py` to launch one independent
+training process per GPU.
+
+## Three-node LDS training
+
+The base model is one job and must finish first. Submit it, then submit a
+three-element LDS job array with an `afterok` dependency:
+
+```bash
+base_job=$(sbatch --parsable slurm/train_base_single_gpu.sbatch)
+sbatch --dependency="afterok:${base_job}" slurm/train_lds_3node_array.sbatch
+```
+
+Set the cluster-specific partition/account on the `sbatch` command line when
+needed. Array tasks 0, 1, and 2 run on three nodes and own LDS subset seeds 0,
+1, and 2 respectively. Inside each node, GPUs 0--3 independently train the
+round-robin subsets `gpu, gpu+4, ..., gpu+60`. Deterministic subset files are
+prepared once before workers launch, so parallel workers never regenerate or
+race on subset definitions.
 
 Useful overrides include `JAX_BATCH_SIZE`, `DAS_PROJ_DIM`,
 `TRAJ_TRACIN_PROJ_DIM`, `DAS_NUM_MC_NOISE`, `TRAJ_TRAIN_MC_SAMPLES`, and
 `TRAJ_QUERY_OBJECTIVE`.
-

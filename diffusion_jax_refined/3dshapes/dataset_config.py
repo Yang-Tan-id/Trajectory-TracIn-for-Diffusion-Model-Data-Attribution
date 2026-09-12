@@ -21,6 +21,12 @@ def _int_list(name: str, default: tuple[int, ...]) -> tuple[int, ...]:
     return default if not value else tuple(int(x) for x in value.replace(",", " ").split())
 
 
+def _uniform_timesteps(count: int, total: int = 1000) -> tuple[int, ...]:
+    if count < 2:
+        raise ValueError("count must be at least 2")
+    return tuple(round(i * (total - 1) / (count - 1)) for i in range(count))
+
+
 DATASET_NAME = "3dshapes"
 DATASET_DISPLAY_NAME = "3D Shapes 64x64 balanced 20k"
 TRAINING_MODULE_NAME = "DM__training_3DSHAPES_pixel"
@@ -119,8 +125,8 @@ ATTRIBUTION_CONFIGS = {
         "attribution_use_trajectory_endpoint": True,
         "timesteps_total": 1000,
         "ddim_steps": 1000,
-        "timesteps": _int_list("DAS_TIMESTEPS", (0, 111, 222, 333, 444, 555, 666, 777, 888, 999)),
-        "num_mc_noise": int(os.environ.get("DAS_NUM_MC_NOISE", "10")),
+        "timesteps": _int_list("DAS_TIMESTEPS", _uniform_timesteps(100)),
+        "num_mc_noise": int(os.environ.get("DAS_NUM_MC_NOISE", "1")),
         "proj_dim": int(os.environ.get("DAS_PROJ_DIM", "4096")),
         "damping": float(os.environ.get("DAS_DAMPING", "2")),
         "damping_sweep_values": DAS_DAMPING_SWEEP_VALUES,
@@ -142,7 +148,7 @@ ATTRIBUTION_CONFIGS = {
         "use_saved_trajectory": True,
         "sync_config_from_checkpoint": True,
         "ddim_steps": 1000,
-        "num_traj_snapshots": int(os.environ.get("TRAJ_NUM_SNAPSHOTS", "1000")),
+        "num_traj_snapshots": int(os.environ.get("TRAJ_NUM_SNAPSHOTS", "10")),
         "snapshot_chunk_size": int(os.environ.get("TRAJ_SNAPSHOT_CHUNK_SIZE", "8")),
         "train_mc_samples": int(os.environ.get("TRAJ_TRAIN_MC_SAMPLES", "10")),
         "tracin_use_learning_rate_weights": True,

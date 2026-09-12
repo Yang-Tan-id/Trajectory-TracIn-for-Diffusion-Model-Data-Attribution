@@ -71,6 +71,9 @@ def main() -> None:
     parser.add_argument("--experiment", default="experiment1")
     parser.add_argument("--train-seed", type=int, default=42)
     parser.add_argument("--epochs", type=int, default=200)
+    parser.add_argument("--base-gpu", default="0", help="Single GPU used by the one base-model job.")
+    parser.add_argument("--lds-gpus", default="0,1,2,3", help="Independent per-model LDS worker GPUs.")
+    parser.add_argument("--lds-subset-seeds", default="0,1,2")
     parser.add_argument("--skip-prepare", action="store_true")
     parser.add_argument("--skip-train", action="store_true")
     parser.add_argument("--skip-lds-train", action="store_true")
@@ -98,9 +101,11 @@ def main() -> None:
         LDS_TRAJECTORY_SAMPLER="ddim_eta0",
         DAS_DAMPING_SWEEP="1",
         DAS_SCORE_DENOMINATOR_CACHE="1",
+        DAS_NUM_MC_NOISE="1",
         TRAJ_QUERY_OBJECTIVE="trajectory_next_checkpoint_noise_mse",
         TRAJ_PARAMETER_SOURCE="raw",
-        TRAJ_NUM_SNAPSHOTS="1000",
+        TRAJ_NUM_SNAPSHOTS="10",
+        TRAJ_TRAIN_MC_SAMPLES="10",
         TRACIN_SCORE_QUERY_NORMALIZE="1",
         TRACIN_SCORE_TRAIN_NORMALIZE="1",
     )
@@ -112,12 +117,22 @@ def main() -> None:
     run([python, "script/build_queries.py"], cwd=root, env=env0, execute=args.execute)
 
     if not args.skip_train:
-        run([python, "training/run_training.py", "--algorithm=shared"], cwd=root, env=env0, execute=args.execute)
+        base_train_env = env0 | {
+            "CUDA_VISIBLE_DEVICES": str(args.base_gpu),
+            "JAX_NUM_DEVICES": "1",
+            "JAX_DATA_PARALLEL": "0",
+        }
+        run([python, "training/run_training.py", "--algorithm=shared"], cwd=root, env=base_train_env, execute=args.execute)
 
     if not args.skip_lds_train:
-        for subset_seed in (0, 1, 2):
+        subset_seeds = [int(value) for value in args.lds_subset_seeds.replace(",", " ").split()]
+        for subset_seed in subset_seeds:
             env = env0 | {"LDS_SAMPLE_RANDOM_SEED": str(subset_seed), "SAMPLE_MODEL_MODE": "prompted_solo"}
-            run([python, "lds/run_training.py", "--m", "64", "--k", "2500"], cwd=root, env=env, execute=args.execute)
+            run(
+                [python, "lds/run_training_multi_gpu.py", "--gpus", args.lds_gpus,
+                 "--subset-seed", str(subset_seed), "--m", "64", "--k", "2500"],
+                cwd=root, env=env, execute=args.execute,
+            )
 
     query_file = root / "queries_seed_0_9.json"
     if query_file.is_file():

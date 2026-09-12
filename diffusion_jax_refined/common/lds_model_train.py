@@ -120,6 +120,16 @@ def main() -> None:
     )
     parser.add_argument("--unprompted", action="store_true", help="Use the unconditional JAX reference model/config.")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument(
+        "--reuse-prepared",
+        action="store_true",
+        help="Reuse an existing lds_model_config.json and subset index files without rewriting them.",
+    )
+    parser.add_argument(
+        "--finalize-only",
+        action="store_true",
+        help="With --reuse-prepared, only verify all final checkpoints and mark the run complete.",
+    )
     args = parser.parse_args()
     if args.m <= 0:
         parser.error("--m must be positive")
@@ -127,6 +137,8 @@ def main() -> None:
         parser.error("--k must be positive")
     if args.k is not None and args.dataset_percentage is not None:
         parser.error("Use either --k or --dataset-percentage, not both")
+    if args.finalize_only and not args.reuse_prepared:
+        parser.error("--finalize-only requires --reuse-prepared")
     try:
         train_subset_ids = _parse_subset_indices(args.subset_indices, args.m)
     except ValueError as exc:
@@ -223,57 +235,96 @@ def main() -> None:
     models_dir = out_dir / "models"
     models_dir.mkdir(parents=True, exist_ok=True)
 
-    rng = np.random.default_rng(args.sample_random_seed)
-    subsets = []
-    universe_set = set(universe.tolist())
-    full_dataset_universe = np.arange(len(row_map), dtype=np.int64)
-    for subset_id in range(args.m):
-        subset_seed = int(rng.integers(0, np.iinfo(np.int32).max))
-        kept = np.sort(np.random.default_rng(subset_seed).choice(universe, k, replace=False))
-        excluded = np.asarray(sorted(universe_set - set(kept.tolist())), dtype=np.int64)
-        training_excluded = np.setdiff1d(full_dataset_universe, kept, assume_unique=True)
-        subset_dir = models_dir / f"subset_{subset_id:04d}"
-        subset_dir.mkdir(parents=True, exist_ok=True)
-        np.save(subset_dir / "kept_attribution_indices.npy", kept)
-        np.save(subset_dir / "excluded_attribution_indices.npy", excluded)
-        if attribution_indices_path is not None:
-            np.save(subset_dir / "excluded_training_indices.npy", training_excluded)
-        metadata = {
-            "subset_id": subset_id,
-            "subset_seed": subset_seed,
-            "subset_size": k,
-            "training_dataset_size": k,
-            "attribution_universe_size": len(universe),
-            "dataset_percentage": args.dataset_percentage,
-            "subset_dir": str(subset_dir.resolve()),
+    config_path = out_dir / "lds_model_config.json"
+    if args.reuse_prepared:
+        if not config_path.is_file():
+            raise FileNotFoundError(
+                f"Cannot --reuse-prepared because {config_path} does not exist. "
+                "Run once with --dry-run to prepare deterministic subsets."
+            )
+        payload = json.loads(config_path.read_text())
+        expected = {
+            "m": args.m,
+            "k": k,
+            "sample_random_seed": args.sample_random_seed,
+            "model_train_seed": model_train_seed,
+            "sample_model_mode": sample_model_mode,
         }
-        _save_json(subset_dir / "subset_metadata.json", metadata)
-        subsets.append(metadata)
+        mismatches = {
+            key: (payload.get(key), value)
+            for key, value in expected.items()
+            if payload.get(key) != value
+        }
+        if mismatches:
+            raise ValueError(f"Prepared LDS config does not match requested worker config: {mismatches}")
+        subsets = list(payload["subsets"])
+    else:
+        rng = np.random.default_rng(args.sample_random_seed)
+        subsets = []
+        universe_set = set(universe.tolist())
+        full_dataset_universe = np.arange(len(row_map), dtype=np.int64)
+        for subset_id in range(args.m):
+            subset_seed = int(rng.integers(0, np.iinfo(np.int32).max))
+            kept = np.sort(np.random.default_rng(subset_seed).choice(universe, k, replace=False))
+            excluded = np.asarray(sorted(universe_set - set(kept.tolist())), dtype=np.int64)
+            training_excluded = np.setdiff1d(full_dataset_universe, kept, assume_unique=True)
+            subset_dir = models_dir / f"subset_{subset_id:04d}"
+            subset_dir.mkdir(parents=True, exist_ok=True)
+            np.save(subset_dir / "kept_attribution_indices.npy", kept)
+            np.save(subset_dir / "excluded_attribution_indices.npy", excluded)
+            if attribution_indices_path is not None:
+                np.save(subset_dir / "excluded_training_indices.npy", training_excluded)
+            metadata = {
+                "subset_id": subset_id,
+                "subset_seed": subset_seed,
+                "subset_size": k,
+                "training_dataset_size": k,
+                "attribution_universe_size": len(universe),
+                "dataset_percentage": args.dataset_percentage,
+                "subset_dir": str(subset_dir.resolve()),
+            }
+            _save_json(subset_dir / "subset_metadata.json", metadata)
+            subsets.append(metadata)
 
-    payload = {
-        "format_version": 1,
-        "dataset": require_attr(dataset_cfg, "DATASET_NAME"),
-        "experiment": require_attr(dataset_cfg, "EXPERIMENT_TAG"),
-        "mode": "unprompted" if use_unprompted else "prompted",
-        "sample_model_mode": sample_model_mode,
-        "model_train_seed": model_train_seed,
-        "m": args.m,
-        "k": k,
-        "dataset_percentage": args.dataset_percentage,
-        "dataset_universe_size": len(universe),
-        "attribution_indices_path": (
-            None if attribution_indices_path is None else str(attribution_indices_path)
-        ),
-        "sample_random_seed": args.sample_random_seed,
-        "base_checkpoint": str(base_checkpoint),
-        "train_config_template": asdict(train_cfg),
-        "subsets": subsets,
-        "trained_subset_indices": sorted(train_subset_ids) if train_subset_ids is not None else None,
-        "complete": False,
-    }
-    _save_json(out_dir / "lds_model_config.json", payload)
+        payload = {
+            "format_version": 1,
+            "dataset": require_attr(dataset_cfg, "DATASET_NAME"),
+            "experiment": require_attr(dataset_cfg, "EXPERIMENT_TAG"),
+            "mode": "unprompted" if use_unprompted else "prompted",
+            "sample_model_mode": sample_model_mode,
+            "model_train_seed": model_train_seed,
+            "m": args.m,
+            "k": k,
+            "dataset_percentage": args.dataset_percentage,
+            "dataset_universe_size": len(universe),
+            "attribution_indices_path": (
+                None if attribution_indices_path is None else str(attribution_indices_path)
+            ),
+            "sample_random_seed": args.sample_random_seed,
+            "base_checkpoint": str(base_checkpoint),
+            "train_config_template": asdict(train_cfg),
+            "subsets": subsets,
+            "trained_subset_indices": None,
+            "complete": False,
+        }
+        _save_json(config_path, payload)
     if args.dry_run:
         print(f"Prepared {args.m} LDS subsets in {out_dir} (dry run)")
+        return
+
+    if args.finalize_only:
+        payload["complete"] = all(
+            (
+                models_dir
+                / f"subset_{subset_id:04d}"
+                / f"seed_{model_train_seed}_epoch_{int(train_cfg.epochs):04d}.ckpt"
+            ).is_file()
+            for subset_id in range(args.m)
+        )
+        _save_json(config_path, payload)
+        if not payload["complete"]:
+            raise RuntimeError(f"LDS run is incomplete: {out_dir}")
+        print(f"Finalized reusable LDS models in {out_dir}")
         return
 
     for subset in subsets:
@@ -305,6 +356,9 @@ def main() -> None:
             progress_bar=True,
         )
 
+    if args.reuse_prepared and train_subset_ids is not None:
+        print(f"Worker completed assigned LDS subset ids in {out_dir}")
+        return
     if train_subset_ids is None:
         payload["complete"] = True
     else:
@@ -316,7 +370,7 @@ def main() -> None:
             ).is_file()
             for subset_id in range(args.m)
         )
-    _save_json(out_dir / "lds_model_config.json", payload)
+    _save_json(config_path, payload)
     print(f"Saved reusable LDS models to {out_dir}")
 
 

@@ -22,7 +22,13 @@ def _factor_ids(labels: np.ndarray) -> tuple[np.ndarray, list[np.ndarray]]:
     return ids, values
 
 
-def select_balanced_indices(labels: np.ndarray, seed: int, samples_per_group: int) -> np.ndarray:
+def select_balanced_indices(
+    labels: np.ndarray,
+    seed: int,
+    samples_per_group: int,
+    *,
+    show_progress: bool = False,
+) -> np.ndarray:
     factor_ids, values = _factor_ids(labels)
     expected_cardinalities = (10, 10, 10, 8, 4, 15)
     actual = tuple(len(v) for v in values)
@@ -40,7 +46,12 @@ def select_balanced_indices(labels: np.ndarray, seed: int, samples_per_group: in
     offsets = np.concatenate(([0], np.cumsum(counts)))
     rng = np.random.default_rng(seed)
     selected = []
-    for group in range(4000):
+    groups = range(4000)
+    if show_progress:
+        from tqdm.auto import tqdm
+
+        groups = tqdm(groups, total=4000, desc="Selecting balanced groups", unit="group")
+    for group in groups:
         candidates = order[offsets[group] : offsets[group + 1]]
         selected.extend(rng.choice(candidates, size=samples_per_group, replace=False).tolist())
     return np.asarray(selected, dtype=np.int64)
@@ -75,6 +86,12 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--samples-per-group", type=int, default=5)
     parser.add_argument("--attribution-size", type=int, default=5000)
+    parser.add_argument(
+        "--read-chunk-size",
+        type=int,
+        default=256,
+        help="Number of selected images to read from HDF5 per progress update.",
+    )
     args = parser.parse_args()
 
     try:
@@ -82,16 +99,48 @@ def main() -> None:
     except ImportError as exc:
         raise SystemExit("h5py is required; install/update the repository conda environment first") from exc
 
+    if args.read_chunk_size <= 0:
+        parser.error("--read-chunk-size must be positive")
+
+    from tqdm.auto import tqdm
+
+    print(f"[1/4] Reading labels from {args.input}", flush=True)
     with h5py.File(args.input, "r") as source:
-        labels_all = np.asarray(source["labels"][:], dtype=np.float64)
-        selected = select_balanced_indices(labels_all, args.seed, args.samples_per_group)
-        # h5py requires increasing fancy indices; restore the deterministic
-        # group/sample order after the I/O operation.
+        label_source = source["labels"]
+        labels_all = np.empty(label_source.shape, dtype=np.float64)
+        label_chunk_size = max(1, args.read_chunk_size * 64)
+        for start in tqdm(
+            range(0, len(label_source), label_chunk_size),
+            total=(len(label_source) + label_chunk_size - 1) // label_chunk_size,
+            desc="Reading labels",
+            unit="chunk",
+        ):
+            end = min(start + label_chunk_size, len(label_source))
+            labels_all[start:end] = label_source[start:end]
+
+        print("[2/4] Selecting 5 samples from each of 4,000 groups", flush=True)
+        selected = select_balanced_indices(
+            labels_all,
+            args.seed,
+            args.samples_per_group,
+            show_progress=True,
+        )
+
+        # h5py requires increasing fancy indices. Read in sorted chunks, then
+        # place each chunk back in deterministic group/sample order.
+        print(f"[3/4] Reading {len(selected):,} selected RGB images", flush=True)
         sort_order = np.argsort(selected)
         sorted_indices = selected[sort_order]
-        sorted_images = np.asarray(source["images"][sorted_indices], dtype=np.uint8)
-        images = np.empty_like(sorted_images)
-        images[sort_order] = sorted_images
+        image_shape = (len(selected),) + tuple(source["images"].shape[1:])
+        images = np.empty(image_shape, dtype=np.uint8)
+        for start in tqdm(
+            range(0, len(selected), args.read_chunk_size),
+            total=(len(selected) + args.read_chunk_size - 1) // args.read_chunk_size,
+            desc="Reading selected images",
+            unit="chunk",
+        ):
+            end = min(start + args.read_chunk_size, len(selected))
+            images[sort_order[start:end]] = source["images"][sorted_indices[start:end]]
 
     raw_labels = labels_all[selected]
     factor_ids, factor_values = _factor_ids(raw_labels)
@@ -105,6 +154,11 @@ def main() -> None:
     ).astype(np.int64)
 
     args.out_root.mkdir(parents=True, exist_ok=True)
+    print(
+        f"[4/4] Compressing and writing dataset.npz to {args.out_root} "
+        "(this final step may take several minutes)",
+        flush=True,
+    )
     np.savez_compressed(
         args.out_root / "dataset.npz",
         images=images,
@@ -137,4 +191,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

@@ -61,8 +61,34 @@ class Test3DShapesFramework(unittest.TestCase):
         self.assertIsNone(cfg.COMMON_CIFAR["score_index_ranges"])
         self.assertEqual(cfg.ATTRIBUTION_CONFIGS["traj_tracin"]["parameter_source"], "raw")
         self.assertEqual(cfg.ATTRIBUTION_CONFIGS["traj_tracin"]["ddim_steps"], 1000)
+        self.assertEqual(cfg.ATTRIBUTION_CONFIGS["traj_tracin"]["num_traj_snapshots"], 10)
+        self.assertEqual(cfg.ATTRIBUTION_CONFIGS["traj_tracin"]["train_mc_samples"], 10)
+        das_timesteps = cfg.ATTRIBUTION_CONFIGS["das"]["timesteps"]
+        self.assertEqual(len(das_timesteps), 100)
+        self.assertEqual((das_timesteps[0], das_timesteps[-1]), (0, 999))
+        self.assertEqual(len(set(das_timesteps)), 100)
+        self.assertEqual(cfg.ATTRIBUTION_CONFIGS["das"]["num_mc_noise"], 1)
         self.assertEqual(min(cfg.DAS_DAMPING_SWEEP_VALUES), 0.1)
         self.assertEqual(max(cfg.DAS_DAMPING_SWEEP_VALUES), 10000)
+
+    def test_lds_gpu_workers_split_64_models_without_overlap(self):
+        launcher = load(
+            THREED / "lds" / "run_training_multi_gpu.py",
+            "three_d_shapes_lds_multi_gpu_test",
+        )
+        chunks = launcher.subset_chunks(64, 4)
+        self.assertEqual([len(chunk) for chunk in chunks], [16, 16, 16, 16])
+        self.assertEqual(chunks[0], list(range(0, 64, 4)))
+        self.assertEqual(chunks[3], list(range(3, 64, 4)))
+        self.assertEqual(sorted(value for chunk in chunks for value in chunk), list(range(64)))
+
+    def test_lds_workers_reuse_prepared_subset_files(self):
+        common_train = (ROOT / "common" / "lds_model_train.py").read_text()
+        launcher = (THREED / "lds" / "run_training_multi_gpu.py").read_text()
+        self.assertIn('"--reuse-prepared"', common_train)
+        self.assertIn('"--finalize-only"', common_train)
+        self.assertIn('base_cmd + ["--dry-run"]', launcher)
+        self.assertIn('base_cmd + ["--reuse-prepared", "--finalize-only"]', launcher)
 
 
 if __name__ == "__main__":
