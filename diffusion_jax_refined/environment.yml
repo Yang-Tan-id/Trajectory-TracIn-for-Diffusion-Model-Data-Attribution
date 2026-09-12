@@ -9,6 +9,7 @@ dependencies:
   - matplotlib
   - tqdm
   - pillow
+  - h5py
   - scikit-learn
   - ipykernel
   - pip

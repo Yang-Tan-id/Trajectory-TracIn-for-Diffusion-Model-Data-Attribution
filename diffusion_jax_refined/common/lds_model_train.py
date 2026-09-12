@@ -183,7 +183,26 @@ def main() -> None:
         batch_names=train_cfg.batch_names,
         class_names=train_cfg.class_names,
     )
-    universe = np.arange(len(row_map), dtype=np.int64)
+    attribution_indices_path = getattr(dataset_cfg, "ATTRIBUTION_INDICES_PATH", None)
+    if attribution_indices_path is None:
+        universe = np.arange(len(row_map), dtype=np.int64)
+    else:
+        attribution_indices_path = Path(attribution_indices_path).expanduser().resolve()
+        if not attribution_indices_path.is_file():
+            raise FileNotFoundError(
+                f"Configured ATTRIBUTION_INDICES_PATH does not exist: {attribution_indices_path}. "
+                "Run the dataset preparation step first."
+            )
+        universe = np.asarray(np.load(attribution_indices_path), dtype=np.int64).reshape(-1)
+        if universe.size == 0:
+            raise ValueError(f"Attribution universe is empty: {attribution_indices_path}")
+        if np.unique(universe).size != universe.size:
+            raise ValueError(f"Attribution universe contains duplicates: {attribution_indices_path}")
+        if universe.min() < 0 or universe.max() >= len(row_map):
+            raise ValueError(
+                f"Attribution universe contains indices outside [0, {len(row_map) - 1}]: "
+                f"{attribution_indices_path}"
+            )
     try:
         k = _dataset_percentage_to_k(args.dataset_percentage, len(universe)) if args.dataset_percentage is not None else args.k
     except ValueError as exc:
@@ -207,18 +226,24 @@ def main() -> None:
     rng = np.random.default_rng(args.sample_random_seed)
     subsets = []
     universe_set = set(universe.tolist())
+    full_dataset_universe = np.arange(len(row_map), dtype=np.int64)
     for subset_id in range(args.m):
         subset_seed = int(rng.integers(0, np.iinfo(np.int32).max))
         kept = np.sort(np.random.default_rng(subset_seed).choice(universe, k, replace=False))
         excluded = np.asarray(sorted(universe_set - set(kept.tolist())), dtype=np.int64)
+        training_excluded = np.setdiff1d(full_dataset_universe, kept, assume_unique=True)
         subset_dir = models_dir / f"subset_{subset_id:04d}"
         subset_dir.mkdir(parents=True, exist_ok=True)
         np.save(subset_dir / "kept_attribution_indices.npy", kept)
         np.save(subset_dir / "excluded_attribution_indices.npy", excluded)
+        if attribution_indices_path is not None:
+            np.save(subset_dir / "excluded_training_indices.npy", training_excluded)
         metadata = {
             "subset_id": subset_id,
             "subset_seed": subset_seed,
             "subset_size": k,
+            "training_dataset_size": k,
+            "attribution_universe_size": len(universe),
             "dataset_percentage": args.dataset_percentage,
             "subset_dir": str(subset_dir.resolve()),
         }
@@ -236,6 +261,9 @@ def main() -> None:
         "k": k,
         "dataset_percentage": args.dataset_percentage,
         "dataset_universe_size": len(universe),
+        "attribution_indices_path": (
+            None if attribution_indices_path is None else str(attribution_indices_path)
+        ),
         "sample_random_seed": args.sample_random_seed,
         "base_checkpoint": str(base_checkpoint),
         "train_config_template": asdict(train_cfg),
@@ -254,7 +282,12 @@ def main() -> None:
             continue
         subset_dir = Path(subset["subset_dir"])
         cfg = TrainConfig(**asdict(train_cfg))
-        excluded = np.load(subset_dir / "excluded_attribution_indices.npy")
+        training_excluded_path = subset_dir / "excluded_training_indices.npy"
+        excluded = np.load(
+            training_excluded_path
+            if training_excluded_path.is_file()
+            else subset_dir / "excluded_attribution_indices.npy"
+        )
         cfg.exclude_indices = selected_indices_to_exclude_indices(excluded, row_map)
         cfg.checkpoint_dir = str(subset_dir)
         cfg.wandb_run_name = f"lds_{run_name}__subset_{subset_id:04d}"
