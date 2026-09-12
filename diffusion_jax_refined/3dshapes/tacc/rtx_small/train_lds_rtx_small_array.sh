@@ -17,8 +17,17 @@ if [[ ! "${SUBSET_SEED}" =~ ^[012]$ ]]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="${REPO_ROOT:-$(cd "${SCRIPT_DIR}/../../../.." && pwd)}"
+if [[ -z "${REPO_ROOT:-}" ]]; then
+  if [[ -n "${SLURM_SUBMIT_DIR:-}" && -f "${SLURM_SUBMIT_DIR}/../../lds/run_training_multi_gpu.py" ]]; then
+    REPO_ROOT="$(cd "${SLURM_SUBMIT_DIR}/../../../.." && pwd)"
+  elif [[ -n "${SLURM_SUBMIT_DIR:-}" && -f "${SLURM_SUBMIT_DIR}/diffusion_jax_refined/3dshapes/lds/run_training_multi_gpu.py" ]]; then
+    REPO_ROOT="$(cd "${SLURM_SUBMIT_DIR}" && pwd)"
+  else
+    REPO_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
+  fi
+fi
 SHAPES_ROOT="${REPO_ROOT}/diffusion_jax_refined/3dshapes"
+TACC_SCRIPT_DIR="${SHAPES_ROOT}/tacc/rtx_small"
 
 if [[ ! -f "${SHAPES_ROOT}/lds/run_training_multi_gpu.py" ]]; then
   echo "Could not locate the 3D Shapes LDS launcher below REPO_ROOT=${REPO_ROOT}" >&2
@@ -71,7 +80,7 @@ if (( SUBSET_SEED < 2 )) && [[ "${AUTO_SUBMIT_LDS:-1}" == "1" ]]; then
   next_job="$(
     sbatch --parsable "${account_args[@]}" \
       --export=ALL,LDS_SUBSET_SEED="${next_seed}" \
-      "${SCRIPT_DIR}/train_lds_rtx_small_array.sh"
+      "${TACC_SCRIPT_DIR}/train_lds_rtx_small_array.sh"
   )"
   echo "LDS subset seed ${SUBSET_SEED} complete; submitted seed ${next_seed} as job ${next_job}"
 else

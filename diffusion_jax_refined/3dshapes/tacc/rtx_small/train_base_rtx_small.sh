@@ -11,8 +11,17 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="${REPO_ROOT:-$(cd "${SCRIPT_DIR}/../../../.." && pwd)}"
+if [[ -z "${REPO_ROOT:-}" ]]; then
+  if [[ -n "${SLURM_SUBMIT_DIR:-}" && -f "${SLURM_SUBMIT_DIR}/../../script/run_3dshapes_experiment.py" ]]; then
+    REPO_ROOT="$(cd "${SLURM_SUBMIT_DIR}/../../../.." && pwd)"
+  elif [[ -n "${SLURM_SUBMIT_DIR:-}" && -f "${SLURM_SUBMIT_DIR}/diffusion_jax_refined/3dshapes/script/run_3dshapes_experiment.py" ]]; then
+    REPO_ROOT="$(cd "${SLURM_SUBMIT_DIR}" && pwd)"
+  else
+    REPO_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
+  fi
+fi
 SHAPES_ROOT="${REPO_ROOT}/diffusion_jax_refined/3dshapes"
+TACC_SCRIPT_DIR="${SHAPES_ROOT}/tacc/rtx_small"
 
 if [[ ! -f "${SHAPES_ROOT}/script/run_3dshapes_experiment.py" ]]; then
   echo "Could not locate the 3D Shapes driver below REPO_ROOT=${REPO_ROOT}" >&2
@@ -42,6 +51,19 @@ echo "repo=${REPO_ROOT}; experiment=${EXPERIMENT_TAG:-experiment1}; seed=${TRAIN
 echo "python=$(${PYTHON_BIN} -c 'import sys; print(sys.executable)')"
 nvidia-smi
 
+RAW_DATA_PATH="${THREEDSHAPES_H5:-${REPO_ROOT}/diffusion_jax_refined/dataset/3dshapes/3dshapes.h5}"
+PREPARED_DATA_PATH="${REPO_ROOT}/diffusion_jax_refined/dataset/3dshapes/20000/dataset.npz"
+if [[ ! -f "${PREPARED_DATA_PATH}" ]]; then
+  if [[ ! -f "${RAW_DATA_PATH}" ]]; then
+    echo "Missing raw dataset: ${RAW_DATA_PATH}" >&2
+    exit 1
+  fi
+  echo "Prepared dataset not found; preparing from ${RAW_DATA_PATH}"
+  "${PYTHON_BIN}" script/prepare_3dshapes.py --input "${RAW_DATA_PATH}"
+else
+  echo "Using prepared dataset: ${PREPARED_DATA_PATH}"
+fi
+
 "${PYTHON_BIN}" script/run_3dshapes_experiment.py \
   --execute \
   --experiment "${EXPERIMENT_TAG:-experiment1}" \
@@ -65,7 +87,7 @@ if [[ "${AUTO_SUBMIT_LDS:-1}" == "1" ]]; then
   lds_job="$(
     sbatch --parsable "${account_args[@]}" \
       --export=ALL,LDS_SUBSET_SEED=0 \
-      "${SCRIPT_DIR}/train_lds_rtx_small_array.sh"
+      "${TACC_SCRIPT_DIR}/train_lds_rtx_small_array.sh"
   )"
   echo "Base training complete; submitted LDS subset seed 0 as job ${lds_job}"
 fi
