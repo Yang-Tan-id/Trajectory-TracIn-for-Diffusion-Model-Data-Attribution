@@ -104,3 +104,19 @@ race on subset definitions.
 Useful overrides include `JAX_BATCH_SIZE`, `DAS_PROJ_DIM`,
 `TRAJ_TRACIN_PROJ_DIM`, `DAS_NUM_MC_NOISE`, `TRAJ_TRAIN_MC_SAMPLES`, and
 `TRAJ_QUERY_OBJECTIVE`.
+
+## TACC RTX-small training
+
+Stampede3's `rtx-small` nodes expose two GPUs. The TACC launcher therefore
+runs two independent LDS workers on GPU 0 and GPU 1. Because the account limit
+permits only one concurrent `rtx-small` node, subset-seed array tasks 0, 1, and
+2 are throttled to one active task and run sequentially after the base job:
+
+```bash
+cd diffusion_jax_refined/3dshapes/tacc/rtx_small
+bash submit_training_pipeline.sh
+```
+
+Set `TACC_ACCOUNT` when an explicit allocation is required by `sbatch`. The
+scripts default to the same conda environment used by the CIFAR5 RTX-small
+jobs; set `ENV_SETUP=/path/to/setup.sh` to use another environment setup.
