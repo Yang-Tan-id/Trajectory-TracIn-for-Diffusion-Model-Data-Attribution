@@ -11,15 +11,25 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [[ -z "${REPO_ROOT:-}" ]]; then
-  if [[ -n "${SLURM_SUBMIT_DIR:-}" && -f "${SLURM_SUBMIT_DIR}/../../script/run_3dshapes_experiment.py" ]]; then
-    REPO_ROOT="$(cd "${SLURM_SUBMIT_DIR}/../../../.." && pwd)"
-  elif [[ -n "${SLURM_SUBMIT_DIR:-}" && -f "${SLURM_SUBMIT_DIR}/diffusion_jax_refined/3dshapes/script/run_3dshapes_experiment.py" ]]; then
-    REPO_ROOT="$(cd "${SLURM_SUBMIT_DIR}" && pwd)"
-  else
-    REPO_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
-  fi
-fi
+resolve_repo_root() {
+  local start candidate
+  for start in "${REPO_ROOT:-}" "${SLURM_SUBMIT_DIR:-}" "${SCRIPT_DIR}"; do
+    [[ -n "${start}" && -d "${start}" ]] || continue
+    candidate="$(cd "${start}" && pwd)"
+    while [[ "${candidate}" != "/" ]]; do
+      if [[ -f "${candidate}/diffusion_jax_refined/3dshapes/script/run_3dshapes_experiment.py" ]]; then
+        printf '%s\n' "${candidate}"
+        return 0
+      fi
+      candidate="$(dirname "${candidate}")"
+    done
+  done
+  return 1
+}
+REPO_ROOT="$(resolve_repo_root)" || {
+  echo "Could not locate the repository from REPO_ROOT, SLURM_SUBMIT_DIR, or script path" >&2
+  exit 1
+}
 SHAPES_ROOT="${REPO_ROOT}/diffusion_jax_refined/3dshapes"
 TACC_SCRIPT_DIR="${SHAPES_ROOT}/tacc/rtx_small"
 
@@ -79,7 +89,7 @@ fi
 # rtx-small allows only two submitted jobs per user. Submit only the next
 # stage here, after base training has succeeded, instead of submitting a
 # three-element LDS array up front.
-if [[ "${AUTO_SUBMIT_LDS:-1}" == "1" ]]; then
+if [[ "${AUTO_SUBMIT_LDS:-0}" == "1" ]]; then
   account_args=()
   if [[ -n "${TACC_ACCOUNT:-${ACCOUNT:-}}" ]]; then
     account_args=(-A "${TACC_ACCOUNT:-${ACCOUNT}}")
@@ -90,4 +100,6 @@ if [[ "${AUTO_SUBMIT_LDS:-1}" == "1" ]]; then
       "${TACC_SCRIPT_DIR}/train_lds_rtx_small_array.sh"
   )"
   echo "Base training complete; submitted LDS subset seed 0 as job ${lds_job}"
+else
+  echo "Base training complete. Submit LDS subset seed 0 from a TACC login node."
 fi

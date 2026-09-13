@@ -12,5 +12,5 @@ fi
 base_job="$(sbatch --parsable "${ACCOUNT_ARGS[@]}" train_base_rtx_small.sh)"
 
 echo "Submitted base job: ${base_job}"
-echo "The base job will submit LDS seeds 0, 1, and 2 one at a time after each stage succeeds."
+echo "After base succeeds, submit LDS seeds 0, 1, and 2 from a TACC login node."
 echo "Monitor with: squeue -u ${USER}"

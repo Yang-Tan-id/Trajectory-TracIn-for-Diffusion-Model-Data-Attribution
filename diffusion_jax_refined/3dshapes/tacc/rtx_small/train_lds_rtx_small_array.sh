@@ -17,15 +17,25 @@ if [[ ! "${SUBSET_SEED}" =~ ^[012]$ ]]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [[ -z "${REPO_ROOT:-}" ]]; then
-  if [[ -n "${SLURM_SUBMIT_DIR:-}" && -f "${SLURM_SUBMIT_DIR}/../../lds/run_training_multi_gpu.py" ]]; then
-    REPO_ROOT="$(cd "${SLURM_SUBMIT_DIR}/../../../.." && pwd)"
-  elif [[ -n "${SLURM_SUBMIT_DIR:-}" && -f "${SLURM_SUBMIT_DIR}/diffusion_jax_refined/3dshapes/lds/run_training_multi_gpu.py" ]]; then
-    REPO_ROOT="$(cd "${SLURM_SUBMIT_DIR}" && pwd)"
-  else
-    REPO_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
-  fi
-fi
+resolve_repo_root() {
+  local start candidate
+  for start in "${REPO_ROOT:-}" "${SLURM_SUBMIT_DIR:-}" "${SCRIPT_DIR}"; do
+    [[ -n "${start}" && -d "${start}" ]] || continue
+    candidate="$(cd "${start}" && pwd)"
+    while [[ "${candidate}" != "/" ]]; do
+      if [[ -f "${candidate}/diffusion_jax_refined/3dshapes/lds/run_training_multi_gpu.py" ]]; then
+        printf '%s\n' "${candidate}"
+        return 0
+      fi
+      candidate="$(dirname "${candidate}")"
+    done
+  done
+  return 1
+}
+REPO_ROOT="$(resolve_repo_root)" || {
+  echo "Could not locate the repository from REPO_ROOT, SLURM_SUBMIT_DIR, or script path" >&2
+  exit 1
+}
 SHAPES_ROOT="${REPO_ROOT}/diffusion_jax_refined/3dshapes"
 TACC_SCRIPT_DIR="${SHAPES_ROOT}/tacc/rtx_small"
 
@@ -71,7 +81,7 @@ nvidia-smi
   --m 64 \
   --k 2500
 
-if (( SUBSET_SEED < 2 )) && [[ "${AUTO_SUBMIT_LDS:-1}" == "1" ]]; then
+if (( SUBSET_SEED < 2 )) && [[ "${AUTO_SUBMIT_LDS:-0}" == "1" ]]; then
   next_seed="$((SUBSET_SEED + 1))"
   account_args=()
   if [[ -n "${TACC_ACCOUNT:-${ACCOUNT:-}}" ]]; then
@@ -84,5 +94,5 @@ if (( SUBSET_SEED < 2 )) && [[ "${AUTO_SUBMIT_LDS:-1}" == "1" ]]; then
   )"
   echo "LDS subset seed ${SUBSET_SEED} complete; submitted seed ${next_seed} as job ${next_job}"
 else
-  echo "LDS subset seed ${SUBSET_SEED} complete; training pipeline finished"
+  echo "LDS subset seed ${SUBSET_SEED} complete. Submit the next seed from a TACC login node if needed."
 fi
