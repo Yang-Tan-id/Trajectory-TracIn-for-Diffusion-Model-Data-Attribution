@@ -6,7 +6,15 @@ DATASET_DIR = Path(__file__).resolve().parents[1]
 if str(DATASET_DIR) not in sys.path:
     sys.path.insert(0, str(DATASET_DIR))
 
-from dataset_config import DATA_ROOT, QUERY, REFERENCE_CKPT, RESULT_ROOT, TRAINING_MODULE_NAME
+from dataset_config import (
+    DATA_ROOT,
+    DATASET_NAME,
+    EXPERIMENT_TAG,
+    QUERY,
+    REFERENCE_CKPT,
+    RESULT_ROOT,
+    TRAINING_MODULE_NAME,
+)
 
 SAMPLE_SEEDS = os.environ.get("SAMPLE_SEEDS", os.environ.get("INITIAL_SEED", "0"))
 SAMPLE_BATCH_SIZE = os.environ.get("SAMPLE_BATCH_SIZE", "1")
