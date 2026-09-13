@@ -122,3 +122,11 @@ bash submit_training_pipeline.sh
 Set `TACC_ACCOUNT` when an explicit allocation is required by `sbatch`. The
 scripts default to the same conda environment used by the CIFAR5 RTX-small
 jobs; set `ENV_SETUP=/path/to/setup.sh` to use another environment setup.
+
+After LDS training, submit the query-independent DAS train-gradient stage from
+a TACC login node. It uses the fixed 5k attribution subset, 100 uniformly
+spaced timestamps, one MC sample per timestamp, and projection dimension 4096:
+
+```bash
+sbatch diffusion_jax_refined/3dshapes/tacc/rtx_small/run_das_train_rtx_small.sh
+```
