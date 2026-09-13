@@ -186,6 +186,7 @@ def save_seed_outputs(
     upscale: int,
     max_png_side: int,
     trajectory_sampler: str,
+    save_trajectory_pngs: bool,
 ):
     os.makedirs(seed_dir, exist_ok=True)
 
@@ -210,6 +211,22 @@ def save_seed_outputs(
             max_side=int(max_png_side),
         )
 
+    if save_trajectory_pngs:
+        frames_dir = os.path.join(seed_dir, "trajectory_frames")
+        os.makedirs(frames_dir, exist_ok=True)
+        for frame_idx, timestep in enumerate(ordered_timesteps):
+            decoded_state = np.asarray(adapter.decode_samples(saved_states[timestep]))
+            for sample_idx, img in enumerate(decoded_state):
+                sampler.save_image_nhwc(
+                    img,
+                    os.path.join(
+                        frames_dir,
+                        f"frame_{frame_idx:04d}_t{int(timestep):04d}_sample_{sample_idx:03d}.png",
+                    ),
+                    upscale=max(1, int(upscale)),
+                    max_side=int(max_png_side),
+                )
+
     info = {
         "seed": int(seed),
         "prompt": prompt,
@@ -221,6 +238,7 @@ def save_seed_outputs(
         "final_state_shape": list(final_state.shape),
         "decoded_final_shape": list(decoded_final.shape),
         "trajectory_sampler": trajectory_sampler,
+        "trajectory_pngs_saved": bool(save_trajectory_pngs),
     }
     with open(os.path.join(seed_dir, "seed_info.json"), "w") as f:
         json.dump(info, f, indent=2)
@@ -246,6 +264,11 @@ def main():
     parser.add_argument("--prefer-device", type=str, default="auto", choices=["auto", "cpu", "gpu"])
     parser.add_argument("--outdir", type=str, default="./attribution_samples")
     parser.add_argument("--num-trajectory-steps", type=int, default=100)
+    parser.add_argument(
+        "--save-trajectory-pngs",
+        action="store_true",
+        help="Render every selected trajectory state into trajectory_frames/*.png.",
+    )
     parser.add_argument(
         "--trajectory-sampler",
         choices=("ddpm", "ddim_eta0"),
@@ -299,6 +322,7 @@ def main():
         "num_trajectory_steps_requested": int(args.num_trajectory_steps),
         "saved_timesteps": [int(x) for x in ordered_timesteps],
         "trajectory_sampler": args.trajectory_sampler,
+        "save_trajectory_pngs": bool(args.save_trajectory_pngs),
         "metadata": adapter.metadata(),
     }
     with open(os.path.join(run_root, "manifest.json"), "w") as f:
@@ -341,6 +365,7 @@ def main():
             upscale=args.upscale,
             max_png_side=args.max_png_side,
             trajectory_sampler=args.trajectory_sampler,
+            save_trajectory_pngs=args.save_trajectory_pngs,
         )
 
         elapsed = time.time() - seed_start

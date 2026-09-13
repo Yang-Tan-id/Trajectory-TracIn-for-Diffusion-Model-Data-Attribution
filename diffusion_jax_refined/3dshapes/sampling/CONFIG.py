@@ -9,6 +9,14 @@ if str(DATASET_DIR) not in sys.path:
 from dataset_config import DATA_ROOT, QUERY, REFERENCE_CKPT, RESULT_ROOT, TRAINING_MODULE_NAME
 
 SAMPLE_SEEDS = os.environ.get("SAMPLE_SEEDS", os.environ.get("INITIAL_SEED", "0"))
+SAMPLE_BATCH_SIZE = os.environ.get("SAMPLE_BATCH_SIZE", "1")
+SAMPLE_TRAJECTORY_STEPS = os.environ.get("SAMPLE_TRAJECTORY_STEPS", "1000")
+TRAJECTORY_SAMPLER = os.environ.get("DIFFUSION_TRAJECTORY_SAMPLER", "ddim_eta0")
+SAVE_TRAJECTORY_PNGS = os.environ.get("SAVE_TRAJECTORY_PNGS", "0").lower() in (
+    "1",
+    "true",
+    "yes",
+)
 SAMPLE_ROOT = Path(os.environ.get("SAMPLE_ROOT", str(RESULT_ROOT / "sample")))
 COMMAND_CWD = "legacy_jax"
 COMMANDS = {
@@ -22,11 +30,11 @@ COMMANDS = {
         "--model-tag=prompted_solo",
         f"--prompt={QUERY}",
         f"--seeds={SAMPLE_SEEDS}",
-        "--batch-size=1",
+        f"--batch-size={SAMPLE_BATCH_SIZE}",
         "--prefer-device=gpu",
         f"--outdir={SAMPLE_ROOT}",
-        "--num-trajectory-steps=1000",
-        "--trajectory-sampler=ddim_eta0",
+        f"--num-trajectory-steps={SAMPLE_TRAJECTORY_STEPS}",
+        f"--trajectory-sampler={TRAJECTORY_SAMPLER}",
     ]
+    + (["--save-trajectory-pngs"] if SAVE_TRAJECTORY_PNGS else [])
 }
-
