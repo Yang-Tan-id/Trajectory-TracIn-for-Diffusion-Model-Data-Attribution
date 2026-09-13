@@ -19,6 +19,7 @@ from dataset_config import (
 SAMPLE_SEEDS = os.environ.get("SAMPLE_SEEDS", os.environ.get("INITIAL_SEED", "0"))
 SAMPLE_BATCH_SIZE = os.environ.get("SAMPLE_BATCH_SIZE", "1")
 SAMPLE_TRAJECTORY_STEPS = os.environ.get("SAMPLE_TRAJECTORY_STEPS", "1000")
+SAMPLE_PREFER_DEVICE = os.environ.get("SAMPLE_PREFER_DEVICE", "gpu")
 TRAJECTORY_SAMPLER = os.environ.get("DIFFUSION_TRAJECTORY_SAMPLER", "ddim_eta0")
 SAVE_TRAJECTORY_PNGS = os.environ.get("SAVE_TRAJECTORY_PNGS", "0").lower() in (
     "1",
@@ -39,7 +40,7 @@ COMMANDS = {
         f"--prompt={QUERY}",
         f"--seeds={SAMPLE_SEEDS}",
         f"--batch-size={SAMPLE_BATCH_SIZE}",
-        "--prefer-device=gpu",
+        f"--prefer-device={SAMPLE_PREFER_DEVICE}",
         f"--outdir={SAMPLE_ROOT}",
         f"--num-trajectory-steps={SAMPLE_TRAJECTORY_STEPS}",
         f"--trajectory-sampler={TRAJECTORY_SAMPLER}",
