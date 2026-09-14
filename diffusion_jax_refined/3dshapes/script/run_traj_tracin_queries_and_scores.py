@@ -30,10 +30,11 @@ def sample_run_root(sample_root: Path, prompt: str, checkpoint: Path) -> Path:
     )
 
 
-def query_artifact_path(run_root: Path, seed: int) -> Path:
+def query_artifact_path(run_root: Path, seed: int, namespace: str = "") -> Path:
+    suffix = f"_query_gradient_{namespace}" if namespace else "_query_gradient"
     return (
         run_root
-        / f"seed_{seed:06d}_query_gradient"
+        / f"seed_{seed:06d}{suffix}"
         / "traj_tracin"
         / "query_gradient_artifact.npz"
     )
@@ -71,6 +72,21 @@ def main() -> None:
     parser.add_argument("--skip-sampling", action="store_true")
     parser.add_argument("--skip-query-gradient", action="store_true")
     parser.add_argument("--skip-score", action="store_true")
+    parser.add_argument(
+        "--artifact-namespace",
+        default="",
+        help="Optional suffix for independent query-gradient, score, and log outputs.",
+    )
+    parser.add_argument(
+        "--snapshot-positions",
+        default="",
+        help="Optional comma/space-separated positions in the saved 1000-step DDIM trajectory.",
+    )
+    parser.add_argument(
+        "--train-artifact",
+        default="",
+        help="Optional matching train-gradient artifact; defaults to the original 10-timestamp artifact.",
+    )
     parser.add_argument("--python-bin", default=os.environ.get("PYTHON_BIN", sys.executable))
     args = parser.parse_args()
 
@@ -97,16 +113,22 @@ def main() -> None:
         / "prompted_jax"
         / f"seed_{args.train_seed}_epoch_{args.epochs:04d}.ckpt"
     )
-    train_artifact = (
+    namespace = args.artifact_namespace.strip()
+    if namespace and any(ch not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-" for ch in namespace):
+        raise ValueError("--artifact-namespace may contain only letters, numbers, underscores, and hyphens")
+    snapshot_positions = parse_ints(args.snapshot_positions)
+    default_train_dir = "traj_tracin" if not namespace else f"traj_tracin_{namespace}"
+    train_artifact = Path(args.train_artifact).expanduser() if args.train_artifact else (
         result_root
         / "model"
         / "prompted_solo"
         / f"seed_{args.train_seed}_train_gradient"
-        / "traj_tracin"
+        / default_train_dir
         / "train_datapoint_gradient_artifact.npz"
     )
     sample_root = result_root / "sample_ddim_eta0_1000"
-    log_root = result_root / "logs" / "traj_tracin_query_score"
+    log_name = "traj_tracin_query_score" if not namespace else f"traj_tracin_query_score_{namespace}"
+    log_root = result_root / "logs" / log_name
     if args.execute:
         for required in (checkpoint, train_artifact):
             if not required.is_file():
@@ -124,7 +146,7 @@ def main() -> None:
         ATTRIBUTION_SCORE_MODEL_MODE="prompted_solo",
         TRAJ_QUERY_OBJECTIVE="trajectory_next_checkpoint_noise_mse",
         TRAJ_PARAMETER_SOURCE="raw",
-        TRAJ_NUM_SNAPSHOTS="10",
+        TRAJ_NUM_SNAPSHOTS=str(len(snapshot_positions) if snapshot_positions else 10),
         TRAJ_TRAIN_MC_SAMPLES="10",
         TRAJ_QUERY_USE_CONFIG_SNAPSHOTS="1",
         TRAJ_TRACIN_PROJ_DIM="4096",
@@ -140,6 +162,8 @@ def main() -> None:
         JAX_NUM_DEVICES="1",
         JAX_PLATFORMS="cuda",
     )
+    if snapshot_positions:
+        base_env["TRAJ_SNAPSHOT_POSITIONS"] = ",".join(str(value) for value in snapshot_positions)
 
     assignments = [selected[index:: len(gpu_ids)] for index in range(len(gpu_ids))]
 
@@ -149,13 +173,14 @@ def main() -> None:
         for query_id, prompt, seed in tasks:
             run_root = sample_run_root(sample_root, prompt, checkpoint)
             seed_dir = run_root / f"seed_{seed:06d}"
-            query_artifact = query_artifact_path(run_root, seed)
+            query_artifact = query_artifact_path(run_root, seed, namespace)
             query_env = worker_env | {
                 "QUERY": prompt,
                 "INITIAL_SEED": str(seed),
                 "SAMPLE_SEED": str(seed),
                 "SAMPLE_SEEDS": str(seed),
                 "ATTRIBUTION_SAMPLE_DIR": str(run_root),
+                "QUERY_GRADIENT_ARTIFACT_PATH": str(query_artifact),
             }
             if args.skip_sampling or (
                 (seed_dir / "trajectory_xt.npy").is_file()
@@ -190,7 +215,8 @@ def main() -> None:
     jobs = []
     for query_id, prompt, seed in selected:
         run_root = sample_run_root(sample_root, prompt, checkpoint)
-        query_artifact = query_artifact_path(run_root, seed)
+        query_artifact = query_artifact_path(run_root, seed, namespace)
+        score_namespace = "traj_tracin" if not namespace else f"traj_tracin_{namespace}"
         score_dir = (
             result_root
             / "attribution_score"
@@ -198,7 +224,7 @@ def main() -> None:
             / f"train_seed_{args.train_seed}"
             / f"query_{_prompt_tag(prompt)}"
             / f"initial_seed_{seed}"
-            / "traj_tracin"
+            / score_namespace
             / "score"
         )
         jobs.append(
