@@ -1954,10 +1954,16 @@ def run_attribution(cfg: TrajAttributionConfig):
     print(f"subset_suffix        : {subset_suffix}")
     print("=" * 90)
     if uses_next_checkpoint_target:
-        print(
-            "[setup] next-checkpoint query target enabled; "
-            "final checkpoint has no c+1 target and will be skipped."
-        )
+        if stage_mode == "train":
+            print(
+                "[setup] next-checkpoint query target enabled; train gradients are "
+                "query-independent, so all checkpoints (including the final one) are retained."
+            )
+        else:
+            print(
+                "[setup] next-checkpoint query target enabled; "
+                "final checkpoint has no c+1 target and will be skipped."
+            )
 
     print("[setup] importing adapter and selecting device...")
     adapter = get_adapter(cfg)
@@ -2582,9 +2588,12 @@ def run_attribution(cfg: TrajAttributionConfig):
         stage_term_weights = []
         used_ckpts_for_stage = []
         stage_part_dir = f"{stage_artifact_path}.parts" if stage_mode == "train" else None
-        stage_total_terms = (len(ckpts) - 1 if uses_next_checkpoint_target else len(ckpts)) * int(
-            cfg.num_traj_snapshots
+        stage_checkpoint_count = (
+            len(ckpts)
+            if stage_mode == "train"
+            else (len(ckpts) - 1 if uses_next_checkpoint_target else len(ckpts))
         )
+        stage_total_terms = stage_checkpoint_count * int(cfg.num_traj_snapshots)
         stage_terms_done = 0
         stage_start_time = time.time()
         ckpt_shard_count = max(1, int(os.environ.get("TRAJ_TRACIN_CKPT_SHARD_COUNT", "1")))
@@ -2605,7 +2614,7 @@ def run_attribution(cfg: TrajAttributionConfig):
         )
 
         for ckpt_i, ckpt_path in enumerate(ckpts):
-            if uses_next_checkpoint_target and ckpt_i + 1 >= len(ckpts):
+            if stage_mode != "train" and uses_next_checkpoint_target and ckpt_i + 1 >= len(ckpts):
                 print(
                     f"[stage:{stage_mode}] skipping final checkpoint "
                     f"{ckpt_i + 1}/{len(ckpts)}: no next-checkpoint query target",
@@ -2974,7 +2983,7 @@ def run_attribution(cfg: TrajAttributionConfig):
                     stage_terms_done += 1
                     print(
                         f"[stage:train] checkpoint-level MC loss ckpt={ckpt_i + 1}/{len(ckpts)} | "
-                        f"terms={stage_terms_done}/{len(ckpts) - 1 if uses_next_checkpoint_target else len(ckpts)} | "
+                        f"terms={stage_terms_done}/{stage_checkpoint_count} | "
                         f"aggregate_timestamps={len(train_t_seq)} | "
                         f"mc_per_timestamp={cfg.train_mc_samples} | "
                         f"elapsed={format_seconds(time.time() - stage_start_time)}",
@@ -3189,7 +3198,7 @@ def run_attribution(cfg: TrajAttributionConfig):
             ]
             if not part_paths:
                 raise RuntimeError(f"No TrajTracIn train checkpoint parts were produced under {stage_part_dir}.")
-            expected_stage_parts = len(ckpts) - 1 if uses_next_checkpoint_target else len(ckpts)
+            expected_stage_parts = len(ckpts)
             if len(part_paths) != expected_stage_parts:
                 missing_parts = [
                     os.path.join(stage_part_dir, f"ckpt_{ckpt_i:04d}.npz")
