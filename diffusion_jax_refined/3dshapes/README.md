@@ -230,3 +230,23 @@ scores unchanged. After scoring, reuse the existing true-f cache for LDS:
 ```bash
 sbatch diffusion_jax_refined/3dshapes/tacc/rtx_small/run_das_aligned10x10_lds_cached.sh
 ```
+
+### Predicted-noise JVP L2-squared score
+
+This score reuses the original Traj TracIn train artifact (50 checkpoints,
+10 timestamps, and one raw projected gradient of the mean 10-MC denoising
+loss per datapoint/term). For each query term it differentiates one Gaussian
+scalar probe of the vector predicted-noise output, immediately computes and
+squares its dot products with all 5,000 saved train gradients, and retains
+only the final scores. It produces uniform and learning-rate-squared variants;
+the transient query-gradient artifacts are deleted after score materialization.
+
+Run the complete 4-node/16-GPU H100 pipeline, including cached LDS evaluation:
+
+```bash
+sbatch diffusion_jax_refined/3dshapes/tacc/h100/run_predicted_noise_jvp_l2_squared_h100.sh
+```
+
+Permanent scores are written below
+`traj_tracin_predicted_noise_jvp_l2_squared/score_constant` and
+`traj_tracin_predicted_noise_jvp_l2_squared/score_lr2`.

@@ -1390,6 +1390,9 @@ def normalize_query_objective_name(name: str) -> str:
         "future_residual_mixture": "trajectory_future_residual_mixture",
         "future_residual_mix": "trajectory_future_residual_mixture",
         "future_checkpoint_residual_mixture": "trajectory_future_residual_mixture",
+        "trajectory_predicted_noise_probe": "trajectory_predicted_noise_probe",
+        "predicted_noise_probe": "trajectory_predicted_noise_probe",
+        "pred_noise_probe": "trajectory_predicted_noise_probe",
         "trajectory_noise_squared_deviation_normalized": "eps_deviation_l2_sq_mean",
         "normalized_trajectory_noise_squared_deviation": "eps_deviation_l2_sq_mean",
         "eps_deviation_l1_mean": "eps_deviation_l1_mean",
@@ -1408,6 +1411,7 @@ def normalize_query_objective_name(name: str) -> str:
             "trajectory_next_checkpoint_implied_noise_mse, "
             "trajectory_next_checkpoint_trajectory_noise_mse, "
             "trajectory_next_checkpoint_ref_projection, trajectory_future_residual_mixture, "
+            "trajectory_predicted_noise_probe, "
             "eps_deviation_l1_mean, eps_deviation_l2_sq_mean, "
             "trajectory_noise_squared_deviation_normalized"
         ) from exc
@@ -1447,6 +1451,8 @@ def query_objective_formula(name: str) -> str:
             "sum_k w_k mean(stopgrad(sum_j alpha_j normalize(eps_theta_c-eps_theta_j)) * "
             "eps_theta_c), with alpha_next=1 and other alpha_j from residual disagreement"
         )
+    if name == "trajectory_predicted_noise_probe":
+        return "sum_k w_k <v_k, eps_theta(x_ref_k,k)>/sqrt(num_output_pixels)"
     if name == "eps_deviation_l1_mean":
         return "sum_k w_k mean(|eps_theta(x_ref_k,k)-eps_theta_ref(x_ref_k,k)|)"
     if name == "eps_deviation_l2_sq_mean":
@@ -1507,6 +1513,29 @@ def make_query_grad_chunk_fn(adapter, model, objective: str):
             xt_refs_chunk,
             t_scalars,
             cond,
+        )
+
+    return jax.jit(grad_chunk)
+
+
+def make_predicted_noise_probe_query_grad_chunk_fn(adapter, model):
+    """Gradients of Gaussian scalar probes of the vector predicted-noise output."""
+
+    def scalar_fn(params, xt_ref, t_scalar, cond, output_probe):
+        t = jnp.full((xt_ref.shape[0],), t_scalar, dtype=jnp.int32)
+        eps = adapter.eps_apply(model, params, xt_ref, t, cond)
+        normalizer = jnp.sqrt(jnp.asarray(eps.size, dtype=jnp.float32))
+        return jnp.sum(eps.astype(jnp.float32) * output_probe.astype(jnp.float32)) / normalizer
+
+    grad_fn = jax.grad(scalar_fn)
+
+    def grad_chunk(params, xt_refs_chunk, t_scalars, cond, output_probes):
+        return jax.vmap(grad_fn, in_axes=(None, 0, 0, None, 0))(
+            params,
+            xt_refs_chunk,
+            t_scalars,
+            cond,
+            output_probes,
         )
 
     return jax.jit(grad_chunk)
@@ -1879,6 +1908,7 @@ def run_attribution(cfg: TrajAttributionConfig):
     if stage_mode and not stage_artifact_path:
         raise ValueError("TRAJ_TRACIN_STAGE_ARTIFACT_PATH is required when TRAJ_TRACIN_STAGE_MODE is set.")
     cfg.query_objective = normalize_query_objective_name(cfg.query_objective)
+    uses_predicted_noise_probe = cfg.query_objective == "trajectory_predicted_noise_probe"
     uses_next_checkpoint_target = query_objective_uses_next_checkpoint(cfg.query_objective)
     uses_implied_noise_trajectory_target = (
         cfg.query_objective == "trajectory_next_checkpoint_implied_noise_mse"
@@ -1954,7 +1984,9 @@ def run_attribution(cfg: TrajAttributionConfig):
     print(
         "query_target         : "
         + (
-            "next_checkpoint_trajectory_implied_noise"
+            "current_checkpoint_predicted_noise_probe"
+            if uses_predicted_noise_probe
+            else "next_checkpoint_trajectory_implied_noise"
             if uses_checkpoint_trajectory_target
             else "next_checkpoint_predicted_noise"
             if uses_next_checkpoint_target
@@ -2830,6 +2862,8 @@ def run_attribution(cfg: TrajAttributionConfig):
                 use_future_residual_mixture = cfg.query_objective == "trajectory_future_residual_mixture"
                 if uses_checkpoint_trajectory_target:
                     query_grad_chunk_fn = make_implied_noise_query_grad_chunk_fn(adapter, model)
+                elif uses_predicted_noise_probe:
+                    query_grad_chunk_fn = make_predicted_noise_probe_query_grad_chunk_fn(adapter, model)
                 elif use_future_residual_mixture:
                     query_grad_chunk_fn = make_future_residual_mixture_grad_chunk_fn(adapter, model)
                     eps_cache = load_or_build_future_noise_cache(xt_refs, t_seq, pos_seq)
@@ -2878,6 +2912,33 @@ def run_attribution(cfg: TrajAttributionConfig):
                             t_chunk,
                             query_cond,
                             future_eps_chunk,
+                        )
+                    elif uses_predicted_noise_probe:
+                        probe_keys = array_to_device(
+                            jnp.stack(
+                                [
+                                    make_jax_key(
+                                        cfg.seed,
+                                        "traj_predicted_noise_output_probe",
+                                        ckpt_i,
+                                        int(t_seq[i]),
+                                        int(pos_seq[i]),
+                                    )
+                                    for i in chunk_ids
+                                ],
+                                axis=0,
+                            ),
+                            device,
+                        )
+                        output_probes = jax.vmap(
+                            lambda key: jax.random.normal(key, xt_chunk.shape[1:], dtype=jnp.float32)
+                        )(probe_keys)
+                        query_grads = query_grad_chunk_fn(
+                            params,
+                            xt_chunk,
+                            t_chunk,
+                            query_cond,
+                            output_probes,
                         )
                     else:
                         query_grads = query_grad_chunk_fn(
@@ -3305,6 +3366,15 @@ def run_attribution(cfg: TrajAttributionConfig):
                     future_mix_rule=np.asarray(
                         "alpha_next=1; alpha_future=gamma*clip((1-cos(normalized_next,normalized_future))/2,0,1); "
                         "alphas normalized to sum 1; residuals RMS-normalized"
+                    ),
+                )
+            if uses_predicted_noise_probe:
+                query_payload.update(
+                    output_probe_distribution=np.asarray("standard_normal"),
+                    output_probes_per_term=np.asarray(1, dtype=np.int32),
+                    output_probe_normalization=np.asarray("sqrt_num_output_elements"),
+                    output_probe_seed_rule=np.asarray(
+                        "make_jax_key(seed,traj_predicted_noise_output_probe,checkpoint_index,timestep,snapshot_position)"
                     ),
                 )
             if uses_checkpoint_trajectory_target:

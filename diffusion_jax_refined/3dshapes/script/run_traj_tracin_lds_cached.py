@@ -35,6 +35,10 @@ VARIANTS = (
     ("train_l2", "score_train_l2_normalized"),
     ("query_train_l2", "score_query_train_l2_normalized"),
 )
+PREDICTED_NOISE_JVP_VARIANTS = (
+    ("constant", "score_constant"),
+    ("lr2", "score_lr2"),
+)
 SCORE_SCHEMES = {
     "original": "traj_tracin",
     "constant_lr_uniform": "traj_tracin_constant_lr_uniform",
@@ -42,6 +46,7 @@ SCORE_SCHEMES = {
     "checkpoint_shared_100x1_query100": "traj_tracin_checkpoint_shared_100x1_query100",
     "aligned100x1_stream": "traj_tracin_aligned100x1_stream",
     "aligned100x1_saved": "traj_tracin_aligned100x1_saved",
+    "predicted_noise_jvp_l2_squared": "traj_tracin_predicted_noise_jvp_l2_squared",
 }
 
 
@@ -104,7 +109,7 @@ def main() -> None:
         help=(
             "Comma/space list: original, constant_lr_uniform, "
             "cosine_lr_ddim_step_squared, checkpoint_shared_100x1_query100, "
-            "aligned100x1_stream, aligned100x1_saved."
+            "aligned100x1_stream, aligned100x1_saved, predicted_noise_jvp_l2_squared."
         ),
     )
     parser.add_argument("--python-bin", default=os.environ.get("PYTHON_BIN", sys.executable))
@@ -118,7 +123,10 @@ def main() -> None:
     invalid_schemes = [value for value in scheme_names if value not in SCORE_SCHEMES]
     if not scheme_names or invalid_schemes:
         raise ValueError(f"Invalid --score-schemes: {invalid_schemes or args.score_schemes!r}")
-    expected_results = len(query_ids) * len(scheme_names) * len(VARIANTS) * len(TARGETS)
+    expected_results = len(query_ids) * len(TARGETS) * sum(
+        len(PREDICTED_NOISE_JVP_VARIANTS) if name == "predicted_noise_jvp_l2_squared" else len(VARIANTS)
+        for name in scheme_names
+    )
     result_root = SHAPES_ROOT / "result" / args.experiment
     legacy_root = REFINE_ROOT / "legacy_jax"
     if str(legacy_root) not in sys.path:
@@ -175,7 +183,12 @@ def main() -> None:
         for scheme_name in scheme_names:
             score_namespace = SCORE_SCHEMES[scheme_name]
             score_root = query_score_root / score_namespace
-            for variant, score_name in VARIANTS:
+            scheme_variants = (
+                PREDICTED_NOISE_JVP_VARIANTS
+                if scheme_name == "predicted_noise_jvp_l2_squared"
+                else VARIANTS
+            )
+            for variant, score_name in scheme_variants:
                 score_dir = score_root / score_name
                 if args.execute and not score_dir.is_dir():
                     raise FileNotFoundError(f"Missing Traj TracIn score directory: {score_dir}")

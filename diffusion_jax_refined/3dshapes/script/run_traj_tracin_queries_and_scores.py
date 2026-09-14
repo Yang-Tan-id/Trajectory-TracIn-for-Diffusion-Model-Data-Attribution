@@ -95,6 +95,11 @@ def main() -> None:
     )
     parser.add_argument("--python-bin", default=os.environ.get("PYTHON_BIN", sys.executable))
     parser.add_argument(
+        "--query-objective",
+        default="trajectory_next_checkpoint_noise_mse",
+        help="Traj TracIn query objective passed through TRAJ_QUERY_OBJECTIVE.",
+    )
+    parser.add_argument(
         "--log-prefix",
         default="",
         help="Optional prefix that keeps concurrent multi-node worker logs distinct.",
@@ -160,7 +165,7 @@ def main() -> None:
         SAMPLE_MODEL_MODE="prompted_solo",
         ATTRIBUTION_SAMPLE_MODEL_MODE="prompted_solo",
         ATTRIBUTION_SCORE_MODEL_MODE="prompted_solo",
-        TRAJ_QUERY_OBJECTIVE="trajectory_next_checkpoint_noise_mse",
+        TRAJ_QUERY_OBJECTIVE=args.query_objective,
         TRAJ_PARAMETER_SOURCE="raw",
         TRAJ_NUM_SNAPSHOTS=str(len(snapshot_positions) if snapshot_positions else args.num_snapshots),
         TRAJ_TRAIN_MC_SAMPLES="10",
