@@ -1213,6 +1213,7 @@ class TrajAttributionConfig:
 
     # scoring
     train_mc_samples: int = 10
+    proj_dim: int = 4096
     m_proj: int = 2   # retained only for reading historical random-projection runs
     max_train_points: int = 1024
     random_subset: bool = True
