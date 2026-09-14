@@ -114,6 +114,9 @@ def main() -> None:
             lds_model_root=lds_model_root,
         )
         row = dict(source_row)
+        # Some reusable target CSVs retain provenance that is not part of the
+        # canonical LDS result schema accepted by write_csv().
+        row.pop("source_dir", None)
         row["prediction_subset"] = args.prediction_subset
         row["prediction_sign"] = args.prediction_sign
         row["pred_sum_tau"] = sum_scores(prediction_indices, score_map, args.prediction_sign)
