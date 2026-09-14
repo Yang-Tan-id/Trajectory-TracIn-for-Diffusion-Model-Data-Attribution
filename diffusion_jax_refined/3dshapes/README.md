@@ -241,10 +241,10 @@ squares its dot products with all 5,000 saved train gradients, and retains
 only the final scores. It produces uniform and learning-rate-squared variants;
 the transient query-gradient artifacts are deleted after score materialization.
 
-Run the complete 4-node/16-GPU H100 pipeline, including cached LDS evaluation:
+Run the complete one-node/two-GPU RTX-small pipeline, including cached LDS evaluation:
 
 ```bash
-sbatch diffusion_jax_refined/3dshapes/tacc/h100/run_predicted_noise_jvp_l2_squared_h100.sh
+sbatch diffusion_jax_refined/3dshapes/tacc/rtx_small/run_predicted_noise_jvp_l2_squared_rtx_small.sh
 ```
 
 Permanent scores are written below

@@ -24,9 +24,15 @@ class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
         self.assertIn("jnp.sum(eps.astype(jnp.float32) * output_probe.astype(jnp.float32)) / normalizer", text)
         self.assertIn("stage_features.append(np.asarray(projector(one_grad), dtype=np.float32))", text)
 
-    def test_h100_pipeline_reuses_original_train_parts(self):
+    def test_rtx_pipeline_reuses_original_train_parts(self):
         driver = (ROOT / "3dshapes" / "script" / "run_predicted_noise_jvp_l2_squared.py").read_text()
-        launcher = (ROOT / "3dshapes" / "tacc" / "h100" / "run_predicted_noise_jvp_l2_squared_h100.sh").read_text()
+        launcher = (
+            ROOT
+            / "3dshapes"
+            / "tacc"
+            / "rtx_small"
+            / "run_predicted_noise_jvp_l2_squared_rtx_small.sh"
+        ).read_text()
         self.assertIn('/ "traj_tracin"', driver)
         self.assertIn('f"ckpt_{ckpt_i:04d}.npz"', driver)
         self.assertIn("sums_constant += squared", driver)
@@ -35,6 +41,7 @@ class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
         self.assertIn('f"run_{run_id}"', driver)
         self.assertIn("--cleanup-query-artifacts", launcher)
         self.assertIn('--run-id "${SLURM_JOB_ID}"', launcher)
+        self.assertIn("--shard-count 2", launcher)
         self.assertIn("--score-schemes predicted_noise_jvp_l2_squared", launcher)
 
 
