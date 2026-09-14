@@ -1876,7 +1876,12 @@ def run_attribution(cfg: TrajAttributionConfig):
     manifest_ckpt = None
     resolved_manifest_ckpt = None
 
-    if cfg.attribution_sample_dir is not None and cfg.use_saved_trajectory:
+    if stage_mode == "train":
+        print(
+            "[setup] train artifact mode: skipping query trajectory loading; "
+            "train gradients use the configured timestamp schedule directly."
+        )
+    elif cfg.attribution_sample_dir is not None and cfg.use_saved_trajectory:
         print(f"[setup] loading precomputed attribution trajectory: {cfg.attribution_sample_dir}")
         precomputed_traj = load_attribution_trajectory(cfg)
         _, t_preview, _, precomputed_sample_meta = precomputed_traj
