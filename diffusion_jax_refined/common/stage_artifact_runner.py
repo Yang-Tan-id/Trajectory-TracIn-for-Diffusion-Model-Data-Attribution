@@ -132,6 +132,27 @@ def _apply_traj_timestep_weighting(
     return result
 
 
+def _apply_traj_checkpoint_weighting(
+    weights: np.ndarray,
+    ckpt_indices: np.ndarray,
+) -> np.ndarray:
+    """Optionally replace stored checkpoint LR weights before timestep weighting."""
+    mode = os.environ.get("TRACIN_SCORE_CHECKPOINT_WEIGHTING", "stored_lr").strip().lower()
+    weights = np.asarray(weights, dtype=np.float64).reshape(-1)
+    if mode in ("", "stored", "stored_lr", "learning_rate", "lr"):
+        return weights
+    if mode not in ("constant", "constant1", "constant_1", "uniform_checkpoint"):
+        raise ValueError(f"unknown TRACIN_SCORE_CHECKPOINT_WEIGHTING={mode!r}")
+    ckpt_indices = np.asarray(ckpt_indices, dtype=np.int64).reshape(-1)
+    if ckpt_indices.shape != weights.shape:
+        raise ValueError("constant checkpoint weighting requires one ckpt_index per score term")
+    result = np.zeros_like(weights)
+    for ckpt in np.unique(ckpt_indices):
+        mask = ckpt_indices == ckpt
+        result[mask] = 1.0 / float(np.count_nonzero(mask))
+    return result
+
+
 def _query_vector(query_payload: dict[str, np.ndarray], *, path: Path, normalize: bool = False, eps: float = 1e-8) -> np.ndarray:
     q = _first_array(query_payload, ("query_feature", "query_features", "query_gradient", "query_gradients"), path=path)
     q = np.asarray(q, dtype=np.float64)
@@ -261,6 +282,7 @@ def _combine_multiterm_dot_scores(
         if weights.shape[0] != query.shape[0]:
             raise ValueError(f"query term_weights length {weights.shape[0]} does not match query terms {query.shape[0]}")
         query_timesteps = np.asarray(query_payload.get("timesteps", ()), dtype=np.int32).reshape(-1)
+        weights = _apply_traj_checkpoint_weighting(weights, query_ckpts)
         weights = _apply_traj_timestep_weighting(weights, query_ckpts, query_timesteps)
         by_ckpt = {int(ckpt): i for i, ckpt in enumerate(train_ckpts)}
         missing = sorted({int(ckpt) for ckpt in query_ckpts if int(ckpt) not in by_ckpt})
@@ -328,8 +350,11 @@ def _combine_multiterm_dot_scores(
         if weights.shape[0] != train.shape[0]:
             raise ValueError(f"train term_weights length {weights.shape[0]} does not match train terms {train.shape[0]}")
         train_keep_array = np.asarray(train_keep, dtype=np.int64)
+        aligned_weights = _apply_traj_checkpoint_weighting(
+            weights[train_keep_array], train_ckpts[train_keep_array]
+        )
         aligned_weights = _apply_traj_timestep_weighting(
-            weights[train_keep_array],
+            aligned_weights,
             train_ckpts[train_keep_array],
             train_timesteps[train_keep_array],
         )
@@ -358,6 +383,7 @@ def _combine_multiterm_dot_scores(
             raise ValueError(f"train term_weights length {train_weights.shape[0]} does not match terms {train.shape[0]}")
         if not np.allclose(train_weights, weights, rtol=1e-5, atol=1e-12):
             raise ValueError("train/query term_weights differ; regenerate both Traj TracIn artifacts with the same LR schedule")
+    weights = _apply_traj_checkpoint_weighting(weights, train_ckpts)
     weights = _apply_traj_timestep_weighting(weights, train_ckpts, train_timesteps)
     scores = np.zeros((train.shape[1],), dtype=np.float64)
     print(
@@ -833,6 +859,7 @@ def _aligned_query_terms_for_fused_score(
             return None
         train_ckpts = np.asarray(train_payload.get("ckpt_indices", ()), dtype=np.int32).reshape(-1)
         train_timesteps = np.asarray(train_payload.get("timesteps", ()), dtype=np.int32).reshape(-1)
+        weights = _apply_traj_checkpoint_weighting(weights, train_ckpts)
         weights = _apply_traj_timestep_weighting(weights, train_ckpts, train_timesteps)
         return query, weights, np.arange(train.shape[0], dtype=np.int64)
 
@@ -872,8 +899,11 @@ def _aligned_query_terms_for_fused_score(
     if weights.shape[0] != train.shape[0]:
         return None
     train_keep_array = np.asarray(train_keep, dtype=np.int64)
+    aligned_weights = _apply_traj_checkpoint_weighting(
+        weights[train_keep_array], train_ckpts[train_keep_array]
+    )
     aligned_weights = _apply_traj_timestep_weighting(
-        weights[train_keep_array],
+        aligned_weights,
         train_ckpts[train_keep_array],
         train_timesteps[train_keep_array],
     )
@@ -938,6 +968,7 @@ def _run_fused_traj_score_batch(
         f"[traj-score-fused] queries={num_queries} terms={num_terms} points={num_points} "
         f"dim={train.shape[2]} raw=1 query_l2={int(normalize_query)} "
         f"train_l2={int(normalize_train)} both_l2={int(normalize_query and normalize_train)} "
+        f"checkpoint_weighting={os.environ.get('TRACIN_SCORE_CHECKPOINT_WEIGHTING', 'stored_lr')} "
         f"timestep_weighting={os.environ.get('TRACIN_SCORE_TIMESTEP_WEIGHTING', 'uniform')}",
         flush=True,
     )
@@ -971,6 +1002,9 @@ def _run_fused_traj_score_batch(
         query_path = Path(job["query_path"])
         timestep_allowlist = os.environ.get("TRACIN_SCORE_TIMESTEP_ALLOWLIST", "").strip()
         shared_metadata = {
+            "checkpoint_weighting": os.environ.get(
+                "TRACIN_SCORE_CHECKPOINT_WEIGHTING", "stored_lr"
+            ),
             "timestep_weighting": os.environ.get(
                 "TRACIN_SCORE_TIMESTEP_WEIGHTING", "uniform"
             ),

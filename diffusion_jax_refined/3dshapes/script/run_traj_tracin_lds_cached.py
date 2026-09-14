@@ -35,6 +35,11 @@ VARIANTS = (
     ("train_l2", "score_train_l2_normalized"),
     ("query_train_l2", "score_query_train_l2_normalized"),
 )
+SCORE_SCHEMES = {
+    "original": "traj_tracin",
+    "constant_lr_uniform": "traj_tracin_constant_lr_uniform",
+    "cosine_lr_ddim_step_squared": "traj_tracin_cosine_lr_ddim_step_squared",
+}
 
 
 def parse_ints(text: str) -> list[int]:
@@ -90,11 +95,23 @@ def main() -> None:
     parser.add_argument("--experiment", default="experiment1")
     parser.add_argument("--train-seed", type=int, default=42)
     parser.add_argument("--query-ids", default="0,1,2,3,4,5,6,7,8,9")
+    parser.add_argument(
+        "--score-schemes",
+        default="original",
+        help="Comma/space list: original, constant_lr_uniform, cosine_lr_ddim_step_squared.",
+    )
     parser.add_argument("--python-bin", default=os.environ.get("PYTHON_BIN", sys.executable))
     args = parser.parse_args()
 
     records = json.loads((SHAPES_ROOT / "queries_seed_0_9.json").read_text())["queries"]
     query_ids = parse_ints(args.query_ids)
+    scheme_names = [
+        value for value in args.score_schemes.replace(",", " ").split() if value.strip()
+    ]
+    invalid_schemes = [value for value in scheme_names if value not in SCORE_SCHEMES]
+    if not scheme_names or invalid_schemes:
+        raise ValueError(f"Invalid --score-schemes: {invalid_schemes or args.score_schemes!r}")
+    expected_results = len(query_ids) * len(scheme_names) * len(VARIANTS) * len(TARGETS)
     result_root = SHAPES_ROOT / "result" / args.experiment
     legacy_root = REFINE_ROOT / "legacy_jax"
     if str(legacy_root) not in sys.path:
@@ -125,14 +142,13 @@ def main() -> None:
             / f"initial_seed_{seed}"
         )
         group = cache_group(eval_root)
-        score_root = (
+        query_score_root = (
             result_root
             / "attribution_score"
             / "prompted_solo"
             / f"train_seed_{args.train_seed}"
             / f"query_{prompt_tag}"
             / f"initial_seed_{seed}"
-            / "traj_tracin"
         )
 
         target_rows = {}
@@ -146,82 +162,86 @@ def main() -> None:
                 with target_csv.open(newline="") as handle:
                     target_rows[target] = list(csv.DictReader(handle))
 
-        # Prediction sums depend on query/variant/subset, but not on target.
-        # Load each score variant once, then reuse its 192 predictions for all
+        # Prediction sums depend on query/scheme/variant/subset, but not on
+        # target. Load each score once, then reuse its 192 predictions for all
         # four target functions.
-        for variant, score_name in VARIANTS:
-            score_dir = score_root / score_name
-            if args.execute and not score_dir.is_dir():
-                raise FileNotFoundError(f"Missing Traj TracIn score directory: {score_dir}")
-            if args.execute:
-                score_inputs = resolve_score_inputs(str(score_dir))
-                indices, scores, sources = combine_attribution_scores(
-                    score_inputs, duplicate_policy="max"
-                )
-                score_map = build_score_vector(indices, scores)
-                first_rows = target_rows[TARGETS[0]]
-                kept_arrays = [
-                    np.load(Path(row["subset_dir"]) / "kept_attribution_indices.npy")
-                    for row in first_rows
-                ]
-                predictions = np.asarray(
-                    [sum_scores(kept, score_map, -1.0) for kept in kept_arrays],
-                    dtype=np.float64,
-                )
-
-            for target in TARGETS:
+        for scheme_name in scheme_names:
+            score_namespace = SCORE_SCHEMES[scheme_name]
+            score_root = query_score_root / score_namespace
+            for variant, score_name in VARIANTS:
                 score_dir = score_root / score_name
-                out_dir = (
-                    eval_root
-                    / "lds"
-                    / f"traj_tracin_{variant}"
-                    / target
-                    / "pred_kept_sign_m1"
-                    / group.name
-                )
-                print(
-                    f"[{completed + 1}/160] query={query_id} target={target} variant={variant}",
-                    flush=True,
-                )
+                if args.execute and not score_dir.is_dir():
+                    raise FileNotFoundError(f"Missing Traj TracIn score directory: {score_dir}")
                 if args.execute:
-                    started = time.time()
-                    rows = []
-                    for source_row, prediction in zip(target_rows[target], predictions):
-                        row = dict(source_row)
-                        row.pop("source_dir", None)
-                        row["prediction_subset"] = "kept"
-                        row["prediction_sign"] = -1.0
-                        row["pred_sum_tau"] = float(prediction)
-                        rows.append(row)
-                    true = np.asarray([float(row["true_f"]) for row in rows], dtype=np.float64)
-                    lds = spearman_corr(predictions, true)
-                    out_dir.mkdir(parents=True, exist_ok=True)
-                    write_csv(str(out_dir / "lds_results.csv"), rows)
-                    summary = {
-                        "algorithm": f"traj_tracin_{variant}",
-                        "mode": "prompted",
-                        "score_sources": sources,
-                        "target_cache": str(group / target / "true_f_results.csv"),
-                        "num_models": len(rows),
-                        "lds_spearman": lds,
-                        "lds_percent": 100.0 * lds if not math.isnan(lds) else float("nan"),
-                        "target_function": target,
-                        "trajectory_reduction": "snapshot_mean",
-                        "prediction_subset": "kept",
-                        "prediction_sign": -1.0,
-                        "elapsed_sec": time.time() - started,
-                    }
-                    (out_dir / "lds_summary.json").write_text(json.dumps(summary, indent=2))
-                    plot_scatter(
-                        str(out_dir / "lds_scatter.png"),
-                        predictions,
-                        true,
-                        f"LDS={lds:.4f} ({100.0 * lds:.2f}%)",
+                    score_inputs = resolve_score_inputs(str(score_dir))
+                    indices, scores, sources = combine_attribution_scores(
+                        score_inputs, duplicate_policy="max"
                     )
-                    print(f"Saved cached LDS evaluation to {out_dir}", flush=True)
-                else:
-                    print(f"score={score_dir} target={group / target} out={out_dir}", flush=True)
-                completed += 1
+                    score_map = build_score_vector(indices, scores)
+                    first_rows = target_rows[TARGETS[0]]
+                    kept_arrays = [
+                        np.load(Path(row["subset_dir"]) / "kept_attribution_indices.npy")
+                        for row in first_rows
+                    ]
+                    predictions = np.asarray(
+                        [sum_scores(kept, score_map, -1.0) for kept in kept_arrays],
+                        dtype=np.float64,
+                    )
+
+                for target in TARGETS:
+                    out_dir = (
+                        eval_root
+                        / "lds"
+                        / f"{score_namespace}_{variant}"
+                        / target
+                        / "pred_kept_sign_m1"
+                        / group.name
+                    )
+                    print(
+                        f"[{completed + 1}/{expected_results}] query={query_id} "
+                        f"scheme={scheme_name} target={target} variant={variant}",
+                        flush=True,
+                    )
+                    if args.execute:
+                        started = time.time()
+                        rows = []
+                        for source_row, prediction in zip(target_rows[target], predictions):
+                            row = dict(source_row)
+                            row.pop("source_dir", None)
+                            row["prediction_subset"] = "kept"
+                            row["prediction_sign"] = -1.0
+                            row["pred_sum_tau"] = float(prediction)
+                            rows.append(row)
+                        true = np.asarray([float(row["true_f"]) for row in rows], dtype=np.float64)
+                        lds = spearman_corr(predictions, true)
+                        out_dir.mkdir(parents=True, exist_ok=True)
+                        write_csv(str(out_dir / "lds_results.csv"), rows)
+                        summary = {
+                            "algorithm": f"{score_namespace}_{variant}",
+                            "score_weighting_scheme": scheme_name,
+                            "mode": "prompted",
+                            "score_sources": sources,
+                            "target_cache": str(group / target / "true_f_results.csv"),
+                            "num_models": len(rows),
+                            "lds_spearman": lds,
+                            "lds_percent": 100.0 * lds if not math.isnan(lds) else float("nan"),
+                            "target_function": target,
+                            "trajectory_reduction": "snapshot_mean",
+                            "prediction_subset": "kept",
+                            "prediction_sign": -1.0,
+                            "elapsed_sec": time.time() - started,
+                        }
+                        (out_dir / "lds_summary.json").write_text(json.dumps(summary, indent=2))
+                        plot_scatter(
+                            str(out_dir / "lds_scatter.png"),
+                            predictions,
+                            true,
+                            f"LDS={lds:.4f} ({100.0 * lds:.2f}%)",
+                        )
+                        print(f"Saved cached LDS evaluation to {out_dir}", flush=True)
+                    else:
+                        print(f"score={score_dir} target={group / target} out={out_dir}", flush=True)
+                    completed += 1
 
     print(f"Completed {completed} cached Traj TracIn LDS evaluations.", flush=True)
 

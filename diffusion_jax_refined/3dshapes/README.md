@@ -150,3 +150,14 @@ the caches on a CPU node (no LDS checkpoints or trajectories are recomputed):
 ```bash
 sbatch diffusion_jax_refined/3dshapes/tacc/rtx_small/run_traj_tracin_lds_cached.sh
 ```
+
+Two additional aligned rescoring schemes reuse the same train/query gradients:
+`constant_lr_uniform` replaces every checkpoint learning rate by one (with
+uniform `1/K` timestamp averaging), while `cosine_lr_ddim_step_squared` keeps
+the original cosine-warmup checkpoint learning rate and distributes it over
+timestamps using normalized squared DDIM step coefficients. Run both score
+schemes and their cached LDS evaluations on the two RTX GPUs with:
+
+```bash
+sbatch diffusion_jax_refined/3dshapes/tacc/rtx_small/run_traj_tracin_weighted_scores_lds.sh
+```
