@@ -112,6 +112,28 @@ class Test3DShapesFramework(unittest.TestCase):
         self.assertIn("TRAJ_TRACIN_CANDIDATE_SHARD_COUNT", algorithm)
         self.assertIn("int(padded_indices[j])", algorithm)
 
+    def test_das_aligned10x10_uses_isolated_matching_term_namespace(self):
+        train_launcher = (
+            THREED / "tacc" / "rtx_small" / "run_das_aligned10x10_train_rtx_small.sh"
+        ).read_text()
+        query_launcher = (
+            THREED / "tacc" / "rtx_small" / "run_das_aligned10x10_query_score_rtx_small.sh"
+        ).read_text()
+        driver = (THREED / "script" / "run_das_queries_and_scores.py").read_text()
+        scorer = (ROOT / "common" / "stage_artifact_runner.py").read_text()
+
+        expected_timesteps = "0,111,222,333,444,555,666,777,888,999"
+        self.assertIn(f'DAS_TIMESTEPS="${{DAS_TIMESTEPS:-{expected_timesteps}}}"', train_launcher)
+        self.assertIn("export DAS_NUM_MC_NOISE=10", train_launcher)
+        self.assertIn("export DAS_AGGREGATE_MC_GRADIENT=1", train_launcher)
+        self.assertIn("das_aligned10x10", train_launcher)
+        self.assertIn("--artifact-namespace aligned10x10", query_launcher)
+        self.assertIn("--num-mc-noise 10", query_launcher)
+        self.assertIn("--aggregate-mc-gradient", query_launcher)
+        self.assertIn('base_env["DAS_TIMESTEPS"]', driver)
+        self.assertIn('"QUERY_GRADIENT_ARTIFACT_PATH": str(query_artifact)', driver)
+        self.assertIn("_require_matching_das_terms(train_term_ids, query_term_ids", scorer)
+
 
 if __name__ == "__main__":
     unittest.main()

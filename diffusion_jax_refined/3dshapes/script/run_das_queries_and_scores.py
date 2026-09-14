@@ -45,10 +45,28 @@ def main() -> None:
     parser.add_argument("--train-seed", type=int, default=42)
     parser.add_argument("--query-ids", default="0,1,2,3,4,5,6,7,8,9")
     parser.add_argument("--gpus", default="0,1")
+    parser.add_argument(
+        "--artifact-namespace",
+        default="",
+        help="Optional isolated artifact/score namespace, for example aligned10x10.",
+    )
+    parser.add_argument("--timesteps", default="", help="Optional comma-separated DAS timesteps.")
+    parser.add_argument("--num-mc-noise", type=int, default=1)
+    parser.add_argument(
+        "--aggregate-mc-gradient",
+        action="store_true",
+        help="Average MC gradients within each timestamp and store one term per timestamp.",
+    )
     parser.add_argument("--skip-query-gradient", action="store_true")
     parser.add_argument("--skip-score", action="store_true")
     parser.add_argument("--python-bin", default=os.environ.get("PYTHON_BIN", sys.executable))
     args = parser.parse_args()
+
+    namespace = args.artifact_namespace.strip().strip("_/")
+    das_name = "das" if not namespace else f"das_{namespace}"
+    query_suffix = "query_gradient" if not namespace else f"query_gradient_{namespace}"
+    if args.num_mc_noise <= 0:
+        raise ValueError("--num-mc-noise must be positive")
 
     query_ids = parse_ints(args.query_ids)
     gpu_ids = [str(value) for value in parse_ints(args.gpus)]
@@ -66,7 +84,7 @@ def main() -> None:
         / "model"
         / "prompted_solo"
         / f"seed_{args.train_seed}_train_gradient"
-        / "das"
+        / das_name
         / "train_datapoint_gradient_artifact.npz"
     )
     selected = []
@@ -81,7 +99,7 @@ def main() -> None:
             if not required.is_file():
                 raise FileNotFoundError(str(required))
 
-    log_root = result_root / "logs" / "das_query_score"
+    log_root = result_root / "logs" / ("das_query_score" if not namespace else f"das_query_score_{namespace}")
     base_env = os.environ.copy()
     base_env.update(
         EXPERIMENT_TAG=args.experiment,
@@ -92,7 +110,7 @@ def main() -> None:
         ATTRIBUTION_SAMPLE_MODEL_MODE="prompted_solo",
         ATTRIBUTION_SCORE_MODEL_MODE="prompted_solo",
         SAMPLE_ROOT=str(sample_root),
-        DAS_NUM_MC_NOISE="1",
+        DAS_NUM_MC_NOISE=str(args.num_mc_noise),
         DAS_PROJ_DIM="4096",
         DAS_DAMPING_SWEEP="1",
         DAS_SCORE_DENOMINATOR_CACHE="1",
@@ -102,6 +120,10 @@ def main() -> None:
         JAX_PLATFORMS="cuda",
         PYTHONUNBUFFERED="1",
     )
+    if args.timesteps.strip():
+        base_env["DAS_TIMESTEPS"] = args.timesteps
+    if args.aggregate_mc_gradient:
+        base_env["DAS_AGGREGATE_MC_GRADIENT"] = "1"
 
     assignments = [selected[index::2] for index in range(2)]
 
@@ -116,8 +138,8 @@ def main() -> None:
             )
             query_artifact = (
                 run_root
-                / f"seed_{seed:06d}_query_gradient"
-                / "das"
+                / f"seed_{seed:06d}_{query_suffix}"
+                / das_name
                 / "query_gradient_artifact.npz"
             )
             if args.skip_query_gradient or query_artifact.is_file():
@@ -129,6 +151,7 @@ def main() -> None:
                 "INITIAL_SEED": str(seed),
                 "SAMPLE_SEED": str(seed),
                 "ATTRIBUTION_SAMPLE_DIR": str(run_root),
+                "QUERY_GRADIENT_ARTIFACT_PATH": str(query_artifact),
             }
             run_command(
                 [args.python_bin, "data_attribution/das/02_query_gradient.py"],
@@ -154,7 +177,9 @@ def main() -> None:
             / f"prompt_{prompt_tag}"
             / f"model_prompted_solo__ckpt_{checkpoint.stem}"
         )
-        query_artifact = run_root / f"seed_{seed:06d}_query_gradient" / "das" / "query_gradient_artifact.npz"
+        query_artifact = (
+            run_root / f"seed_{seed:06d}_{query_suffix}" / das_name / "query_gradient_artifact.npz"
+        )
         if args.execute and not query_artifact.is_file():
             raise FileNotFoundError(str(query_artifact))
         output_dir = (
@@ -164,7 +189,7 @@ def main() -> None:
             / f"train_seed_{args.train_seed}"
             / f"query_{prompt_tag}"
             / f"initial_seed_{seed}"
-            / "das"
+            / das_name
             / "score"
         )
         batch_jobs.append(

@@ -207,3 +207,22 @@ sbatch diffusion_jax_refined/3dshapes/tacc/h100/run_traj_tracin_aligned100x1_str
 The launcher is restartable: completed query artifacts and stream shards are
 skipped. Final score directories use the namespace
 `traj_tracin_aligned100x1_stream`.
+
+To run the timestamp-aligned DAS comparison with 10 uniformly spaced
+timestamps and one stored gradient per timestamp, averaged online from 10
+independent Monte Carlo noise draws, first build its isolated train/Gram
+artifact and then compute all ten query artifacts and the 16-lambda score
+sweep. The individual MC gradients are not stored:
+
+```bash
+sbatch diffusion_jax_refined/3dshapes/tacc/rtx_small/run_das_aligned10x10_train_rtx_small.sh
+sbatch diffusion_jax_refined/3dshapes/tacc/rtx_small/run_das_aligned10x10_query_score_rtx_small.sh
+```
+
+Submit the second job only after the first completes successfully. These jobs
+write under `das_aligned10x10`, leaving the existing DAS 100x1 artifacts and
+scores unchanged. After scoring, reuse the existing true-f cache for LDS:
+
+```bash
+sbatch diffusion_jax_refined/3dshapes/tacc/rtx_small/run_das_aligned10x10_lds_cached.sh
+```

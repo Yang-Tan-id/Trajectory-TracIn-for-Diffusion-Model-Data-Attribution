@@ -88,6 +88,11 @@ def main() -> None:
     parser.add_argument("--execute", action="store_true")
     parser.add_argument("--experiment", default="experiment1")
     parser.add_argument("--train-seed", type=int, default=42)
+    parser.add_argument(
+        "--artifact-namespace",
+        default="",
+        help="Optional DAS score namespace, for example aligned10x10.",
+    )
     parser.add_argument("--query-ids", default="0,1,2,3,4,5,6,7,8,9")
     parser.add_argument(
         "--lambdas",
@@ -95,6 +100,10 @@ def main() -> None:
     )
     parser.add_argument("--python-bin", default=os.environ.get("PYTHON_BIN", sys.executable))
     args = parser.parse_args()
+
+    namespace = args.artifact_namespace.strip().strip("_/")
+    das_name = "das" if not namespace else f"das_{namespace}"
+    result_algorithm_prefix = "das" if not namespace else das_name
 
     records = json.loads((SHAPES_ROOT / "queries_seed_0_9.json").read_text())["queries"]
     query_ids = parse_ints(args.query_ids)
@@ -131,7 +140,7 @@ def main() -> None:
             / f"train_seed_{args.train_seed}"
             / f"query_{prompt_tag}"
             / f"initial_seed_{seed}"
-            / "das"
+            / das_name
             / "score"
         )
 
@@ -165,7 +174,7 @@ def main() -> None:
                 out_dir = (
                     eval_root
                     / "lds"
-                    / f"das_lambda_{tag}"
+                    / f"{result_algorithm_prefix}_lambda_{tag}"
                     / target
                     / "pred_kept_sign_m1"
                     / group.name
@@ -185,7 +194,7 @@ def main() -> None:
                     out_dir.mkdir(parents=True, exist_ok=True)
                     write_csv(str(out_dir / "lds_results.csv"), rows)
                     summary = {
-                        "algorithm": f"das_lambda_{tag}",
+                        "algorithm": f"{result_algorithm_prefix}_lambda_{tag}",
                         "damping": damping,
                         "mode": "prompted",
                         "score_sources": sources,
