@@ -1422,6 +1422,14 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
     aggregate_mc_gradient = os.environ.get("DAS_AGGREGATE_MC_GRADIENT", "0").strip().lower() in (
         "1", "true", "yes", "on"
     )
+    aggregate_mc_normalized = os.environ.get(
+        "DAS_AGGREGATE_MC_NORMALIZED", "0"
+    ).strip().lower() in ("1", "true", "yes", "on")
+    if aggregate_mc_gradient and aggregate_mc_normalized:
+        raise ValueError(
+            "DAS_AGGREGATE_MC_GRADIENT and DAS_AGGREGATE_MC_NORMALIZED are mutually exclusive"
+        )
+    mc_normalize_eps = float(os.environ.get("DAS_AGGREGATE_MC_NORMALIZE_EPS", "1e-8"))
     proj_dim = int(cfg.proj_dim)
     damping = float(cfg.damping)
     sweep_enabled = os.environ.get("DAS_DAMPING_SWEEP", "0") in ("1", "true", "True", "yes")
@@ -1482,8 +1490,13 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
             # reduced online, so the ten individual gradients are never kept.
             query_gradient_sum = None
             query_residual_sum = 0.0
+            query_gradient_sqnorm_sum = 0.0
+            query_residual_sq_sum = 0.0
             train_gradient_sum = None
             train_gram_sum = None
+            train_gradient_sqnorm_sum = None
+            train_residual_sum = None
+            train_residual_sq_sum = None
 
             if aggregate_mc_gradient and stage_mode in ("train", "query"):
                 projection_mc_key = "mc_average_loss"
@@ -1629,7 +1642,13 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
                 noise_q = None
                 if stage_mode != "train":
                     _, noise_q = sample_xt_and_noise_jax(schedule, x0_ref, t=t_tensor, rng=rng_q)
-                projection_mc_key = "mc_average" if aggregate_mc_gradient else mc_i
+                projection_mc_key = (
+                    "mc_normalized"
+                    if aggregate_mc_normalized
+                    else "mc_average"
+                    if aggregate_mc_gradient
+                    else mc_i
+                )
                 rng_probe = array_to_device(
                     make_jax_key(cfg.seed, "pdas_output_probe", ckpt_i, t_value, projection_mc_key),
                     device,
@@ -1649,7 +1668,11 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
                     model=model,
                     schedule=schedule,
                     projector=projector,
-                    normalize_projected_grads=bool(cfg.normalize_projected_grads),
+                    # The normalized-MC mode applies one joint normalization
+                    # across all noise-specific gradients at this timestamp.
+                    normalize_projected_grads=(
+                        False if aggregate_mc_normalized else bool(cfg.normalize_projected_grads)
+                    ),
                     normalize_eps=float(cfg.normalize_eps),
                 )
                 print("[mc] shared projector ready", flush=True)
@@ -1668,7 +1691,38 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
 
                 if stage_mode == "query":
                     phi_q_np = np.asarray(phi_q, dtype=np.float32)
-                    if aggregate_mc_gradient:
+                    if aggregate_mc_normalized:
+                        if query_gradient_sum is None:
+                            query_gradient_sum = np.zeros_like(phi_q_np, dtype=np.float64)
+                        query_gradient_sum += phi_q_np.astype(np.float64)
+                        query_gradient_sqnorm_sum += float(
+                            np.dot(phi_q_np.astype(np.float64), phi_q_np.astype(np.float64))
+                        )
+                        query_residual_sum += float(query_residual)
+                        query_residual_sq_sum += float(query_residual) ** 2
+                        if mc_i + 1 == num_mc_noise:
+                            gradient_denom = math.sqrt(query_gradient_sqnorm_sum) + mc_normalize_eps
+                            residual_denom = math.sqrt(query_residual_sq_sum) + mc_normalize_eps
+                            stage_query_features.append(
+                                (
+                                    query_gradient_sum
+                                    / float(num_mc_noise)
+                                    / gradient_denom
+                                ).astype(np.float32)
+                            )
+                            stage_query_residuals.append(
+                                query_residual_sum
+                                / float(num_mc_noise)
+                                / residual_denom
+                            )
+                            stage_ckpt_indices.append(int(ckpt_i))
+                            stage_timestep_values.append(int(t_value))
+                            stage_mc_indices.append(-1)
+                            print(
+                                "[mc-normalized] cached one trajectory-normalized query term "
+                                f"for t={t_value} from {num_mc_noise} noise draws"
+                            )
+                    elif aggregate_mc_gradient:
                         if query_gradient_sum is None:
                             query_gradient_sum = np.zeros_like(phi_q_np, dtype=np.float32)
                         query_gradient_sum += phi_q_np
@@ -1716,10 +1770,59 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
                             phi_np = np.asarray(phi_i, dtype=np.float32)
                             phi_cache[start + local_j] = phi_np
                             residual_cache[start + local_j] = float(residual_i)
-                            H_proj += np.outer(phi_np, phi_np).astype(np.float32)
+                            if not aggregate_mc_normalized:
+                                H_proj += np.outer(phi_np, phi_np).astype(np.float32)
                         if hasattr(stage_iter, "set_postfix"):
                             stage_iter.set_postfix(samples=f"{min(start + len(batch), M)}/{M}")
-                    if aggregate_mc_gradient:
+                    if aggregate_mc_normalized:
+                        if train_gradient_sum is None:
+                            train_gradient_sum = np.zeros_like(phi_cache, dtype=np.float64)
+                            train_gradient_sqnorm_sum = np.zeros((M,), dtype=np.float64)
+                            train_residual_sum = np.zeros((M,), dtype=np.float64)
+                            train_residual_sq_sum = np.zeros((M,), dtype=np.float64)
+                        phi64 = phi_cache.astype(np.float64)
+                        residual64 = residual_cache.astype(np.float64)
+                        train_gradient_sum += phi64
+                        train_gradient_sqnorm_sum += np.einsum(
+                            "md,md->m", phi64, phi64, dtype=np.float64
+                        )
+                        train_residual_sum += residual64
+                        train_residual_sq_sum += np.square(residual64)
+                        if mc_i + 1 == num_mc_noise:
+                            gradient_denom = (
+                                np.sqrt(train_gradient_sqnorm_sum) + mc_normalize_eps
+                            )
+                            residual_denom = (
+                                np.sqrt(train_residual_sq_sum) + mc_normalize_eps
+                            )
+                            aggregated_gradients = (
+                                train_gradient_sum
+                                / float(num_mc_noise)
+                                / gradient_denom[:, None]
+                            ).astype(np.float32)
+                            aggregated_residuals = (
+                                train_residual_sum
+                                / float(num_mc_noise)
+                                / residual_denom
+                            ).astype(np.float32)
+                            aggregated_gram = (
+                                aggregated_gradients.T @ aggregated_gradients
+                            ).astype(np.float32)
+                            stage_train_features.append(aggregated_gradients)
+                            stage_residuals.append(aggregated_residuals)
+                            stage_grams_undamped.append(aggregated_gram)
+                            stage_grams.append(
+                                aggregated_gram
+                                + damping * np.eye(proj_dim, dtype=np.float32)
+                            )
+                            stage_ckpt_indices.append(int(ckpt_i))
+                            stage_timestep_values.append(int(t_value))
+                            stage_mc_indices.append(-1)
+                            print(
+                                "[mc-normalized] cached one trajectory-normalized train gradient, "
+                                f"residual, and Gram for t={t_value} from {num_mc_noise} noise draws"
+                            )
+                    elif aggregate_mc_gradient:
                         # residual * projected Jacobian is the projected
                         # per-example denoising-loss gradient. Average that
                         # gradient, rather than averaging residual and phi
@@ -1935,7 +2038,11 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
             damping_sweep_values=np.asarray([float(v) for v in damping_values], dtype=np.float32),
             proj_dim=np.asarray(int(proj_dim), dtype=np.int32),
             mc_samples_per_term=np.asarray(int(num_mc_noise), dtype=np.int32),
-            mc_aggregation=np.asarray("loss_mean_single_backward" if aggregate_mc_gradient else "none"),
+            mc_aggregation=np.asarray("loss_mean_single_backward" if aggregate_mc_gradient else (
+                "noise_specific_trajectory_normalized_per_timestamp"
+                if aggregate_mc_normalized else "none"
+            )),
+            mc_normalize_eps=np.asarray(mc_normalize_eps, dtype=np.float32),
         )
         print(f"[saved] DAS train artifact: {stage_artifact_path}")
         return
@@ -1952,7 +2059,14 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
             damping=np.asarray(float(damping), dtype=np.float32),
             proj_dim=np.asarray(int(proj_dim), dtype=np.int32),
             mc_samples_per_term=np.asarray(int(num_mc_noise), dtype=np.int32),
-            mc_aggregation=np.asarray("query_mean_single_backward" if aggregate_mc_gradient else "none"),
+            mc_aggregation=np.asarray(
+                "noise_specific_trajectory_normalized_per_timestamp"
+                if aggregate_mc_normalized
+                else "query_mean_single_backward"
+                if aggregate_mc_gradient
+                else "none"
+            ),
+            mc_normalize_eps=np.asarray(mc_normalize_eps, dtype=np.float32),
         )
         print(f"[saved] DAS query artifact: {stage_artifact_path}")
         return

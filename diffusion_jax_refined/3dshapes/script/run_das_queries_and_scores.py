@@ -57,6 +57,14 @@ def main() -> None:
         action="store_true",
         help="Average MC gradients within each timestamp and store one term per timestamp.",
     )
+    parser.add_argument(
+        "--aggregate-mc-normalized",
+        action="store_true",
+        help=(
+            "Within every timestamp, jointly normalize and average the noise-specific "
+            "predicted-noise gradients and residuals before DAS scoring."
+        ),
+    )
     parser.add_argument("--skip-query-gradient", action="store_true")
     parser.add_argument("--skip-score", action="store_true")
     parser.add_argument("--python-bin", default=os.environ.get("PYTHON_BIN", sys.executable))
@@ -67,6 +75,8 @@ def main() -> None:
     query_suffix = "query_gradient" if not namespace else f"query_gradient_{namespace}"
     if args.num_mc_noise <= 0:
         raise ValueError("--num-mc-noise must be positive")
+    if args.aggregate_mc_gradient and args.aggregate_mc_normalized:
+        raise ValueError("the two MC aggregation modes are mutually exclusive")
 
     query_ids = parse_ints(args.query_ids)
     gpu_ids = [str(value) for value in parse_ints(args.gpus)]
@@ -124,6 +134,8 @@ def main() -> None:
         base_env["DAS_TIMESTEPS"] = args.timesteps
     if args.aggregate_mc_gradient:
         base_env["DAS_AGGREGATE_MC_GRADIENT"] = "1"
+    if args.aggregate_mc_normalized:
+        base_env["DAS_AGGREGATE_MC_NORMALIZED"] = "1"
 
     assignments = [selected[index::2] for index in range(2)]
 

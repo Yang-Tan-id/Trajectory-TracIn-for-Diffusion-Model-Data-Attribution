@@ -250,3 +250,18 @@ sbatch diffusion_jax_refined/3dshapes/tacc/rtx_small/run_predicted_noise_jvp_l2_
 Permanent scores are written below
 `traj_tracin_predicted_noise_jvp_l2_squared/score_constant` and
 `traj_tracin_predicted_noise_jvp_l2_squared/score_lr2`.
+
+### Noise-specific normalized 10x10 DAS
+
+This variant keeps the predicted-noise gradient and residual separate. At each
+of 10 timestamps it evaluates 10 noise-specific terms, jointly normalizes the
+10 gradients and the 10 residuals, then averages each into one timestamp term.
+It writes to the independent `das_mc_normalized10x10` namespace.
+
+```bash
+sbatch diffusion_jax_refined/3dshapes/tacc/rtx_small/run_das_mc_normalized10x10_train_rtx_small.sh
+sbatch diffusion_jax_refined/3dshapes/tacc/rtx_small/run_das_mc_normalized10x10_query_score_rtx_small.sh
+sbatch diffusion_jax_refined/3dshapes/tacc/rtx_small/run_das_mc_normalized10x10_lds_cached.sh
+```
+
+Submit each stage only after the previous stage completes successfully.
