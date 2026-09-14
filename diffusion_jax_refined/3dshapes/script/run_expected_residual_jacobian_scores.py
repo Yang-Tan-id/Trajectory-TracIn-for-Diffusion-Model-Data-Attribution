@@ -18,13 +18,10 @@ if str(SHAPES_ROOT) not in sys.path:
 from dataset_config import ATTRIBUTION_INDICES_PATH, _prompt_tag
 
 
-TRAIN_NAMESPACE = "traj_tracin_expected_residual_jacobian_probe_aligned"
-ORIGINAL_QUERY_NAMESPACE = "expected_residual_jacobian_original_f"
-PREDICTED_QUERY_NAMESPACE = "expected_residual_jacobian_predicted_noise"
-SCORE_NAMESPACES = {
-    "original": "traj_tracin_expected_residual_jacobian_probe_aligned_v_l2_original_f",
-    "predicted": "traj_tracin_expected_residual_jacobian_probe_aligned_v_l2_predicted_noise",
-}
+DEFAULT_TRAIN_NAMESPACE = "traj_tracin_expected_residual_jacobian_probe_aligned"
+DEFAULT_ORIGINAL_QUERY_NAMESPACE = "expected_residual_jacobian_original_f"
+DEFAULT_PREDICTED_QUERY_NAMESPACE = "expected_residual_jacobian_predicted_noise"
+DEFAULT_SCORE_NAMESPACE_PREFIX = "traj_tracin_expected_residual_jacobian_probe_aligned_v_l2"
 
 
 def records() -> list[dict]:
@@ -72,13 +69,13 @@ def query_artifact_path(
     )
 
 
-def train_part_dir(experiment: str, train_seed: int) -> Path:
+def train_part_dir(args: argparse.Namespace) -> Path:
     artifact = (
-        result_root(experiment)
+        result_root(args.experiment)
         / "model"
         / "prompted_solo"
-        / f"seed_{train_seed}_train_gradient"
-        / TRAIN_NAMESPACE
+        / f"seed_{args.train_seed}_train_gradient"
+        / args.train_namespace
         / "train_datapoint_gradient_artifact.npz"
     )
     return Path(str(artifact) + ".parts")
@@ -88,7 +85,7 @@ def shard_path(args: argparse.Namespace) -> Path:
     return (
         result_root(args.experiment)
         / "stream_score"
-        / TRAIN_NAMESPACE
+        / args.train_namespace
         / f"train_seed_{args.train_seed}"
         / f"run_{args.run_id}"
         / "shards"
@@ -155,10 +152,10 @@ def score_shard(args: argparse.Namespace) -> None:
         return
 
     original_query, original_meta = load_query_bank(
-        args, ORIGINAL_QUERY_NAMESPACE, "trajectory_next_checkpoint_noise_mse"
+        args, args.original_query_namespace, "trajectory_next_checkpoint_noise_mse"
     )
     predicted_query, predicted_meta = load_query_bank(
-        args, PREDICTED_QUERY_NAMESPACE, "trajectory_predicted_noise_probe"
+        args, args.predicted_query_namespace, "trajectory_predicted_noise_probe"
     )
     query_banks = {
         "original": (original_query, original_meta),
@@ -186,8 +183,8 @@ def score_shard(args: argparse.Namespace) -> None:
     score_indices = None
     jacobian_norm_probes = None
 
-    for ckpt_i in range(args.shard_index, 50, args.shard_count):
-        path = train_part_dir(args.experiment, args.train_seed) / f"ckpt_{ckpt_i:04d}.npz"
+    for ckpt_i in range(args.shard_index, args.num_checkpoints, args.shard_count):
+        path = train_part_dir(args) / f"ckpt_{ckpt_i:04d}.npz"
         if not path.is_file():
             raise FileNotFoundError(path)
         with np.load(path, allow_pickle=False) as data:
@@ -200,8 +197,9 @@ def score_shard(args: argparse.Namespace) -> None:
             part_probe_count = int(np.asarray(data["jacobian_norm_probes"]).item())
         if semantics != "mean_probe_projected_residual_times_unit_probe_gradient":
             raise ValueError(f"unexpected train feature semantics in {path}: {semantics}")
-        if train.shape != (10, 5000, 4096):
-            raise ValueError(f"{path} expected (10,5000,4096), got {train.shape}")
+        expected_shape = (args.num_snapshots, 5000, 4096)
+        if train.shape != expected_shape:
+            raise ValueError(f"{path} expected {expected_shape}, got {train.shape}")
         if jacobian_norm_probes is None:
             jacobian_norm_probes = part_probe_count
         elif jacobian_norm_probes != part_probe_count:
@@ -299,8 +297,8 @@ def materialize_scores(
             "query_normalization": query_variant,
             "train_mc_samples": 10,
             "jacobian_norm_probes": jacobian_norm_probes,
-            "num_checkpoints": 50,
-            "timestamps_per_checkpoint": 10,
+            "num_checkpoints": args.num_checkpoints,
+            "timestamps_per_checkpoint": args.num_snapshots,
             "projection_dim": 4096,
         }
         (out_dir / "score_artifact_manifest.json").write_text(
@@ -342,9 +340,12 @@ def merge(args: argparse.Namespace) -> None:
             jacobian_norm_probes = shard_probe_count
         elif jacobian_norm_probes != shard_probe_count:
             raise ValueError(f"Jacobian probe-count mismatch: {path}")
-    if original_terms != 490 or predicted_terms != 500:
+    expected_original_terms = (args.num_checkpoints - 1) * args.num_snapshots
+    expected_predicted_terms = args.num_checkpoints * args.num_snapshots
+    if original_terms != expected_original_terms or predicted_terms != expected_predicted_terms:
         raise ValueError(
-            f"expected original/predicted terms 490/500, got {original_terms}/{predicted_terms}"
+            f"expected original/predicted terms {expected_original_terms}/{expected_predicted_terms}, "
+            f"got {original_terms}/{predicted_terms}"
         )
     expected = np.asarray(np.load(ATTRIBUTION_INDICES_PATH), dtype=np.int64)
     if score_indices is None or not np.array_equal(np.sort(score_indices), np.sort(expected)):
@@ -352,7 +353,7 @@ def merge(args: argparse.Namespace) -> None:
     for query_variant in ("raw", "query_l2"):
         materialize_scores(
             args,
-            SCORE_NAMESPACES["original"],
+            f"{args.score_namespace_prefix}_original_f",
             totals[("original", query_variant)] / original_weight,
             score_indices,
             f"learning_rate_weighted_mean(dot(v_l2_train_feature, {query_variant}_grad(original_f)))",
@@ -361,7 +362,7 @@ def merge(args: argparse.Namespace) -> None:
         )
         materialize_scores(
             args,
-            SCORE_NAMESPACES["predicted"],
+            f"{args.score_namespace_prefix}_predicted_noise",
             totals[("predicted", query_variant)] / predicted_weight,
             score_indices,
             f"learning_rate_squared_weighted_mean(square(dot(v_l2_train_feature, {query_variant}_predicted_noise_probe_grad)))",
@@ -383,6 +384,12 @@ def main() -> None:
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--shard-index", type=int, default=0)
     parser.add_argument("--shard-count", type=int, default=2)
+    parser.add_argument("--num-checkpoints", type=int, default=50)
+    parser.add_argument("--num-snapshots", type=int, default=10)
+    parser.add_argument("--train-namespace", default=DEFAULT_TRAIN_NAMESPACE)
+    parser.add_argument("--original-query-namespace", default=DEFAULT_ORIGINAL_QUERY_NAMESPACE)
+    parser.add_argument("--predicted-query-namespace", default=DEFAULT_PREDICTED_QUERY_NAMESPACE)
+    parser.add_argument("--score-namespace-prefix", default=DEFAULT_SCORE_NAMESPACE_PREFIX)
     args = parser.parse_args()
     if not 0 <= args.shard_index < args.shard_count:
         raise ValueError("invalid shard index/count")

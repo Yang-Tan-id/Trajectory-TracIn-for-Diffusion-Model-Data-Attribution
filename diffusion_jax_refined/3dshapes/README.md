@@ -288,6 +288,16 @@ sbatch -p rtx-small \
   diffusion_jax_refined/3dshapes/tacc/rtx_small/run_expected_residual_jacobian_pipeline_rtx_small.sh
 ```
 
+The corresponding saved-gradient 100-timestamp x 1-MC version uses the same
+single v-L2 train feature and exact train/query output-probe alignment. It
+splits 50 checkpoints across 16 H100 GPUs and evaluates both query targets:
+
+```bash
+sbatch -p h100 \
+  --export=ALL,EXPERIMENT_TAG=experiment1,TRAIN_SEED=42 \
+  diffusion_jax_refined/3dshapes/tacc/h100/run_traj_tracin_probe_aligned_v_l2_100x1_h100.sh
+```
+
 ### Noise-specific normalized 10x10 DAS
 
 This variant keeps the predicted-noise gradient and residual separate. At each

@@ -20,6 +20,13 @@ PIPELINE = (
     / "run_expected_residual_jacobian_pipeline_rtx_small.sh"
 )
 SCORER = ROOT / "3dshapes" / "script" / "run_expected_residual_jacobian_scores.py"
+H100_100X1 = (
+    ROOT
+    / "3dshapes"
+    / "tacc"
+    / "h100"
+    / "run_traj_tracin_probe_aligned_v_l2_100x1_h100.sh"
+)
 
 
 def test_expected_residual_jacobian_is_not_expected_loss_gradient():
@@ -66,8 +73,8 @@ def test_pipeline_materializes_four_scores():
     assert "trajectory_predicted_noise_probe" in launcher
     assert "expected_residual_jacobian_probe_aligned_v_l2_original_f" in launcher
     assert "expected_residual_jacobian_probe_aligned_v_l2_predicted_noise" in launcher
-    assert "original_terms != 490" in scorer
-    assert "predicted_terms != 500" in scorer
+    assert "expected_original_terms = (args.num_checkpoints - 1) * args.num_snapshots" in scorer
+    assert "expected_predicted_terms = args.num_checkpoints * args.num_snapshots" in scorer
     assert 'for query_variant in ("raw", "query_l2")' in scorer
     assert 'component = "score" if query_variant == "raw" else "score_query_normalized"' in scorer
     assert "1 train normalization x 2 query targets x 2 query normalizations" in scorer
@@ -77,3 +84,18 @@ def test_pipeline_materializes_four_scores():
     assert "EXPECTED_RESIDUAL_JACOBIAN_VARIANTS" in lds
     assert '("raw", "score")' in lds
     assert '("query_l2", "score_query_normalized")' in lds
+
+
+def test_h100_100x1_uses_probe_aligned_v_l2_artifact():
+    source = H100_100X1.read_text()
+    assert "#SBATCH -N 4" in source
+    assert "#SBATCH -n 16" in source
+    assert "TRAJ_NUM_SNAPSHOTS=100" in source
+    assert "TRAJ_TRAIN_MC_SAMPLES=1" in source
+    assert "TRAJ_TRACIN_TRAIN_DECOMPOSE_RESIDUAL_JACOBIAN=1" in source
+    assert "TRAJ_TRACIN_JACOBIAN_NORM_PROBES=1" in source
+    assert "probe_aligned_100x1" in source
+    assert "--num-checkpoints 50" in source
+    assert "--num-snapshots 100" in source
+    assert "trajectory_next_checkpoint_noise_mse" in source
+    assert "trajectory_predicted_noise_probe" in source
