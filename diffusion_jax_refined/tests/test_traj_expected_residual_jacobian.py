@@ -41,6 +41,8 @@ def test_algorithm_saves_single_probe_v_l2_feature():
     assert "def residual_contraction" not in source
     assert "projected_residual * unit_probe_gradient" in source
     assert '"mean_probe_projected_residual_times_unit_probe_gradient"' in source
+    assert "cfg.seed + 91_337" not in source
+    assert "base_probe_key = predicted_noise_probe_key(\n                            cfg.seed," in source
 
 
 def test_rtx_launcher_uses_isolated_resumable_artifact():
@@ -62,8 +64,8 @@ def test_pipeline_materializes_four_scores():
     scorer = SCORER.read_text()
     assert "trajectory_next_checkpoint_noise_mse" in launcher
     assert "trajectory_predicted_noise_probe" in launcher
-    assert "expected_residual_jacobian_v_l2_original_f" in launcher
-    assert "expected_residual_jacobian_v_l2_predicted_noise" in launcher
+    assert "expected_residual_jacobian_probe_aligned_v_l2_original_f" in launcher
+    assert "expected_residual_jacobian_probe_aligned_v_l2_predicted_noise" in launcher
     assert "original_terms != 490" in scorer
     assert "predicted_terms != 500" in scorer
     assert 'for query_variant in ("raw", "query_l2")' in scorer

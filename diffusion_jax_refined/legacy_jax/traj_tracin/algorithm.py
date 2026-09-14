@@ -3192,7 +3192,7 @@ def run_attribution(cfg: TrajAttributionConfig):
                         term_v_l2_features = np.empty((len(picked), proj_dim), dtype=np.float32)
                         t_scalar = array_to_device(jnp.asarray(int(t_value), dtype=jnp.int32), device)
                         base_probe_key = predicted_noise_probe_key(
-                            cfg.seed + 91_337,
+                            cfg.seed,
                             ckpt_i,
                             int(t_value),
                             int(pos_seq[snap_id]),

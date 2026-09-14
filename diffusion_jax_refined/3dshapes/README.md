@@ -262,7 +262,8 @@ feature:
 
 - `train_features = (v^T E[r]/sqrt(D)) * unit(P E[J]^T v/sqrt(D))`.
 
-The probe normalizes the randomly probed gradient and projects the full-vector
+The train and query sides use the same deterministic probe for each
+`(checkpoint, timestamp, snapshot_position)`. The probe normalizes the randomly probed gradient and projects the full-vector
 residual. There is no separate residual-contraction backward and no duplicate
 F-norm feature, because with one probe it differs only by the constant
 `sqrt(D)` and therefore has identical rankings.

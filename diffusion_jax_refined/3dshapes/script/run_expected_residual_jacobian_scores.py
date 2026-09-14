@@ -18,12 +18,12 @@ if str(SHAPES_ROOT) not in sys.path:
 from dataset_config import ATTRIBUTION_INDICES_PATH, _prompt_tag
 
 
-TRAIN_NAMESPACE = "traj_tracin_expected_residual_jacobian_probe_reused"
+TRAIN_NAMESPACE = "traj_tracin_expected_residual_jacobian_probe_aligned"
 ORIGINAL_QUERY_NAMESPACE = "expected_residual_jacobian_original_f"
 PREDICTED_QUERY_NAMESPACE = "expected_residual_jacobian_predicted_noise"
 SCORE_NAMESPACES = {
-    "original": "traj_tracin_expected_residual_jacobian_v_l2_original_f",
-    "predicted": "traj_tracin_expected_residual_jacobian_v_l2_predicted_noise",
+    "original": "traj_tracin_expected_residual_jacobian_probe_aligned_v_l2_original_f",
+    "predicted": "traj_tracin_expected_residual_jacobian_probe_aligned_v_l2_predicted_noise",
 }
 
 

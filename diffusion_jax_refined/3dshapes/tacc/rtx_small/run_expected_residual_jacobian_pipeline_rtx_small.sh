@@ -56,7 +56,7 @@ LOG_ROOT="${SHAPES_ROOT}/result/${EXPERIMENT_TAG}/logs/expected_residual_jacobia
 mkdir -p "${LOG_ROOT}"
 
 echo "3D Shapes normalized expected-Jacobian/residual pipeline"
-echo "train=one shared probe reused for both P(E[J]^T E[r]) and norm estimate"
+echo "train/query use the same timestamp-specific output probe"
 echo "scores=1 v-L2 train feature x 2 f targets x raw/query-L2 = 4 score types"
 echo "logs=${LOG_ROOT}"
 
@@ -127,6 +127,6 @@ JAX_PLATFORMS=cpu "${PYTHON_BIN}" "${SHAPES_ROOT}/script/run_traj_tracin_lds_cac
   --experiment "${EXPERIMENT_TAG}" \
   --train-seed "${TRAIN_SEED}" \
   --score-schemes \
-    expected_residual_jacobian_v_l2_original_f,expected_residual_jacobian_v_l2_predicted_noise
+    expected_residual_jacobian_probe_aligned_v_l2_original_f,expected_residual_jacobian_probe_aligned_v_l2_predicted_noise
 
 echo "[done] 1 train normalization x 2 f targets x 2 query normalizations = 4 scores"

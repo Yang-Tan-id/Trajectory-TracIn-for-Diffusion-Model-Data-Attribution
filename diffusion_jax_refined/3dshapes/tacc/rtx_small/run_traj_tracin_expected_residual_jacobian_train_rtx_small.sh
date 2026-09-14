@@ -61,10 +61,10 @@ export TF_GPU_ALLOCATOR="${TF_GPU_ALLOCATOR:-cuda_malloc_async}"
 export XLA_PYTHON_CLIENT_PREALLOCATE="${XLA_PYTHON_CLIENT_PREALLOCATE:-false}"
 export PYTHONUNBUFFERED=1
 
-ARTIFACT_DIR="${SHAPES_ROOT}/result/${EXPERIMENT_TAG}/model/prompted_solo/seed_${TRAIN_SEED}_train_gradient/traj_tracin_expected_residual_jacobian_probe_reused"
+ARTIFACT_DIR="${SHAPES_ROOT}/result/${EXPERIMENT_TAG}/model/prompted_solo/seed_${TRAIN_SEED}_train_gradient/traj_tracin_expected_residual_jacobian_probe_aligned"
 ARTIFACT="${ARTIFACT_DIR}/train_datapoint_gradient_artifact.npz"
 PART_DIR="${ARTIFACT}.parts"
-LOG_DIR="${SHAPES_ROOT}/result/${EXPERIMENT_TAG}/logs/traj_tracin_expected_residual_jacobian_probe_reused_train"
+LOG_DIR="${SHAPES_ROOT}/result/${EXPERIMENT_TAG}/logs/traj_tracin_expected_residual_jacobian_probe_aligned_train"
 export TRAIN_DATAPOINT_GRADIENT_ARTIFACT_PATH="${ARTIFACT}"
 mkdir -p "${LOG_DIR}" "${PART_DIR}"
 
@@ -79,7 +79,7 @@ if [[ "${checkpoint_count}" != "50" ]]; then
   exit 1
 fi
 
-echo "3D Shapes single-probe v-L2 expected-Jacobian/residual artifacts"
+echo "3D Shapes train/query probe-aligned single-probe v-L2 artifacts"
 echo "checkpoints=50 snapshots=10 MC=10 norm_probes=${TRAJ_TRACIN_JACOBIAN_NORM_PROBES} projection_dim=${TRAJ_TRACIN_PROJ_DIM}"
 echo "GPU 0: even checkpoints; GPU 1: odd checkpoints"
 echo "artifact=${ARTIFACT}"
