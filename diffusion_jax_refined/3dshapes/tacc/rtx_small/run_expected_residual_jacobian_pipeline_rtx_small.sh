@@ -31,7 +31,7 @@ REPO_ROOT="$(resolve_repo_root)" || { echo "Could not locate repository" >&2; ex
 SHAPES_ROOT="${REPO_ROOT}/diffusion_jax_refined/3dshapes"
 QUERY_DRIVER="${SHAPES_ROOT}/script/run_traj_tracin_queries_and_scores.py"
 SCORE_DRIVER="${SHAPES_ROOT}/script/run_expected_residual_jacobian_scores.py"
-TRAIN_LAUNCHER="${SCRIPT_DIR}/run_traj_tracin_expected_residual_jacobian_train_rtx_small.sh"
+TRAIN_LAUNCHER="${SHAPES_ROOT}/tacc/rtx_small/run_traj_tracin_expected_residual_jacobian_train_rtx_small.sh"
 
 if [[ -n "${ENV_SETUP:-}" ]]; then
   # shellcheck disable=SC1090
