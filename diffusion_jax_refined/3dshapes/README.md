@@ -143,3 +143,10 @@ The two RTX GPUs run disjoint model shards (96 of the 192 LDS models each).
 For every query/model pair the checkpoint is restored once, and endpoint and
 trajectory counterfactual targets share one generated DDIM trajectory. Existing
 target JSON caches are skipped, so resubmitting safely resumes missing work.
+
+Once the true-f job completes, compute all four Traj TracIn LDS variants from
+the caches on a CPU node (no LDS checkpoints or trajectories are recomputed):
+
+```bash
+sbatch diffusion_jax_refined/3dshapes/tacc/rtx_small/run_traj_tracin_lds_cached.sh
+```
