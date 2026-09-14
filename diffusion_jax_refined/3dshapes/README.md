@@ -257,17 +257,18 @@ in `score`, `score_query_normalized`, `score_train_l2_normalized`, and
 
 For each checkpoint, timestamp, and attribution point, this variant forms the
 full-vector 10-MC expected predicted-noise residual and the expected
-predicted-noise Jacobian. The same four probes produce and retain two train
+predicted-noise Jacobian. The same single output probe produces and retains two train
 features without a second train pass:
 
-- `train_features = P(E[J]^T E[r]) / estimated_frobenius_norm(E[PJ])`;
+- `train_features = estimated P(E[J]^T E[r]) / estimated_frobenius_norm(E[PJ])`;
 - `train_features_v_l2_normalized = mean_l((v_l^T E[r]/sqrt(D)) * unit(P E[J]^T v_l/sqrt(D)))`.
 
-The first normalizes the complete expected Jacobian before residual
-contraction. The second normalizes each randomly probed gradient and also
-projects the residual with that probe. The full residual remains a vector in
-both definitions. The method produces these two fixed train normalizations,
-not four reconstructable post-hoc variants.
+The same Hutchinson probe estimates both the first feature's numerator and its
+norm denominator; there is no separate residual-contraction backward.
+The second feature normalizes each randomly probed gradient and also projects
+the residual with that probe. The full residual remains a vector in both
+definitions. The method produces these two fixed train normalizations, not
+four reconstructable post-hoc variants.
 
 ```bash
 sbatch -p rtx-small \

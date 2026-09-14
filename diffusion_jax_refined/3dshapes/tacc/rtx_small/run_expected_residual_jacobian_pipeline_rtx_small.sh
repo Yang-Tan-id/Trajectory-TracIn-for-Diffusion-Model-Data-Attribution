@@ -56,7 +56,7 @@ LOG_ROOT="${SHAPES_ROOT}/result/${EXPERIMENT_TAG}/logs/expected_residual_jacobia
 mkdir -p "${LOG_ROOT}"
 
 echo "3D Shapes normalized expected-Jacobian/residual pipeline"
-echo "train=P(E[J]^T E[r])/four-probe Frobenius estimate"
+echo "train=one shared probe reused for both P(E[J]^T E[r]) and norm estimate"
 echo "scores=2 train features x 2 f targets x raw/query-L2 = 8 score types"
 echo "logs=${LOG_ROOT}"
 

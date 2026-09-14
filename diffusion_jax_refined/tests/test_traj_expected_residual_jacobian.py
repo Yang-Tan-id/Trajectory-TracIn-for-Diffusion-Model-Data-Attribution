@@ -38,11 +38,13 @@ def test_algorithm_saves_both_normalized_contractions_and_norm():
     assert "TRAJ_TRACIN_TRAIN_DECOMPOSE_RESIDUAL_JACOBIAN" in source
     assert "train_jacobian_norms=np.stack(train_jacobian_norm_terms" in source
     assert "train_features_v_l2_normalized=np.stack" in source
-    assert "projected_expected_jacobian_transpose_expected_residual_over_frobenius_norm" in source
+    assert "hutchinson_projected_expected_jacobian_transpose_expected_residual_over_frobenius_norm" in source
     assert "TRAJ_TRACIN_JACOBIAN_NORM_PROBES" in source
     assert 'archive.open("train_jacobian_norms.npy"' in source
     assert "mean_residual = jax.lax.stop_gradient" in source
-    assert "residual_contraction" in source
+    assert "contraction_contributions" in source
+    assert "normalizer * jnp.mean" in source
+    assert "def residual_contraction" not in source
     assert "projected_residual * unit_probe_gradient" in source
 
 
@@ -54,6 +56,7 @@ def test_rtx_launcher_uses_isolated_resumable_artifact():
     assert "TRAJ_TRAIN_MC_SAMPLES=10" in source
     assert "TRAJ_NUM_SNAPSHOTS=10" in source
     assert "TRAJ_TRACIN_JACOBIAN_NORM_PROBES" in source
+    assert 'TRAJ_TRACIN_JACOBIAN_NORM_PROBES:-1' in source
     assert "traj_tracin_expected_residual_jacobian" in source
     assert "TRAJ_TRACIN_CKPT_SHARD_COUNT=2" in source
     assert '"train_jacobian_norms"' in source

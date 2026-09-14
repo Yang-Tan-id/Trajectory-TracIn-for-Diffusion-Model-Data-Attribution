@@ -18,7 +18,7 @@ if str(SHAPES_ROOT) not in sys.path:
 from dataset_config import ATTRIBUTION_INDICES_PATH, _prompt_tag
 
 
-TRAIN_NAMESPACE = "traj_tracin_expected_residual_jacobian"
+TRAIN_NAMESPACE = "traj_tracin_expected_residual_jacobian_probe_reused"
 ORIGINAL_QUERY_NAMESPACE = "expected_residual_jacobian_original_f"
 PREDICTED_QUERY_NAMESPACE = "expected_residual_jacobian_predicted_noise"
 SCORE_NAMESPACES = {
@@ -187,6 +187,7 @@ def score_shard(args: argparse.Namespace) -> None:
     original_terms = 0
     predicted_terms = 0
     score_indices = None
+    jacobian_norm_probes = None
 
     for ckpt_i in range(args.shard_index, 50, args.shard_count):
         path = train_part_dir(args.experiment, args.train_seed) / f"ckpt_{ckpt_i:04d}.npz"
@@ -202,7 +203,8 @@ def score_shard(args: argparse.Namespace) -> None:
             timesteps = np.asarray(data["timesteps"], dtype=np.int32)
             weights = np.asarray(data["term_weights"], dtype=np.float64)
             semantics = str(np.asarray(data["train_feature_semantics"]).item())
-        if semantics != "projected_expected_jacobian_transpose_expected_residual_over_frobenius_norm":
+            part_probe_count = int(np.asarray(data["jacobian_norm_probes"]).item())
+        if semantics != "hutchinson_projected_expected_jacobian_transpose_expected_residual_over_frobenius_norm":
             raise ValueError(f"unexpected train feature semantics in {path}: {semantics}")
         if train.shape != (10, 5000, 4096):
             raise ValueError(f"{path} expected (10,5000,4096), got {train.shape}")
@@ -210,6 +212,10 @@ def score_shard(args: argparse.Namespace) -> None:
             raise ValueError(
                 f"{path} v-L2 feature shape {train_v_l2.shape} != F-norm shape {train.shape}"
             )
+        if jacobian_norm_probes is None:
+            jacobian_norm_probes = part_probe_count
+        elif jacobian_norm_probes != part_probe_count:
+            raise ValueError(f"Jacobian probe-count mismatch: {path}")
         if score_indices is None:
             score_indices = indices
         elif not np.array_equal(score_indices, indices):
@@ -276,6 +282,7 @@ def score_shard(args: argparse.Namespace) -> None:
         original_terms=np.asarray(original_terms, dtype=np.int32),
         predicted_terms=np.asarray(predicted_terms, dtype=np.int32),
         score_indices=score_indices,
+        jacobian_norm_probes=np.asarray(jacobian_norm_probes, dtype=np.int32),
     )
     print(f"[saved] {output}", flush=True)
 
@@ -287,6 +294,7 @@ def materialize_scores(
     score_indices: np.ndarray,
     definition: str,
     query_variant: str,
+    jacobian_norm_probes: int,
 ):
     normalization = "v_l2" if "_v_l2_" in namespace else "fnorm"
     for query_id, record in enumerate(records()):
@@ -315,7 +323,7 @@ def materialize_scores(
             "train_normalization": normalization,
             "query_normalization": query_variant,
             "train_mc_samples": 10,
-            "jacobian_norm_probes": 4,
+            "jacobian_norm_probes": jacobian_norm_probes,
             "num_checkpoints": 50,
             "timestamps_per_checkpoint": 10,
             "projection_dim": 4096,
@@ -335,6 +343,7 @@ def merge(args: argparse.Namespace) -> None:
     original_weight = predicted_weight = 0.0
     original_terms = predicted_terms = 0
     score_indices = None
+    jacobian_norm_probes = None
     for shard in range(args.shard_count):
         args.shard_index = shard
         path = shard_path(args)
@@ -350,10 +359,15 @@ def merge(args: argparse.Namespace) -> None:
             original_terms += int(data["original_terms"])
             predicted_terms += int(data["predicted_terms"])
             indices = np.asarray(data["score_indices"], dtype=np.int64)
+            shard_probe_count = int(np.asarray(data["jacobian_norm_probes"]).item())
         if score_indices is None:
             score_indices = indices
         elif not np.array_equal(score_indices, indices):
             raise ValueError(f"score indices mismatch: {path}")
+        if jacobian_norm_probes is None:
+            jacobian_norm_probes = shard_probe_count
+        elif jacobian_norm_probes != shard_probe_count:
+            raise ValueError(f"Jacobian probe-count mismatch: {path}")
     if original_terms != 490 or predicted_terms != 500:
         raise ValueError(
             f"expected original/predicted terms 490/500, got {original_terms}/{predicted_terms}"
@@ -370,6 +384,7 @@ def merge(args: argparse.Namespace) -> None:
                 score_indices,
                 f"learning_rate_weighted_mean(dot({normalization}_train_feature, {query_variant}_grad(original_f)))",
                 query_variant,
+                int(jacobian_norm_probes),
             )
             materialize_scores(
                 args,
@@ -378,6 +393,7 @@ def merge(args: argparse.Namespace) -> None:
                 score_indices,
                 f"learning_rate_squared_weighted_mean(square(dot({normalization}_train_feature, {query_variant}_predicted_noise_probe_grad)))",
                 query_variant,
+                int(jacobian_norm_probes),
             )
     print(
         "[done] materialized 2 train normalizations x 2 query targets x 2 query normalizations",
