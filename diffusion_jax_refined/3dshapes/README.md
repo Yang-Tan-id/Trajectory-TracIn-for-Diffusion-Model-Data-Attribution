@@ -253,6 +253,42 @@ Permanent scores are written below `traj_tracin_predicted_noise_jvp_l2_squared`
 in `score`, `score_query_normalized`, `score_train_l2_normalized`, and
 `score_query_train_l2_normalized`.
 
+### Normalized expected-Jacobian times expected-residual score
+
+For each checkpoint, timestamp, and attribution point, this variant forms the
+full-vector 10-MC expected predicted-noise residual and the expected
+predicted-noise Jacobian. The same four probes produce and retain two train
+features without a second train pass:
+
+- `train_features = P(E[J]^T E[r]) / estimated_frobenius_norm(E[PJ])`;
+- `train_features_v_l2_normalized = mean_l((v_l^T E[r]/sqrt(D)) * unit(P E[J]^T v_l/sqrt(D)))`.
+
+The first normalizes the complete expected Jacobian before residual
+contraction. The second normalizes each randomly probed gradient and also
+projects the residual with that probe. The full residual remains a vector in
+both definitions. The method produces these two fixed train normalizations,
+not four reconstructable post-hoc variants.
+
+```bash
+sbatch -p rtx-small \
+  --export=ALL,EXPERIMENT_TAG=experiment1,TRAIN_SEED=42 \
+  diffusion_jax_refined/3dshapes/tacc/rtx_small/run_traj_tracin_expected_residual_jacobian_train_rtx_small.sh
+```
+
+The two GPUs split the 50 checkpoints, and all checkpoint parts are retained
+for restart and direct score streaming. No duplicate monolithic merged copy is
+written. Each of the two train features is crossed with both the original
+next-checkpoint-noise-MSE target and the new vector predicted-noise target,
+using both raw and per-term L2-normalized query gradients. This gives eight
+scores per query (and 320 cached LDS evaluations over 10 queries and four true-f
+targets). Run the complete RTX-small pipeline with:
+
+```bash
+sbatch -p rtx-small \
+  --export=ALL,EXPERIMENT_TAG=experiment1,TRAIN_SEED=42 \
+  diffusion_jax_refined/3dshapes/tacc/rtx_small/run_expected_residual_jacobian_pipeline_rtx_small.sh
+```
+
 ### Noise-specific normalized 10x10 DAS
 
 This variant keeps the predicted-noise gradient and residual separate. At each

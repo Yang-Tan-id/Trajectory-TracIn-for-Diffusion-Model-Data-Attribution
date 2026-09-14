@@ -64,8 +64,36 @@ def merge_train_checkpoint_parts_atomic(
         "ckpt_paths": [],
     }
     total_terms = 0
+    has_train_jacobian_norms = None
+    has_train_v_l2_features = None
+    normalized_jacobian_train_mc_samples = None
     for part_path in part_paths:
         with np.load(part_path, allow_pickle=True) as part:
+            part_has_train_jacobian_norms = "train_jacobian_norms" in part.files
+            part_has_train_v_l2_features = "train_features_v_l2_normalized" in part.files
+            if has_train_jacobian_norms is None:
+                has_train_jacobian_norms = part_has_train_jacobian_norms
+            elif has_train_jacobian_norms != part_has_train_jacobian_norms:
+                raise ValueError(
+                    "train_jacobian_norms presence mismatch across checkpoint parts: "
+                    f"{part_path}"
+                )
+            if has_train_v_l2_features is None:
+                has_train_v_l2_features = part_has_train_v_l2_features
+            elif has_train_v_l2_features != part_has_train_v_l2_features:
+                raise ValueError(
+                    "train_features_v_l2_normalized presence mismatch across checkpoint parts: "
+                    f"{part_path}"
+                )
+            if part_has_train_jacobian_norms:
+                part_mc_samples = int(np.asarray(part["train_mc_samples"]).item())
+                if normalized_jacobian_train_mc_samples is None:
+                    normalized_jacobian_train_mc_samples = part_mc_samples
+                elif normalized_jacobian_train_mc_samples != part_mc_samples:
+                    raise ValueError(
+                        "train_mc_samples mismatch across checkpoint parts: "
+                        f"{part_path}"
+                    )
             part_score_indices = np.asarray(part["score_indices"], dtype=np.int64)
             if score_indices is None:
                 score_indices = part_score_indices
@@ -151,6 +179,79 @@ def merge_train_checkpoint_parts_atomic(
                         flush=True,
                     )
 
+            if has_train_jacobian_norms:
+                norm_shape = (total_terms, int(score_indices.shape[0]))
+                with archive.open("train_jacobian_norms.npy", mode="w", force_zip64=True) as member:
+                    np.lib.format.write_array_header_2_0(
+                        member,
+                        {
+                            "descr": np.lib.format.dtype_to_descr(np.dtype(np.float32)),
+                            "fortran_order": False,
+                            "shape": norm_shape,
+                        },
+                    )
+                    norm_term_offset = 0
+                    for part_i, part_path in enumerate(part_paths, start=1):
+                        with np.load(part_path, allow_pickle=False) as part:
+                            jacobian_norms = np.asarray(
+                                part["train_jacobian_norms"], dtype=np.float32, order="C"
+                            )
+                        expected_shape = (
+                            metadata_parts["ckpt_indices"][part_i - 1].shape[0],
+                            score_indices.shape[0],
+                        )
+                        if jacobian_norms.shape != expected_shape:
+                            raise ValueError(
+                                f"train_jacobian_norms shape mismatch in {part_path}: "
+                                f"got {jacobian_norms.shape}, expected {expected_shape}"
+                            )
+                        member.write(memoryview(jacobian_norms).cast("B"))
+                        norm_term_offset += jacobian_norms.shape[0]
+                        print(
+                            f"[stage:train] merge wrote Jacobian-norm part {part_i}/{len(part_paths)} | "
+                            f"terms={norm_term_offset}/{total_terms}",
+                            flush=True,
+                        )
+
+            if has_train_v_l2_features:
+                feature_shape = (total_terms, int(score_indices.shape[0]), int(proj_dim))
+                with archive.open(
+                    "train_features_v_l2_normalized.npy", mode="w", force_zip64=True
+                ) as member:
+                    np.lib.format.write_array_header_2_0(
+                        member,
+                        {
+                            "descr": np.lib.format.dtype_to_descr(np.dtype(np.float32)),
+                            "fortran_order": False,
+                            "shape": feature_shape,
+                        },
+                    )
+                    v_l2_term_offset = 0
+                    for part_i, part_path in enumerate(part_paths, start=1):
+                        with np.load(part_path, allow_pickle=False) as part:
+                            features = np.asarray(
+                                part["train_features_v_l2_normalized"],
+                                dtype=np.float32,
+                                order="C",
+                            )
+                        expected_shape = (
+                            metadata_parts["ckpt_indices"][part_i - 1].shape[0],
+                            score_indices.shape[0],
+                            proj_dim,
+                        )
+                        if features.shape != expected_shape:
+                            raise ValueError(
+                                f"train_features_v_l2_normalized shape mismatch in {part_path}: "
+                                f"got {features.shape}, expected {expected_shape}"
+                            )
+                        member.write(memoryview(features).cast("B"))
+                        v_l2_term_offset += features.shape[0]
+                        print(
+                            f"[stage:train] merge wrote v-L2 feature part "
+                            f"{part_i}/{len(part_paths)} | terms={v_l2_term_offset}/{total_terms}",
+                            flush=True,
+                        )
+
             write_small_array(archive, "score_indices", score_indices)
             for key in metadata_parts:
                 write_small_array(archive, key, np.concatenate(metadata_parts[key], axis=0))
@@ -168,6 +269,27 @@ def merge_train_checkpoint_parts_atomic(
                 "query_target_checkpoint",
                 np.asarray(query_target_checkpoint),
             )
+            if has_train_jacobian_norms:
+                write_small_array(
+                    archive,
+                    "train_mc_samples",
+                    np.asarray(normalized_jacobian_train_mc_samples, dtype=np.int32),
+                )
+                write_small_array(
+                    archive,
+                    "train_feature_semantics",
+                    np.asarray("projected_expected_jacobian_transpose_expected_residual_over_frobenius_norm"),
+                )
+                write_small_array(
+                    archive,
+                    "train_jacobian_norm_semantics",
+                    np.asarray("four_probe_hutchinson_projected_expected_jacobian_frobenius_norm"),
+                )
+                write_small_array(
+                    archive,
+                    "train_v_l2_feature_semantics",
+                    np.asarray("mean_probe_projected_residual_times_unit_probe_gradient"),
+                )
         os.replace(tmp_path, path)
     except Exception:
         if os.path.exists(tmp_path):
@@ -2686,6 +2808,14 @@ def run_attribution(cfg: TrajAttributionConfig):
         aggregate_train_timestamps = os.environ.get(
             "TRAJ_TRACIN_TRAIN_AGGREGATE_TIMESTAMPS", "0"
         ) in ("1", "true", "True", "yes")
+        decompose_residual_jacobian = os.environ.get(
+            "TRAJ_TRACIN_TRAIN_DECOMPOSE_RESIDUAL_JACOBIAN", "0"
+        ).strip().lower() in ("1", "true", "yes", "on")
+        if decompose_residual_jacobian and aggregate_train_timestamps:
+            raise ValueError(
+                "TRAJ_TRACIN_TRAIN_DECOMPOSE_RESIDUAL_JACOBIAN requires "
+                "TRAJ_TRACIN_TRAIN_AGGREGATE_TIMESTAMPS=0."
+            )
         if ckpt_shard_index < 0 or ckpt_shard_index >= ckpt_shard_count:
             raise ValueError(
                 "TRAJ_TRACIN_CKPT_SHARD_INDEX must be in "
@@ -2975,11 +3105,247 @@ def run_attribution(cfg: TrajAttributionConfig):
                     )
             else:
                 train_phi_terms = []
+                train_v_l2_terms = []
+                train_jacobian_norm_terms = []
                 train_ckpt_indices = []
                 train_timesteps = []
                 train_snapshot_positions = []
                 train_ckpt_paths = []
                 train_term_weights = []
+
+                if decompose_residual_jacobian:
+                    if not uses_predicted_noise_probe:
+                        raise ValueError(
+                            "Decomposed residual/Jacobian train artifacts require "
+                            "TRAJ_QUERY_OBJECTIVE=trajectory_predicted_noise_probe."
+                        )
+
+                    norm_probe_count = max(
+                        1,
+                        int(os.environ.get("TRAJ_TRACIN_JACOBIAN_NORM_PROBES", "4")),
+                    )
+
+                    def train_normalized_residual_jacobian_one(
+                        p, x0_one, cond_one, rng_one, t_scalar, norm_probes
+                    ):
+                        x0_one = x0_one[None, ...]
+                        if cond_one.ndim == 0:
+                            cond_one = cond_one[None]
+                        else:
+                            cond_one = cond_one[None, ...]
+                        sample_count = int(cfg.train_mc_samples)
+                        x0_rep = jnp.repeat(x0_one, repeats=sample_count, axis=0)
+                        cond_rep = jnp.repeat(cond_one, repeats=sample_count, axis=0)
+                        t_rep = jnp.full((sample_count,), t_scalar, dtype=jnp.int32)
+                        noise = jax.random.normal(rng_one, x0_rep.shape, dtype=x0_rep.dtype)
+                        xt = q_sample(schedule, x0_rep, t_rep, noise)
+                        normalizer = jnp.sqrt(jnp.asarray(x0_one.size, dtype=jnp.float32))
+
+                        def mean_prediction(pp):
+                            pred = adapter.eps_apply(model, pp, xt, t_rep, cond_rep)
+                            return jnp.mean(pred.astype(jnp.float32), axis=0, keepdims=True)
+
+                        pred = adapter.eps_apply(model, p, xt, t_rep, cond_rep)
+                        mean_residual = jax.lax.stop_gradient(
+                            jnp.mean(
+                                pred.astype(jnp.float32) - noise.astype(jnp.float32),
+                                axis=0,
+                                keepdims=True,
+                            )
+                        )
+
+                        def residual_contraction(pp):
+                            return jnp.sum(mean_prediction(pp) * mean_residual) / normalizer
+
+                        contraction_grad = jax.grad(residual_contraction)(p)
+                        projected_contraction = projector(contraction_grad)
+
+                        def norm_probe_outputs(probe):
+                            def probe_scalar(pp):
+                                return jnp.sum(mean_prediction(pp) * probe) / normalizer
+
+                            probe_grad = jax.grad(probe_scalar)(p)
+                            projected_probe_grad = projector(probe_grad)
+                            probe_sqnorm = jnp.sum(
+                                jnp.square(projected_probe_grad.astype(jnp.float32))
+                            )
+                            projected_residual = jnp.sum(mean_residual * probe) / normalizer
+                            unit_probe_gradient = projected_probe_grad / jnp.maximum(
+                                jnp.sqrt(probe_sqnorm),
+                                jnp.asarray(1e-8, dtype=jnp.float32),
+                            )
+                            return probe_sqnorm, projected_residual * unit_probe_gradient
+
+                        probe_sqnorms, v_l2_contributions = jax.lax.map(
+                            norm_probe_outputs, norm_probes
+                        )
+                        jacobian_norm = jnp.sqrt(
+                            jnp.mean(probe_sqnorms) + jnp.asarray(1e-16, dtype=jnp.float32)
+                        )
+                        normalized_feature = projected_contraction / jnp.maximum(
+                            jacobian_norm,
+                            jnp.asarray(1e-8, dtype=jnp.float32),
+                        )
+                        v_l2_feature = jnp.mean(v_l2_contributions, axis=0)
+                        return jacobian_norm, normalized_feature, v_l2_feature
+
+                    train_normalized_residual_jacobian_batch = jax.jit(
+                        jax.vmap(
+                            train_normalized_residual_jacobian_one,
+                            in_axes=(None, 0, 0, 0, None, None),
+                        )
+                    )
+                    bs_stage = max(1, int(cfg.score_batch_size))
+                    total_batches = math.ceil(len(picked) / bs_stage)
+                    print(
+                        "[stage:train] normalized expected-Jacobian/residual artifact mode | "
+                        f"save=P(E[J]^T E[r])/estimated_frobenius_norm(E[PJ]) | "
+                        f"mc={cfg.train_mc_samples} norm_probes={norm_probe_count} "
+                        f"batch_size={bs_stage}",
+                        flush=True,
+                    )
+                    for snap_id, t_value in enumerate(t_seq):
+                        term_features = np.empty((len(picked), proj_dim), dtype=np.float32)
+                        term_v_l2_features = np.empty((len(picked), proj_dim), dtype=np.float32)
+                        term_jacobian_norms = np.empty((len(picked),), dtype=np.float32)
+                        t_scalar = array_to_device(jnp.asarray(int(t_value), dtype=jnp.int32), device)
+                        base_probe_key = predicted_noise_probe_key(
+                            cfg.seed + 91_337,
+                            ckpt_i,
+                            int(t_value),
+                            int(pos_seq[snap_id]),
+                        )
+                        norm_probes = array_to_device(
+                            jnp.stack(
+                                [
+                                    jax.random.normal(
+                                        jax.random.fold_in(base_probe_key, probe_i),
+                                        example_x.shape,
+                                        dtype=jnp.float32,
+                                    )
+                                    for probe_i in range(norm_probe_count)
+                                ],
+                                axis=0,
+                            ),
+                            device,
+                        )
+                        for start in range(0, len(picked), bs_stage):
+                            end = min(len(picked), start + bs_stage)
+                            batch_id = start // bs_stage + 1
+                            real_indices = picked[start:end]
+                            padded_indices = pad_indices_to_batch(real_indices, bs_stage)
+                            x_batch, cond_batch = make_train_batch(
+                                adapter,
+                                ds,
+                                padded_indices,
+                                device,
+                                use_bfloat16=use_bfloat16_train_batch,
+                            )
+                            rngs = array_to_device(
+                                jnp.stack(
+                                    [
+                                        jax.random.PRNGKey(
+                                            cfg.seed
+                                            + 700_000 * (ckpt_i + 1)
+                                            + 10_000 * snap_id
+                                            + start
+                                            + j
+                                        )
+                                        for j in range(bs_stage)
+                                    ],
+                                    axis=0,
+                                ),
+                                device,
+                            )
+                            (
+                                jacobian_norm_batch,
+                                phi_batch,
+                                v_l2_batch,
+                            ) = train_normalized_residual_jacobian_batch(
+                                params,
+                                x_batch,
+                                cond_batch,
+                                rngs,
+                                t_scalar,
+                                norm_probes,
+                            )
+                            phi_batch.block_until_ready()
+                            term_features[start:end] = np.asarray(
+                                phi_batch[: end - start], dtype=np.float32
+                            )
+                            term_v_l2_features[start:end] = np.asarray(
+                                v_l2_batch[: end - start], dtype=np.float32
+                            )
+                            term_jacobian_norms[start:end] = np.asarray(
+                                jacobian_norm_batch[: end - start], dtype=np.float32
+                            )
+                            if batch_id == 1 or batch_id % 10 == 0 or end == len(picked):
+                                print(
+                                    f"[stage:train] decomposed batch {batch_id}/{total_batches} | "
+                                    f"ckpt={ckpt_i + 1}/{len(ckpts)} | "
+                                    f"snapshot={snap_id + 1}/{len(t_seq)} | "
+                                    f"datapoints={end}/{len(picked)} | t={int(t_value)} | "
+                                    f"elapsed={format_seconds(time.time() - stage_start_time)}",
+                                    flush=True,
+                                )
+                        train_phi_terms.append(term_features)
+                        train_v_l2_terms.append(term_v_l2_features)
+                        train_jacobian_norm_terms.append(term_jacobian_norms)
+                        train_ckpt_indices.append(int(ckpt_i))
+                        train_timesteps.append(int(t_value))
+                        train_snapshot_positions.append(int(pos_seq[snap_id]))
+                        train_ckpt_paths.append(str(ckpt_path))
+                        train_term_weights.append(ckpt_lr_weight / float(max(1, len(t_seq))))
+                        stage_terms_done += 1
+                        print(
+                            f"[stage:train] decomposed term saved in memory | "
+                            f"terms={stage_terms_done}/{stage_total_terms}",
+                            flush=True,
+                        )
+
+                    if stage_part_path is None:
+                        raise RuntimeError(
+                            "Decomposed residual/Jacobian mode requires a checkpoint-part artifact path."
+                        )
+                    save_npz_compressed_atomic(
+                        stage_part_path,
+                        train_features=np.stack(train_phi_terms, axis=0).astype(np.float32),
+                        train_features_v_l2_normalized=np.stack(
+                            train_v_l2_terms, axis=0
+                        ).astype(np.float32),
+                        train_jacobian_norms=np.stack(train_jacobian_norm_terms, axis=0).astype(np.float32),
+                        score_indices=np.asarray(picked, dtype=np.int64),
+                        ckpt_indices=np.asarray(train_ckpt_indices, dtype=np.int32),
+                        timesteps=np.asarray(train_timesteps, dtype=np.int32),
+                        snapshot_positions=np.asarray(train_snapshot_positions, dtype=np.int32),
+                        term_weights=np.asarray(train_term_weights, dtype=np.float32),
+                        ckpt_paths=np.asarray(train_ckpt_paths),
+                        proj_dim=np.asarray(proj_dim, dtype=np.int32),
+                        train_mc_samples=np.asarray(cfg.train_mc_samples, dtype=np.int32),
+                        train_feature_semantics=np.asarray(
+                            "projected_expected_jacobian_transpose_expected_residual_over_frobenius_norm"
+                        ),
+                        train_jacobian_norm_semantics=np.asarray(
+                            "hutchinson_projected_expected_predicted_noise_jacobian_frobenius_norm"
+                        ),
+                        train_v_l2_feature_semantics=np.asarray(
+                            "mean_probe_projected_residual_times_unit_probe_gradient"
+                        ),
+                        jacobian_norm_probes=np.asarray(norm_probe_count, dtype=np.int32),
+                    )
+                    print(
+                        f"[stage:train] saved decomposed checkpoint part "
+                        f"{ckpt_i + 1}/{len(ckpts)}: {stage_part_path}",
+                        flush=True,
+                    )
+                    used_ckpts_for_stage.append(ckpt_path)
+                    print(
+                        f"[stage:{stage_mode}] checkpoint {ckpt_i + 1}/{len(ckpts)} done | "
+                        f"elapsed={format_seconds(time.time() - stage_ckpt_start)} | "
+                        f"total_elapsed={format_seconds(time.time() - stage_start_time)}",
+                        flush=True,
+                    )
+                    continue
 
                 if aggregate_train_timestamps:
                     aggregate_timestamp_count = max(

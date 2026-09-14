@@ -44,7 +44,21 @@ SCORE_SCHEMES = {
     "aligned100x1_stream": "traj_tracin_aligned100x1_stream",
     "aligned100x1_saved": "traj_tracin_aligned100x1_saved",
     "predicted_noise_jvp_l2_squared": "traj_tracin_predicted_noise_jvp_l2_squared",
+    "expected_residual_jacobian_fnorm_original_f": "traj_tracin_expected_residual_jacobian_fnorm_original_f",
+    "expected_residual_jacobian_v_l2_original_f": "traj_tracin_expected_residual_jacobian_v_l2_original_f",
+    "expected_residual_jacobian_fnorm_predicted_noise": "traj_tracin_expected_residual_jacobian_fnorm_predicted_noise",
+    "expected_residual_jacobian_v_l2_predicted_noise": "traj_tracin_expected_residual_jacobian_v_l2_predicted_noise",
 }
+EXPECTED_RESIDUAL_JACOBIAN_SCHEMES = {
+    "expected_residual_jacobian_fnorm_original_f",
+    "expected_residual_jacobian_v_l2_original_f",
+    "expected_residual_jacobian_fnorm_predicted_noise",
+    "expected_residual_jacobian_v_l2_predicted_noise",
+}
+EXPECTED_RESIDUAL_JACOBIAN_VARIANTS = (
+    ("raw", "score"),
+    ("query_l2", "score_query_normalized"),
+)
 
 
 def parse_ints(text: str) -> list[int]:
@@ -106,7 +120,11 @@ def main() -> None:
         help=(
             "Comma/space list: original, constant_lr_uniform, "
             "cosine_lr_ddim_step_squared, checkpoint_shared_100x1_query100, "
-            "aligned100x1_stream, aligned100x1_saved, predicted_noise_jvp_l2_squared."
+            "aligned100x1_stream, aligned100x1_saved, predicted_noise_jvp_l2_squared, "
+            "expected_residual_jacobian_fnorm_original_f, "
+            "expected_residual_jacobian_v_l2_original_f, "
+            "expected_residual_jacobian_fnorm_predicted_noise, "
+            "expected_residual_jacobian_v_l2_predicted_noise."
         ),
     )
     parser.add_argument("--python-bin", default=os.environ.get("PYTHON_BIN", sys.executable))
@@ -121,7 +139,11 @@ def main() -> None:
     if not scheme_names or invalid_schemes:
         raise ValueError(f"Invalid --score-schemes: {invalid_schemes or args.score_schemes!r}")
     expected_results = len(query_ids) * len(TARGETS) * sum(
-        len(PREDICTED_NOISE_JVP_VARIANTS) if name == "predicted_noise_jvp_l2_squared" else len(VARIANTS)
+        len(EXPECTED_RESIDUAL_JACOBIAN_VARIANTS)
+        if name in EXPECTED_RESIDUAL_JACOBIAN_SCHEMES
+        else len(PREDICTED_NOISE_JVP_VARIANTS)
+        if name == "predicted_noise_jvp_l2_squared"
+        else len(VARIANTS)
         for name in scheme_names
     )
     result_root = SHAPES_ROOT / "result" / args.experiment
@@ -181,7 +203,9 @@ def main() -> None:
             score_namespace = SCORE_SCHEMES[scheme_name]
             score_root = query_score_root / score_namespace
             scheme_variants = (
-                PREDICTED_NOISE_JVP_VARIANTS
+                EXPECTED_RESIDUAL_JACOBIAN_VARIANTS
+                if scheme_name in EXPECTED_RESIDUAL_JACOBIAN_SCHEMES
+                else PREDICTED_NOISE_JVP_VARIANTS
                 if scheme_name == "predicted_noise_jvp_l2_squared"
                 else VARIANTS
             )
