@@ -17,6 +17,10 @@ from pathlib import Path
 
 import numpy as np
 
+REFINE_ROOT = Path(__file__).resolve().parents[1]
+if str(REFINE_ROOT) not in sys.path:
+    sys.path.insert(0, str(REFINE_ROOT))
+
 from common.config_loader import load_config, require_attr
 
 
