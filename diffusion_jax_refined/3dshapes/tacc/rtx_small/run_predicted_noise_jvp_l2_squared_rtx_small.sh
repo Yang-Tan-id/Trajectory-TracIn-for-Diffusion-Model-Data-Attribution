@@ -67,7 +67,7 @@ wait_all() {
 echo "3D Shapes predicted-noise JVP L2-squared attribution on RTX-small"
 echo "reuse=train TrajTracIn 50 checkpoints x 10 timestamps x 10-MC mean loss"
 echo "GPU 0/1 split 10 queries, then split the 50 checkpoints"
-echo "outputs=constant and learning-rate-squared scores; transient query gradients are deleted"
+echo "outputs=raw, query-L2, train-L2, and query+train-L2 variants with LR-squared term weights"
 echo "logs=${LOG_ROOT}"
 nvidia-smi
 
@@ -112,7 +112,7 @@ echo "[phase 3/4] merge scores and remove transient query gradients"
   --shard-count 2 \
   --cleanup-query-artifacts
 
-echo "[phase 4/4] cached LDS for constant and lr2 variants"
+echo "[phase 4/4] cached LDS for the four original normalization variants"
 JAX_PLATFORMS=cpu "${PYTHON_BIN}" "${SHAPES_ROOT}/script/run_traj_tracin_lds_cached.py" \
   --execute \
   --experiment "${EXPERIMENT_TAG}" \

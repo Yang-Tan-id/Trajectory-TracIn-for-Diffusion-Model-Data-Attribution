@@ -238,8 +238,10 @@ This score reuses the original Traj TracIn train artifact (50 checkpoints,
 loss per datapoint/term). For each query term it differentiates one Gaussian
 scalar probe of the vector predicted-noise output, immediately computes and
 squares its dot products with all 5,000 saved train gradients, and retains
-only the final scores. It produces uniform and learning-rate-squared variants;
-the transient query-gradient artifacts are deleted after score materialization.
+only the final scores. It produces the original raw, query-L2, train-L2, and
+query+train-L2 variants, using learning-rate-squared term weights because the
+directional output change is squared. The transient query-gradient artifacts
+are deleted after score materialization.
 
 Run the complete one-node/two-GPU RTX-small pipeline, including cached LDS evaluation:
 
@@ -247,9 +249,9 @@ Run the complete one-node/two-GPU RTX-small pipeline, including cached LDS evalu
 sbatch diffusion_jax_refined/3dshapes/tacc/rtx_small/run_predicted_noise_jvp_l2_squared_rtx_small.sh
 ```
 
-Permanent scores are written below
-`traj_tracin_predicted_noise_jvp_l2_squared/score_constant` and
-`traj_tracin_predicted_noise_jvp_l2_squared/score_lr2`.
+Permanent scores are written below `traj_tracin_predicted_noise_jvp_l2_squared`
+in `score`, `score_query_normalized`, `score_train_l2_normalized`, and
+`score_query_train_l2_normalized`.
 
 ### Noise-specific normalized 10x10 DAS
 

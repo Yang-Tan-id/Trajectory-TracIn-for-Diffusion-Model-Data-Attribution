@@ -132,9 +132,12 @@ def score_shard(args: argparse.Namespace) -> None:
         (int(ckpt), int(timestep)): term_id
         for term_id, (ckpt, timestep) in enumerate(zip(query_meta["ckpt_indices"], query_meta["timesteps"]))
     }
-    sums_constant = np.zeros((10, 5000), dtype=np.float64)
-    sums_lr2 = np.zeros_like(sums_constant)
-    constant_weight_sum = 0.0
+    sums = {
+        "score": np.zeros((10, 5000), dtype=np.float64),
+        "score_query_normalized": np.zeros((10, 5000), dtype=np.float64),
+        "score_train_l2_normalized": np.zeros((10, 5000), dtype=np.float64),
+        "score_query_train_l2_normalized": np.zeros((10, 5000), dtype=np.float64),
+    }
     lr2_weight_sum = 0.0
     score_indices = None
     used_terms = 0
@@ -163,11 +166,22 @@ def score_shard(args: argparse.Namespace) -> None:
             train_device = jax.device_put(jnp.asarray(train[local_term]))
             query_device = jax.device_put(jnp.asarray(query[:, query_term, :]))
             directional = train_device @ query_device.T
-            squared = np.asarray(jax.device_get(jnp.square(directional)), dtype=np.float64).T
-            sums_constant += squared
-            sums_lr2 += float(weight) ** 2 * squared
-            constant_weight_sum += 1.0
-            lr2_weight_sum += float(weight) ** 2
+            train_norm = jnp.linalg.norm(train_device, axis=1) + 1e-8
+            query_norm = jnp.linalg.norm(query_device, axis=1) + 1e-8
+            term_scores = {
+                "score": jnp.square(directional),
+                "score_query_normalized": jnp.square(directional / query_norm[None, :]),
+                "score_train_l2_normalized": jnp.square(directional / train_norm[:, None]),
+                "score_query_train_l2_normalized": jnp.square(
+                    directional / train_norm[:, None] / query_norm[None, :]
+                ),
+            }
+            weight_squared = float(weight) ** 2
+            for component, values in term_scores.items():
+                sums[component] += weight_squared * np.asarray(
+                    jax.device_get(values), dtype=np.float64
+                ).T
+            lr2_weight_sum += weight_squared
             used_terms += 1
         print(f"[score shard {args.shard_index}/{args.shard_count}] checkpoint={ckpt_i} terms={used_terms}", flush=True)
 
@@ -175,9 +189,7 @@ def score_shard(args: argparse.Namespace) -> None:
         raise RuntimeError("checkpoint shard selected no train parts")
     atomic_savez(
         output,
-        sums_constant=sums_constant,
-        sums_lr2=sums_lr2,
-        constant_weight_sum=np.asarray(constant_weight_sum, dtype=np.float64),
+        **{f"sums_{component}": values for component, values in sums.items()},
         lr2_weight_sum=np.asarray(lr2_weight_sum, dtype=np.float64),
         score_indices=score_indices,
         used_terms=np.asarray(used_terms, dtype=np.int32),
@@ -194,9 +206,12 @@ def atomic_save(path: Path, value: np.ndarray) -> None:
 
 
 def merge(args: argparse.Namespace) -> None:
-    total_constant = np.zeros((10, 5000), dtype=np.float64)
-    total_lr2 = np.zeros_like(total_constant)
-    constant_denom = 0.0
+    totals = {
+        "score": np.zeros((10, 5000), dtype=np.float64),
+        "score_query_normalized": np.zeros((10, 5000), dtype=np.float64),
+        "score_train_l2_normalized": np.zeros((10, 5000), dtype=np.float64),
+        "score_query_train_l2_normalized": np.zeros((10, 5000), dtype=np.float64),
+    }
     lr2_denom = 0.0
     terms = 0
     score_indices = None
@@ -209,9 +224,10 @@ def merge(args: argparse.Namespace) -> None:
         if not path.is_file():
             raise FileNotFoundError(path)
         with np.load(path, allow_pickle=False) as payload:
-            total_constant += np.asarray(payload["sums_constant"], dtype=np.float64)
-            total_lr2 += np.asarray(payload["sums_lr2"], dtype=np.float64)
-            constant_denom += float(payload["constant_weight_sum"])
+            for component in totals:
+                totals[component] += np.asarray(
+                    payload[f"sums_{component}"], dtype=np.float64
+                )
             lr2_denom += float(payload["lr2_weight_sum"])
             terms += int(payload["used_terms"])
             indices = np.asarray(payload["score_indices"], dtype=np.int64)
@@ -219,16 +235,13 @@ def merge(args: argparse.Namespace) -> None:
             score_indices = indices
         elif not np.array_equal(score_indices, indices):
             raise ValueError(f"score indices differ in {path}")
-    if terms != 500 or constant_denom != 500.0:
-        raise ValueError(f"expected 500 terms, got terms={terms} weight={constant_denom}")
+    if terms != 500 or lr2_denom <= 0.0:
+        raise ValueError(f"expected 500 terms and positive LR2 weight, got terms={terms} weight={lr2_denom}")
     expected = np.asarray(np.load(ATTRIBUTION_INDICES_PATH), dtype=np.int64)
     if score_indices is None or not np.array_equal(np.sort(score_indices), np.sort(expected)):
         raise ValueError("score indices do not match attribution_5k_indices.npy")
 
-    scores = {
-        "score_constant": total_constant / constant_denom,
-        "score_lr2": total_lr2 / lr2_denom,
-    }
+    scores = {component: values / lr2_denom for component, values in totals.items()}
     for component, values in scores.items():
         for query_id, record in enumerate(records()):
             out_dir = (
@@ -246,7 +259,13 @@ def merge(args: argparse.Namespace) -> None:
             manifest = {
                 "algorithm": SCORE_NAMESPACE,
                 "score_variant": component,
-                "definition": "weighted_mean_terms((projected_train_loss_gradient dot projected_query_probe_gradient)^2)",
+                "definition": "lr_squared_weighted_mean_terms(squared_normalized_dot_product)",
+                "normalization_variants": [
+                    "raw",
+                    "query_l2",
+                    "train_l2",
+                    "query_train_l2",
+                ],
                 "num_output_probes_per_term": 1,
                 "num_checkpoints": 50,
                 "timestamps_per_checkpoint": 10,
@@ -263,7 +282,7 @@ def merge(args: argparse.Namespace) -> None:
             if path.is_file():
                 path.unlink()
                 print(f"[cleanup] removed transient query gradient: {path}", flush=True)
-    print(f"[done] materialized constant and lr2 scores for 10 queries; terms={terms}", flush=True)
+    print(f"[done] materialized four normalized score variants for 10 queries; terms={terms}", flush=True)
 
 
 def main() -> None:

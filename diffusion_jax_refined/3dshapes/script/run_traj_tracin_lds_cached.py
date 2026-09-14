@@ -35,10 +35,7 @@ VARIANTS = (
     ("train_l2", "score_train_l2_normalized"),
     ("query_train_l2", "score_query_train_l2_normalized"),
 )
-PREDICTED_NOISE_JVP_VARIANTS = (
-    ("constant", "score_constant"),
-    ("lr2", "score_lr2"),
-)
+PREDICTED_NOISE_JVP_VARIANTS = VARIANTS
 SCORE_SCHEMES = {
     "original": "traj_tracin",
     "constant_lr_uniform": "traj_tracin_constant_lr_uniform",
