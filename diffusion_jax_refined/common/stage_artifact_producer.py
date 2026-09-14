@@ -67,6 +67,16 @@ def run_train_datapoint_gradient_artifact(config_path: str | Path) -> Path:
         }[algorithm]
         with _temporary_env({mode_env: "train", path_env: str(artifact)}):
             run_algorithm_config(config_path)
+        if (
+            algorithm == "traj_tracin"
+            and os.environ.get("TRAJ_TRACIN_SKIP_STAGE_MERGE", "0").strip().lower()
+            in ("1", "true", "yes", "on")
+        ):
+            print(
+                "[stage-1] Traj TracIn checkpoint shard completed; "
+                f"final merge intentionally deferred for {artifact}"
+            )
+            return out_dir
         if not artifact.is_file():
             raise FileNotFoundError(f"{algorithm} train stage did not produce {artifact}")
         return out_dir
