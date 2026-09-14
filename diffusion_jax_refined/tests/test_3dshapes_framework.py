@@ -90,7 +90,7 @@ class Test3DShapesFramework(unittest.TestCase):
         self.assertIn('base_cmd + ["--dry-run"]', launcher)
         self.assertIn('base_cmd + ["--reuse-prepared", "--finalize-only"]', launcher)
 
-    def test_h100_aligned100x1_stream_contract(self):
+    def test_h100_aligned100x1_saved_gradient_contract(self):
         launcher = (
             THREED
             / "tacc"
@@ -101,16 +101,24 @@ class Test3DShapesFramework(unittest.TestCase):
             THREED / "script" / "run_traj_tracin_aligned100x1_stream.py"
         ).read_text()
         algorithm = (ROOT / "legacy_jax" / "traj_tracin" / "algorithm.py").read_text()
+        lds_driver = (THREED / "script" / "run_traj_tracin_lds_cached.py").read_text()
 
         self.assertIn("#SBATCH -N 4", launcher)
         self.assertIn("#SBATCH -n 16", launcher)
-        self.assertLess(launcher.index("[phase 1/3]"), launcher.index("[phase 2/3]"))
+        self.assertLess(launcher.index("[phase 1/4]"), launcher.index("[phase 2/4]"))
         self.assertIn('TRAJ_TRAIN_MC_SAMPLES="1"', driver)
         self.assertIn('TRAJ_NUM_SNAPSHOTS="100"', driver)
-        self.assertIn('TRAJ_TRACIN_STAGE_MODE="score_stream"', driver)
-        self.assertIn('"train_gradient_artifact_saved": False', driver)
-        self.assertIn("TRAJ_TRACIN_CANDIDATE_SHARD_COUNT", algorithm)
-        self.assertIn("int(padded_indices[j])", algorithm)
+        self.assertIn('TRAJ_TRACIN_STAGE_MODE="train"', driver)
+        self.assertIn('TRAJ_TRACIN_SKIP_STAGE_MERGE="1"', driver)
+        self.assertIn('TRAJ_TRACIN_TRAIN_EXCLUDE_FINAL_CHECKPOINT="1"', driver)
+        self.assertIn("train_ckpt_shard_", launcher)
+        self.assertIn("validate-train", launcher)
+        self.assertIn("score-saved", launcher)
+        self.assertIn("merge-saved", launcher)
+        self.assertIn("run_saved_score_shard", driver)
+        self.assertIn("merge_saved_score_shards", driver)
+        self.assertIn("exclude_final_train_checkpoint", algorithm)
+        self.assertIn('"aligned100x1_saved": "traj_tracin_aligned100x1_saved"', lds_driver)
 
     def test_das_aligned10x10_uses_isolated_matching_term_namespace(self):
         train_launcher = (

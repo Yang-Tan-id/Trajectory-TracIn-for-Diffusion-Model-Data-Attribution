@@ -2657,8 +2657,22 @@ def run_attribution(cfg: TrajAttributionConfig):
             "True",
             "yes",
         )
+        exclude_final_train_checkpoint = (
+            stage_mode == "train"
+            and os.environ.get("TRAJ_TRACIN_TRAIN_EXCLUDE_FINAL_CHECKPOINT", "0").strip().lower()
+            in ("1", "true", "yes", "on")
+        )
+        if exclude_final_train_checkpoint:
+            stage_checkpoint_count -= 1
 
         for ckpt_i, ckpt_path in enumerate(ckpts):
+            if exclude_final_train_checkpoint and ckpt_i + 1 >= len(ckpts):
+                print(
+                    f"[stage:{stage_mode}] skipping final checkpoint "
+                    f"{ckpt_i + 1}/{len(ckpts)} to align with next-checkpoint query terms",
+                    flush=True,
+                )
+                continue
             if stage_mode != "train" and uses_next_checkpoint_target and ckpt_i + 1 >= len(ckpts):
                 print(
                     f"[stage:{stage_mode}] skipping final checkpoint "
@@ -3243,7 +3257,7 @@ def run_attribution(cfg: TrajAttributionConfig):
             ]
             if not part_paths:
                 raise RuntimeError(f"No TrajTracIn train checkpoint parts were produced under {stage_part_dir}.")
-            expected_stage_parts = len(ckpts)
+            expected_stage_parts = len(ckpts) - (1 if exclude_final_train_checkpoint else 0)
             if len(part_paths) != expected_stage_parts:
                 missing_parts = [
                     os.path.join(stage_part_dir, f"ckpt_{ckpt_i:04d}.npz")

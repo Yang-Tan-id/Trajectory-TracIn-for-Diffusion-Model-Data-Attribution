@@ -193,20 +193,23 @@ the large multiplication 100 times:
 sbatch diffusion_jax_refined/3dshapes/tacc/rtx_small/run_traj_tracin_checkpoint_shared_100x1_query_score_rtx_small.sh
 ```
 
-For an exact timestamp-aligned `100 timestamps x 1 MC` comparison without a
-train-gradient artifact, the H100 streaming launcher requests four nodes and
-four GPUs per node. It first caches the ten query-gradient artifacts, waits for
-all ten, then shards the fixed random 5k attribution subset across all 16 GPUs.
-Each train gradient is immediately dotted with all ten aligned query gradients
-and discarded; only score shards and the final four score variants are saved:
+For an exact timestamp-aligned `100 timestamps x 1 MC` comparison with retained
+train gradients, the H100 launcher requests four nodes and four GPUs per node.
+It first caches the ten query-gradient artifacts, then shards the 49 usable
+training checkpoints across all 16 GPUs. Each checkpoint stores 100 timestamp
+gradients for the fixed random 5k attribution subset:
 
 ```bash
 sbatch diffusion_jax_refined/3dshapes/tacc/h100/run_traj_tracin_aligned100x1_stream_h100.sh
 ```
 
-The launcher is restartable: completed query artifacts and stream shards are
-skipped. Final score directories use the namespace
-`traj_tracin_aligned100x1_stream`.
+The launcher is restartable: completed query artifacts and checkpoint parts are
+skipped. It keeps 49 independent checkpoint parts under the namespace
+`traj_tracin_aligned100x1_saved`, totaling roughly 374 GiB. It intentionally
+does not merge them into a second 374-GiB artifact. Once all parts exist, the
+same 16 workers read their assigned checkpoint parts, compute all ten queries'
+raw/query-normalized/train-normalized/both-normalized scores, and merge only
+the small score shards.
 
 To run the timestamp-aligned DAS comparison with 10 uniformly spaced
 timestamps and one stored gradient per timestamp. Each datapoint forms the

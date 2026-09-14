@@ -41,6 +41,7 @@ SCORE_SCHEMES = {
     "cosine_lr_ddim_step_squared": "traj_tracin_cosine_lr_ddim_step_squared",
     "checkpoint_shared_100x1_query100": "traj_tracin_checkpoint_shared_100x1_query100",
     "aligned100x1_stream": "traj_tracin_aligned100x1_stream",
+    "aligned100x1_saved": "traj_tracin_aligned100x1_saved",
 }
 
 
@@ -103,7 +104,7 @@ def main() -> None:
         help=(
             "Comma/space list: original, constant_lr_uniform, "
             "cosine_lr_ddim_step_squared, checkpoint_shared_100x1_query100, "
-            "aligned100x1_stream."
+            "aligned100x1_stream, aligned100x1_saved."
         ),
     )
     parser.add_argument("--python-bin", default=os.environ.get("PYTHON_BIN", sys.executable))
