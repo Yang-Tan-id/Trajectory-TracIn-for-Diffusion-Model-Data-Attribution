@@ -21,6 +21,8 @@ class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
     def test_query_probe_is_scalar_and_raw_projected(self):
         text = (ROOT / "legacy_jax" / "traj_tracin" / "algorithm.py").read_text()
         self.assertIn('"trajectory_predicted_noise_probe"', text)
+        self.assertIn("def predicted_noise_probe_key", text)
+        self.assertNotIn("make_jax_key(", text)
         self.assertIn("jnp.sum(eps.astype(jnp.float32) * output_probe.astype(jnp.float32)) / normalizer", text)
         self.assertIn("stage_features.append(np.asarray(projector(one_grad), dtype=np.float32))", text)
 

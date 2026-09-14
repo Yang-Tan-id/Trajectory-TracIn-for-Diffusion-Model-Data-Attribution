@@ -38,6 +38,14 @@ def save_npz_compressed_atomic(path: str, **arrays) -> None:
     os.replace(tmp_path, path)
 
 
+def predicted_noise_probe_key(seed: int, checkpoint_index: int, timestep: int, snapshot_position: int):
+    """Deterministic, domain-separated RNG key for one output-space probe."""
+    key = jax.random.PRNGKey(seed)
+    for value in (0x50524F42, checkpoint_index, timestep, snapshot_position):
+        key = jax.random.fold_in(key, int(value))
+    return key
+
+
 def merge_train_checkpoint_parts_atomic(
     path: str,
     part_paths: Sequence[str],
@@ -2917,9 +2925,8 @@ def run_attribution(cfg: TrajAttributionConfig):
                         probe_keys = array_to_device(
                             jnp.stack(
                                 [
-                                    make_jax_key(
+                                    predicted_noise_probe_key(
                                         cfg.seed,
-                                        "traj_predicted_noise_output_probe",
                                         ckpt_i,
                                         int(t_seq[i]),
                                         int(pos_seq[i]),
@@ -3374,7 +3381,7 @@ def run_attribution(cfg: TrajAttributionConfig):
                     output_probes_per_term=np.asarray(1, dtype=np.int32),
                     output_probe_normalization=np.asarray("sqrt_num_output_elements"),
                     output_probe_seed_rule=np.asarray(
-                        "make_jax_key(seed,traj_predicted_noise_output_probe,checkpoint_index,timestep,snapshot_position)"
+                        "fold_in(PRNGKey(seed),domain_tag,checkpoint_index,timestep,snapshot_position)"
                     ),
                 )
             if uses_checkpoint_trajectory_target:
