@@ -149,6 +149,11 @@ ATTRIBUTION_CONFIGS = {
         "sync_config_from_checkpoint": True,
         "ddim_steps": 1000,
         "num_traj_snapshots": int(os.environ.get("TRAJ_NUM_SNAPSHOTS", "10")),
+        "traj_snapshot_positions": (
+            _int_list("TRAJ_SNAPSHOT_POSITIONS", ())
+            if os.environ.get("TRAJ_SNAPSHOT_POSITIONS")
+            else None
+        ),
         "snapshot_chunk_size": int(os.environ.get("TRAJ_SNAPSHOT_CHUNK_SIZE", "8")),
         "train_mc_samples": int(os.environ.get("TRAJ_TRAIN_MC_SAMPLES", "10")),
         "tracin_use_learning_rate_weights": True,
