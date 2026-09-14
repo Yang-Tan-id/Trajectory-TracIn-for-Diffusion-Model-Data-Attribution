@@ -130,3 +130,16 @@ spaced timestamps, one MC sample per timestamp, and projection dimension 4096:
 ```bash
 sbatch diffusion_jax_refined/3dshapes/tacc/rtx_small/run_das_train_rtx_small.sh
 ```
+
+After all three LDS subset-seed folders and the ten full DDIM trajectories are
+available, compute the four reusable true-f targets before running any LDS
+score correlation:
+
+```bash
+sbatch diffusion_jax_refined/3dshapes/tacc/rtx_small/run_lds_true_f_rtx_small.sh
+```
+
+The two RTX GPUs run disjoint model shards (96 of the 192 LDS models each).
+For every query/model pair the checkpoint is restored once, and endpoint and
+trajectory counterfactual targets share one generated DDIM trajectory. Existing
+target JSON caches are skipped, so resubmitting safely resumes missing work.

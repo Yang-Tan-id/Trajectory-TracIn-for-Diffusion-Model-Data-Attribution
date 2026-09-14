@@ -164,7 +164,28 @@ def main() -> None:
         default=os.environ.get("LDS_TRAJECTORY_SAMPLER", os.environ.get("DIFFUSION_TRAJECTORY_SAMPLER", "ddpm")),
     )
     parser.add_argument("--out-dir", default=None)
+    parser.add_argument(
+        "--true-f-only",
+        action="store_true",
+        help="Compute/cache target values without loading attribution scores or producing LDS correlations.",
+    )
+    parser.add_argument(
+        "--model-shard-index",
+        type=int,
+        default=int(os.environ.get("LDS_MODEL_SHARD_INDEX", "0")),
+    )
+    parser.add_argument(
+        "--model-shard-count",
+        type=int,
+        default=int(os.environ.get("LDS_MODEL_SHARD_COUNT", "1")),
+    )
     args = parser.parse_args()
+    if args.model_shard_count <= 0:
+        parser.error("--model-shard-count must be positive")
+    if not 0 <= args.model_shard_index < args.model_shard_count:
+        parser.error("--model-shard-index must be in [0, --model-shard-count)")
+    if args.model_shard_count != 1 and not args.true_f_only:
+        parser.error("model sharding is supported only with --true-f-only")
 
     dataset_cfg = load_config(args.config)
     legacy_root = Path(require_attr(dataset_cfg, "LEGACY_JAX_ROOT"))
@@ -235,7 +256,7 @@ def main() -> None:
     diffusion_timesteps = int(configs[0]["train_config_template"].get("timesteps", 1000))
 
     score_file = args.score_file or os.environ.get("ATTRIBUTION_RESULT_DIRS")
-    if score_file is None:
+    if score_file is None and not args.true_f_only:
         root_attr = (
             "UNPROMPTED_ATTRIBUTION_RUN_ROOT" if args.unprompted else "ATTRIBUTION_RUN_ROOT"
         )
@@ -257,14 +278,27 @@ def main() -> None:
             score_file = ",".join(str(path) for path in matches) or str(
                 attribution_root / algorithm_dir
             )
-    score_inputs = resolve_score_inputs(score_file)
-    indices, scores, sources = combine_attribution_scores(score_inputs, duplicate_policy=args.duplicate_policy)
-    score_map = build_score_vector(indices, scores)
-    score_meta = infer_score_metadata(score_inputs)
+    score_inputs = [] if args.true_f_only else resolve_score_inputs(score_file)
+    if args.true_f_only:
+        indices = np.empty((0,), dtype=np.int64)
+        scores = np.empty((0,), dtype=np.float64)
+        sources = []
+        score_map = np.empty((0,), dtype=np.float64)
+        score_meta = {}
+    else:
+        indices, scores, sources = combine_attribution_scores(
+            score_inputs, duplicate_policy=args.duplicate_policy
+        )
+        score_map = build_score_vector(indices, scores)
+        score_meta = infer_score_metadata(score_inputs)
     score_run_config = score_meta.get("score_run_config", {})
-    prompt = infer_prompt(score_inputs) or ("unconditional" if args.unprompted else require_attr(dataset_cfg, "QUERY"))
+    prompt = (
+        infer_prompt(score_inputs) if score_inputs else None
+    ) or ("unconditional" if args.unprompted else require_attr(dataset_cfg, "QUERY"))
     sample_attr = "UNPROMPTED_ATTRIBUTION_SAMPLE_DIR" if args.unprompted else "ATTRIBUTION_SAMPLE_DIR"
-    sample_dir = infer_attribution_sample_dir(score_inputs) or require_attr(dataset_cfg, sample_attr)
+    sample_dir = (
+        infer_attribution_sample_dir(score_inputs) if score_inputs else None
+    ) or require_attr(dataset_cfg, sample_attr)
     sample_seed = score_run_config.get(
         "attribution_sample_seed",
         getattr(dataset_cfg, "INITIAL_SEED", os.environ.get("INITIAL_SEED", 0)),
@@ -327,7 +361,9 @@ def main() -> None:
             / names
         )
 
-    out_dirs = {target: out_dir_for_target(target) for target in target_functions}
+    out_dirs = {} if args.true_f_only else {
+        target: out_dir_for_target(target) for target in target_functions
+    }
     for out_dir in out_dirs.values():
         out_dir.mkdir(parents=True, exist_ok=True)
     cache_root = Path(require_attr(dataset_cfg, eval_root_attr)) / "lds_target_cache"
@@ -335,16 +371,30 @@ def main() -> None:
         cache_root = cache_root / args.trajectory_sampler
     cache_root = cache_root / names
     cache_dirs = {target: cache_root / target for target in target_functions}
+    for cache_dir in cache_dirs.values():
+        cache_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.true_f_only:
+        print(
+            f"[lds-eval] true-f-only | models={len(subset_records)} | "
+            f"shard={args.model_shard_index}/{args.model_shard_count} | "
+            f"targets={','.join(target_functions)} | cache={cache_root}",
+            flush=True,
+        )
 
     rows_by_target = {target: [] for target in target_functions}
     started = time.time()
     for global_id, (model_dir, subset_dir, subset) in enumerate(subset_records):
+        if global_id % args.model_shard_count != args.model_shard_index:
+            continue
         kept = np.load(subset_dir / "kept_attribution_indices.npy")
-        if args.prediction_subset == "kept":
-            prediction_indices = kept
-        else:
-            prediction_indices = np.load(subset_dir / "excluded_attribution_indices.npy")
-        prediction = sum_scores(prediction_indices, score_map, args.prediction_sign)
+        prediction = None
+        if not args.true_f_only:
+            if args.prediction_subset == "kept":
+                prediction_indices = kept
+            else:
+                prediction_indices = np.load(subset_dir / "excluded_attribution_indices.npy")
+            prediction = sum_scores(prediction_indices, score_map, args.prediction_sign)
         try:
             checkpoint = latest_checkpoint(str(subset_dir))
         except FileNotFoundError:
@@ -382,6 +432,15 @@ def main() -> None:
                     details=details,
                     trajectory_sampler=args.trajectory_sampler,
                 )
+        if args.true_f_only:
+            print(
+                f"[{global_id + 1}/{len(subset_records)}] {model_dir.name}/{subset_dir.name} "
+                f"targets={','.join(target_functions)} "
+                f"cached={len(target_functions) - len(missing_targets)} "
+                f"computed={len(missing_targets)}",
+                flush=True,
+            )
+            continue
         for target_function in target_functions:
             true_f, details = values[target_function]
             row = {
@@ -408,6 +467,25 @@ def main() -> None:
             f"computed={len(missing_targets)}",
             flush=True,
         )
+
+    if args.true_f_only:
+        manifest = {
+            "mode": "true_f_only",
+            "prompt": prompt,
+            "sample_seed": sample_seed,
+            "trajectory_sampler": args.trajectory_sampler,
+            "target_functions": target_functions,
+            "num_models_total": len(subset_records),
+            "model_shard_index": args.model_shard_index,
+            "model_shard_count": args.model_shard_count,
+            "elapsed_sec": time.time() - started,
+        }
+        manifest_path = cache_root / (
+            f"true_f_shard_{args.model_shard_index:02d}_of_{args.model_shard_count:02d}.json"
+        )
+        manifest_path.write_text(json.dumps(manifest, indent=2))
+        print(f"[lds-eval] true-f shard complete: {cache_root}", flush=True)
+        return
 
     for target_function, rows in rows_by_target.items():
         out_dir = out_dirs[target_function]

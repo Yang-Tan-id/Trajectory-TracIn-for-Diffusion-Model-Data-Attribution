@@ -1038,33 +1038,41 @@ class CifarTargetEvaluator:
 
     def evaluate_many(self, checkpoint: str, target_functions: Sequence[str]) -> Dict[str, Tuple[float, Dict[str, object]]]:
         targets = [normalize_target_function(target) for target in target_functions]
-        if set(targets).issubset({"endpoint_contarfactual", "traj_contarfactual"}):
+        target_adapter = self._make_adapter(checkpoint)
+        counterfactual_targets = set(targets) & {"endpoint_contarfactual", "traj_contarfactual"}
+        values: Dict[str, Tuple[float, Dict[str, object]]] = {}
+        if counterfactual_targets:
             if self.sample_seed is None:
                 raise ValueError("trajectory counterfactual targets require --attribution-sample-seed/seed metadata.")
             assert self.t_seq is not None
-            target_adapter = self._make_adapter(checkpoint)
             target_xt = self._sample_model_space_trajectory(
                 target_adapter,
                 seed=int(self.sample_seed),
                 timesteps_to_save=self.t_seq,
             )
-            return self._counterfactual_values_from_trajectory(
-                target_xt,
-                include_endpoint="endpoint_contarfactual" in targets,
-                include_traj="traj_contarfactual" in targets,
+            values.update(
+                self._counterfactual_values_from_trajectory(
+                    target_xt,
+                    include_endpoint="endpoint_contarfactual" in targets,
+                    include_traj="traj_contarfactual" in targets,
+                )
             )
-        values: Dict[str, Tuple[float, Dict[str, object]]] = {}
         original_target = self.target_function
         try:
             for target in targets:
+                if target in counterfactual_targets:
+                    continue
                 self.target_function = target
-                values[target] = self.evaluate(checkpoint)
+                values[target] = self._evaluate_with_adapter(target_adapter)
         finally:
             self.target_function = original_target
         return values
 
     def evaluate(self, checkpoint: str) -> Tuple[float, Dict[str, object]]:
         target_adapter = self._make_adapter(checkpoint)
+        return self._evaluate_with_adapter(target_adapter)
+
+    def _evaluate_with_adapter(self, target_adapter: CIFARAdapter) -> Tuple[float, Dict[str, object]]:
         # Store the target adapter for the jitted closures. The module/model structure is
         # identical across checkpoints; params are the dynamic inputs.
         self._target_adapter_for_jit = target_adapter
@@ -1118,7 +1126,9 @@ class CifarTargetEvaluator:
             rng_keys = [jax.random.PRNGKey(int(seed)) for seed in key_seeds.tolist()]
             t_values = jax.device_put(jnp.asarray(t_values_np, dtype=jnp.int32), self.device)
             rng_keys = jax.device_put(jnp.stack(rng_keys, axis=0), self.device)
-            value = self._simple_loss_fn(target_params, self.xt_ref, t_values, rng_keys)
+            # Multi-target evaluation keeps the full reference trajectory loaded.
+            # The simple-loss target is defined on its final x_0 endpoint only.
+            value = self._simple_loss_fn(target_params, self.xt_ref[-1:], t_values, rng_keys)
             details = {
                 "target_function": "simple_loss",
                 "simple_loss_timestep_candidates": [int(t) for t in self.simple_loss_timesteps],
