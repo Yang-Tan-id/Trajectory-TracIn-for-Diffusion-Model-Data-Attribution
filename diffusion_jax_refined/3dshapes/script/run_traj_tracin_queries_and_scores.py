@@ -83,6 +83,12 @@ def main() -> None:
         help="Optional comma/space-separated positions in the saved 1000-step DDIM trajectory.",
     )
     parser.add_argument(
+        "--num-snapshots",
+        type=int,
+        default=10,
+        help="Number of evenly spaced trajectory snapshots when --snapshot-positions is omitted.",
+    )
+    parser.add_argument(
         "--train-artifact",
         default="",
         help="Optional matching train-gradient artifact; defaults to the original 10-timestamp artifact.",
@@ -117,6 +123,8 @@ def main() -> None:
     if namespace and any(ch not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-" for ch in namespace):
         raise ValueError("--artifact-namespace may contain only letters, numbers, underscores, and hyphens")
     snapshot_positions = parse_ints(args.snapshot_positions)
+    if args.num_snapshots <= 0:
+        raise ValueError("--num-snapshots must be positive")
     default_train_dir = "traj_tracin" if not namespace else f"traj_tracin_{namespace}"
     train_artifact = Path(args.train_artifact).expanduser() if args.train_artifact else (
         result_root
@@ -146,7 +154,7 @@ def main() -> None:
         ATTRIBUTION_SCORE_MODEL_MODE="prompted_solo",
         TRAJ_QUERY_OBJECTIVE="trajectory_next_checkpoint_noise_mse",
         TRAJ_PARAMETER_SOURCE="raw",
-        TRAJ_NUM_SNAPSHOTS=str(len(snapshot_positions) if snapshot_positions else 10),
+        TRAJ_NUM_SNAPSHOTS=str(len(snapshot_positions) if snapshot_positions else args.num_snapshots),
         TRAJ_TRAIN_MC_SAMPLES="10",
         TRAJ_QUERY_USE_CONFIG_SNAPSHOTS="1",
         TRAJ_TRACIN_PROJ_DIM="4096",

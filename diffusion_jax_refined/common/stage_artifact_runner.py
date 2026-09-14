@@ -863,10 +863,53 @@ def _aligned_query_terms_for_fused_score(
         weights = _apply_traj_timestep_weighting(weights, train_ckpts, train_timesteps)
         return query, weights, np.arange(train.shape[0], dtype=np.int64)
 
-    if not _env_flag("TRACIN_ALIGN_TERMS_BY_CKPT_TIMESTEP", "0"):
-        return None
     train_ckpts = np.asarray(train_payload.get("ckpt_indices", ()), dtype=np.int32).reshape(-1)
     train_timesteps = np.asarray(train_payload.get("timesteps", ()), dtype=np.int32).reshape(-1)
+    inferred_checkpoint_shared = (
+        train_ckpts.shape[0] == train.shape[0]
+        and train_timesteps.shape[0] == train.shape[0]
+        and train_timesteps.size > 0
+        and np.all(train_timesteps == -1)
+    )
+    if train.shape[0] != query.shape[0] and (
+        "checkpoint_shared_train_gradient" in train_payload or inferred_checkpoint_shared
+    ):
+        query_ckpts = np.asarray(query_payload.get("ckpt_indices", ()), dtype=np.int32).reshape(-1)
+        query_timesteps = np.asarray(query_payload.get("timesteps", ()), dtype=np.int32).reshape(-1)
+        if query_ckpts.shape[0] != query.shape[0] or query_timesteps.shape[0] != query.shape[0]:
+            return None
+        weights = np.asarray(
+            query_payload.get("term_weights", np.full((query.shape[0],), 1.0 / query.shape[0])),
+            dtype=np.float64,
+        ).reshape(-1)
+        if weights.shape[0] != query.shape[0]:
+            return None
+        keep = np.asarray(
+            [
+                i
+                for i, timestep in enumerate(query_timesteps)
+                if not timestep_allowlist or int(timestep) in timestep_allowlist
+            ],
+            dtype=np.int64,
+        )
+        if keep.size == 0:
+            return None
+        query_ckpts_kept = query_ckpts[keep]
+        query_timesteps_kept = query_timesteps[keep]
+        weights = _apply_traj_checkpoint_weighting(weights[keep], query_ckpts_kept)
+        weights = _apply_traj_timestep_weighting(weights, query_ckpts_kept, query_timesteps_kept)
+        by_ckpt = {int(ckpt): i for i, ckpt in enumerate(train_ckpts)}
+        try:
+            train_indices = np.asarray(
+                [by_ckpt[int(ckpt)] for ckpt in query_ckpts_kept],
+                dtype=np.int64,
+            )
+        except KeyError:
+            return None
+        return query[keep], weights, train_indices
+
+    if not _env_flag("TRACIN_ALIGN_TERMS_BY_CKPT_TIMESTEP", "0"):
+        return None
     query_ckpts = np.asarray(query_payload.get("ckpt_indices", ()), dtype=np.int32).reshape(-1)
     query_timesteps = np.asarray(query_payload.get("timesteps", ()), dtype=np.int32).reshape(-1)
     if (
@@ -972,12 +1015,55 @@ def _run_fused_traj_score_batch(
         f"timestep_weighting={os.environ.get('TRACIN_SCORE_TIMESTEP_WEIGHTING', 'uniform')}",
         flush=True,
     )
-    term_iter = _iter_with_tqdm(
-        range(num_terms),
-        total=num_terms,
-        desc="TrajTracIn fused score terms",
-        enabled=_env_flag("TRACIN_SCORE_TQDM", "1"),
-    )
+    unique_train_indices = list(dict.fromkeys(int(value) for value in train_term_indices))
+    if len(unique_train_indices) < num_terms:
+        train_slot = {train_i: slot for slot, train_i in enumerate(unique_train_indices)}
+        raw_query_aggregate = np.zeros(
+            (num_queries, len(unique_train_indices), train.shape[2]), dtype=np.float32
+        )
+        normalized_query_aggregate = (
+            np.zeros_like(raw_query_aggregate) if normalize_query else None
+        )
+        for term_i in range(num_terms):
+            slot = train_slot[int(train_term_indices[term_i])]
+            weights = weights_all[:, term_i, None]
+            raw_query_aggregate[:, slot, :] += query_all[:, term_i, :] * weights
+            if normalize_query:
+                normalized_query_aggregate[:, slot, :] += query_norm_all[:, term_i, :] * weights
+        print(
+            f"[traj-score-fused] checkpoint-shared aggregation: "
+            f"{num_terms} query terms -> {len(unique_train_indices)} train matmuls",
+            flush=True,
+        )
+        train_eps = float(os.environ.get("TRACIN_SCORE_TRAIN_NORMALIZE_EPS", "1e-8"))
+        for slot, train_i in enumerate(unique_train_indices):
+            train_term = np.asarray(train[train_i], dtype=np.float32)
+            raw_dot = train_term @ raw_query_aggregate[:, slot, :].T
+            raw_scores += raw_dot.T
+            train_denom = None
+            if normalize_train:
+                train_norm = np.sqrt(np.einsum("ij,ij->i", train_term, train_term, optimize=True))
+                train_denom = np.maximum(train_norm, train_eps)[:, None]
+                train_scores += (raw_dot / train_denom).T
+            if normalize_query:
+                query_dot = train_term @ normalized_query_aggregate[:, slot, :].T
+                query_scores += query_dot.T
+                if normalize_train:
+                    both_scores += (query_dot / train_denom).T
+            if (slot + 1) % 10 == 0 or slot + 1 == len(unique_train_indices):
+                print(
+                    f"[traj-score-fused] checkpoint-shared matmul "
+                    f"{slot + 1}/{len(unique_train_indices)}",
+                    flush=True,
+                )
+        term_iter = ()
+    else:
+        term_iter = _iter_with_tqdm(
+            range(num_terms),
+            total=num_terms,
+            desc="TrajTracIn fused score terms",
+            enabled=_env_flag("TRACIN_SCORE_TQDM", "1"),
+        )
     for term_i in term_iter:
         train_i = int(train_term_indices[term_i])
         train_term = np.asarray(train[train_i], dtype=np.float32)

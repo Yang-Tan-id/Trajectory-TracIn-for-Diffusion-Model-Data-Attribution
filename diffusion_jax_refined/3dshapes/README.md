@@ -173,3 +173,22 @@ schemes and their cached LDS evaluations on the two RTX GPUs with:
 ```bash
 sbatch diffusion_jax_refined/3dshapes/tacc/rtx_small/run_traj_tracin_weighted_scores_lds.sh
 ```
+
+To compare against timestep-aligned Traj TracIn, build one checkpoint-shared
+train gradient by averaging 100 evenly spaced diffusion timestamps with one
+independent noise draw per timestamp. This stores 50 train terms (one per
+checkpoint) and runs the two checkpoint shards on the two RTX GPUs:
+
+```bash
+sbatch diffusion_jax_refined/3dshapes/tacc/rtx_small/run_traj_tracin_checkpoint_shared_100x1_train_rtx_small.sh
+```
+
+After that artifact is complete, compute 100 query trajectory gradients per
+checkpoint transition and score them against the shared train gradient. The
+scorer aggregates the 100 query terms before the train matrix multiplication,
+so it writes the raw and three normalized score variants without repeating
+the large multiplication 100 times:
+
+```bash
+sbatch diffusion_jax_refined/3dshapes/tacc/rtx_small/run_traj_tracin_checkpoint_shared_100x1_query_score_rtx_small.sh
+```

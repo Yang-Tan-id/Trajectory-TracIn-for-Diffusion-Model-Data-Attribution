@@ -39,6 +39,7 @@ SCORE_SCHEMES = {
     "original": "traj_tracin",
     "constant_lr_uniform": "traj_tracin_constant_lr_uniform",
     "cosine_lr_ddim_step_squared": "traj_tracin_cosine_lr_ddim_step_squared",
+    "checkpoint_shared_100x1_query100": "traj_tracin_checkpoint_shared_100x1_query100",
 }
 
 
@@ -98,7 +99,10 @@ def main() -> None:
     parser.add_argument(
         "--score-schemes",
         default="original",
-        help="Comma/space list: original, constant_lr_uniform, cosine_lr_ddim_step_squared.",
+        help=(
+            "Comma/space list: original, constant_lr_uniform, "
+            "cosine_lr_ddim_step_squared, checkpoint_shared_100x1_query100."
+        ),
     )
     parser.add_argument("--python-bin", default=os.environ.get("PYTHON_BIN", sys.executable))
     args = parser.parse_args()

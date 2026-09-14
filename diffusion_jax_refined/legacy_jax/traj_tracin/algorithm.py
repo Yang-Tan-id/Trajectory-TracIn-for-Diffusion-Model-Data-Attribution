@@ -146,6 +146,13 @@ def merge_train_checkpoint_parts_atomic(
             write_small_array(archive, "score_indices", score_indices)
             for key in metadata_parts:
                 write_small_array(archive, key, np.concatenate(metadata_parts[key], axis=0))
+            merged_timesteps = np.concatenate(metadata_parts["timesteps"], axis=0)
+            if merged_timesteps.size and np.all(merged_timesteps == -1):
+                write_small_array(
+                    archive,
+                    "checkpoint_shared_train_gradient",
+                    np.asarray(1, dtype=np.int32),
+                )
             write_small_array(archive, "proj_dim", np.asarray(proj_dim, dtype=np.int32))
             write_small_array(archive, "query_objective", np.asarray(query_objective))
             write_small_array(
