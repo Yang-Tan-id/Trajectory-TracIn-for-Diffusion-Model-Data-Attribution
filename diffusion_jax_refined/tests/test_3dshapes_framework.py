@@ -121,11 +121,13 @@ class Test3DShapesFramework(unittest.TestCase):
         ).read_text()
         driver = (THREED / "script" / "run_das_queries_and_scores.py").read_text()
         scorer = (ROOT / "common" / "stage_artifact_runner.py").read_text()
+        algorithm = (ROOT / "legacy_jax" / "DAS" / "algorithm.py").read_text()
 
         expected_timesteps = "0,111,222,333,444,555,666,777,888,999"
         self.assertIn(f'DAS_TIMESTEPS="${{DAS_TIMESTEPS:-{expected_timesteps}}}"', train_launcher)
         self.assertIn("export DAS_NUM_MC_NOISE=10", train_launcher)
         self.assertIn("export DAS_AGGREGATE_MC_GRADIENT=1", train_launcher)
+        self.assertIn("one backward of the 10-noise mean loss", train_launcher)
         self.assertIn("das_aligned10x10", train_launcher)
         self.assertIn("--artifact-namespace aligned10x10", query_launcher)
         self.assertIn("--num-mc-noise 10", query_launcher)
@@ -133,6 +135,10 @@ class Test3DShapesFramework(unittest.TestCase):
         self.assertIn('base_env["DAS_TIMESTEPS"]', driver)
         self.assertIn('"QUERY_GRADIENT_ARTIFACT_PATH": str(query_artifact)', driver)
         self.assertIn("_require_matching_das_terms(train_term_ids, query_term_ids", scorer)
+        self.assertIn("def make_projected_mc_average_loss_grad_fn", algorithm)
+        self.assertIn("return jnp.mean(losses)", algorithm)
+        self.assertIn('stage_mc_indices.append(-1)', algorithm)
+        self.assertIn('mc_aggregation=np.asarray("loss_mean_single_backward"', algorithm)
 
 
 if __name__ == "__main__":

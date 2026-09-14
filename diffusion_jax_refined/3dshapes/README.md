@@ -209,10 +209,11 @@ skipped. Final score directories use the namespace
 `traj_tracin_aligned100x1_stream`.
 
 To run the timestamp-aligned DAS comparison with 10 uniformly spaced
-timestamps and one stored gradient per timestamp, averaged online from 10
-independent Monte Carlo noise draws, first build its isolated train/Gram
-artifact and then compute all ten query artifacts and the 16-lambda score
-sweep. The individual MC gradients are not stored:
+timestamps and one stored gradient per timestamp. Each datapoint forms the
+mean loss over 10 independent Monte Carlo noises and differentiates that mean
+once; it does not run or save ten separate backwards. The Gram is formed from
+these averaged-loss gradients. First build its isolated train/Gram artifact,
+then compute all ten query artifacts and the 16-lambda score sweep:
 
 ```bash
 sbatch diffusion_jax_refined/3dshapes/tacc/rtx_small/run_das_aligned10x10_train_rtx_small.sh

@@ -776,6 +776,79 @@ def make_projected_eps_grad_fn(
     return jax.jit(phi_fn)
 
 
+def make_projected_mc_average_loss_grad_fn(
+    adapter,
+    model,
+    schedule,
+    projector,
+    *,
+    normalize_projected_grads: bool,
+    normalize_eps: float,
+):
+    """Differentiate the mean denoising loss over an MC noise batch once."""
+
+    def averaged_grad_fn(params, x0, cond, t, noises):
+        def averaged_loss_fn(p):
+            losses = jax.vmap(
+                lambda noise: denoising_loss_fixed_t_noise_jax(
+                    adapter=adapter,
+                    model=model,
+                    params=p,
+                    schedule=schedule,
+                    x0=x0,
+                    cond=cond,
+                    t=t,
+                    noise=noise,
+                )
+            )(noises)
+            return jnp.mean(losses)
+
+        loss, grads = jax.value_and_grad(averaged_loss_fn)(params)
+        phi = projector(grads)
+        phi = maybe_normalize_phi(phi, normalize_projected_grads, normalize_eps)
+        return loss, phi
+
+    return jax.jit(averaged_grad_fn)
+
+
+def make_projected_mc_average_query_grad_fn(
+    adapter,
+    model,
+    schedule,
+    projector,
+    *,
+    normalize_projected_grads: bool,
+    normalize_eps: float,
+):
+    """Differentiate the mean query scalar over an MC noise batch once."""
+
+    def averaged_query_grad_fn(params, x0, cond, t, noises, output_probe):
+        normalizer = jnp.sqrt(jnp.asarray(x0.size, dtype=jnp.float32))
+
+        def averaged_scalar_fn(p):
+            values = jax.vmap(
+                lambda noise: jnp.sum(
+                    adapter.eps_apply(model, p, q_sample(schedule, x0, t, noise), t, cond)
+                    * output_probe
+                )
+                / normalizer
+            )(noises)
+            return jnp.mean(values)
+
+        def residual_scalar(noise):
+            xt = q_sample(schedule, x0, t, noise)
+            residual = adapter.eps_apply(model, params, xt, t, cond) - noise
+            return jnp.sum(residual * output_probe) / normalizer
+
+        mean_residual = jnp.mean(jax.vmap(residual_scalar)(noises))
+        grads = jax.grad(averaged_scalar_fn)(params)
+        phi = projector(grads)
+        phi = maybe_normalize_phi(phi, normalize_projected_grads, normalize_eps)
+        return mean_residual, phi
+
+    return jax.jit(averaged_query_grad_fn)
+
+
 def sample_xt_and_noise_jax(
     schedule: DiffusionSchedule,
     x0: jnp.ndarray,
@@ -1412,6 +1485,129 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
             train_gradient_sum = None
             train_gram_sum = None
 
+            if aggregate_mc_gradient and stage_mode in ("train", "query"):
+                projection_mc_key = "mc_average_loss"
+                rng_probe = array_to_device(
+                    make_jax_key(cfg.seed, "pdas_output_probe", ckpt_i, t_value, projection_mc_key),
+                    device,
+                )
+                probe_shape = tuple(x0_ref.shape) if x0_ref is not None else tuple(example_x.shape)
+                output_probe = array_to_device(sample_output_probe_jax(probe_shape, rng=rng_probe), device)
+                projector = build_countsketch_projector_jax(
+                    params_k,
+                    proj_dim,
+                    seed_parts=(cfg.seed, "pdas_gradient_projection", ckpt_i, t_value, projection_mc_key),
+                    device=device,
+                )
+
+                if stage_mode == "query":
+                    query_keys = array_to_device(
+                        jnp.stack(
+                            [make_jax_key(cfg.seed, "pdas_q", ckpt_i, t_value, mc_i) for mc_i in range(num_mc_noise)]
+                        ),
+                        device,
+                    )
+                    query_noises = jax.vmap(
+                        lambda key: jax.random.normal(key, x0_ref.shape, dtype=x0_ref.dtype)
+                    )(query_keys)
+                    averaged_query_fn = make_projected_mc_average_query_grad_fn(
+                        adapter=adapter,
+                        model=model,
+                        schedule=schedule,
+                        projector=projector,
+                        normalize_projected_grads=bool(cfg.normalize_projected_grads),
+                        normalize_eps=float(cfg.normalize_eps),
+                    )
+                    print(
+                        f"[mc-average] one query backward over {num_mc_noise} noises at t={t_value}",
+                        flush=True,
+                    )
+                    query_residual, phi_q = averaged_query_fn(
+                        params_k,
+                        x0_ref,
+                        query_cond,
+                        t_tensor,
+                        query_noises,
+                        output_probe,
+                    )
+                    phi_q.block_until_ready()
+                    stage_query_features.append(np.asarray(phi_q, dtype=np.float32))
+                    stage_query_residuals.append(float(query_residual))
+                    stage_ckpt_indices.append(int(ckpt_i))
+                    stage_timestep_values.append(int(t_value))
+                    stage_mc_indices.append(-1)
+                    processed_mc_terms += num_mc_noise
+                    total_terms += num_mc_noise
+                    print(
+                        "[mc-average] cached one averaged query gradient for "
+                        f"t={t_value} from {num_mc_noise} noises"
+                    )
+                    continue
+
+                averaged_train_fn = make_projected_mc_average_loss_grad_fn(
+                    adapter=adapter,
+                    model=model,
+                    schedule=schedule,
+                    projector=projector,
+                    normalize_projected_grads=bool(cfg.normalize_projected_grads),
+                    normalize_eps=float(cfg.normalize_eps),
+                )
+                gradient_cache = np.empty((M, proj_dim), dtype=np.float32)
+                gram = np.zeros((proj_dim, proj_dim), dtype=np.float32)
+                stage_iter = iter_with_tqdm(
+                    range(num_batches),
+                    total=num_batches,
+                    desc=f"DAS averaged-loss train ckpt {ckpt_i+1}/{len(baseline_ckpts)} t={t_value}",
+                    enabled=bool(cfg.use_tqdm),
+                )
+                for batch_idx in stage_iter:
+                    start = batch_idx * bs
+                    batch = picked[start:start + bs]
+                    for local_j, idx in enumerate(batch):
+                        x0_i, cond_i = adapter.get_item(ds, idx)
+                        x0_i = array_to_device(x0_i, device)
+                        cond_i = array_to_device(cond_i, device)
+                        noise_keys = array_to_device(
+                            jnp.stack(
+                                [
+                                    make_jax_key(cfg.seed, "pdas_tr", ckpt_i, t_value, mc_i, idx)
+                                    for mc_i in range(num_mc_noise)
+                                ]
+                            ),
+                            device,
+                        )
+                        noises_i = jax.vmap(
+                            lambda key: jax.random.normal(key, x0_i.shape, dtype=x0_i.dtype)
+                        )(noise_keys)
+                        _, averaged_gradient = averaged_train_fn(
+                            params_k,
+                            x0_i,
+                            cond_i,
+                            t_tensor,
+                            noises_i,
+                        )
+                        averaged_gradient.block_until_ready()
+                        gradient_np = np.asarray(averaged_gradient, dtype=np.float32)
+                        gradient_cache[start + local_j] = gradient_np
+                        gram += np.outer(gradient_np, gradient_np).astype(np.float32)
+                    if hasattr(stage_iter, "set_postfix"):
+                        stage_iter.set_postfix(samples=f"{min(start + len(batch), M)}/{M}")
+
+                stage_train_features.append(gradient_cache)
+                stage_residuals.append(np.ones((M,), dtype=np.float32))
+                stage_grams_undamped.append(gram.copy())
+                stage_grams.append(gram + damping * np.eye(proj_dim, dtype=np.float32))
+                stage_ckpt_indices.append(int(ckpt_i))
+                stage_timestep_values.append(int(t_value))
+                stage_mc_indices.append(-1)
+                processed_mc_terms += num_mc_noise
+                total_terms += num_mc_noise
+                print(
+                    "[mc-average] cached one averaged-loss train gradient/Gram for "
+                    f"t={t_value} from {num_mc_noise} noises"
+                )
+                continue
+
             for mc_i in range(num_mc_noise):
                 total_terms += 1
                 processed_mc_terms += 1
@@ -1739,7 +1935,7 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
             damping_sweep_values=np.asarray([float(v) for v in damping_values], dtype=np.float32),
             proj_dim=np.asarray(int(proj_dim), dtype=np.int32),
             mc_samples_per_term=np.asarray(int(num_mc_noise), dtype=np.int32),
-            mc_aggregation=np.asarray("gradient_mean" if aggregate_mc_gradient else "none"),
+            mc_aggregation=np.asarray("loss_mean_single_backward" if aggregate_mc_gradient else "none"),
         )
         print(f"[saved] DAS train artifact: {stage_artifact_path}")
         return
@@ -1756,7 +1952,7 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
             damping=np.asarray(float(damping), dtype=np.float32),
             proj_dim=np.asarray(int(proj_dim), dtype=np.int32),
             mc_samples_per_term=np.asarray(int(num_mc_noise), dtype=np.int32),
-            mc_aggregation=np.asarray("gradient_mean" if aggregate_mc_gradient else "none"),
+            mc_aggregation=np.asarray("query_mean_single_backward" if aggregate_mc_gradient else "none"),
         )
         print(f"[saved] DAS query artifact: {stage_artifact_path}")
         return

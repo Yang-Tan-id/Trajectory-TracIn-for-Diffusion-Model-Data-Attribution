@@ -67,7 +67,7 @@ ARTIFACT_DIR="${SHAPES_ROOT}/result/${EXPERIMENT_TAG}/model/prompted_solo/seed_$
 export TRAIN_DATAPOINT_GRADIENT_ARTIFACT_PATH="${ARTIFACT_DIR}/train_datapoint_gradient_artifact.npz"
 export DAS_GLOBAL_GRAM_ARTIFACT_PATH="${TRAIN_DATAPOINT_GRADIENT_ARTIFACT_PATH}"
 
-echo "3D Shapes DAS: 10 timestamps, each storing one gradient averaged over 10 MC noises"
+echo "3D Shapes DAS: 10 timestamps, one backward of the 10-noise mean loss per datapoint"
 echo "timestamps=${DAS_TIMESTEPS}; mc_per_timestamp=${DAS_NUM_MC_NOISE}; artifact=${TRAIN_DATAPOINT_GRADIENT_ARTIFACT_PATH}"
 nvidia-smi
 
