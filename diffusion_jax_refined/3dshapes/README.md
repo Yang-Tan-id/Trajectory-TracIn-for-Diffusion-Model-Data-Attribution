@@ -131,6 +131,18 @@ spaced timestamps, one MC sample per timestamp, and projection dimension 4096:
 sbatch diffusion_jax_refined/3dshapes/tacc/rtx_small/run_das_train_rtx_small.sh
 ```
 
+After the DAS train artifact and all ten DDIM query trajectories exist, run
+the ten DAS query gradients followed by the complete 16-lambda score sweep:
+
+```bash
+sbatch diffusion_jax_refined/3dshapes/tacc/rtx_small/run_das_query_score_rtx_small.sh
+```
+
+GPU 0 and GPU 1 first own disjoint query-gradient jobs. Scoring then batches
+all ten queries and splits the lambda values across the GPUs, loading the
+shared train/Gram artifact once per worker. Existing query-gradient artifacts
+are skipped when the launcher is resumed.
+
 After all three LDS subset-seed folders and the ten full DDIM trajectories are
 available, compute the four reusable true-f targets before running any LDS
 score correlation:

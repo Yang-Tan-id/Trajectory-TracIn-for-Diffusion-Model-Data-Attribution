@@ -1219,7 +1219,10 @@ def run_das_score_batch_stage(config_path: str | Path) -> None:
     train_term_ids = _das_term_ids(train_payload, path=train_path, expected_terms=train.shape[0])
 
     print(f"[das-score-batch] loading global Gram once: {gram_path}", flush=True)
-    gram_payload = _load_npz(gram_path)
+    # The standard DAS artifact stores train features, residuals, and Gram in
+    # one NPZ. Reuse the already-loaded payload instead of duplicating the
+    # multi-gigabyte arrays in host memory.
+    gram_payload = train_payload if gram_path.resolve() == train_path.resolve() else _load_npz(gram_path)
     gram_undamped = np.asarray(gram_payload["gram_undamped"], dtype=_score_float_dtype())
     if gram_undamped.ndim == 2:
         gram_undamped = gram_undamped[None, :, :]
