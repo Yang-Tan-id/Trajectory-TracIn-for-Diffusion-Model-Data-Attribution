@@ -3106,7 +3106,6 @@ def run_attribution(cfg: TrajAttributionConfig):
             else:
                 train_phi_terms = []
                 train_v_l2_terms = []
-                train_jacobian_norm_terms = []
                 train_ckpt_indices = []
                 train_timesteps = []
                 train_snapshot_positions = []
@@ -3168,35 +3167,11 @@ def run_attribution(cfg: TrajAttributionConfig):
                                 jnp.sqrt(probe_sqnorm),
                                 jnp.asarray(1e-8, dtype=jnp.float32),
                             )
-                            return (
-                                probe_sqnorm,
-                                projected_residual * projected_probe_grad,
-                                projected_residual * unit_probe_gradient,
-                            )
+                            return projected_residual * unit_probe_gradient
 
-                        (
-                            probe_sqnorms,
-                            contraction_contributions,
-                            v_l2_contributions,
-                        ) = jax.lax.map(
-                            norm_probe_outputs, norm_probes
-                        )
-                        jacobian_norm = jnp.sqrt(
-                            jnp.mean(probe_sqnorms) + jnp.asarray(1e-16, dtype=jnp.float32)
-                        )
-                        # Each probe gradient and projected residual contains a
-                        # 1/sqrt(D) factor. Multiplying their expectation by
-                        # sqrt(D) estimates P(E[J]^T E[r])/sqrt(D), matching
-                        # the scale of the former direct contraction VJP.
-                        projected_contraction = normalizer * jnp.mean(
-                            contraction_contributions, axis=0
-                        )
-                        normalized_feature = projected_contraction / jnp.maximum(
-                            jacobian_norm,
-                            jnp.asarray(1e-8, dtype=jnp.float32),
-                        )
+                        v_l2_contributions = jax.lax.map(norm_probe_outputs, norm_probes)
                         v_l2_feature = jnp.mean(v_l2_contributions, axis=0)
-                        return jacobian_norm, normalized_feature, v_l2_feature
+                        return v_l2_feature
 
                     train_normalized_residual_jacobian_batch = jax.jit(
                         jax.vmap(
@@ -3208,15 +3183,13 @@ def run_attribution(cfg: TrajAttributionConfig):
                     total_batches = math.ceil(len(picked) / bs_stage)
                     print(
                         "[stage:train] normalized expected-Jacobian/residual artifact mode | "
-                        f"save=shared-probe estimate of P(E[J]^T E[r])/estimated_frobenius_norm(E[PJ]) | "
+                        f"save=mean projected-residual times unit probe-gradient | "
                         f"mc={cfg.train_mc_samples} norm_probes={norm_probe_count} "
                         f"batch_size={bs_stage}",
                         flush=True,
                     )
                     for snap_id, t_value in enumerate(t_seq):
-                        term_features = np.empty((len(picked), proj_dim), dtype=np.float32)
                         term_v_l2_features = np.empty((len(picked), proj_dim), dtype=np.float32)
-                        term_jacobian_norms = np.empty((len(picked),), dtype=np.float32)
                         t_scalar = array_to_device(jnp.asarray(int(t_value), dtype=jnp.int32), device)
                         base_probe_key = predicted_noise_probe_key(
                             cfg.seed + 91_337,
@@ -3266,11 +3239,7 @@ def run_attribution(cfg: TrajAttributionConfig):
                                 ),
                                 device,
                             )
-                            (
-                                jacobian_norm_batch,
-                                phi_batch,
-                                v_l2_batch,
-                            ) = train_normalized_residual_jacobian_batch(
+                            v_l2_batch = train_normalized_residual_jacobian_batch(
                                 params,
                                 x_batch,
                                 cond_batch,
@@ -3278,15 +3247,9 @@ def run_attribution(cfg: TrajAttributionConfig):
                                 t_scalar,
                                 norm_probes,
                             )
-                            phi_batch.block_until_ready()
-                            term_features[start:end] = np.asarray(
-                                phi_batch[: end - start], dtype=np.float32
-                            )
+                            v_l2_batch.block_until_ready()
                             term_v_l2_features[start:end] = np.asarray(
                                 v_l2_batch[: end - start], dtype=np.float32
-                            )
-                            term_jacobian_norms[start:end] = np.asarray(
-                                jacobian_norm_batch[: end - start], dtype=np.float32
                             )
                             if batch_id == 1 or batch_id % 10 == 0 or end == len(picked):
                                 print(
@@ -3297,9 +3260,7 @@ def run_attribution(cfg: TrajAttributionConfig):
                                     f"elapsed={format_seconds(time.time() - stage_start_time)}",
                                     flush=True,
                                 )
-                        train_phi_terms.append(term_features)
                         train_v_l2_terms.append(term_v_l2_features)
-                        train_jacobian_norm_terms.append(term_jacobian_norms)
                         train_ckpt_indices.append(int(ckpt_i))
                         train_timesteps.append(int(t_value))
                         train_snapshot_positions.append(int(pos_seq[snap_id]))
@@ -3318,11 +3279,9 @@ def run_attribution(cfg: TrajAttributionConfig):
                         )
                     save_npz_compressed_atomic(
                         stage_part_path,
-                        train_features=np.stack(train_phi_terms, axis=0).astype(np.float32),
-                        train_features_v_l2_normalized=np.stack(
+                        train_features=np.stack(
                             train_v_l2_terms, axis=0
                         ).astype(np.float32),
-                        train_jacobian_norms=np.stack(train_jacobian_norm_terms, axis=0).astype(np.float32),
                         score_indices=np.asarray(picked, dtype=np.int64),
                         ckpt_indices=np.asarray(train_ckpt_indices, dtype=np.int32),
                         timesteps=np.asarray(train_timesteps, dtype=np.int32),
@@ -3332,12 +3291,6 @@ def run_attribution(cfg: TrajAttributionConfig):
                         proj_dim=np.asarray(proj_dim, dtype=np.int32),
                         train_mc_samples=np.asarray(cfg.train_mc_samples, dtype=np.int32),
                         train_feature_semantics=np.asarray(
-                            "hutchinson_projected_expected_jacobian_transpose_expected_residual_over_frobenius_norm"
-                        ),
-                        train_jacobian_norm_semantics=np.asarray(
-                            "hutchinson_projected_expected_predicted_noise_jacobian_frobenius_norm"
-                        ),
-                        train_v_l2_feature_semantics=np.asarray(
                             "mean_probe_projected_residual_times_unit_probe_gradient"
                         ),
                         jacobian_norm_probes=np.asarray(norm_probe_count, dtype=np.int32),

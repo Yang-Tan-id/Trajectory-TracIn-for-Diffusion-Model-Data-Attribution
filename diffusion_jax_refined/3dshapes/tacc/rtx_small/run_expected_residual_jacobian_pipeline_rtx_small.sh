@@ -57,7 +57,7 @@ mkdir -p "${LOG_ROOT}"
 
 echo "3D Shapes normalized expected-Jacobian/residual pipeline"
 echo "train=one shared probe reused for both P(E[J]^T E[r]) and norm estimate"
-echo "scores=2 train features x 2 f targets x raw/query-L2 = 8 score types"
+echo "scores=1 v-L2 train feature x 2 f targets x raw/query-L2 = 4 score types"
 echo "logs=${LOG_ROOT}"
 
 echo "[phase 1/5] build/resume normalized train artifact"
@@ -121,12 +121,12 @@ done
   --run-id "${SLURM_JOB_ID}" \
   --shard-count 2
 
-echo "[phase 5/5] cached LDS for all 8 score types (320 query/score/target evaluations)"
+echo "[phase 5/5] cached LDS for all 4 score types (160 query/score/target evaluations)"
 JAX_PLATFORMS=cpu "${PYTHON_BIN}" "${SHAPES_ROOT}/script/run_traj_tracin_lds_cached.py" \
   --execute \
   --experiment "${EXPERIMENT_TAG}" \
   --train-seed "${TRAIN_SEED}" \
   --score-schemes \
-    expected_residual_jacobian_fnorm_original_f,expected_residual_jacobian_v_l2_original_f,expected_residual_jacobian_fnorm_predicted_noise,expected_residual_jacobian_v_l2_predicted_noise
+    expected_residual_jacobian_v_l2_original_f,expected_residual_jacobian_v_l2_predicted_noise
 
-echo "[done] 2 train normalizations x 2 f targets x 2 query normalizations = 8 scores"
+echo "[done] 1 train normalization x 2 f targets x 2 query normalizations = 4 scores"

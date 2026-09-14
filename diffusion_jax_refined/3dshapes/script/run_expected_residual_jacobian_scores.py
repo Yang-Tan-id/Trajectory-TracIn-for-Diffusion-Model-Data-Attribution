@@ -22,10 +22,8 @@ TRAIN_NAMESPACE = "traj_tracin_expected_residual_jacobian_probe_reused"
 ORIGINAL_QUERY_NAMESPACE = "expected_residual_jacobian_original_f"
 PREDICTED_QUERY_NAMESPACE = "expected_residual_jacobian_predicted_noise"
 SCORE_NAMESPACES = {
-    ("fnorm", "original"): "traj_tracin_expected_residual_jacobian_fnorm_original_f",
-    ("v_l2", "original"): "traj_tracin_expected_residual_jacobian_v_l2_original_f",
-    ("fnorm", "predicted"): "traj_tracin_expected_residual_jacobian_fnorm_predicted_noise",
-    ("v_l2", "predicted"): "traj_tracin_expected_residual_jacobian_v_l2_predicted_noise",
+    "original": "traj_tracin_expected_residual_jacobian_v_l2_original_f",
+    "predicted": "traj_tracin_expected_residual_jacobian_v_l2_predicted_noise",
 }
 
 
@@ -177,8 +175,7 @@ def score_shard(args: argparse.Namespace) -> None:
     }
 
     sums = {
-        (normalization, target, query_variant): np.zeros((10, 5000), dtype=np.float64)
-        for normalization in ("fnorm", "v_l2")
+        (target, query_variant): np.zeros((10, 5000), dtype=np.float64)
         for target in ("original", "predicted")
         for query_variant in ("raw", "query_l2")
     }
@@ -195,23 +192,16 @@ def score_shard(args: argparse.Namespace) -> None:
             raise FileNotFoundError(path)
         with np.load(path, allow_pickle=False) as data:
             train = np.asarray(data["train_features"], dtype=np.float32)
-            train_v_l2 = np.asarray(
-                data["train_features_v_l2_normalized"], dtype=np.float32
-            )
             indices = np.asarray(data["score_indices"], dtype=np.int64)
             ckpts = np.asarray(data["ckpt_indices"], dtype=np.int32)
             timesteps = np.asarray(data["timesteps"], dtype=np.int32)
             weights = np.asarray(data["term_weights"], dtype=np.float64)
             semantics = str(np.asarray(data["train_feature_semantics"]).item())
             part_probe_count = int(np.asarray(data["jacobian_norm_probes"]).item())
-        if semantics != "hutchinson_projected_expected_jacobian_transpose_expected_residual_over_frobenius_norm":
+        if semantics != "mean_probe_projected_residual_times_unit_probe_gradient":
             raise ValueError(f"unexpected train feature semantics in {path}: {semantics}")
         if train.shape != (10, 5000, 4096):
             raise ValueError(f"{path} expected (10,5000,4096), got {train.shape}")
-        if train_v_l2.shape != train.shape:
-            raise ValueError(
-                f"{path} v-L2 feature shape {train_v_l2.shape} != F-norm shape {train.shape}"
-            )
         if jacobian_norm_probes is None:
             jacobian_norm_probes = part_probe_count
         elif jacobian_norm_probes != part_probe_count:
@@ -223,23 +213,18 @@ def score_shard(args: argparse.Namespace) -> None:
 
         for local_term, (ckpt, timestep, weight) in enumerate(zip(ckpts, timesteps, weights)):
             train_device = jax.device_put(jnp.asarray(train[local_term]))
-            train_v_l2_device = jax.device_put(jnp.asarray(train_v_l2[local_term]))
 
             original_term = lookups["original"].get((int(ckpt), int(timestep)))
             if original_term is not None:
                 query_device = jax.device_put(jnp.asarray(original_query[:, original_term, :]))
-                for normalization, train_values in (
-                    ("fnorm", train_device),
-                    ("v_l2", train_v_l2_device),
-                ):
-                    dots = train_values @ query_device.T
-                    query_norms = jnp.linalg.norm(query_device, axis=1) + 1e-8
-                    sums[(normalization, "original", "raw")] += float(weight) * np.asarray(
-                        jax.device_get(dots), dtype=np.float64
-                    ).T
-                    sums[(normalization, "original", "query_l2")] += float(weight) * np.asarray(
-                        jax.device_get(dots / query_norms[None, :]), dtype=np.float64
-                    ).T
+                dots = train_device @ query_device.T
+                query_norms = jnp.linalg.norm(query_device, axis=1) + 1e-8
+                sums[("original", "raw")] += float(weight) * np.asarray(
+                    jax.device_get(dots), dtype=np.float64
+                ).T
+                sums[("original", "query_l2")] += float(weight) * np.asarray(
+                    jax.device_get(dots / query_norms[None, :]), dtype=np.float64
+                ).T
                 original_weight += abs(float(weight))
                 original_terms += 1
 
@@ -247,19 +232,14 @@ def score_shard(args: argparse.Namespace) -> None:
             if predicted_term is None:
                 raise ValueError(f"missing predicted-noise query term ckpt={ckpt} t={timestep}")
             query_device = jax.device_put(jnp.asarray(predicted_query[:, predicted_term, :]))
-            for normalization, train_values in (
-                ("fnorm", train_device),
-                ("v_l2", train_v_l2_device),
-            ):
-                dots = train_values @ query_device.T
-                query_norms = jnp.linalg.norm(query_device, axis=1) + 1e-8
-                sums[(normalization, "predicted", "raw")] += float(weight) ** 2 * np.asarray(
-                    jax.device_get(jnp.square(dots)), dtype=np.float64
-                ).T
-                sums[(normalization, "predicted", "query_l2")] += float(weight) ** 2 * np.asarray(
-                    jax.device_get(jnp.square(dots / query_norms[None, :])),
-                    dtype=np.float64,
-                ).T
+            dots = train_device @ query_device.T
+            query_norms = jnp.linalg.norm(query_device, axis=1) + 1e-8
+            sums[("predicted", "raw")] += float(weight) ** 2 * np.asarray(
+                jax.device_get(jnp.square(dots)), dtype=np.float64
+            ).T
+            sums[("predicted", "query_l2")] += float(weight) ** 2 * np.asarray(
+                jax.device_get(jnp.square(dots / query_norms[None, :])), dtype=np.float64
+            ).T
             predicted_weight += float(weight) ** 2
             predicted_terms += 1
 
@@ -274,8 +254,8 @@ def score_shard(args: argparse.Namespace) -> None:
     atomic_savez(
         output,
         **{
-            f"{normalization}_{target}_{query_variant}_sum": values
-            for (normalization, target, query_variant), values in sums.items()
+            f"{target}_{query_variant}_sum": values
+            for (target, query_variant), values in sums.items()
         },
         original_weight=np.asarray(original_weight, dtype=np.float64),
         predicted_weight=np.asarray(predicted_weight, dtype=np.float64),
@@ -296,7 +276,6 @@ def materialize_scores(
     query_variant: str,
     jacobian_norm_probes: int,
 ):
-    normalization = "v_l2" if "_v_l2_" in namespace else "fnorm"
     for query_id, record in enumerate(records()):
         component = "score" if query_variant == "raw" else "score_query_normalized"
         out_dir = (
@@ -315,12 +294,8 @@ def materialize_scores(
             "algorithm": namespace,
             "score_variant": f"fixed_train_jacobian_normalization_{query_variant}",
             "definition": definition,
-            "train_feature": (
-                "mean_l (projected_residual_l * unit(P E[J]^T v_l))"
-                if normalization == "v_l2"
-                else "P(E[J]^T E[r]) / estimated_frobenius_norm(E[PJ])"
-            ),
-            "train_normalization": normalization,
+            "train_feature": "mean_l (projected_residual_l * unit(P E[J]^T v_l))",
+            "train_normalization": "v_l2",
             "query_normalization": query_variant,
             "train_mc_samples": 10,
             "jacobian_norm_probes": jacobian_norm_probes,
@@ -335,8 +310,7 @@ def materialize_scores(
 
 def merge(args: argparse.Namespace) -> None:
     totals = {
-        (normalization, target, query_variant): np.zeros((10, 5000), dtype=np.float64)
-        for normalization in ("fnorm", "v_l2")
+        (target, query_variant): np.zeros((10, 5000), dtype=np.float64)
         for target in ("original", "predicted")
         for query_variant in ("raw", "query_l2")
     }
@@ -350,9 +324,9 @@ def merge(args: argparse.Namespace) -> None:
         if not path.is_file():
             raise FileNotFoundError(path)
         with np.load(path, allow_pickle=False) as data:
-            for normalization, target, query_variant in totals:
-                totals[(normalization, target, query_variant)] += np.asarray(
-                    data[f"{normalization}_{target}_{query_variant}_sum"], dtype=np.float64
+            for target, query_variant in totals:
+                totals[(target, query_variant)] += np.asarray(
+                    data[f"{target}_{query_variant}_sum"], dtype=np.float64
                 )
             original_weight += float(data["original_weight"])
             predicted_weight += float(data["predicted_weight"])
@@ -375,28 +349,27 @@ def merge(args: argparse.Namespace) -> None:
     expected = np.asarray(np.load(ATTRIBUTION_INDICES_PATH), dtype=np.int64)
     if score_indices is None or not np.array_equal(np.sort(score_indices), np.sort(expected)):
         raise ValueError("score indices do not match attribution subset")
-    for normalization in ("fnorm", "v_l2"):
-        for query_variant in ("raw", "query_l2"):
-            materialize_scores(
-                args,
-                SCORE_NAMESPACES[(normalization, "original")],
-                totals[(normalization, "original", query_variant)] / original_weight,
-                score_indices,
-                f"learning_rate_weighted_mean(dot({normalization}_train_feature, {query_variant}_grad(original_f)))",
-                query_variant,
-                int(jacobian_norm_probes),
-            )
-            materialize_scores(
-                args,
-                SCORE_NAMESPACES[(normalization, "predicted")],
-                totals[(normalization, "predicted", query_variant)] / predicted_weight,
-                score_indices,
-                f"learning_rate_squared_weighted_mean(square(dot({normalization}_train_feature, {query_variant}_predicted_noise_probe_grad)))",
-                query_variant,
-                int(jacobian_norm_probes),
-            )
+    for query_variant in ("raw", "query_l2"):
+        materialize_scores(
+            args,
+            SCORE_NAMESPACES["original"],
+            totals[("original", query_variant)] / original_weight,
+            score_indices,
+            f"learning_rate_weighted_mean(dot(v_l2_train_feature, {query_variant}_grad(original_f)))",
+            query_variant,
+            int(jacobian_norm_probes),
+        )
+        materialize_scores(
+            args,
+            SCORE_NAMESPACES["predicted"],
+            totals[("predicted", query_variant)] / predicted_weight,
+            score_indices,
+            f"learning_rate_squared_weighted_mean(square(dot(v_l2_train_feature, {query_variant}_predicted_noise_probe_grad)))",
+            query_variant,
+            int(jacobian_norm_probes),
+        )
     print(
-        "[done] materialized 2 train normalizations x 2 query targets x 2 query normalizations",
+        "[done] materialized 1 train normalization x 2 query targets x 2 query normalizations",
         flush=True,
     )
 

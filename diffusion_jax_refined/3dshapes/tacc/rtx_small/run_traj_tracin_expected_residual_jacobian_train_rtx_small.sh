@@ -79,7 +79,7 @@ if [[ "${checkpoint_count}" != "50" ]]; then
   exit 1
 fi
 
-echo "3D Shapes probe-reused F-norm and probe-after-L2 expected-Jacobian/residual artifacts"
+echo "3D Shapes single-probe v-L2 expected-Jacobian/residual artifacts"
 echo "checkpoints=50 snapshots=10 MC=10 norm_probes=${TRAJ_TRACIN_JACOBIAN_NORM_PROBES} projection_dim=${TRAJ_TRACIN_PROJ_DIM}"
 echo "GPU 0: even checkpoints; GPU 1: odd checkpoints"
 echo "artifact=${ARTIFACT}"
@@ -120,8 +120,6 @@ from pathlib import Path
 part_dir = Path(sys.argv[1])
 required = {
     "train_features",
-    "train_features_v_l2_normalized",
-    "train_jacobian_norms",
     "ckpt_indices",
     "timesteps",
     "score_indices",
@@ -131,11 +129,7 @@ for path in (part_dir / "ckpt_0000.npz", part_dir / "ckpt_0049.npz"):
         missing = required.difference(data.files)
         if missing:
             raise SystemExit(f"{path} missing fields: {sorted(missing)}")
-        print(f"[verify] {path.name} F={data['train_features'].shape} vL2={data['train_features_v_l2_normalized'].shape} norms={data['train_jacobian_norms'].shape}")
-        if data["train_features"].shape[:2] != data["train_jacobian_norms"].shape:
-            raise SystemExit("feature/Jacobian-norm leading dimensions do not match")
-        if data["train_features"].shape != data["train_features_v_l2_normalized"].shape:
-            raise SystemExit("F-norm/v-L2 feature shapes do not match")
+        print(f"[verify] {path.name} vL2={data['train_features'].shape}")
 PY
 
-echo "[done] resumable two-feature checkpoint artifact parts=${PART_DIR}"
+echo "[done] resumable single-feature checkpoint artifact parts=${PART_DIR}"

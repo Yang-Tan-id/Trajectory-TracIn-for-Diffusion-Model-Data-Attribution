@@ -257,18 +257,15 @@ in `score`, `score_query_normalized`, `score_train_l2_normalized`, and
 
 For each checkpoint, timestamp, and attribution point, this variant forms the
 full-vector 10-MC expected predicted-noise residual and the expected
-predicted-noise Jacobian. The same single output probe produces and retains two train
-features without a second train pass:
+predicted-noise Jacobian. A single output probe produces one retained train
+feature:
 
-- `train_features = estimated P(E[J]^T E[r]) / estimated_frobenius_norm(E[PJ])`;
-- `train_features_v_l2_normalized = mean_l((v_l^T E[r]/sqrt(D)) * unit(P E[J]^T v_l/sqrt(D)))`.
+- `train_features = (v^T E[r]/sqrt(D)) * unit(P E[J]^T v/sqrt(D))`.
 
-The same Hutchinson probe estimates both the first feature's numerator and its
-norm denominator; there is no separate residual-contraction backward.
-The second feature normalizes each randomly probed gradient and also projects
-the residual with that probe. The full residual remains a vector in both
-definitions. The method produces these two fixed train normalizations, not
-four reconstructable post-hoc variants.
+The probe normalizes the randomly probed gradient and projects the full-vector
+residual. There is no separate residual-contraction backward and no duplicate
+F-norm feature, because with one probe it differs only by the constant
+`sqrt(D)` and therefore has identical rankings.
 
 ```bash
 sbatch -p rtx-small \
@@ -278,10 +275,10 @@ sbatch -p rtx-small \
 
 The two GPUs split the 50 checkpoints, and all checkpoint parts are retained
 for restart and direct score streaming. No duplicate monolithic merged copy is
-written. Each of the two train features is crossed with both the original
+written. The retained train feature is crossed with both the original
 next-checkpoint-noise-MSE target and the new vector predicted-noise target,
-using both raw and per-term L2-normalized query gradients. This gives eight
-scores per query (and 320 cached LDS evaluations over 10 queries and four true-f
+using both raw and per-term L2-normalized query gradients. This gives four
+scores per query (and 160 cached LDS evaluations over 10 queries and four true-f
 targets). Run the complete RTX-small pipeline with:
 
 ```bash
