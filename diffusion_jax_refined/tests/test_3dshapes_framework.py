@@ -90,6 +90,28 @@ class Test3DShapesFramework(unittest.TestCase):
         self.assertIn('base_cmd + ["--dry-run"]', launcher)
         self.assertIn('base_cmd + ["--reuse-prepared", "--finalize-only"]', launcher)
 
+    def test_h100_aligned100x1_stream_contract(self):
+        launcher = (
+            THREED
+            / "tacc"
+            / "h100"
+            / "run_traj_tracin_aligned100x1_stream_h100.sh"
+        ).read_text()
+        driver = (
+            THREED / "script" / "run_traj_tracin_aligned100x1_stream.py"
+        ).read_text()
+        algorithm = (ROOT / "legacy_jax" / "traj_tracin" / "algorithm.py").read_text()
+
+        self.assertIn("#SBATCH -N 4", launcher)
+        self.assertIn("#SBATCH -n 16", launcher)
+        self.assertLess(launcher.index("[phase 1/3]"), launcher.index("[phase 2/3]"))
+        self.assertIn('TRAJ_TRAIN_MC_SAMPLES="1"', driver)
+        self.assertIn('TRAJ_NUM_SNAPSHOTS="100"', driver)
+        self.assertIn('TRAJ_TRACIN_STAGE_MODE="score_stream"', driver)
+        self.assertIn('"train_gradient_artifact_saved": False', driver)
+        self.assertIn("TRAJ_TRACIN_CANDIDATE_SHARD_COUNT", algorithm)
+        self.assertIn("int(padded_indices[j])", algorithm)
+
 
 if __name__ == "__main__":
     unittest.main()

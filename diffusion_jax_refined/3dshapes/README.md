@@ -192,3 +192,18 @@ the large multiplication 100 times:
 ```bash
 sbatch diffusion_jax_refined/3dshapes/tacc/rtx_small/run_traj_tracin_checkpoint_shared_100x1_query_score_rtx_small.sh
 ```
+
+For an exact timestamp-aligned `100 timestamps x 1 MC` comparison without a
+train-gradient artifact, the H100 streaming launcher requests four nodes and
+four GPUs per node. It first caches the ten query-gradient artifacts, waits for
+all ten, then shards the fixed random 5k attribution subset across all 16 GPUs.
+Each train gradient is immediately dotted with all ten aligned query gradients
+and discarded; only score shards and the final four score variants are saved:
+
+```bash
+sbatch diffusion_jax_refined/3dshapes/tacc/h100/run_traj_tracin_aligned100x1_stream_h100.sh
+```
+
+The launcher is restartable: completed query artifacts and stream shards are
+skipped. Final score directories use the namespace
+`traj_tracin_aligned100x1_stream`.

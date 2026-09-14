@@ -1146,6 +1146,21 @@ def build_candidate_items(cfg, N: int) -> List[int]:
     return [int(i) for i in picked]
 
 
+def shard_candidate_items(picked: Sequence[int]) -> Tuple[List[int], int, int, int, int]:
+    """Deterministically split an already-selected candidate set by list position."""
+    shard_count = max(1, int(os.environ.get("TRAJ_TRACIN_CANDIDATE_SHARD_COUNT", "1")))
+    shard_index = int(os.environ.get("TRAJ_TRACIN_CANDIDATE_SHARD_INDEX", "0"))
+    if shard_index < 0 or shard_index >= shard_count:
+        raise ValueError(
+            "TRAJ_TRACIN_CANDIDATE_SHARD_INDEX must be in "
+            f"[0, {shard_count}), got {shard_index}"
+        )
+    total = len(picked)
+    start = total * shard_index // shard_count
+    end = total * (shard_index + 1) // shard_count
+    return [int(value) for value in picked[start:end]], shard_index, shard_count, start, end
+
+
 def score_subset_suffix(cfg) -> str:
     if cfg.score_index_ranges is not None:
         parts = []
@@ -2347,6 +2362,16 @@ def run_attribution(cfg: TrajAttributionConfig):
     N = len(ds)
     print("[setup] selecting train points to score...")
     picked = build_candidate_items(cfg, N)
+    picked, candidate_shard_index, candidate_shard_count, candidate_start, candidate_end = (
+        shard_candidate_items(picked)
+    )
+    if candidate_shard_count > 1:
+        print(
+            "[setup] candidate shard "
+            f"{candidate_shard_index + 1}/{candidate_shard_count} | "
+            f"selected positions={candidate_start}:{candidate_end} | points={len(picked)}",
+            flush=True,
+        )
     if cfg.score_index_ranges is not None:
         print(f"[setup] selected {len(picked)} / {N} train points from score_index_ranges")
     elif cfg.random_subset:
@@ -2505,8 +2530,15 @@ def run_attribution(cfg: TrajAttributionConfig):
                     rngs = array_to_device(
                         jnp.stack(
                             [
-                                jax.random.PRNGKey(
-                                    cfg.seed + 700_000 * (ckpt_i + 1) + 10_000 * int(term_id) + start + j
+                                jax.random.fold_in(
+                                    jax.random.fold_in(
+                                        jax.random.fold_in(
+                                            jax.random.PRNGKey(cfg.seed),
+                                            int(ckpt_i),
+                                        ),
+                                        int(term_id),
+                                    ),
+                                    int(padded_indices[j]),
                                 )
                                 for j in range(batch_size_stream)
                             ],

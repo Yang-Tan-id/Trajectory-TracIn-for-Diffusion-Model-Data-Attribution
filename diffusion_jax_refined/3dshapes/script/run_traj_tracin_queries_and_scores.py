@@ -94,6 +94,11 @@ def main() -> None:
         help="Optional matching train-gradient artifact; defaults to the original 10-timestamp artifact.",
     )
     parser.add_argument("--python-bin", default=os.environ.get("PYTHON_BIN", sys.executable))
+    parser.add_argument(
+        "--log-prefix",
+        default="",
+        help="Optional prefix that keeps concurrent multi-node worker logs distinct.",
+    )
     args = parser.parse_args()
 
     query_ids = parse_ints(args.query_ids)
@@ -138,7 +143,10 @@ def main() -> None:
     log_name = "traj_tracin_query_score" if not namespace else f"traj_tracin_query_score_{namespace}"
     log_root = result_root / "logs" / log_name
     if args.execute:
-        for required in (checkpoint, train_artifact):
+        required_paths = [checkpoint]
+        if not args.skip_score:
+            required_paths.append(train_artifact)
+        for required in required_paths:
             if not required.is_file():
                 raise FileNotFoundError(str(required))
         log_root.mkdir(parents=True, exist_ok=True)
@@ -177,7 +185,8 @@ def main() -> None:
 
     def worker(gpu: str, tasks: list[tuple[int, str, int]]) -> None:
         worker_env = base_env | {"CUDA_VISIBLE_DEVICES": gpu}
-        log_path = log_root / f"gpu_{gpu}.log"
+        log_prefix = f"{args.log_prefix.strip()}_" if args.log_prefix.strip() else ""
+        log_path = log_root / f"{log_prefix}gpu_{gpu}.log"
         for query_id, prompt, seed in tasks:
             run_root = sample_run_root(sample_root, prompt, checkpoint)
             seed_dir = run_root / f"seed_{seed:06d}"
