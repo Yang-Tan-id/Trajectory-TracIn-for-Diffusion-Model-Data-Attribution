@@ -166,6 +166,17 @@ class LossDirectionResidualRmsTest(unittest.TestCase):
         self.assertIn("--alpha 0.5", launcher)
         self.assertIn("--score-schemes f_next_linear_square_z50", launcher)
 
+    def test_cached_lds_supports_positive_prediction_direction(self) -> None:
+        source = LDS_DRIVER.read_text()
+        self.assertIn('"--prediction-sign"', source)
+        self.assertIn('choices=(-1.0, 1.0)', source)
+        self.assertIn(
+            'sign_tag = "p1" if args.prediction_sign > 0 else "m1"', source
+        )
+        self.assertIn(
+            "sum_scores(kept, score_map, args.prediction_sign)", source
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
