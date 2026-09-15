@@ -276,6 +276,21 @@ class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
         self.assertIn('"per_query.csv"', text)
         self.assertIn('"ten_query_means.csv"', text)
 
+    def test_probe8_all_subset_sizes_analysis_covers_255_nonempty_subsets(self):
+        path = (
+            ROOT
+            / "3dshapes"
+            / "script"
+            / "analyze_predicted_noise_probe8_all_subset_sizes.py"
+        )
+        text = path.read_text()
+
+        self.assertEqual(sum(len(list(itertools.combinations(range(8), k))) for k in range(1, 9)), 255)
+        self.assertIn("for subset_size in range(1, 9)", text)
+        self.assertIn('"subset_size_distribution.csv"', text)
+        self.assertIn('"both_l2_counterfactual_by_subset_size.png"', text)
+        self.assertIn("ax.errorbar(", text)
+
 
 if __name__ == "__main__":
     unittest.main()
