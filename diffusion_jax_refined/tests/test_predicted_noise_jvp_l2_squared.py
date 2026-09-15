@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "3dshapes" / "script"))
 
 from run_predicted_noise_jvp_l2_squared import reduce_final_probe_scores
+from materialize_f_next_final_score_squared import square_final_scores
 
 
 class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
@@ -79,6 +80,13 @@ class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
                 reduced["square_then_mean"],
                 reduced["mean_then_square"],
             )
+        )
+
+    def test_f_next_final_score_is_squared_per_datasample(self):
+        scores = np.asarray([-3.0, -0.5, 0.0, 2.0], dtype=np.float64)
+        np.testing.assert_allclose(
+            square_final_scores(scores),
+            [9.0, 0.25, 0.0, 4.0],
         )
 
     def test_learning_rate_is_linear_and_the_term_sum_is_not_normalized(self):
