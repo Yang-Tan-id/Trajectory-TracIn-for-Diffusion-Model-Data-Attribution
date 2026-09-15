@@ -462,6 +462,8 @@ class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
         self.assertIn("fixed8)", launcher)
         self.assertIn("run_score signed linear", launcher)
         self.assertIn("run_score squared termwise_square", launcher)
+        self.assertIn('local label="$2"', launcher)
+        self.assertIn('local run_id="${SLURM_JOB_ID}_${label}"', launcher)
         self.assertIn("--prediction-sign=1", launcher)
         self.assertIn("--prediction-sign=-1", launcher)
         self.assertIn("predicted_noise_jvp_signed_probe12", cached_lds)

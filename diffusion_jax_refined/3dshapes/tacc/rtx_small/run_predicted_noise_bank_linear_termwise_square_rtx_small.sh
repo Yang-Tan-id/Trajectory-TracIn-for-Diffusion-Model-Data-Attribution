@@ -57,7 +57,9 @@ LOG_ROOT="${SHAPES_ROOT}/result/${EXPERIMENT_TAG}/logs/predicted_noise_${PROBE_B
 mkdir -p "${LOG_ROOT}"
 
 run_score() {
-  local contraction="$1" label="$2" run_id="${SLURM_JOB_ID}_${label}"
+  local contraction="$1"
+  local label="$2"
+  local run_id="${SLURM_JOB_ID}_${label}"
   local -a suffix_args=()
   [[ -z "${NAMESPACE_SUFFIX}" ]] || suffix_args=(--namespace-suffix "${NAMESPACE_SUFFIX}")
   local pids=() failed=0
