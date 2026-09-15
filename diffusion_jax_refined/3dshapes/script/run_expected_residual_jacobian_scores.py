@@ -25,6 +25,13 @@ DEFAULT_SCORE_NAMESPACE_PREFIX = "traj_tracin_expected_residual_jacobian_probe_a
 DEFAULT_TRAIN_FEATURE_SEMANTICS = "mean_probe_projected_residual_times_unit_probe_gradient"
 
 
+def score_weighting_semantics(args: argparse.Namespace) -> str:
+    value = f"learning_rate_weighted_sum_with_{args.original_contraction}_original"
+    if not args.skip_predicted:
+        value += f"_and_{args.predicted_contraction}_predicted"
+    return value + "_contractions"
+
+
 def records() -> list[dict]:
     return json.loads((SHAPES_ROOT / "queries_seed_0_9.json").read_text())["queries"]
 
@@ -176,11 +183,11 @@ def score_shard(args: argparse.Namespace) -> None:
     original_query, original_meta = load_query_bank(
         args, args.original_query_namespace, "trajectory_next_checkpoint_noise_mse"
     )
-    predicted_query, predicted_meta = load_predicted_query_probes(args)
-    query_banks = {
-        "original": (original_query, original_meta),
-        "predicted": (predicted_query, predicted_meta),
-    }
+    query_banks = {"original": (original_query, original_meta)}
+    predicted_query = None
+    if not args.skip_predicted:
+        predicted_query, predicted_meta = load_predicted_query_probes(args)
+        query_banks["predicted"] = (predicted_query, predicted_meta)
     lookups = {
         name: {
             (int(ckpt), int(timestep)): term_id
@@ -193,7 +200,7 @@ def score_shard(args: argparse.Namespace) -> None:
 
     sums = {
         (target, query_variant): np.zeros((10, 5000), dtype=np.float64)
-        for target in ("original", "predicted")
+        for target in query_banks
         for query_variant in ("raw", "query_l2")
     }
     original_terms = 0
@@ -211,7 +218,14 @@ def score_shard(args: argparse.Namespace) -> None:
             ckpts = np.asarray(data["ckpt_indices"], dtype=np.int32)
             timesteps = np.asarray(data["timesteps"], dtype=np.int32)
             weights = np.asarray(data["term_weights"], dtype=np.float64)
-            semantics = str(np.asarray(data["train_feature_semantics"]).item())
+            semantics = str(
+                np.asarray(
+                    data.get(
+                        "train_feature_semantics",
+                        "raw_projected_expected_loss_gradient",
+                    )
+                ).item()
+            )
             part_probe_count = int(np.asarray(data.get("jacobian_norm_probes", 0)).item())
         if semantics != args.train_feature_semantics:
             raise ValueError(f"unexpected train feature semantics in {path}: {semantics}")
@@ -235,45 +249,51 @@ def score_shard(args: argparse.Namespace) -> None:
                 query_device = jax.device_put(jnp.asarray(original_query[:, original_term, :]))
                 dots = train_device @ query_device.T
                 query_norms = jnp.linalg.norm(query_device, axis=1) + 1e-8
+                if args.original_contraction == "squared":
+                    raw_original = jnp.square(dots)
+                    query_l2_original = jnp.square(dots / query_norms[None, :])
+                else:
+                    raw_original = dots
+                    query_l2_original = dots / query_norms[None, :]
                 sums[("original", "raw")] += float(weight) * np.asarray(
-                    jax.device_get(dots), dtype=np.float64
+                    jax.device_get(raw_original), dtype=np.float64
                 ).T
                 sums[("original", "query_l2")] += float(weight) * np.asarray(
-                    jax.device_get(dots / query_norms[None, :]), dtype=np.float64
+                    jax.device_get(query_l2_original), dtype=np.float64
                 ).T
                 original_terms += 1
 
-            predicted_term = lookups["predicted"].get((int(ckpt), int(timestep)))
-            if predicted_term is None:
-                raise ValueError(f"missing predicted-noise query term ckpt={ckpt} t={timestep}")
-            predicted_raw = np.zeros((10, 5000), dtype=np.float64)
-            predicted_query_l2 = np.zeros((10, 5000), dtype=np.float64)
-            for probe_index in range(args.predicted_num_probes):
-                query_device = jax.device_put(
-                    jnp.asarray(predicted_query[probe_index, :, predicted_term, :])
+            if not args.skip_predicted:
+                predicted_term = lookups["predicted"].get((int(ckpt), int(timestep)))
+                if predicted_term is None:
+                    raise ValueError(f"missing predicted-noise query term ckpt={ckpt} t={timestep}")
+                predicted_raw = np.zeros((10, 5000), dtype=np.float64)
+                predicted_query_l2 = np.zeros((10, 5000), dtype=np.float64)
+                assert predicted_query is not None
+                for probe_index in range(args.predicted_num_probes):
+                    query_device = jax.device_put(
+                        jnp.asarray(predicted_query[probe_index, :, predicted_term, :])
+                    )
+                    dots = train_device @ query_device.T
+                    query_norms = jnp.linalg.norm(query_device, axis=1) + 1e-8
+                    if args.predicted_contraction == "squared":
+                        raw_values = jnp.square(dots)
+                        query_l2_values = jnp.square(dots / query_norms[None, :])
+                    else:
+                        raw_values = dots
+                        query_l2_values = dots / query_norms[None, :]
+                    predicted_raw += np.asarray(
+                        jax.device_get(raw_values), dtype=np.float64
+                    ).T / float(args.predicted_num_probes)
+                    predicted_query_l2 += np.asarray(
+                        jax.device_get(query_l2_values),
+                        dtype=np.float64,
+                    ).T / float(args.predicted_num_probes)
+                sums[("predicted", "raw")] += float(weight) * predicted_raw
+                sums[("predicted", "query_l2")] += (
+                    float(weight) * predicted_query_l2
                 )
-                dots = train_device @ query_device.T
-                query_norms = jnp.linalg.norm(query_device, axis=1) + 1e-8
-                if args.predicted_contraction == "squared":
-                    raw_values = jnp.square(dots)
-                    query_l2_values = jnp.square(dots / query_norms[None, :])
-                else:
-                    raw_values = dots
-                    query_l2_values = dots / query_norms[None, :]
-                predicted_raw += np.asarray(
-                    jax.device_get(raw_values), dtype=np.float64
-                ).T / float(args.predicted_num_probes)
-                predicted_query_l2 += np.asarray(
-                    jax.device_get(query_l2_values),
-                    dtype=np.float64,
-                ).T / float(args.predicted_num_probes)
-            # Keep the TrajTracIn learning-rate weight linear; `weight`
-            # already includes the per-snapshot averaging factor.
-            sums[("predicted", "raw")] += float(weight) * predicted_raw
-            sums[("predicted", "query_l2")] += (
-                float(weight) * predicted_query_l2
-            )
-            predicted_terms += 1
+                predicted_terms += 1
 
         print(
             f"[score shard {args.shard_index}/{args.shard_count}] checkpoint={ckpt_i} "
@@ -293,9 +313,7 @@ def score_shard(args: argparse.Namespace) -> None:
         predicted_terms=np.asarray(predicted_terms, dtype=np.int32),
         score_indices=score_indices,
         jacobian_norm_probes=np.asarray(jacobian_norm_probes, dtype=np.int32),
-        weighting_semantics=np.asarray(
-            f"learning_rate_weighted_sum_with_{args.predicted_contraction}_predicted_contractions"
-        ),
+        weighting_semantics=np.asarray(score_weighting_semantics(args)),
     )
     print(f"[saved] {output}", flush=True)
 
@@ -343,9 +361,10 @@ def materialize_scores(
 
 
 def merge(args: argparse.Namespace) -> None:
+    targets = ("original",) if args.skip_predicted else ("original", "predicted")
     totals = {
         (target, query_variant): np.zeros((10, 5000), dtype=np.float64)
-        for target in ("original", "predicted")
+        for target in targets
         for query_variant in ("raw", "query_l2")
     }
     original_terms = predicted_terms = 0
@@ -362,9 +381,7 @@ def merge(args: argparse.Namespace) -> None:
                     data[f"{target}_{query_variant}_sum"], dtype=np.float64
                 )
             semantics = str(np.asarray(data.get("weighting_semantics", "")).item())
-            expected_semantics = (
-                f"learning_rate_weighted_sum_with_{args.predicted_contraction}_predicted_contractions"
-            )
+            expected_semantics = score_weighting_semantics(args)
             if semantics != expected_semantics:
                 raise ValueError(
                     f"{path} has incompatible weighting semantics {semantics!r}; "
@@ -383,7 +400,9 @@ def merge(args: argparse.Namespace) -> None:
         elif jacobian_norm_probes != shard_probe_count:
             raise ValueError(f"Jacobian probe-count mismatch: {path}")
     expected_original_terms = (args.num_checkpoints - 1) * args.num_snapshots
-    expected_predicted_terms = args.num_checkpoints * args.num_snapshots
+    expected_predicted_terms = (
+        0 if args.skip_predicted else args.num_checkpoints * args.num_snapshots
+    )
     if original_terms != expected_original_terms or predicted_terms != expected_predicted_terms:
         raise ValueError(
             f"expected original/predicted terms {expected_original_terms}/{expected_predicted_terms}, "
@@ -393,33 +412,43 @@ def merge(args: argparse.Namespace) -> None:
     if score_indices is None or not np.array_equal(np.sort(score_indices), np.sort(expected)):
         raise ValueError("score indices do not match attribution subset")
     for query_variant in ("raw", "query_l2"):
+        original_definition = (
+            f"learning_rate_weighted_sum(square(dot(v_l2_train_feature, "
+            f"{query_variant}_grad(original_f))))"
+            if args.original_contraction == "squared"
+            else f"learning_rate_weighted_sum(dot(v_l2_train_feature, "
+            f"{query_variant}_grad(original_f)))"
+        )
         materialize_scores(
             args,
             f"{args.score_namespace_prefix}_original_f",
             totals[("original", query_variant)],
             score_indices,
-            f"learning_rate_weighted_sum(dot(v_l2_train_feature, {query_variant}_grad(original_f)))",
+            original_definition,
             query_variant,
             int(jacobian_norm_probes),
         )
-        materialize_scores(
-            args,
-            f"{args.score_namespace_prefix}_predicted_noise",
-            totals[("predicted", query_variant)],
-            score_indices,
-            (
-                f"learning_rate_weighted_sum("
-                f"{args.predicted_contraction}(dot(v_l2_train_feature, "
-                f"{query_variant}_predicted_noise_probe_grad)))"
-                if args.predicted_contraction == "squared"
-                else f"learning_rate_weighted_sum(dot(v_l2_train_feature, "
-                f"{query_variant}_predicted_noise_probe_grad))"
-            ),
-            query_variant,
-            int(jacobian_norm_probes),
-        )
+        if not args.skip_predicted:
+            materialize_scores(
+                args,
+                f"{args.score_namespace_prefix}_predicted_noise",
+                totals[("predicted", query_variant)],
+                score_indices,
+                (
+                    f"learning_rate_weighted_sum("
+                    f"{args.predicted_contraction}(dot(v_l2_train_feature, "
+                    f"{query_variant}_predicted_noise_probe_grad)))"
+                    if args.predicted_contraction == "squared"
+                    else f"learning_rate_weighted_sum(dot(v_l2_train_feature, "
+                    f"{query_variant}_predicted_noise_probe_grad))"
+                ),
+                query_variant,
+                int(jacobian_norm_probes),
+            )
+    target_count = 1 if args.skip_predicted else 2
     print(
-        "[done] materialized 1 train normalization x 2 query targets x 2 query normalizations",
+        f"[done] materialized 1 train normalization x {target_count} query targets "
+        "x 2 query normalizations",
         flush=True,
     )
 
@@ -440,10 +469,20 @@ def main() -> None:
     parser.add_argument("--predicted-query-namespace", default=DEFAULT_PREDICTED_QUERY_NAMESPACE)
     parser.add_argument("--predicted-num-probes", type=int, default=1)
     parser.add_argument(
+        "--original-contraction",
+        choices=("signed", "squared"),
+        default="signed",
+    )
+    parser.add_argument(
         "--predicted-contraction",
         choices=("squared", "signed"),
         default="squared",
         help="Apply either square(dot) or the signed dot to predicted-noise probes.",
+    )
+    parser.add_argument(
+        "--skip-predicted",
+        action="store_true",
+        help="Score only original f; avoids loading or multiplying predicted-noise probes.",
     )
     parser.add_argument("--score-namespace-prefix", default=DEFAULT_SCORE_NAMESPACE_PREFIX)
     parser.add_argument(
@@ -458,7 +497,11 @@ def main() -> None:
         raise ValueError("invalid shard index/count")
     if args.predicted_num_probes <= 0:
         raise ValueError("--predicted-num-probes must be positive")
-    if args.predicted_num_probes > 1 and "{probe_index}" not in args.predicted_query_namespace:
+    if (
+        not args.skip_predicted
+        and args.predicted_num_probes > 1
+        and "{probe_index}" not in args.predicted_query_namespace
+    ):
         raise ValueError(
             "--predicted-query-namespace must contain {probe_index} when multiple probes are used"
         )

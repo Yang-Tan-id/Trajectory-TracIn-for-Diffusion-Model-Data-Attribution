@@ -29,6 +29,13 @@ SIGNED_SCORE_PIPELINE = (
     / "rtx_small"
     / "run_loss_direction_residual_rms_signed_score_rtx_small.sh"
 )
+F_NEXT_SQUARED_PIPELINE = (
+    ROOT
+    / "3dshapes"
+    / "tacc"
+    / "rtx_small"
+    / "run_f_next_dot_squared_score_rtx_small.sh"
+)
 SCORER = ROOT / "3dshapes" / "script" / "run_expected_residual_jacobian_scores.py"
 LDS_DRIVER = ROOT / "3dshapes" / "script" / "run_traj_tracin_lds_cached.py"
 
@@ -110,6 +117,22 @@ class LossDirectionResidualRmsTest(unittest.TestCase):
             '"traj_tracin_loss_direction_residual_rms_signed_predicted_noise"',
             lds_driver,
         )
+
+    def test_original_train_f_next_squared_score_is_score_only(self) -> None:
+        scorer = SCORER.read_text()
+        self.assertIn('"--original-contraction"', scorer)
+        self.assertIn("raw_original = jnp.square(dots)", scorer)
+        self.assertIn('"--skip-predicted"', scorer)
+        self.assertIn('"raw_projected_expected_loss_gradient"', scorer)
+
+        launcher = F_NEXT_SQUARED_PIPELINE.read_text()
+        self.assertIn("--train-namespace \"${TRAIN_NAMESPACE}\"", launcher)
+        self.assertIn("TRAIN_NAMESPACE=traj_tracin", launcher)
+        self.assertIn("--original-contraction squared", launcher)
+        self.assertIn("--skip-predicted", launcher)
+        self.assertNotIn("01_train_datapoint_gradient.py", launcher)
+        self.assertNotIn("run_traj_tracin_queries_and_scores.py", launcher)
+        self.assertIn("--score-schemes f_next_dot_squared", launcher)
 
 
 if __name__ == "__main__":
