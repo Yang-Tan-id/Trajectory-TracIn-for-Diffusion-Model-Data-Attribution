@@ -1,6 +1,7 @@
 from pathlib import Path
 import sys
 import unittest
+import itertools
 
 import numpy as np
 
@@ -258,6 +259,22 @@ class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
         self.assertIn('choices=("linear", "square", "all")', printer)
         self.assertIn('"LINEAR MEAN (NO SQUARE)"', printer)
         self.assertIn('"p1",', printer)
+
+    def test_probe8_choose4_analysis_enumerates_all_subsets(self):
+        path = (
+            ROOT
+            / "3dshapes"
+            / "script"
+            / "analyze_predicted_noise_probe8_choose4.py"
+        )
+        text = path.read_text()
+
+        self.assertEqual(len(list(itertools.combinations(range(8), 4))), 70)
+        self.assertIn("itertools.combinations(range(8), 4)", text)
+        self.assertIn('default=1.0', text)
+        self.assertIn('"sums_score_query_train_l2_normalized"', text)
+        self.assertIn('"per_query.csv"', text)
+        self.assertIn('"ten_query_means.csv"', text)
 
 
 if __name__ == "__main__":
