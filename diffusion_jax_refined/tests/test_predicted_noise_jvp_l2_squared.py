@@ -533,6 +533,29 @@ class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
         self.assertIn("--num-probes 12", launcher)
         self.assertIn('RUN_ID="${SOURCE_RUN_ID:-3502474}"', launcher)
 
+    def test_probe12_sign_flip_analysis_covers_all_4096_assignments(self):
+        analyzer = (
+            ROOT
+            / "3dshapes"
+            / "script"
+            / "analyze_predicted_noise_probe12_sign_flips.py"
+        ).read_text()
+        launcher = (
+            ROOT
+            / "3dshapes"
+            / "tacc"
+            / "rtx_small"
+            / "run_predicted_noise_probe12_sign_flips_rtx_small.sh"
+        ).read_text()
+
+        self.assertEqual(1 << 12, 4096)
+        self.assertIn("def sign_matrix(num_probes: int)", analyzer)
+        self.assertIn("means + means[::-1]", analyzer)
+        self.assertIn("all_plus_percentile", analyzer)
+        self.assertIn("both_l2_counterfactual_sign_histogram.png", analyzer)
+        self.assertIn("exhaustive 4096 sign assignments", launcher)
+        self.assertIn('RUN_ID="${SOURCE_RUN_ID:-3503519}"', launcher)
+
 
 if __name__ == "__main__":
     unittest.main()
