@@ -18,6 +18,9 @@ FINAL_LINEAR_MEAN_NAMESPACE = "predicted_noise_jvp_final_linear_mean"
 FINAL_SQUARE_THEN_MEAN_NAMESPACE = "predicted_noise_jvp_final_square_then_mean"
 FINAL_MEAN_THEN_SQUARE_NAMESPACE = "predicted_noise_jvp_final_mean_then_square"
 FINAL_POST_SQUARE_STAGING_NAMESPACE = "predicted_noise_jvp_final_post_square"
+TIMESTAMP_CHECKPOINT_SQUARE_NAMESPACE = (
+    "predicted_noise_jvp_timestamp_checkpoint_sum_square"
+)
 
 import sys
 
@@ -60,6 +63,8 @@ def score_namespace(
         namespace = SQUARED_NAMESPACE
     elif contraction == "final_post_square":
         namespace = FINAL_POST_SQUARE_STAGING_NAMESPACE
+    elif contraction == "timestamp_checkpoint_square":
+        namespace = TIMESTAMP_CHECKPOINT_SQUARE_NAMESPACE
     else:
         raise ValueError(f"unknown contraction {contraction!r}")
     suffix = "" if num_probes == 1 else f"_probe{num_probes}"
@@ -89,6 +94,8 @@ def weighting_semantics(contraction: str) -> str:
         return "learning_rate_weighted_sum_of_squared_gradient_contractions"
     if contraction == "final_post_square":
         return "square_after_learning_rate_weighted_term_sum_per_probe"
+    if contraction == "timestamp_checkpoint_square":
+        return "mean_timestamp_probe_square_of_checkpoint_lr_weighted_sum"
     return "learning_rate_weighted_sum_of_signed_gradient_contractions"
 
 
@@ -99,6 +106,16 @@ def reduce_final_probe_scores(probe_scores: np.ndarray) -> dict[str, np.ndarray]
         "square_then_mean": np.mean(np.square(probe_scores), axis=0),
         "mean_then_square": np.square(np.mean(probe_scores, axis=0)),
     }
+
+
+def reduce_timestamp_checkpoint_sums(checkpoint_sums: np.ndarray) -> np.ndarray:
+    """Square checkpoint sums, then average timestamp and probe axes."""
+    if checkpoint_sums.ndim != 4:
+        raise ValueError(
+            "checkpoint_sums must have shape "
+            "(timestamps, probes, queries, datapoints)"
+        )
+    return np.mean(np.square(checkpoint_sums), axis=(0, 1))
 
 
 def query_artifact_path(
@@ -266,11 +283,16 @@ def score_shard(args: argparse.Namespace) -> None:
         (int(ckpt), int(timestep)): term_id
         for term_id, (ckpt, timestep) in enumerate(zip(query_meta["ckpt_indices"], query_meta["timesteps"]))
     }
-    score_shape = (
-        (args.num_probes, 10, 5000)
-        if args.contraction == "final_post_square"
-        else (10, 5000)
-    )
+    timestep_values = list(dict.fromkeys(int(value) for value in query_meta["timesteps"]))
+    if len(timestep_values) != 10:
+        raise ValueError(f"expected 10 unique query timesteps, got {timestep_values}")
+    timestep_slots = {value: slot for slot, value in enumerate(timestep_values)}
+    if args.contraction == "final_post_square":
+        score_shape = (args.num_probes, 10, 5000)
+    elif args.contraction == "timestamp_checkpoint_square":
+        score_shape = (len(timestep_values), args.num_probes, 10, 5000)
+    else:
+        score_shape = (10, 5000)
     sums = {
         "score": np.zeros(score_shape, dtype=np.float64),
         "score_query_normalized": np.zeros(score_shape, dtype=np.float64),
@@ -304,7 +326,10 @@ def score_shard(args: argparse.Namespace) -> None:
             train_device = jax.device_put(jnp.asarray(train[local_term]))
             train_norm = jnp.linalg.norm(train_device, axis=1) + 1e-8
             term_scores = None
-            if args.contraction != "final_post_square":
+            if args.contraction not in (
+                "final_post_square",
+                "timestamp_checkpoint_square",
+            ):
                 term_scores = {
                     component: np.zeros((10, 5000), dtype=np.float64)
                     for component in sums
@@ -334,6 +359,13 @@ def score_shard(args: argparse.Namespace) -> None:
                         # Keep each probe separate through the complete trajectory sum.
                         # Squaring and cross-probe reduction happen only after shards merge.
                         sums[component][probe_index] += float(weight) * host_values
+                    elif args.contraction == "timestamp_checkpoint_square":
+                        # Stored term weights are eta_c / num_timestamps. Restore eta_c
+                        # here because timestamp averaging occurs after checkpoint sums.
+                        checkpoint_lr = float(weight) * float(len(timestep_values))
+                        sums[component][timestep_slots[int(timestep)], probe_index] += (
+                            checkpoint_lr * host_values
+                        )
                     else:
                         assert term_scores is not None
                         term_scores[component] += host_values / float(args.num_probes)
@@ -368,11 +400,12 @@ def atomic_save(path: Path, value: np.ndarray) -> None:
 
 
 def merge(args: argparse.Namespace) -> None:
-    score_shape = (
-        (args.num_probes, 10, 5000)
-        if args.contraction == "final_post_square"
-        else (10, 5000)
-    )
+    if args.contraction == "final_post_square":
+        score_shape = (args.num_probes, 10, 5000)
+    elif args.contraction == "timestamp_checkpoint_square":
+        score_shape = (10, args.num_probes, 10, 5000)
+    else:
+        score_shape = (10, 5000)
     totals = {
         "score": np.zeros(score_shape, dtype=np.float64),
         "score_query_normalized": np.zeros(score_shape, dtype=np.float64),
@@ -433,6 +466,17 @@ def merge(args: argparse.Namespace) -> None:
             }
             for reduction in ("linear_mean", "square_then_mean", "mean_then_square")
         }
+    elif args.contraction == "timestamp_checkpoint_square":
+        score_sets = {
+            score_namespace(
+                args.num_probes,
+                args.contraction,
+                args.namespace_suffix,
+            ): {
+                component: reduce_timestamp_checkpoint_sums(values)
+                for component, values in totals.items()
+            }
+        }
     else:
         score_sets = {
             score_namespace(
@@ -465,6 +509,8 @@ def merge(args: argparse.Namespace) -> None:
                         if "final_square_then_mean" in output_namespace
                         else "square(mean_probes(learning_rate_weighted_sum_terms(signed_normalized_dot_product)))"
                         if "final_mean_then_square" in output_namespace
+                        else "mean_timestamp_probe(square(sum_checkpoint(learning_rate_times_signed_normalized_dot_product)))"
+                        if "timestamp_checkpoint_sum_square" in output_namespace
                         else "mean_probes(learning_rate_weighted_sum_terms(signed_normalized_dot_product))"
                         if "final_linear_mean" in output_namespace
                         else "learning_rate_weighted_sum_terms(squared_normalized_dot_product)"
@@ -523,12 +569,19 @@ def main() -> None:
     parser.add_argument("--num-probes", type=int, default=1)
     parser.add_argument(
         "--contraction",
-        choices=("squared", "signed", "final_post_square"),
+        choices=(
+            "squared",
+            "signed",
+            "final_post_square",
+            "timestamp_checkpoint_square",
+        ),
         default="squared",
         help=(
             "squared: square each term before trajectory accumulation; signed: keep the "
             "signed term; final_post_square: retain per-probe trajectory sums and emit "
-            "both mean(square(S_r)) and square(mean(S_r))."
+            "both mean(square(S_r)) and square(mean(S_r)); "
+            "timestamp_checkpoint_square: for each timestamp/probe, sum all "
+            "learning-rate-weighted checkpoints, square, then average timestamps/probes."
         ),
     )
     parser.add_argument(

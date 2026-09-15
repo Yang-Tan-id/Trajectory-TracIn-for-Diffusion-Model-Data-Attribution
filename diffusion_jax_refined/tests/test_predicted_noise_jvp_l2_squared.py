@@ -8,7 +8,10 @@ import numpy as np
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "3dshapes" / "script"))
 
-from run_predicted_noise_jvp_l2_squared import reduce_final_probe_scores
+from run_predicted_noise_jvp_l2_squared import (
+    reduce_final_probe_scores,
+    reduce_timestamp_checkpoint_sums,
+)
 from materialize_f_next_final_score_squared import square_final_scores
 
 
@@ -191,7 +194,8 @@ class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
             / "run_predicted_noise_jvp_signed_probe4_score_rtx_small.sh"
         ).read_text()
 
-        self.assertIn('choices=("squared", "signed", "final_post_square")', driver)
+        for contraction in ("squared", "signed", "final_post_square"):
+            self.assertIn(f'"{contraction}"', driver)
         self.assertIn('SIGNED_NAMESPACE = "predicted_noise_jvp_signed"', driver)
         self.assertIn("query_namespace_pattern.format(probe_index=probe_index)", driver)
         self.assertIn("--contraction signed", launcher)
@@ -294,6 +298,53 @@ class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
             cached_lds,
         )
         self.assertIn("choices=(4, 8, 12)", printer)
+
+    def test_probe8_timestamp_grouped_checkpoint_square_pipeline(self):
+        driver = (
+            ROOT / "3dshapes" / "script" / "run_predicted_noise_jvp_l2_squared.py"
+        ).read_text()
+        launcher = (
+            ROOT
+            / "3dshapes"
+            / "tacc"
+            / "rtx_small"
+            / "run_predicted_noise_probe8_timestamp_checkpoint_square_rtx_small.sh"
+        ).read_text()
+        cached_lds = (
+            ROOT / "3dshapes" / "script" / "run_traj_tracin_lds_cached.py"
+        ).read_text()
+
+        self.assertIn('"timestamp_checkpoint_square"', driver)
+        self.assertIn("checkpoint_lr = float(weight) * float(len(timestep_values))", driver)
+        self.assertIn("reduce_timestamp_checkpoint_sums(values)", driver)
+        self.assertIn("NUM_PROBES=8", launcher)
+        self.assertIn("--contraction timestamp_checkpoint_square", launcher)
+        self.assertIn(
+            "predicted_noise_jvp_timestamp_checkpoint_sum_square_probe8",
+            launcher,
+        )
+        self.assertIn("--prediction-sign=-1", launcher)
+        self.assertIn(
+            '"traj_tracin_predicted_noise_jvp_timestamp_checkpoint_sum_square_probe8"',
+            cached_lds,
+        )
+
+    def test_timestamp_checkpoint_sums_square_then_average_timestamp_and_probe(self):
+        checkpoint_sums = np.asarray(
+            [
+                [[[1.0, 2.0]], [[3.0, 4.0]]],
+                [[[5.0, 6.0]], [[7.0, 8.0]]],
+            ],
+            dtype=np.float64,
+        )
+        actual = reduce_timestamp_checkpoint_sums(checkpoint_sums)
+        expected = np.asarray(
+            [[
+                (1.0 + 9.0 + 25.0 + 49.0) / 4.0,
+                (4.0 + 16.0 + 36.0 + 64.0) / 4.0,
+            ]]
+        )
+        np.testing.assert_allclose(actual, expected)
 
     def test_probe8_choose4_analysis_enumerates_all_subsets(self):
         path = (
