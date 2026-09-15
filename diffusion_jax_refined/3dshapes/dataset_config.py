@@ -141,6 +141,9 @@ ATTRIBUTION_CONFIGS = {
         "checkpoint_dir": CHECKPOINT_DIR,
         "reference_ckpt": REFERENCE_CKPT,
         "query_objective": os.environ.get("TRAJ_QUERY_OBJECTIVE", "trajectory_next_checkpoint_noise_mse"),
+        "predicted_noise_probe_index": int(
+            os.environ.get("TRAJ_PREDICTED_NOISE_PROBE_INDEX", "0")
+        ),
         "parameter_source": os.environ.get("TRAJ_PARAMETER_SOURCE", "raw"),
         "attribution_sample_dir": ATTRIBUTION_SAMPLE_DIR,
         "attribution_sample_seed": INITIAL_SEED,

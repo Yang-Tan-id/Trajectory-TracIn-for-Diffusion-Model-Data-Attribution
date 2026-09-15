@@ -36,6 +36,10 @@ VARIANTS = (
     ("query_train_l2", "score_query_train_l2_normalized"),
 )
 PREDICTED_NOISE_JVP_VARIANTS = VARIANTS
+PREDICTED_NOISE_JVP_SCHEMES = {
+    "predicted_noise_jvp_l2_squared",
+    "predicted_noise_jvp_l2_squared_probe4",
+}
 SCORE_SCHEMES = {
     "original": "traj_tracin",
     "constant_lr_uniform": "traj_tracin_constant_lr_uniform",
@@ -44,6 +48,7 @@ SCORE_SCHEMES = {
     "aligned100x1_stream": "traj_tracin_aligned100x1_stream",
     "aligned100x1_saved": "traj_tracin_aligned100x1_saved",
     "predicted_noise_jvp_l2_squared": "traj_tracin_predicted_noise_jvp_l2_squared",
+    "predicted_noise_jvp_l2_squared_probe4": "traj_tracin_predicted_noise_jvp_l2_squared_probe4",
     "expected_residual_jacobian_fnorm_original_f": "traj_tracin_expected_residual_jacobian_fnorm_original_f",
     "expected_residual_jacobian_v_l2_original_f": "traj_tracin_expected_residual_jacobian_v_l2_original_f",
     "expected_residual_jacobian_fnorm_predicted_noise": "traj_tracin_expected_residual_jacobian_fnorm_predicted_noise",
@@ -129,6 +134,7 @@ def main() -> None:
             "Comma/space list: original, constant_lr_uniform, "
             "cosine_lr_ddim_step_squared, checkpoint_shared_100x1_query100, "
             "aligned100x1_stream, aligned100x1_saved, predicted_noise_jvp_l2_squared, "
+            "predicted_noise_jvp_l2_squared_probe4, "
             "expected_residual_jacobian_fnorm_original_f, "
             "expected_residual_jacobian_v_l2_original_f, "
             "expected_residual_jacobian_fnorm_predicted_noise, "
@@ -154,7 +160,7 @@ def main() -> None:
         len(EXPECTED_RESIDUAL_JACOBIAN_VARIANTS)
         if name in EXPECTED_RESIDUAL_JACOBIAN_SCHEMES
         else len(PREDICTED_NOISE_JVP_VARIANTS)
-        if name == "predicted_noise_jvp_l2_squared"
+        if name in PREDICTED_NOISE_JVP_SCHEMES
         else len(VARIANTS)
         for name in scheme_names
     )
@@ -218,7 +224,7 @@ def main() -> None:
                 EXPECTED_RESIDUAL_JACOBIAN_VARIANTS
                 if scheme_name in EXPECTED_RESIDUAL_JACOBIAN_SCHEMES
                 else PREDICTED_NOISE_JVP_VARIANTS
-                if scheme_name == "predicted_noise_jvp_l2_squared"
+                if scheme_name in PREDICTED_NOISE_JVP_SCHEMES
                 else VARIANTS
             )
             for variant, score_name in scheme_variants:

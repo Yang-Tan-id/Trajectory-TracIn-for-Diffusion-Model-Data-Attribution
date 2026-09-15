@@ -38,11 +38,21 @@ def save_npz_compressed_atomic(path: str, **arrays) -> None:
     os.replace(tmp_path, path)
 
 
-def predicted_noise_probe_key(seed: int, checkpoint_index: int, timestep: int, snapshot_position: int):
+def predicted_noise_probe_key(
+    seed: int,
+    checkpoint_index: int,
+    timestep: int,
+    snapshot_position: int,
+    probe_index: int = 0,
+):
     """Deterministic, domain-separated RNG key for one output-space probe."""
     key = jax.random.PRNGKey(seed)
     for value in (0x50524F42, checkpoint_index, timestep, snapshot_position):
         key = jax.random.fold_in(key, int(value))
+    # Preserve the historical probe exactly for index zero so existing
+    # train/query artifacts remain compatible.
+    if probe_index:
+        key = jax.random.fold_in(key, int(probe_index))
     return key
 
 
@@ -1340,6 +1350,7 @@ class TrajAttributionConfig:
     query: Any = None
     seed: int = 0
     query_objective: str = "trajectory_noise_squared_deviation"
+    predicted_noise_probe_index: int = 0
     parameter_source: str = "ema"  # "ema" for historical behavior, "raw" for TrainState.params
 
     # optional precomputed sampler trajectory
@@ -3060,6 +3071,7 @@ def run_attribution(cfg: TrajAttributionConfig):
                                         ckpt_i,
                                         int(t_seq[i]),
                                         int(pos_seq[i]),
+                                        cfg.predicted_noise_probe_index,
                                     )
                                     for i in chunk_ids
                                 ],
@@ -3196,6 +3208,7 @@ def run_attribution(cfg: TrajAttributionConfig):
                             ckpt_i,
                             int(t_value),
                             int(pos_seq[snap_id]),
+                            cfg.predicted_noise_probe_index,
                         )
                         norm_probes = array_to_device(
                             jnp.stack(
@@ -3707,9 +3720,13 @@ def run_attribution(cfg: TrajAttributionConfig):
                 query_payload.update(
                     output_probe_distribution=np.asarray("standard_normal"),
                     output_probes_per_term=np.asarray(1, dtype=np.int32),
+                    output_probe_index=np.asarray(
+                        cfg.predicted_noise_probe_index, dtype=np.int32
+                    ),
                     output_probe_normalization=np.asarray("sqrt_num_output_elements"),
                     output_probe_seed_rule=np.asarray(
-                        "fold_in(PRNGKey(seed),domain_tag,checkpoint_index,timestep,snapshot_position)"
+                        "historical fold_in(PRNGKey(seed),domain_tag,checkpoint_index,"
+                        "timestep,snapshot_position), then fold_in(probe_index) when nonzero"
                     ),
                 )
             if uses_checkpoint_trajectory_target:

@@ -35,6 +35,27 @@ class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
         np.testing.assert_allclose(train_l2[:, 0], [64.0 / 25.0, 0.0])
         np.testing.assert_allclose(both_l2[:, 0], [16.0 / 25.0, 0.0])
 
+    def test_multiple_probes_average_squared_dots_not_gradients(self):
+        train = np.asarray([[1.0, 2.0], [3.0, -1.0]], dtype=np.float64)
+        probes = np.asarray(
+            [
+                [[1.0, 0.0], [0.0, 1.0]],
+                [[1.0, 1.0], [1.0, -1.0]],
+                [[2.0, -1.0], [-1.0, 2.0]],
+                [[0.5, 0.5], [-0.5, 0.5]],
+            ],
+            dtype=np.float64,
+        )
+        actual = np.mean(
+            np.stack([np.square(train @ query.T) for query in probes], axis=0),
+            axis=0,
+        )
+        expected = sum(np.square(train @ query.T) for query in probes) / 4.0
+        np.testing.assert_allclose(actual, expected)
+        self.assertFalse(
+            np.allclose(actual, np.square(train @ np.mean(probes, axis=0).T))
+        )
+
     def test_query_probe_is_scalar_and_raw_projected(self):
         text = (ROOT / "legacy_jax" / "traj_tracin" / "algorithm.py").read_text()
         self.assertIn('"trajectory_predicted_noise_probe"', text)
@@ -64,6 +85,23 @@ class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
         self.assertIn('--run-id "${SLURM_JOB_ID}"', launcher)
         self.assertIn("--shard-count 2", launcher)
         self.assertIn("--score-schemes predicted_noise_jvp_l2_squared", launcher)
+
+    def test_four_probe_rtx_pipeline_is_independent_and_reuses_train(self):
+        launcher = (
+            ROOT
+            / "3dshapes"
+            / "tacc"
+            / "rtx_small"
+            / "run_predicted_noise_jvp_l2_squared_probe4_rtx_small.sh"
+        ).read_text()
+        driver = (ROOT / "3dshapes" / "script" / "run_predicted_noise_jvp_l2_squared.py").read_text()
+        self.assertIn("NUM_PROBES=4", launcher)
+        self.assertIn("for probe_index in 0 1 2 3", launcher)
+        self.assertIn('--predicted-noise-probe-index "${probe_index}"', launcher)
+        self.assertIn('--num-probes "${NUM_PROBES}"', launcher)
+        self.assertIn("predicted_noise_jvp_l2_squared_probe4", launcher)
+        self.assertIn("for probe_index in range(args.num_probes)", driver)
+        self.assertIn("/ float(args.num_probes)", driver)
 
 
 if __name__ == "__main__":

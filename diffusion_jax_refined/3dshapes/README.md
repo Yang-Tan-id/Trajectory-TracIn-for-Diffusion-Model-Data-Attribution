@@ -253,6 +253,18 @@ Permanent scores are written below `traj_tracin_predicted_noise_jvp_l2_squared`
 in `score`, `score_query_normalized`, `score_train_l2_normalized`, and
 `score_query_train_l2_normalized`.
 
+The four-query-probe version reuses the same train-gradient artifact. For each
+checkpoint/timestamp it computes four independent predicted-noise query VJPs,
+averages their squared train/query contractions, and retains the same four
+normalization variants in the independent
+`traj_tracin_predicted_noise_jvp_l2_squared_probe4` namespace:
+
+```bash
+sbatch -p rtx-small \
+  --export=ALL,EXPERIMENT_TAG=experiment1,TRAIN_SEED=42 \
+  diffusion_jax_refined/3dshapes/tacc/rtx_small/run_predicted_noise_jvp_l2_squared_probe4_rtx_small.sh
+```
+
 ### Normalized expected-Jacobian times expected-residual score
 
 For each checkpoint, timestamp, and attribution point, this variant forms the

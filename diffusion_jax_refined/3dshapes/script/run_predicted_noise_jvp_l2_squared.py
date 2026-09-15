@@ -13,7 +13,6 @@ import numpy as np
 
 SHAPES_ROOT = Path(__file__).resolve().parents[1]
 NAMESPACE = "predicted_noise_jvp_l2_squared"
-SCORE_NAMESPACE = f"traj_tracin_{NAMESPACE}"
 
 import sys
 
@@ -35,7 +34,26 @@ def checkpoint_path(experiment: str, train_seed: int, epochs: int) -> Path:
     return result_root(experiment) / "model" / "prompted_jax" / f"seed_{train_seed}_epoch_{epochs:04d}.ckpt"
 
 
-def query_artifact_path(experiment: str, train_seed: int, epochs: int, query_id: int) -> Path:
+def probe_namespace(num_probes: int, probe_index: int) -> str:
+    if num_probes == 1:
+        return NAMESPACE
+    return f"{NAMESPACE}_probe{num_probes}_r{probe_index}"
+
+
+def score_namespace(num_probes: int) -> str:
+    suffix = "" if num_probes == 1 else f"_probe{num_probes}"
+    return f"traj_tracin_{NAMESPACE}{suffix}"
+
+
+def query_artifact_path(
+    experiment: str,
+    train_seed: int,
+    epochs: int,
+    query_id: int,
+    *,
+    num_probes: int,
+    probe_index: int,
+) -> Path:
     record = records()[query_id]
     checkpoint = checkpoint_path(experiment, train_seed, epochs)
     run_root = (
@@ -48,7 +66,7 @@ def query_artifact_path(experiment: str, train_seed: int, epochs: int, query_id:
     seed = int(record["initial_seed"])
     return (
         run_root
-        / f"seed_{seed:06d}_query_gradient_{NAMESPACE}"
+        / f"seed_{seed:06d}_query_gradient_{probe_namespace(num_probes, probe_index)}"
         / "traj_tracin"
         / "query_gradient_artifact.npz"
     )
@@ -66,11 +84,11 @@ def train_part_dir(experiment: str, train_seed: int) -> Path:
     return Path(str(artifact) + ".parts")
 
 
-def shard_root(experiment: str, train_seed: int, run_id: str) -> Path:
+def shard_root(experiment: str, train_seed: int, run_id: str, num_probes: int) -> Path:
     return (
         result_root(experiment)
         / "stream_score"
-        / SCORE_NAMESPACE
+        / score_namespace(num_probes)
         / f"train_seed_{train_seed}"
         / f"run_{run_id}"
     )
@@ -85,34 +103,51 @@ def atomic_savez(path: Path, **arrays: np.ndarray) -> None:
 
 
 def load_query_bank(args: argparse.Namespace) -> tuple[np.ndarray, dict[str, np.ndarray]]:
-    features = []
+    probe_banks = []
     reference = None
-    for query_id in range(10):
-        path = query_artifact_path(args.experiment, args.train_seed, args.epochs, query_id)
-        if not path.is_file():
-            raise FileNotFoundError(path)
-        with np.load(path, allow_pickle=False) as payload:
-            feature = np.asarray(payload["query_features"], dtype=np.float32)
-            objective = str(np.asarray(payload["query_objective"]).item())
-            proj_dim = int(np.asarray(payload["proj_dim"]).item())
-            metadata = {
-                "ckpt_indices": np.asarray(payload["ckpt_indices"], dtype=np.int32),
-                "timesteps": np.asarray(payload["timesteps"], dtype=np.int32),
-                "term_weights": np.asarray(payload["term_weights"], dtype=np.float64),
-            }
-        if objective != "trajectory_predicted_noise_probe":
-            raise ValueError(f"{path} contains query objective {objective!r}")
-        if feature.shape != (500, 4096) or proj_dim != 4096:
-            raise ValueError(f"{path} expected query features (500,4096), got {feature.shape}")
-        features.append(feature)
-        if reference is None:
-            reference = metadata
-        else:
-            for key, value in metadata.items():
-                if not np.allclose(value, reference[key], rtol=1e-6, atol=1e-12):
-                    raise ValueError(f"query {query_id} metadata mismatch for {key}")
+    for probe_index in range(args.num_probes):
+        features = []
+        for query_id in range(10):
+            path = query_artifact_path(
+                args.experiment,
+                args.train_seed,
+                args.epochs,
+                query_id,
+                num_probes=args.num_probes,
+                probe_index=probe_index,
+            )
+            if not path.is_file():
+                raise FileNotFoundError(path)
+            with np.load(path, allow_pickle=False) as payload:
+                feature = np.asarray(payload["query_features"], dtype=np.float32)
+                objective = str(np.asarray(payload["query_objective"]).item())
+                proj_dim = int(np.asarray(payload["proj_dim"]).item())
+                stored_probe_index = int(np.asarray(payload.get("output_probe_index", 0)).item())
+                metadata = {
+                    "ckpt_indices": np.asarray(payload["ckpt_indices"], dtype=np.int32),
+                    "timesteps": np.asarray(payload["timesteps"], dtype=np.int32),
+                    "term_weights": np.asarray(payload["term_weights"], dtype=np.float64),
+                }
+            if objective != "trajectory_predicted_noise_probe":
+                raise ValueError(f"{path} contains query objective {objective!r}")
+            if stored_probe_index != probe_index:
+                raise ValueError(
+                    f"{path} contains output probe {stored_probe_index}, expected {probe_index}"
+                )
+            if feature.shape != (500, 4096) or proj_dim != 4096:
+                raise ValueError(f"{path} expected query features (500,4096), got {feature.shape}")
+            features.append(feature)
+            if reference is None:
+                reference = metadata
+            else:
+                for key, value in metadata.items():
+                    if not np.allclose(value, reference[key], rtol=1e-6, atol=1e-12):
+                        raise ValueError(
+                            f"probe {probe_index} query {query_id} metadata mismatch for {key}"
+                        )
+        probe_banks.append(np.stack(features, axis=0))
     assert reference is not None
-    return np.stack(features, axis=0), reference
+    return np.stack(probe_banks, axis=0), reference
 
 
 def score_shard(args: argparse.Namespace) -> None:
@@ -120,7 +155,7 @@ def score_shard(args: argparse.Namespace) -> None:
     import jax.numpy as jnp
 
     output = (
-        shard_root(args.experiment, args.train_seed, args.run_id)
+        shard_root(args.experiment, args.train_seed, args.run_id, args.num_probes)
         / "shards"
         / f"shard_{args.shard_index:02d}.npz"
     )
@@ -164,23 +199,36 @@ def score_shard(args: argparse.Namespace) -> None:
             if query_term is None:
                 raise ValueError(f"no query feature for checkpoint={ckpt} timestep={timestep}")
             train_device = jax.device_put(jnp.asarray(train[local_term]))
-            query_device = jax.device_put(jnp.asarray(query[:, query_term, :]))
-            directional = train_device @ query_device.T
             train_norm = jnp.linalg.norm(train_device, axis=1) + 1e-8
-            query_norm = jnp.linalg.norm(query_device, axis=1) + 1e-8
             term_scores = {
-                "score": jnp.square(directional),
-                "score_query_normalized": jnp.square(directional / query_norm[None, :]),
-                "score_train_l2_normalized": jnp.square(directional / train_norm[:, None]),
-                "score_query_train_l2_normalized": jnp.square(
-                    directional / train_norm[:, None] / query_norm[None, :]
-                ),
+                component: np.zeros((10, 5000), dtype=np.float64)
+                for component in sums
             }
+            for probe_index in range(args.num_probes):
+                query_device = jax.device_put(
+                    jnp.asarray(query[probe_index, :, query_term, :])
+                )
+                directional = train_device @ query_device.T
+                query_norm = jnp.linalg.norm(query_device, axis=1) + 1e-8
+                probe_scores = {
+                    "score": jnp.square(directional),
+                    "score_query_normalized": jnp.square(
+                        directional / query_norm[None, :]
+                    ),
+                    "score_train_l2_normalized": jnp.square(
+                        directional / train_norm[:, None]
+                    ),
+                    "score_query_train_l2_normalized": jnp.square(
+                        directional / train_norm[:, None] / query_norm[None, :]
+                    ),
+                }
+                for component, values in probe_scores.items():
+                    term_scores[component] += np.asarray(
+                        jax.device_get(values), dtype=np.float64
+                    ).T / float(args.num_probes)
             weight_squared = float(weight) ** 2
             for component, values in term_scores.items():
-                sums[component] += weight_squared * np.asarray(
-                    jax.device_get(values), dtype=np.float64
-                ).T
+                sums[component] += weight_squared * values
             lr2_weight_sum += weight_squared
             used_terms += 1
         print(f"[score shard {args.shard_index}/{args.shard_count}] checkpoint={ckpt_i} terms={used_terms}", flush=True)
@@ -217,7 +265,7 @@ def merge(args: argparse.Namespace) -> None:
     score_indices = None
     for shard in range(args.shard_count):
         path = (
-            shard_root(args.experiment, args.train_seed, args.run_id)
+            shard_root(args.experiment, args.train_seed, args.run_id, args.num_probes)
             / "shards"
             / f"shard_{shard:02d}.npz"
         )
@@ -251,13 +299,13 @@ def merge(args: argparse.Namespace) -> None:
                 / f"train_seed_{args.train_seed}"
                 / f"query_{_prompt_tag(str(record['prompt']))}"
                 / f"initial_seed_{int(record['initial_seed'])}"
-                / SCORE_NAMESPACE
+                / score_namespace(args.num_probes)
                 / component
             )
             atomic_save(out_dir / "scores.npy", values[query_id])
             atomic_save(out_dir / "score_indices.npy", score_indices)
             manifest = {
-                "algorithm": SCORE_NAMESPACE,
+                "algorithm": score_namespace(args.num_probes),
                 "score_variant": component,
                 "definition": "lr_squared_weighted_mean_terms(squared_normalized_dot_product)",
                 "normalization_variants": [
@@ -266,7 +314,7 @@ def merge(args: argparse.Namespace) -> None:
                     "train_l2",
                     "query_train_l2",
                 ],
-                "num_output_probes_per_term": 1,
+                "num_output_probes_per_term": args.num_probes,
                 "num_checkpoints": 50,
                 "timestamps_per_checkpoint": 10,
                 "train_mc_samples_per_timestamp": 10,
@@ -278,10 +326,18 @@ def merge(args: argparse.Namespace) -> None:
             (out_dir / "score_artifact_manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True))
     if args.cleanup_query_artifacts:
         for query_id in range(10):
-            path = query_artifact_path(args.experiment, args.train_seed, args.epochs, query_id)
-            if path.is_file():
-                path.unlink()
-                print(f"[cleanup] removed transient query gradient: {path}", flush=True)
+            for probe_index in range(args.num_probes):
+                path = query_artifact_path(
+                    args.experiment,
+                    args.train_seed,
+                    args.epochs,
+                    query_id,
+                    num_probes=args.num_probes,
+                    probe_index=probe_index,
+                )
+                if path.is_file():
+                    path.unlink()
+                    print(f"[cleanup] removed transient query gradient: {path}", flush=True)
     print(f"[done] materialized four normalized score variants for 10 queries; terms={terms}", flush=True)
 
 
@@ -294,10 +350,13 @@ def main() -> None:
     parser.add_argument("--shard-index", type=int, default=0)
     parser.add_argument("--shard-count", type=int, default=16)
     parser.add_argument("--run-id", default=os.environ.get("PRED_NOISE_JVP_RUN_ID", "manual"))
+    parser.add_argument("--num-probes", type=int, default=1)
     parser.add_argument("--cleanup-query-artifacts", action="store_true")
     args = parser.parse_args()
     if args.shard_count <= 0 or not 0 <= args.shard_index < args.shard_count:
         raise ValueError("invalid shard index/count")
+    if args.num_probes <= 0:
+        raise ValueError("--num-probes must be positive")
     if not args.run_id or "/" in args.run_id:
         raise ValueError("--run-id must be a non-empty path component")
     if args.command == "score-shard":
