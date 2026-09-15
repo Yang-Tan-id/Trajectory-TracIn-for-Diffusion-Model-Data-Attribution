@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Score squared predicted-noise directional changes from saved Traj TracIn gradients."""
+"""Score squared or signed predicted-noise changes from saved Traj TracIn gradients."""
 
 from __future__ import annotations
 
@@ -12,7 +12,8 @@ import numpy as np
 
 
 SHAPES_ROOT = Path(__file__).resolve().parents[1]
-NAMESPACE = "predicted_noise_jvp_l2_squared"
+SQUARED_NAMESPACE = "predicted_noise_jvp_l2_squared"
+SIGNED_NAMESPACE = "predicted_noise_jvp_signed"
 
 import sys
 
@@ -36,13 +37,20 @@ def checkpoint_path(experiment: str, train_seed: int, epochs: int) -> Path:
 
 def probe_namespace(num_probes: int, probe_index: int) -> str:
     if num_probes == 1:
-        return NAMESPACE
-    return f"{NAMESPACE}_probe{num_probes}_r{probe_index}"
+        return SQUARED_NAMESPACE
+    return f"{SQUARED_NAMESPACE}_probe{num_probes}_r{probe_index}"
 
 
-def score_namespace(num_probes: int) -> str:
+def score_namespace(num_probes: int, contraction: str = "squared") -> str:
+    namespace = SIGNED_NAMESPACE if contraction == "signed" else SQUARED_NAMESPACE
     suffix = "" if num_probes == 1 else f"_probe{num_probes}"
-    return f"traj_tracin_{NAMESPACE}{suffix}"
+    return f"traj_tracin_{namespace}{suffix}"
+
+
+def weighting_semantics(contraction: str) -> str:
+    if contraction == "squared":
+        return "learning_rate_weighted_sum_of_squared_gradient_contractions"
+    return "learning_rate_weighted_sum_of_signed_gradient_contractions"
 
 
 def query_artifact_path(
@@ -53,6 +61,7 @@ def query_artifact_path(
     *,
     num_probes: int,
     probe_index: int,
+    query_namespace_pattern: str = "",
 ) -> Path:
     record = records()[query_id]
     checkpoint = checkpoint_path(experiment, train_seed, epochs)
@@ -64,9 +73,14 @@ def query_artifact_path(
         / f"model_prompted_solo__ckpt_{checkpoint.stem}"
     )
     seed = int(record["initial_seed"])
+    namespace = (
+        query_namespace_pattern.format(probe_index=probe_index)
+        if query_namespace_pattern
+        else probe_namespace(num_probes, probe_index)
+    )
     return (
         run_root
-        / f"seed_{seed:06d}_query_gradient_{probe_namespace(num_probes, probe_index)}"
+        / f"seed_{seed:06d}_query_gradient_{namespace}"
         / "traj_tracin"
         / "query_gradient_artifact.npz"
     )
@@ -84,11 +98,17 @@ def train_part_dir(experiment: str, train_seed: int) -> Path:
     return Path(str(artifact) + ".parts")
 
 
-def shard_root(experiment: str, train_seed: int, run_id: str, num_probes: int) -> Path:
+def shard_root(
+    experiment: str,
+    train_seed: int,
+    run_id: str,
+    num_probes: int,
+    contraction: str = "squared",
+) -> Path:
     return (
         result_root(experiment)
         / "stream_score"
-        / score_namespace(num_probes)
+        / score_namespace(num_probes, contraction)
         / f"train_seed_{train_seed}"
         / f"run_{run_id}"
     )
@@ -115,6 +135,7 @@ def load_query_bank(args: argparse.Namespace) -> tuple[np.ndarray, dict[str, np.
                 query_id,
                 num_probes=args.num_probes,
                 probe_index=probe_index,
+                query_namespace_pattern=args.query_namespace_pattern,
             )
             if not path.is_file():
                 raise FileNotFoundError(path)
@@ -155,7 +176,13 @@ def score_shard(args: argparse.Namespace) -> None:
     import jax.numpy as jnp
 
     output = (
-        shard_root(args.experiment, args.train_seed, args.run_id, args.num_probes)
+        shard_root(
+            args.experiment,
+            args.train_seed,
+            args.run_id,
+            args.num_probes,
+            args.contraction,
+        )
         / "shards"
         / f"shard_{args.shard_index:02d}.npz"
     )
@@ -209,15 +236,16 @@ def score_shard(args: argparse.Namespace) -> None:
                 )
                 directional = train_device @ query_device.T
                 query_norm = jnp.linalg.norm(query_device, axis=1) + 1e-8
+                transform = jnp.square if args.contraction == "squared" else lambda x: x
                 probe_scores = {
-                    "score": jnp.square(directional),
-                    "score_query_normalized": jnp.square(
+                    "score": transform(directional),
+                    "score_query_normalized": transform(
                         directional / query_norm[None, :]
                     ),
-                    "score_train_l2_normalized": jnp.square(
+                    "score_train_l2_normalized": transform(
                         directional / train_norm[:, None]
                     ),
-                    "score_query_train_l2_normalized": jnp.square(
+                    "score_query_train_l2_normalized": transform(
                         directional / train_norm[:, None] / query_norm[None, :]
                     ),
                 }
@@ -225,8 +253,8 @@ def score_shard(args: argparse.Namespace) -> None:
                     term_scores[component] += np.asarray(
                         jax.device_get(values), dtype=np.float64
                     ).T / float(args.num_probes)
-            # Only the gradient-produced directional derivative is squared.
-            # The TrajTracIn learning-rate weight remains linear, and the
+            # The requested transform applies only to the gradient-produced
+            # directional derivative. The learning-rate weight remains linear, and the
             # stored per-snapshot weight already averages the 10 snapshots.
             term_weight = float(weight)
             for component, values in term_scores.items():
@@ -241,9 +269,7 @@ def score_shard(args: argparse.Namespace) -> None:
         **{f"sums_{component}": values for component, values in sums.items()},
         score_indices=score_indices,
         used_terms=np.asarray(used_terms, dtype=np.int32),
-        weighting_semantics=np.asarray(
-            "learning_rate_weighted_sum_of_squared_gradient_contractions"
-        ),
+        weighting_semantics=np.asarray(weighting_semantics(args.contraction)),
     )
     print(f"[saved] {output}", flush=True)
 
@@ -267,7 +293,13 @@ def merge(args: argparse.Namespace) -> None:
     score_indices = None
     for shard in range(args.shard_count):
         path = (
-            shard_root(args.experiment, args.train_seed, args.run_id, args.num_probes)
+            shard_root(
+                args.experiment,
+                args.train_seed,
+                args.run_id,
+                args.num_probes,
+                args.contraction,
+            )
             / "shards"
             / f"shard_{shard:02d}.npz"
         )
@@ -279,10 +311,11 @@ def merge(args: argparse.Namespace) -> None:
                     payload[f"sums_{component}"], dtype=np.float64
                 )
             semantics = str(np.asarray(payload.get("weighting_semantics", "")).item())
-            if semantics != "learning_rate_weighted_sum_of_squared_gradient_contractions":
+            expected_semantics = weighting_semantics(args.contraction)
+            if semantics != expected_semantics:
                 raise ValueError(
                     f"{path} has incompatible weighting semantics {semantics!r}; "
-                    "recompute this score shard with linear learning-rate weights"
+                    f"expected {expected_semantics!r}"
                 )
             terms += int(payload["used_terms"])
             indices = np.asarray(payload["score_indices"], dtype=np.int64)
@@ -306,15 +339,19 @@ def merge(args: argparse.Namespace) -> None:
                 / f"train_seed_{args.train_seed}"
                 / f"query_{_prompt_tag(str(record['prompt']))}"
                 / f"initial_seed_{int(record['initial_seed'])}"
-                / score_namespace(args.num_probes)
+                / score_namespace(args.num_probes, args.contraction)
                 / component
             )
             atomic_save(out_dir / "scores.npy", values[query_id])
             atomic_save(out_dir / "score_indices.npy", score_indices)
             manifest = {
-                "algorithm": score_namespace(args.num_probes),
+                "algorithm": score_namespace(args.num_probes, args.contraction),
                 "score_variant": component,
-                "definition": "learning_rate_weighted_sum_terms(squared_normalized_dot_product)",
+                "definition": (
+                    "learning_rate_weighted_sum_terms(squared_normalized_dot_product)"
+                    if args.contraction == "squared"
+                    else "learning_rate_weighted_sum_terms(signed_normalized_dot_product)"
+                ),
                 "normalization_variants": [
                     "raw",
                     "query_l2",
@@ -341,6 +378,7 @@ def merge(args: argparse.Namespace) -> None:
                     query_id,
                     num_probes=args.num_probes,
                     probe_index=probe_index,
+                    query_namespace_pattern=args.query_namespace_pattern,
                 )
                 if path.is_file():
                     path.unlink()
@@ -358,6 +396,16 @@ def main() -> None:
     parser.add_argument("--shard-count", type=int, default=16)
     parser.add_argument("--run-id", default=os.environ.get("PRED_NOISE_JVP_RUN_ID", "manual"))
     parser.add_argument("--num-probes", type=int, default=1)
+    parser.add_argument(
+        "--contraction",
+        choices=("squared", "signed"),
+        default="squared",
+    )
+    parser.add_argument(
+        "--query-namespace-pattern",
+        default="",
+        help="Optional artifact namespace with {probe_index}; allows reuse of an existing probe bank.",
+    )
     parser.add_argument("--cleanup-query-artifacts", action="store_true")
     args = parser.parse_args()
     if args.shard_count <= 0 or not 0 <= args.shard_index < args.shard_count:

@@ -124,6 +124,29 @@ class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
         self.assertIn("for probe_index in range(args.num_probes)", driver)
         self.assertIn("/ float(args.num_probes)", driver)
 
+    def test_signed_four_probe_score_reuses_original_train_and_saved_queries(self):
+        driver = (
+            ROOT / "3dshapes" / "script" / "run_predicted_noise_jvp_l2_squared.py"
+        ).read_text()
+        launcher = (
+            ROOT
+            / "3dshapes"
+            / "tacc"
+            / "rtx_small"
+            / "run_predicted_noise_jvp_signed_probe4_score_rtx_small.sh"
+        ).read_text()
+
+        self.assertIn('choices=("squared", "signed")', driver)
+        self.assertIn('SIGNED_NAMESPACE = "predicted_noise_jvp_signed"', driver)
+        self.assertIn("query_namespace_pattern.format(probe_index=probe_index)", driver)
+        self.assertIn("--contraction signed", launcher)
+        self.assertIn(
+            "loss_direction_residual_rms_predicted_noise_probe4_r{probe_index}",
+            launcher,
+        )
+        self.assertNotIn("run_traj_tracin_queries_and_scores.py", launcher)
+        self.assertIn("predicted_noise_jvp_signed_probe4", launcher)
+
 
 if __name__ == "__main__":
     unittest.main()
