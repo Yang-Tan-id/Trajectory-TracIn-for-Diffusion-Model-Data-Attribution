@@ -22,6 +22,7 @@ DEFAULT_TRAIN_NAMESPACE = "traj_tracin_expected_residual_jacobian_probe_aligned"
 DEFAULT_ORIGINAL_QUERY_NAMESPACE = "expected_residual_jacobian_original_f"
 DEFAULT_PREDICTED_QUERY_NAMESPACE = "expected_residual_jacobian_predicted_noise"
 DEFAULT_SCORE_NAMESPACE_PREFIX = "traj_tracin_expected_residual_jacobian_probe_aligned_v_l2"
+DEFAULT_TRAIN_FEATURE_SEMANTICS = "mean_probe_projected_residual_times_unit_probe_gradient"
 
 
 def records() -> list[dict]:
@@ -142,6 +143,27 @@ def load_query_bank(args: argparse.Namespace, namespace: str, objective: str):
     return np.stack(features, axis=0), reference
 
 
+def load_predicted_query_probes(args: argparse.Namespace):
+    banks = []
+    reference = None
+    for probe_index in range(args.predicted_num_probes):
+        namespace = args.predicted_query_namespace.format(probe_index=probe_index)
+        bank, metadata = load_query_bank(
+            args, namespace, "trajectory_predicted_noise_probe"
+        )
+        if reference is None:
+            reference = metadata
+        else:
+            for key in metadata:
+                if not np.allclose(metadata[key], reference[key], rtol=1e-6, atol=1e-12):
+                    raise ValueError(
+                        f"predicted-noise probe metadata mismatch for {key}: {namespace}"
+                    )
+        banks.append(bank)
+    assert reference is not None
+    return np.stack(banks, axis=0), reference
+
+
 def score_shard(args: argparse.Namespace) -> None:
     import jax
     import jax.numpy as jnp
@@ -154,9 +176,7 @@ def score_shard(args: argparse.Namespace) -> None:
     original_query, original_meta = load_query_bank(
         args, args.original_query_namespace, "trajectory_next_checkpoint_noise_mse"
     )
-    predicted_query, predicted_meta = load_query_bank(
-        args, args.predicted_query_namespace, "trajectory_predicted_noise_probe"
-    )
+    predicted_query, predicted_meta = load_predicted_query_probes(args)
     query_banks = {
         "original": (original_query, original_meta),
         "predicted": (predicted_query, predicted_meta),
@@ -194,8 +214,8 @@ def score_shard(args: argparse.Namespace) -> None:
             timesteps = np.asarray(data["timesteps"], dtype=np.int32)
             weights = np.asarray(data["term_weights"], dtype=np.float64)
             semantics = str(np.asarray(data["train_feature_semantics"]).item())
-            part_probe_count = int(np.asarray(data["jacobian_norm_probes"]).item())
-        if semantics != "mean_probe_projected_residual_times_unit_probe_gradient":
+            part_probe_count = int(np.asarray(data.get("jacobian_norm_probes", 0)).item())
+        if semantics != args.train_feature_semantics:
             raise ValueError(f"unexpected train feature semantics in {path}: {semantics}")
         expected_shape = (args.num_snapshots, 5000, 4096)
         if train.shape != expected_shape:
@@ -229,15 +249,25 @@ def score_shard(args: argparse.Namespace) -> None:
             predicted_term = lookups["predicted"].get((int(ckpt), int(timestep)))
             if predicted_term is None:
                 raise ValueError(f"missing predicted-noise query term ckpt={ckpt} t={timestep}")
-            query_device = jax.device_put(jnp.asarray(predicted_query[:, predicted_term, :]))
-            dots = train_device @ query_device.T
-            query_norms = jnp.linalg.norm(query_device, axis=1) + 1e-8
-            sums[("predicted", "raw")] += float(weight) ** 2 * np.asarray(
-                jax.device_get(jnp.square(dots)), dtype=np.float64
-            ).T
-            sums[("predicted", "query_l2")] += float(weight) ** 2 * np.asarray(
-                jax.device_get(jnp.square(dots / query_norms[None, :])), dtype=np.float64
-            ).T
+            predicted_raw = np.zeros((10, 5000), dtype=np.float64)
+            predicted_query_l2 = np.zeros((10, 5000), dtype=np.float64)
+            for probe_index in range(args.predicted_num_probes):
+                query_device = jax.device_put(
+                    jnp.asarray(predicted_query[probe_index, :, predicted_term, :])
+                )
+                dots = train_device @ query_device.T
+                query_norms = jnp.linalg.norm(query_device, axis=1) + 1e-8
+                predicted_raw += np.asarray(
+                    jax.device_get(jnp.square(dots)), dtype=np.float64
+                ).T / float(args.predicted_num_probes)
+                predicted_query_l2 += np.asarray(
+                    jax.device_get(jnp.square(dots / query_norms[None, :])),
+                    dtype=np.float64,
+                ).T / float(args.predicted_num_probes)
+            sums[("predicted", "raw")] += float(weight) ** 2 * predicted_raw
+            sums[("predicted", "query_l2")] += (
+                float(weight) ** 2 * predicted_query_l2
+            )
             predicted_weight += float(weight) ** 2
             predicted_terms += 1
 
@@ -292,11 +322,12 @@ def materialize_scores(
             "algorithm": namespace,
             "score_variant": f"fixed_train_jacobian_normalization_{query_variant}",
             "definition": definition,
-            "train_feature": "mean_l (projected_residual_l * unit(P E[J]^T v_l))",
-            "train_normalization": "v_l2",
+            "train_feature": args.train_feature_description,
+            "train_normalization": "fixed_in_saved_train_feature",
             "query_normalization": query_variant,
             "train_mc_samples": 10,
             "jacobian_norm_probes": jacobian_norm_probes,
+            "predicted_noise_query_probes": args.predicted_num_probes,
             "num_checkpoints": args.num_checkpoints,
             "timestamps_per_checkpoint": args.num_snapshots,
             "projection_dim": 4096,
@@ -389,10 +420,24 @@ def main() -> None:
     parser.add_argument("--train-namespace", default=DEFAULT_TRAIN_NAMESPACE)
     parser.add_argument("--original-query-namespace", default=DEFAULT_ORIGINAL_QUERY_NAMESPACE)
     parser.add_argument("--predicted-query-namespace", default=DEFAULT_PREDICTED_QUERY_NAMESPACE)
+    parser.add_argument("--predicted-num-probes", type=int, default=1)
     parser.add_argument("--score-namespace-prefix", default=DEFAULT_SCORE_NAMESPACE_PREFIX)
+    parser.add_argument(
+        "--train-feature-semantics", default=DEFAULT_TRAIN_FEATURE_SEMANTICS
+    )
+    parser.add_argument(
+        "--train-feature-description",
+        default="mean_l (projected_residual_l * unit(P E[J]^T v_l))",
+    )
     args = parser.parse_args()
     if not 0 <= args.shard_index < args.shard_count:
         raise ValueError("invalid shard index/count")
+    if args.predicted_num_probes <= 0:
+        raise ValueError("--predicted-num-probes must be positive")
+    if args.predicted_num_probes > 1 and "{probe_index}" not in args.predicted_query_namespace:
+        raise ValueError(
+            "--predicted-query-namespace must contain {probe_index} when multiple probes are used"
+        )
     if args.command == "score-shard":
         score_shard(args)
     else:

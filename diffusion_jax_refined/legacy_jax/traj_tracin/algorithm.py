@@ -2822,6 +2822,14 @@ def run_attribution(cfg: TrajAttributionConfig):
         decompose_residual_jacobian = os.environ.get(
             "TRAJ_TRACIN_TRAIN_DECOMPOSE_RESIDUAL_JACOBIAN", "0"
         ).strip().lower() in ("1", "true", "yes", "on")
+        reuse_gradient_residual_rms = os.environ.get(
+            "TRAJ_TRACIN_TRAIN_REUSE_GRADIENT_RESIDUAL_RMS", "0"
+        ).strip().lower() in ("1", "true", "yes", "on")
+        if decompose_residual_jacobian and reuse_gradient_residual_rms:
+            raise ValueError(
+                "TRAJ_TRACIN_TRAIN_DECOMPOSE_RESIDUAL_JACOBIAN and "
+                "TRAJ_TRACIN_TRAIN_REUSE_GRADIENT_RESIDUAL_RMS are mutually exclusive."
+            )
         if decompose_residual_jacobian and aggregate_train_timestamps:
             raise ValueError(
                 "TRAJ_TRACIN_TRAIN_DECOMPOSE_RESIDUAL_JACOBIAN requires "
@@ -2898,12 +2906,14 @@ def run_attribution(cfg: TrajAttributionConfig):
                 raise
             params = tree_to_device(select_state_params(state, cfg.parameter_source), device)
             print(f"[stage:{stage_mode}] checkpoint {ckpt_i + 1}/{len(ckpts)} restored", flush=True)
-            projector = build_countsketch_projector_jax(
-                params,
-                proj_dim,
-                seed_parts=(cfg.seed, "traj_tracin_projection", ckpt_i),
-                device=device,
-            )
+            projector = None
+            if not (stage_mode == "train" and reuse_gradient_residual_rms):
+                projector = build_countsketch_projector_jax(
+                    params,
+                    proj_dim,
+                    seed_parts=(cfg.seed, "traj_tracin_projection", ckpt_i),
+                    device=device,
+                )
             eps_fn = lambda p, x, t, c: adapter.eps_apply(model, p, x, t, c)
             implied_noise_targets = None
             if stage_mode == "train":
@@ -3123,6 +3133,180 @@ def run_attribution(cfg: TrajAttributionConfig):
                 train_snapshot_positions = []
                 train_ckpt_paths = []
                 train_term_weights = []
+
+                if reuse_gradient_residual_rms:
+                    source_artifact = os.environ.get("TRAJ_TRACIN_SOURCE_TRAIN_ARTIFACT")
+                    if not source_artifact:
+                        raise ValueError(
+                            "TRAJ_TRACIN_SOURCE_TRAIN_ARTIFACT is required when "
+                            "TRAJ_TRACIN_TRAIN_REUSE_GRADIENT_RESIDUAL_RMS=1."
+                        )
+                    source_part_path = os.path.join(
+                        f"{source_artifact}.parts", f"ckpt_{ckpt_i:04d}.npz"
+                    )
+                    if not os.path.isfile(source_part_path):
+                        raise FileNotFoundError(
+                            f"Missing source Traj TracIn checkpoint part: {source_part_path}"
+                        )
+                    with np.load(source_part_path, allow_pickle=False) as source_part:
+                        source_features = np.asarray(
+                            source_part["train_features"], dtype=np.float32
+                        )
+                        source_indices = np.asarray(source_part["score_indices"], dtype=np.int64)
+                        source_ckpt_indices = np.asarray(
+                            source_part["ckpt_indices"], dtype=np.int32
+                        )
+                        source_timesteps = np.asarray(source_part["timesteps"], dtype=np.int32)
+                        source_positions = np.asarray(
+                            source_part["snapshot_positions"], dtype=np.int32
+                        )
+                        source_weights = np.asarray(source_part["term_weights"], dtype=np.float32)
+                        source_paths = np.asarray(source_part["ckpt_paths"])
+
+                    expected_shape = (len(t_seq), len(picked), proj_dim)
+                    if source_features.shape != expected_shape:
+                        raise ValueError(
+                            f"{source_part_path} expected train_features {expected_shape}, "
+                            f"got {source_features.shape}"
+                        )
+                    if not np.array_equal(source_indices, np.asarray(picked, dtype=np.int64)):
+                        raise ValueError(f"score_indices mismatch in {source_part_path}")
+                    if not np.array_equal(source_ckpt_indices, np.full(len(t_seq), ckpt_i)):
+                        raise ValueError(f"ckpt_indices mismatch in {source_part_path}")
+                    if not np.array_equal(source_timesteps, np.asarray(t_seq, dtype=np.int32)):
+                        raise ValueError(f"timesteps mismatch in {source_part_path}")
+                    if not np.array_equal(source_positions, np.asarray(pos_seq, dtype=np.int32)):
+                        raise ValueError(f"snapshot_positions mismatch in {source_part_path}")
+
+                    def residual_rms_one(p, x0_one, cond_one, rng_one, t_scalar):
+                        x0_one = x0_one[None, ...]
+                        if cond_one.ndim == 0:
+                            cond_one = cond_one[None]
+                        else:
+                            cond_one = cond_one[None, ...]
+                        loss = train_loss_at_dynamic_t_mc_vectorized(
+                            adapter=adapter,
+                            model=model,
+                            params=p,
+                            schedule=schedule,
+                            x0=x0_one,
+                            cond=cond_one,
+                            t_scalar=t_scalar,
+                            num_mc_samples=cfg.train_mc_samples,
+                            rng=rng_one,
+                        )
+                        return jnp.sqrt(jnp.maximum(loss, jnp.asarray(0.0, dtype=jnp.float32)))
+
+                    residual_rms_batch = jax.jit(
+                        jax.vmap(residual_rms_one, in_axes=(None, 0, 0, 0, None))
+                    )
+                    bs_stage = max(1, int(cfg.score_batch_size))
+                    total_batches = math.ceil(len(picked) / bs_stage)
+                    transformed_features = np.empty_like(source_features)
+                    residual_rms_terms = np.empty((len(t_seq), len(picked)), dtype=np.float32)
+                    normalization_eps = float(cfg.query_normalize_eps)
+                    print(
+                        "[stage:train] reusing projected expected-loss gradients; "
+                        "computing matching 10-MC residual RMS with forward passes only | "
+                        f"source={source_part_path} batch_size={bs_stage}",
+                        flush=True,
+                    )
+                    for snap_id, t_value in enumerate(t_seq):
+                        t_scalar = array_to_device(
+                            jnp.asarray(int(t_value), dtype=jnp.int32), device
+                        )
+                        source_term = source_features[snap_id]
+                        source_norm = np.linalg.norm(source_term, axis=1, keepdims=True)
+                        unit_source = source_term / np.maximum(source_norm, normalization_eps)
+                        for start in range(0, len(picked), bs_stage):
+                            end = min(len(picked), start + bs_stage)
+                            batch_id = start // bs_stage + 1
+                            real_indices = picked[start:end]
+                            padded_indices = pad_indices_to_batch(real_indices, bs_stage)
+                            x_batch, cond_batch = make_train_batch(
+                                adapter,
+                                ds,
+                                padded_indices,
+                                device,
+                                use_bfloat16=use_bfloat16_train_batch,
+                            )
+                            # This is exactly the key formula used by the source gradient run.
+                            rngs = array_to_device(
+                                jnp.stack(
+                                    [
+                                        jax.random.PRNGKey(
+                                            cfg.seed
+                                            + 700_000 * (ckpt_i + 1)
+                                            + 10_000 * snap_id
+                                            + start
+                                            + j
+                                        )
+                                        for j in range(bs_stage)
+                                    ],
+                                    axis=0,
+                                ),
+                                device,
+                            )
+                            rms_batch = residual_rms_batch(
+                                params, x_batch, cond_batch, rngs, t_scalar
+                            )
+                            rms_batch.block_until_ready()
+                            rms = np.asarray(
+                                rms_batch[: end - start], dtype=np.float32
+                            )
+                            residual_rms_terms[snap_id, start:end] = rms
+                            transformed_features[snap_id, start:end] = (
+                                unit_source[start:end] * rms[:, None]
+                            )
+                            if batch_id == 1 or batch_id % 10 == 0 or end == len(picked):
+                                print(
+                                    f"[stage:train] residual-RMS forward batch "
+                                    f"{batch_id}/{total_batches} | "
+                                    f"ckpt={ckpt_i + 1}/{len(ckpts)} | "
+                                    f"snapshot={snap_id + 1}/{len(t_seq)} | "
+                                    f"datapoints={end}/{len(picked)} | t={int(t_value)} | "
+                                    f"elapsed={format_seconds(time.time() - stage_start_time)}",
+                                    flush=True,
+                                )
+
+                    if stage_part_path is None:
+                        raise RuntimeError(
+                            "Residual-RMS gradient reuse mode requires checkpoint-part output."
+                        )
+                    save_npz_compressed_atomic(
+                        stage_part_path,
+                        train_features=transformed_features,
+                        residual_rms=residual_rms_terms,
+                        source_gradient_norms=np.linalg.norm(
+                            source_features, axis=2
+                        ).astype(np.float32),
+                        score_indices=source_indices,
+                        ckpt_indices=source_ckpt_indices,
+                        timesteps=source_timesteps,
+                        snapshot_positions=source_positions,
+                        term_weights=source_weights,
+                        ckpt_paths=source_paths,
+                        proj_dim=np.asarray(proj_dim, dtype=np.int32),
+                        train_mc_samples=np.asarray(cfg.train_mc_samples, dtype=np.int32),
+                        normalization_eps=np.asarray(normalization_eps, dtype=np.float32),
+                        train_feature_semantics=np.asarray(
+                            "unit_projected_expected_loss_gradient_times_matching_mc_residual_rms"
+                        ),
+                        source_train_artifact=np.asarray(str(source_artifact)),
+                    )
+                    print(
+                        f"[stage:train] saved residual-RMS normalized checkpoint part "
+                        f"{ckpt_i + 1}/{len(ckpts)}: {stage_part_path}",
+                        flush=True,
+                    )
+                    used_ckpts_for_stage.append(ckpt_path)
+                    print(
+                        f"[stage:{stage_mode}] checkpoint {ckpt_i + 1}/{len(ckpts)} done | "
+                        f"elapsed={format_seconds(time.time() - stage_ckpt_start)} | "
+                        f"total_elapsed={format_seconds(time.time() - stage_start_time)}",
+                        flush=True,
+                    )
+                    continue
 
                 if decompose_residual_jacobian:
                     if not uses_predicted_noise_probe:

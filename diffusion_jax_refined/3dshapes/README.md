@@ -265,6 +265,32 @@ sbatch -p rtx-small \
   diffusion_jax_refined/3dshapes/tacc/rtx_small/run_predicted_noise_jvp_l2_squared_probe4_rtx_small.sh
 ```
 
+To retain residual magnitude while discarding the projected train-gradient
+magnitude, reuse the original 10-MC Traj TracIn checkpoint parts and build
+
+`train_features = residual_RMS * train_gradient / max(L2(train_gradient), eps)`.
+
+This is a forward-only conversion: it exactly reproduces the source run's MC
+noise keys, does not compute train-side backward passes, and writes 50
+restartable checkpoint parts in the independent
+`traj_tracin_loss_direction_residual_rms` namespace:
+
+```bash
+sbatch -p rtx-small \
+  --export=ALL,EXPERIMENT_TAG=experiment1,TRAIN_SEED=42 \
+  diffusion_jax_refined/3dshapes/tacc/rtx_small/run_traj_tracin_loss_direction_residual_rms_train_rtx_small.sh
+```
+
+The full RTX-small pipeline then evaluates both the signed original
+next-checkpoint target and the squared predicted-noise target. The latter
+averages four independent query-probe contractions before LDS evaluation:
+
+```bash
+sbatch -p rtx-small \
+  --export=ALL,EXPERIMENT_TAG=experiment1,TRAIN_SEED=42 \
+  diffusion_jax_refined/3dshapes/tacc/rtx_small/run_loss_direction_residual_rms_pipeline_rtx_small.sh
+```
+
 ### Normalized expected-Jacobian times expected-residual score
 
 For each checkpoint, timestamp, and attribution point, this variant forms the
