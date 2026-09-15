@@ -227,13 +227,22 @@ def load_query_bank(args: argparse.Namespace) -> tuple[np.ndarray, dict[str, np.
                 raise ValueError(
                     f"{path} contains output probe {stored_probe_index}, expected {probe_index}"
                 )
-            if (
-                args.expected_query_probe_mode
-                and stored_probe_mode != args.expected_query_probe_mode
-            ):
+            expected_mode = args.expected_query_probe_mode
+            mode_matches = stored_probe_mode == expected_mode
+            if expected_mode == "shared_orthogonal_extended":
+                mode_matches = (
+                    probe_index < 4
+                    and stored_probe_mode == "shared_orthogonal"
+                    and stored_probe_bank_size == 4
+                ) or (
+                    probe_index >= 4
+                    and stored_probe_mode == "shared_orthogonal_extended"
+                    and stored_probe_bank_size == args.num_probes
+                )
+            if expected_mode and not mode_matches:
                 raise ValueError(
                     f"{path} contains probe mode {stored_probe_mode!r}, expected "
-                    f"{args.expected_query_probe_mode!r}"
+                    f"{expected_mode!r}"
                 )
             if (
                 args.expected_query_probe_mode == "shared_orthogonal"
@@ -591,7 +600,12 @@ def main() -> None:
     )
     parser.add_argument(
         "--expected-query-probe-mode",
-        choices=("", "independent_gaussian", "shared_orthogonal"),
+        choices=(
+            "",
+            "independent_gaussian",
+            "shared_orthogonal",
+            "shared_orthogonal_extended",
+        ),
         default="",
     )
     parser.add_argument(

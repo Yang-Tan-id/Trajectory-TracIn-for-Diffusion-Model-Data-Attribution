@@ -107,7 +107,11 @@ def main() -> None:
     )
     parser.add_argument(
         "--predicted-noise-probe-mode",
-        choices=("independent_gaussian", "shared_orthogonal"),
+        choices=(
+            "independent_gaussian",
+            "shared_orthogonal",
+            "shared_orthogonal_extended",
+        ),
         default="independent_gaussian",
     )
     parser.add_argument("--predicted-noise-probe-count", type=int, default=1)
@@ -152,7 +156,8 @@ def main() -> None:
     if args.predicted_noise_probe_count <= 0:
         raise ValueError("--predicted-noise-probe-count must be positive")
     if (
-        args.predicted_noise_probe_mode == "shared_orthogonal"
+        args.predicted_noise_probe_mode
+        in ("shared_orthogonal", "shared_orthogonal_extended")
         and args.predicted_noise_probe_index >= args.predicted_noise_probe_count
     ):
         raise ValueError("shared orthogonal probe index must be smaller than probe count")

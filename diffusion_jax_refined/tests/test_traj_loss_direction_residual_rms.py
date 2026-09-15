@@ -79,6 +79,40 @@ class LossDirectionResidualRmsTest(unittest.TestCase):
         self.assertIn("--prediction-sign=1", pipeline)
         self.assertIn("--prediction-sign=-1", pipeline)
 
+    def test_extended_fixed_bank_preserves_historical_four(self) -> None:
+        algorithm = ALGORITHM.read_text()
+        query_driver = (
+            ROOT / "3dshapes" / "script" / "run_traj_tracin_queries_and_scores.py"
+        ).read_text()
+        independent_launcher = (
+            ROOT
+            / "3dshapes"
+            / "tacc"
+            / "rtx_small"
+            / "run_predicted_noise_probe9_12_queries_rtx_small.sh"
+        ).read_text()
+        fixed_launcher = (
+            ROOT
+            / "3dshapes"
+            / "tacc"
+            / "rtx_small"
+            / "run_predicted_noise_fixed_probe5_8_queries_rtx_small.sh"
+        ).read_text()
+
+        self.assertIn(
+            "def extended_shared_orthogonal_predicted_noise_probes(", algorithm
+        )
+        self.assertIn("base = shared_orthogonal_predicted_noise_probes(", algorithm)
+        self.assertIn("candidates - base_unit.T @ (base_unit @ candidates)", algorithm)
+        self.assertIn('"shared_orthogonal_extended"', query_driver)
+        self.assertIn("for probe_index in 8 9 10 11", independent_launcher)
+        self.assertIn("for probe_index in 4 5 6 7", fixed_launcher)
+        self.assertIn(
+            "--predicted-noise-probe-mode shared_orthogonal_extended",
+            fixed_launcher,
+        )
+        self.assertIn("--predicted-noise-probe-count 8", fixed_launcher)
+
     def test_feature_keeps_rms_and_gradient_direction(self) -> None:
         gradient = np.asarray([[3.0, 4.0], [0.0, 0.0]], dtype=np.float32)
         residual_rms = np.asarray([2.0, 7.0], dtype=np.float32)
