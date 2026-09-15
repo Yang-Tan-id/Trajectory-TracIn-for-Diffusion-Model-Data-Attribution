@@ -27,18 +27,21 @@ def main() -> None:
     parser.add_argument("--namespace-suffix", default="")
     parser.add_argument(
         "--reduction",
-        choices=("timestamp_checkpoint_square", "termwise_square"),
+        choices=("linear", "timestamp_checkpoint_square", "termwise_square"),
         default="timestamp_checkpoint_square",
     )
     args = parser.parse_args()
     if args.num_probes <= 0:
         raise ValueError("--num-probes must be positive")
 
-    namespace_base = (
-        "traj_tracin_predicted_noise_jvp_timestamp_checkpoint_sum_square"
-        if args.reduction == "timestamp_checkpoint_square"
-        else "traj_tracin_predicted_noise_jvp_l2_squared"
-    )
+    namespace_bases = {
+        "linear": "traj_tracin_predicted_noise_jvp_signed",
+        "timestamp_checkpoint_square": (
+            "traj_tracin_predicted_noise_jvp_timestamp_checkpoint_sum_square"
+        ),
+        "termwise_square": "traj_tracin_predicted_noise_jvp_l2_squared",
+    }
+    namespace_base = namespace_bases[args.reduction]
     namespace = f"{namespace_base}_probe{args.num_probes}"
     suffix = args.namespace_suffix.strip().strip("_/")
     if suffix:
@@ -47,11 +50,12 @@ def main() -> None:
     records = json.loads((SHAPES_ROOT / "queries_seed_0_9.json").read_text())["queries"]
     grouped: dict[tuple[str, str], list[float]] = {}
 
-    title = (
-        "TIMESTAMP-GROUPED CHECKPOINT-SUM SQUARE"
-        if args.reduction == "timestamp_checkpoint_square"
-        else "TERMWISE GRADIENT-PRODUCT SQUARE"
-    )
+    titles = {
+        "linear": "LINEAR TERM SUM (NO SQUARE)",
+        "timestamp_checkpoint_square": "TIMESTAMP-GROUPED CHECKPOINT-SUM SQUARE",
+        "termwise_square": "TERMWISE GRADIENT-PRODUCT SQUARE",
+    }
+    title = titles[args.reduction]
     print(f"{title} ({args.num_probes} probes, sign {args.prediction_sign})")
     print(
         f"{'TARGET':24s} {'Q':>2s} {'RAW':>9s} {'QUERY-L2':>9s} "

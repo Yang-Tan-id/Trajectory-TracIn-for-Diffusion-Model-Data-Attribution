@@ -413,7 +413,7 @@ class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
             '"traj_tracin_predicted_noise_jvp_l2_squared_probe4_orthogonal_shared"',
             cached_lds,
         )
-        self.assertIn('choices=("timestamp_checkpoint_square", "termwise_square")', printer)
+        self.assertIn('"timestamp_checkpoint_square", "termwise_square"', printer)
 
     def test_probe8_termwise_square_pipeline_reuses_saved_queries(self):
         launcher = (
@@ -439,6 +439,38 @@ class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
         self.assertIn(
             '"traj_tracin_predicted_noise_jvp_l2_squared_probe8"', cached_lds
         )
+
+    def test_cumulative_probe_banks_emit_linear_and_termwise_square(self):
+        launcher = (
+            ROOT
+            / "3dshapes"
+            / "tacc"
+            / "rtx_small"
+            / "run_predicted_noise_bank_linear_termwise_square_rtx_small.sh"
+        ).read_text()
+        cached_lds = (
+            ROOT / "3dshapes" / "script" / "run_traj_tracin_lds_cached.py"
+        ).read_text()
+        printer = (
+            ROOT
+            / "3dshapes"
+            / "script"
+            / "print_predicted_noise_timestamp_checkpoint_square_lds.py"
+        ).read_text()
+
+        self.assertIn("independent12)", launcher)
+        self.assertIn("fixed8)", launcher)
+        self.assertIn("run_score signed linear", launcher)
+        self.assertIn("run_score squared termwise_square", launcher)
+        self.assertIn("--prediction-sign=1", launcher)
+        self.assertIn("--prediction-sign=-1", launcher)
+        self.assertIn("predicted_noise_jvp_signed_probe12", cached_lds)
+        self.assertIn("predicted_noise_jvp_l2_squared_probe12", cached_lds)
+        self.assertIn("predicted_noise_shared_orthogonal_probe8_linear", cached_lds)
+        self.assertIn(
+            "predicted_noise_shared_orthogonal_probe8_termwise_square", cached_lds
+        )
+        self.assertIn('"linear": "traj_tracin_predicted_noise_jvp_signed"', printer)
 
     def test_probe8_choose4_analysis_enumerates_all_subsets(self):
         path = (
