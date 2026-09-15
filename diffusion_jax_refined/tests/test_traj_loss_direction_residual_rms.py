@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import importlib.util
 import unittest
 
 import numpy as np
@@ -38,6 +39,16 @@ F_NEXT_SQUARED_PIPELINE = (
 )
 SCORER = ROOT / "3dshapes" / "script" / "run_expected_residual_jacobian_scores.py"
 LDS_DRIVER = ROOT / "3dshapes" / "script" / "run_traj_tracin_lds_cached.py"
+ENSEMBLE_DRIVER = (
+    ROOT / "3dshapes" / "script" / "materialize_f_next_linear_square_ensemble.py"
+)
+ENSEMBLE_LAUNCHER = (
+    ROOT
+    / "3dshapes"
+    / "tacc"
+    / "rtx_small"
+    / "run_f_next_linear_square_z50_lds_rtx_small.sh"
+)
 
 
 class LossDirectionResidualRmsTest(unittest.TestCase):
@@ -133,6 +144,27 @@ class LossDirectionResidualRmsTest(unittest.TestCase):
         self.assertNotIn("01_train_datapoint_gradient.py", launcher)
         self.assertNotIn("run_traj_tracin_queries_and_scores.py", launcher)
         self.assertIn("--score-schemes f_next_dot_squared", launcher)
+
+    def test_linear_square_ensemble_standardizes_each_component(self) -> None:
+        spec = importlib.util.spec_from_file_location("f_next_ensemble", ENSEMBLE_DRIVER)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+
+        linear = np.asarray([1.0, 2.0, 8.0])
+        squared = np.asarray([100.0, 200.0, 300.0])
+        linear_z, _, _ = module.zscore(linear, 1e-12)
+        squared_z, _, _ = module.zscore(squared, 1e-12)
+        ensemble = 0.5 * linear_z + 0.5 * squared_z
+
+        self.assertAlmostEqual(float(np.mean(linear_z)), 0.0)
+        self.assertAlmostEqual(float(np.std(linear_z)), 1.0)
+        self.assertAlmostEqual(float(np.mean(squared_z)), 0.0)
+        np.testing.assert_allclose(ensemble, 0.5 * (linear_z + squared_z))
+
+        launcher = ENSEMBLE_LAUNCHER.read_text()
+        self.assertIn("--alpha 0.5", launcher)
+        self.assertIn("--score-schemes f_next_linear_square_z50", launcher)
 
 
 if __name__ == "__main__":
