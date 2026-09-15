@@ -14,6 +14,7 @@ import numpy as np
 SHAPES_ROOT = Path(__file__).resolve().parents[1]
 SQUARED_NAMESPACE = "predicted_noise_jvp_l2_squared"
 SIGNED_NAMESPACE = "predicted_noise_jvp_signed"
+FINAL_LINEAR_MEAN_NAMESPACE = "predicted_noise_jvp_final_linear_mean"
 FINAL_SQUARE_THEN_MEAN_NAMESPACE = "predicted_noise_jvp_final_square_then_mean"
 FINAL_MEAN_THEN_SQUARE_NAMESPACE = "predicted_noise_jvp_final_mean_then_square"
 FINAL_POST_SQUARE_STAGING_NAMESPACE = "predicted_noise_jvp_final_post_square"
@@ -44,7 +45,15 @@ def probe_namespace(num_probes: int, probe_index: int) -> str:
     return f"{SQUARED_NAMESPACE}_probe{num_probes}_r{probe_index}"
 
 
-def score_namespace(num_probes: int, contraction: str = "squared") -> str:
+def with_namespace_suffix(namespace: str, namespace_suffix: str) -> str:
+    return f"{namespace}_{namespace_suffix}" if namespace_suffix else namespace
+
+
+def score_namespace(
+    num_probes: int,
+    contraction: str = "squared",
+    namespace_suffix: str = "",
+) -> str:
     if contraction == "signed":
         namespace = SIGNED_NAMESPACE
     elif contraction == "squared":
@@ -54,11 +63,16 @@ def score_namespace(num_probes: int, contraction: str = "squared") -> str:
     else:
         raise ValueError(f"unknown contraction {contraction!r}")
     suffix = "" if num_probes == 1 else f"_probe{num_probes}"
-    return f"traj_tracin_{namespace}{suffix}"
+    return with_namespace_suffix(f"traj_tracin_{namespace}{suffix}", namespace_suffix)
 
 
-def final_score_namespace(num_probes: int, reduction: str) -> str:
+def final_score_namespace(
+    num_probes: int,
+    reduction: str,
+    namespace_suffix: str = "",
+) -> str:
     namespaces = {
+        "linear_mean": FINAL_LINEAR_MEAN_NAMESPACE,
         "square_then_mean": FINAL_SQUARE_THEN_MEAN_NAMESPACE,
         "mean_then_square": FINAL_MEAN_THEN_SQUARE_NAMESPACE,
     }
@@ -67,7 +81,7 @@ def final_score_namespace(num_probes: int, reduction: str) -> str:
     except KeyError as exc:
         raise ValueError(f"unknown final-score reduction {reduction!r}") from exc
     suffix = "" if num_probes == 1 else f"_probe{num_probes}"
-    return f"traj_tracin_{namespace}{suffix}"
+    return with_namespace_suffix(f"traj_tracin_{namespace}{suffix}", namespace_suffix)
 
 
 def weighting_semantics(contraction: str) -> str:
@@ -79,8 +93,9 @@ def weighting_semantics(contraction: str) -> str:
 
 
 def reduce_final_probe_scores(probe_scores: np.ndarray) -> dict[str, np.ndarray]:
-    """Reduce fully accumulated per-probe sample scores in the two requested ways."""
+    """Reduce fully accumulated per-probe sample scores in three ways."""
     return {
+        "linear_mean": np.mean(probe_scores, axis=0),
         "square_then_mean": np.mean(np.square(probe_scores), axis=0),
         "mean_then_square": np.square(np.mean(probe_scores, axis=0)),
     }
@@ -137,11 +152,12 @@ def shard_root(
     run_id: str,
     num_probes: int,
     contraction: str = "squared",
+    namespace_suffix: str = "",
 ) -> Path:
     return (
         result_root(experiment)
         / "stream_score"
-        / score_namespace(num_probes, contraction)
+        / score_namespace(num_probes, contraction, namespace_suffix)
         / f"train_seed_{train_seed}"
         / f"run_{run_id}"
     )
@@ -177,6 +193,12 @@ def load_query_bank(args: argparse.Namespace) -> tuple[np.ndarray, dict[str, np.
                 objective = str(np.asarray(payload["query_objective"]).item())
                 proj_dim = int(np.asarray(payload["proj_dim"]).item())
                 stored_probe_index = int(np.asarray(payload.get("output_probe_index", 0)).item())
+                stored_probe_mode = str(
+                    np.asarray(payload.get("output_probe_mode", "independent_gaussian")).item()
+                )
+                stored_probe_bank_size = int(
+                    np.asarray(payload.get("output_probe_bank_size", 1)).item()
+                )
                 metadata = {
                     "ckpt_indices": np.asarray(payload["ckpt_indices"], dtype=np.int32),
                     "timesteps": np.asarray(payload["timesteps"], dtype=np.int32),
@@ -187,6 +209,22 @@ def load_query_bank(args: argparse.Namespace) -> tuple[np.ndarray, dict[str, np.
             if stored_probe_index != probe_index:
                 raise ValueError(
                     f"{path} contains output probe {stored_probe_index}, expected {probe_index}"
+                )
+            if (
+                args.expected_query_probe_mode
+                and stored_probe_mode != args.expected_query_probe_mode
+            ):
+                raise ValueError(
+                    f"{path} contains probe mode {stored_probe_mode!r}, expected "
+                    f"{args.expected_query_probe_mode!r}"
+                )
+            if (
+                args.expected_query_probe_mode == "shared_orthogonal"
+                and stored_probe_bank_size != args.num_probes
+            ):
+                raise ValueError(
+                    f"{path} contains orthogonal bank size {stored_probe_bank_size}, "
+                    f"expected {args.num_probes}"
                 )
             if feature.shape != (500, 4096) or proj_dim != 4096:
                 raise ValueError(f"{path} expected query features (500,4096), got {feature.shape}")
@@ -215,6 +253,7 @@ def score_shard(args: argparse.Namespace) -> None:
             args.run_id,
             args.num_probes,
             args.contraction,
+            args.namespace_suffix,
         )
         / "shards"
         / f"shard_{args.shard_index:02d}.npz"
@@ -350,6 +389,7 @@ def merge(args: argparse.Namespace) -> None:
                 args.run_id,
                 args.num_probes,
                 args.contraction,
+                args.namespace_suffix,
             )
             / "shards"
             / f"shard_{shard:02d}.npz"
@@ -382,15 +422,25 @@ def merge(args: argparse.Namespace) -> None:
 
     if args.contraction == "final_post_square":
         score_sets = {
-            final_score_namespace(args.num_probes, reduction): {
+            final_score_namespace(
+                args.num_probes,
+                reduction,
+                args.namespace_suffix,
+            ): {
                 component: reduced[reduction]
                 for component, probe_values in totals.items()
                 for reduced in (reduce_final_probe_scores(probe_values),)
             }
-            for reduction in ("square_then_mean", "mean_then_square")
+            for reduction in ("linear_mean", "square_then_mean", "mean_then_square")
         }
     else:
-        score_sets = {score_namespace(args.num_probes, args.contraction): totals}
+        score_sets = {
+            score_namespace(
+                args.num_probes,
+                args.contraction,
+                args.namespace_suffix,
+            ): totals
+        }
 
     for output_namespace, scores in score_sets.items():
         for component, values in scores.items():
@@ -415,6 +465,8 @@ def merge(args: argparse.Namespace) -> None:
                         if "final_square_then_mean" in output_namespace
                         else "square(mean_probes(learning_rate_weighted_sum_terms(signed_normalized_dot_product)))"
                         if "final_mean_then_square" in output_namespace
+                        else "mean_probes(learning_rate_weighted_sum_terms(signed_normalized_dot_product))"
+                        if "final_linear_mean" in output_namespace
                         else "learning_rate_weighted_sum_terms(squared_normalized_dot_product)"
                         if args.contraction == "squared"
                         else "learning_rate_weighted_sum_terms(signed_normalized_dot_product)"
@@ -484,6 +536,16 @@ def main() -> None:
         default="",
         help="Optional artifact namespace with {probe_index}; allows reuse of an existing probe bank.",
     )
+    parser.add_argument(
+        "--expected-query-probe-mode",
+        choices=("", "independent_gaussian", "shared_orthogonal"),
+        default="",
+    )
+    parser.add_argument(
+        "--namespace-suffix",
+        default="",
+        help="Optional suffix keeping a specialized probe experiment independent.",
+    )
     parser.add_argument("--cleanup-query-artifacts", action="store_true")
     args = parser.parse_args()
     if args.shard_count <= 0 or not 0 <= args.shard_index < args.shard_count:
@@ -492,6 +554,11 @@ def main() -> None:
         raise ValueError("--num-probes must be positive")
     if not args.run_id or "/" in args.run_id:
         raise ValueError("--run-id must be a non-empty path component")
+    if args.namespace_suffix and any(
+        char not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-"
+        for char in args.namespace_suffix
+    ):
+        raise ValueError("--namespace-suffix may contain only letters, numbers, _ and -")
     if args.command == "score-shard":
         score_shard(args)
     else:

@@ -56,6 +56,31 @@ def predicted_noise_probe_key(
     return key
 
 
+def shared_orthogonal_predicted_noise_probes(
+    seed: int,
+    output_shape: Sequence[int],
+    probe_count: int,
+):
+    """Create one deterministic orthogonal output-probe bank shared by all terms."""
+    output_size = int(np.prod(tuple(int(value) for value in output_shape)))
+    if probe_count <= 0 or probe_count > output_size:
+        raise ValueError(
+            f"probe_count must be in [1,{output_size}], got {probe_count}"
+        )
+    key = jax.random.fold_in(jax.random.PRNGKey(seed), 0x4F525448)
+    gaussian = jax.random.normal(
+        key,
+        (output_size, probe_count),
+        dtype=jnp.float32,
+    )
+    orthonormal, triangular = jnp.linalg.qr(gaussian, mode="reduced")
+    # Canonicalize QR column signs so separately generated banks agree exactly.
+    signs = jnp.where(jnp.diag(triangular) < 0, -1.0, 1.0)
+    orthonormal = orthonormal * signs[None, :]
+    probes = orthonormal.T * jnp.sqrt(jnp.asarray(output_size, dtype=jnp.float32))
+    return probes.reshape((probe_count,) + tuple(int(value) for value in output_shape))
+
+
 def merge_train_checkpoint_parts_atomic(
     path: str,
     part_paths: Sequence[str],
@@ -1351,6 +1376,8 @@ class TrajAttributionConfig:
     seed: int = 0
     query_objective: str = "trajectory_noise_squared_deviation"
     predicted_noise_probe_index: int = 0
+    predicted_noise_probe_mode: str = "independent_gaussian"
+    predicted_noise_probe_count: int = 1
     parameter_source: str = "ema"  # "ema" for historical behavior, "raw" for TrainState.params
 
     # optional precomputed sampler trajectory
@@ -2050,6 +2077,22 @@ def run_attribution(cfg: TrajAttributionConfig):
         raise ValueError("TRAJ_TRACIN_STAGE_ARTIFACT_PATH is required when TRAJ_TRACIN_STAGE_MODE is set.")
     cfg.query_objective = normalize_query_objective_name(cfg.query_objective)
     uses_predicted_noise_probe = cfg.query_objective == "trajectory_predicted_noise_probe"
+    predicted_noise_probe_mode = str(cfg.predicted_noise_probe_mode).strip().lower()
+    if predicted_noise_probe_mode not in ("independent_gaussian", "shared_orthogonal"):
+        raise ValueError(
+            "predicted_noise_probe_mode must be 'independent_gaussian' or "
+            f"'shared_orthogonal', got {cfg.predicted_noise_probe_mode!r}"
+        )
+    if cfg.predicted_noise_probe_count <= 0:
+        raise ValueError("predicted_noise_probe_count must be positive")
+    if (
+        predicted_noise_probe_mode == "shared_orthogonal"
+        and not 0 <= cfg.predicted_noise_probe_index < cfg.predicted_noise_probe_count
+    ):
+        raise ValueError(
+            "shared orthogonal predicted-noise probe index must be smaller than "
+            f"probe count {cfg.predicted_noise_probe_count}"
+        )
     uses_next_checkpoint_target = query_objective_uses_next_checkpoint(cfg.query_objective)
     uses_implied_noise_trajectory_target = (
         cfg.query_objective == "trajectory_next_checkpoint_implied_noise_mse"
@@ -2814,6 +2857,7 @@ def run_attribution(cfg: TrajAttributionConfig):
         stage_total_terms = stage_checkpoint_count * int(cfg.num_traj_snapshots)
         stage_terms_done = 0
         stage_start_time = time.time()
+        shared_orthogonal_probe_bank = None
         ckpt_shard_count = max(1, int(os.environ.get("TRAJ_TRACIN_CKPT_SHARD_COUNT", "1")))
         ckpt_shard_index = int(os.environ.get("TRAJ_TRACIN_CKPT_SHARD_INDEX", "0"))
         aggregate_train_timestamps = os.environ.get(
@@ -3073,25 +3117,45 @@ def run_attribution(cfg: TrajAttributionConfig):
                             future_eps_chunk,
                         )
                     elif uses_predicted_noise_probe:
-                        probe_keys = array_to_device(
-                            jnp.stack(
-                                [
-                                    predicted_noise_probe_key(
+                        if predicted_noise_probe_mode == "shared_orthogonal":
+                            if shared_orthogonal_probe_bank is None:
+                                shared_orthogonal_probe_bank = array_to_device(
+                                    shared_orthogonal_predicted_noise_probes(
                                         cfg.seed,
-                                        ckpt_i,
-                                        int(t_seq[i]),
-                                        int(pos_seq[i]),
-                                        cfg.predicted_noise_probe_index,
-                                    )
-                                    for i in chunk_ids
-                                ],
-                                axis=0,
-                            ),
-                            device,
-                        )
-                        output_probes = jax.vmap(
-                            lambda key: jax.random.normal(key, xt_chunk.shape[1:], dtype=jnp.float32)
-                        )(probe_keys)
+                                        xt_chunk.shape[1:],
+                                        cfg.predicted_noise_probe_count,
+                                    ),
+                                    device,
+                                )
+                            selected_probe = shared_orthogonal_probe_bank[
+                                cfg.predicted_noise_probe_index
+                            ]
+                            output_probes = jnp.broadcast_to(
+                                selected_probe,
+                                (len(chunk_ids),) + tuple(selected_probe.shape),
+                            )
+                        else:
+                            probe_keys = array_to_device(
+                                jnp.stack(
+                                    [
+                                        predicted_noise_probe_key(
+                                            cfg.seed,
+                                            ckpt_i,
+                                            int(t_seq[i]),
+                                            int(pos_seq[i]),
+                                            cfg.predicted_noise_probe_index,
+                                        )
+                                        for i in chunk_ids
+                                    ],
+                                    axis=0,
+                                ),
+                                device,
+                            )
+                            output_probes = jax.vmap(
+                                lambda key: jax.random.normal(
+                                    key, xt_chunk.shape[1:], dtype=jnp.float32
+                                )
+                            )(probe_keys)
                         query_grads = query_grad_chunk_fn(
                             params,
                             xt_chunk,
@@ -3902,14 +3966,24 @@ def run_attribution(cfg: TrajAttributionConfig):
                 )
             if uses_predicted_noise_probe:
                 query_payload.update(
-                    output_probe_distribution=np.asarray("standard_normal"),
+                    output_probe_distribution=np.asarray(
+                        "orthogonal_gaussian_qr"
+                        if predicted_noise_probe_mode == "shared_orthogonal"
+                        else "standard_normal"
+                    ),
                     output_probes_per_term=np.asarray(1, dtype=np.int32),
                     output_probe_index=np.asarray(
                         cfg.predicted_noise_probe_index, dtype=np.int32
                     ),
                     output_probe_normalization=np.asarray("sqrt_num_output_elements"),
+                    output_probe_mode=np.asarray(predicted_noise_probe_mode),
+                    output_probe_bank_size=np.asarray(
+                        cfg.predicted_noise_probe_count, dtype=np.int32
+                    ),
                     output_probe_seed_rule=np.asarray(
-                        "historical fold_in(PRNGKey(seed),domain_tag,checkpoint_index,"
+                        "fold_in(PRNGKey(seed),ORTH), QR once, shared across all checkpoints/snapshots"
+                        if predicted_noise_probe_mode == "shared_orthogonal"
+                        else "historical fold_in(PRNGKey(seed),domain_tag,checkpoint_index,"
                         "timestep,snapshot_position), then fold_in(probe_index) when nonzero"
                     ),
                 )

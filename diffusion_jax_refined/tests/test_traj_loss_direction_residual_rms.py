@@ -49,9 +49,36 @@ ENSEMBLE_LAUNCHER = (
     / "rtx_small"
     / "run_f_next_linear_square_z50_lds_rtx_small.sh"
 )
+SHARED_ORTHOGONAL_PIPELINE = (
+    ROOT
+    / "3dshapes"
+    / "tacc"
+    / "rtx_small"
+    / "run_predicted_noise_shared_orthogonal_probe4_pipeline_rtx_small.sh"
+)
 
 
 class LossDirectionResidualRmsTest(unittest.TestCase):
+    def test_shared_orthogonal_probes_are_fixed_across_trajectory(self) -> None:
+        algorithm = ALGORITHM.read_text()
+        query_driver = (
+            ROOT / "3dshapes" / "script" / "run_traj_tracin_queries_and_scores.py"
+        ).read_text()
+        pipeline = SHARED_ORTHOGONAL_PIPELINE.read_text()
+
+        self.assertIn("def shared_orthogonal_predicted_noise_probes(", algorithm)
+        self.assertIn('jnp.linalg.qr(gaussian, mode="reduced")', algorithm)
+        self.assertIn("shared_orthogonal_probe_bank = None", algorithm)
+        self.assertIn("jnp.broadcast_to(", algorithm)
+        self.assertIn('"--predicted-noise-probe-mode"', query_driver)
+        self.assertIn("for probe_index in 0 1 2 3", pipeline)
+        self.assertIn("--predicted-noise-probe-mode shared_orthogonal", pipeline)
+        self.assertIn("--predicted-noise-probe-count", pipeline)
+        self.assertIn("--expected-query-probe-mode shared_orthogonal", pipeline)
+        self.assertIn("predicted_noise_shared_orthogonal_probe4_linear", pipeline)
+        self.assertIn("--prediction-sign=1", pipeline)
+        self.assertIn("--prediction-sign=-1", pipeline)
+
     def test_feature_keeps_rms_and_gradient_direction(self) -> None:
         gradient = np.asarray([[3.0, 4.0], [0.0, 0.0]], dtype=np.float32)
         residual_rms = np.asarray([2.0, 7.0], dtype=np.float32)

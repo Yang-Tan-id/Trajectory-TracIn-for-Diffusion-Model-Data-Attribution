@@ -73,6 +73,7 @@ class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
         )
         reduced = reduce_final_probe_scores(probe_scores)
 
+        np.testing.assert_allclose(reduced["linear_mean"], [[0.0, 1.0]])
         np.testing.assert_allclose(reduced["square_then_mean"], [[5.0, 6.0]])
         np.testing.assert_allclose(reduced["mean_then_square"], [[0.0, 1.0]])
         self.assertFalse(

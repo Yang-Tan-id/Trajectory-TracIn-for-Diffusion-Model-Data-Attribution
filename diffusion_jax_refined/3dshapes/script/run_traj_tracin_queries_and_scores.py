@@ -106,6 +106,12 @@ def main() -> None:
         help="Independent output-probe index without changing the train/CountSketch seed.",
     )
     parser.add_argument(
+        "--predicted-noise-probe-mode",
+        choices=("independent_gaussian", "shared_orthogonal"),
+        default="independent_gaussian",
+    )
+    parser.add_argument("--predicted-noise-probe-count", type=int, default=1)
+    parser.add_argument(
         "--log-prefix",
         default="",
         help="Optional prefix that keeps concurrent multi-node worker logs distinct.",
@@ -143,6 +149,13 @@ def main() -> None:
         raise ValueError("--num-snapshots must be positive")
     if args.predicted_noise_probe_index < 0:
         raise ValueError("--predicted-noise-probe-index must be nonnegative")
+    if args.predicted_noise_probe_count <= 0:
+        raise ValueError("--predicted-noise-probe-count must be positive")
+    if (
+        args.predicted_noise_probe_mode == "shared_orthogonal"
+        and args.predicted_noise_probe_index >= args.predicted_noise_probe_count
+    ):
+        raise ValueError("shared orthogonal probe index must be smaller than probe count")
     default_train_dir = "traj_tracin" if not namespace else f"traj_tracin_{namespace}"
     train_artifact = Path(args.train_artifact).expanduser() if args.train_artifact else (
         result_root
@@ -175,6 +188,8 @@ def main() -> None:
         ATTRIBUTION_SCORE_MODEL_MODE="prompted_solo",
         TRAJ_QUERY_OBJECTIVE=args.query_objective,
         TRAJ_PREDICTED_NOISE_PROBE_INDEX=str(args.predicted_noise_probe_index),
+        TRAJ_PREDICTED_NOISE_PROBE_MODE=args.predicted_noise_probe_mode,
+        TRAJ_PREDICTED_NOISE_PROBE_COUNT=str(args.predicted_noise_probe_count),
         TRAJ_PARAMETER_SOURCE="raw",
         TRAJ_NUM_SNAPSHOTS=str(len(snapshot_positions) if snapshot_positions else args.num_snapshots),
         TRAJ_TRAIN_MC_SAMPLES="10",

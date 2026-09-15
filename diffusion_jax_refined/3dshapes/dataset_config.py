@@ -144,6 +144,12 @@ ATTRIBUTION_CONFIGS = {
         "predicted_noise_probe_index": int(
             os.environ.get("TRAJ_PREDICTED_NOISE_PROBE_INDEX", "0")
         ),
+        "predicted_noise_probe_mode": os.environ.get(
+            "TRAJ_PREDICTED_NOISE_PROBE_MODE", "independent_gaussian"
+        ),
+        "predicted_noise_probe_count": int(
+            os.environ.get("TRAJ_PREDICTED_NOISE_PROBE_COUNT", "1")
+        ),
         "parameter_source": os.environ.get("TRAJ_PARAMETER_SOURCE", "raw"),
         "attribution_sample_dir": ATTRIBUTION_SAMPLE_DIR,
         "attribution_sample_seed": INITIAL_SEED,
