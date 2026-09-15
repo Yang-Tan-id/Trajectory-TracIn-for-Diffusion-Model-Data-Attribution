@@ -52,7 +52,10 @@ def spearman(x: np.ndarray, y: np.ndarray) -> float:
     return float(np.sum(rx * ry) / denominator) if denominator else float("nan")
 
 
-def load_probe_scores(shard_dir: Path) -> tuple[dict[str, np.ndarray], np.ndarray]:
+def load_probe_scores(
+    shard_dir: Path,
+    num_probes: int = 8,
+) -> tuple[dict[str, np.ndarray], np.ndarray]:
     shard_paths = sorted(shard_dir.glob("shard_*.npz"))
     if not shard_paths:
         raise FileNotFoundError(f"no score shards under {shard_dir}")
@@ -63,8 +66,11 @@ def load_probe_scores(shard_dir: Path) -> tuple[dict[str, np.ndarray], np.ndarra
         with np.load(path, allow_pickle=False) as payload:
             for variant, key in VARIANTS.items():
                 values = np.asarray(payload[key], dtype=np.float64)
-                if values.shape != (8, 10, 5000):
-                    raise ValueError(f"{path}:{key} expected (8,10,5000), got {values.shape}")
+                expected_shape = (num_probes, 10, 5000)
+                if values.shape != expected_shape:
+                    raise ValueError(
+                        f"{path}:{key} expected {expected_shape}, got {values.shape}"
+                    )
                 if variant not in totals:
                     totals[variant] = np.zeros_like(values)
                 totals[variant] += values

@@ -500,10 +500,38 @@ class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
         text = path.read_text()
 
         self.assertEqual(sum(len(list(itertools.combinations(range(8), k))) for k in range(1, 9)), 255)
-        self.assertIn("for subset_size in range(1, 9)", text)
+        self.assertIn("for subset_size in range(1, num_probes + 1)", text)
         self.assertIn('"subset_size_distribution.csv"', text)
         self.assertIn('"both_l2_counterfactual_by_subset_size.png"', text)
         self.assertIn("ax.errorbar(", text)
+
+    def test_probe12_all_subset_sizes_launcher_covers_4095_subsets(self):
+        analyzer = (
+            ROOT
+            / "3dshapes"
+            / "script"
+            / "analyze_predicted_noise_probe8_all_subset_sizes.py"
+        ).read_text()
+        launcher = (
+            ROOT
+            / "3dshapes"
+            / "tacc"
+            / "rtx_small"
+            / "run_predicted_noise_probe12_all_subset_sizes_rtx_small.sh"
+        ).read_text()
+
+        self.assertEqual(
+            sum(
+                len(list(itertools.combinations(range(12), k)))
+                for k in range(1, 13)
+            ),
+            4095,
+        )
+        self.assertIn("--num-probes", analyzer)
+        self.assertIn("load_probe_scores(shard_dir, args.num_probes)", analyzer)
+        self.assertIn("all 4095 nonempty subsets", launcher)
+        self.assertIn("--num-probes 12", launcher)
+        self.assertIn('RUN_ID="${SOURCE_RUN_ID:-3502474}"', launcher)
 
 
 if __name__ == "__main__":

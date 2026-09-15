@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate every nonempty subset of a saved eight-probe linear score run."""
+"""Evaluate every nonempty subset of a saved per-probe linear score run."""
 
 from __future__ import annotations
 
@@ -24,11 +24,11 @@ from analyze_predicted_noise_probe8_choose4 import (
 )
 
 
-def all_probe_subsets() -> list[tuple[int, ...]]:
+def all_probe_subsets(num_probes: int = 8) -> list[tuple[int, ...]]:
     return [
         combination
-        for subset_size in range(1, 9)
-        for combination in itertools.combinations(range(8), subset_size)
+        for subset_size in range(1, num_probes + 1)
+        for combination in itertools.combinations(range(num_probes), subset_size)
     ]
 
 
@@ -36,7 +36,11 @@ def standard_deviation(values: list[float]) -> float:
     return statistics.stdev(values) if len(values) > 1 else 0.0
 
 
-def save_plot(path: Path, distribution_rows: list[dict[str, object]]) -> None:
+def save_plot(
+    path: Path,
+    distribution_rows: list[dict[str, object]],
+    num_probes: int,
+) -> None:
     try:
         import matplotlib.pyplot as plt
     except Exception as exc:
@@ -47,7 +51,7 @@ def save_plot(path: Path, distribution_rows: list[dict[str, object]]) -> None:
         (int(row["subset_size"]), str(row["target"]), str(row["variant"])): row
         for row in distribution_rows
     }
-    subset_sizes = np.arange(1, 9)
+    subset_sizes = np.arange(1, num_probes + 1)
     fig, ax = plt.subplots(figsize=(8.2, 5.2))
     styles = (
         ("endpoint_contarfactual", "Endpoint counterfactual", "#1565c0", "o"),
@@ -76,7 +80,7 @@ def save_plot(path: Path, distribution_rows: list[dict[str, object]]) -> None:
     ax.set_xticks(subset_sizes)
     ax.set_xlabel("Number of probes in subset (k)")
     ax.set_ylabel("10-query mean LDS (%)")
-    ax.set_title("Eight-probe linear score: all subsets, Both-L2")
+    ax.set_title(f"{num_probes}-probe linear score: all subsets, Both-L2")
     ax.grid(alpha=0.2)
     ax.legend(frameon=False)
     fig.tight_layout()
@@ -91,21 +95,24 @@ def main() -> None:
     parser.add_argument("--experiment", default="experiment1")
     parser.add_argument("--train-seed", type=int, default=42)
     parser.add_argument("--run-id", required=True)
+    parser.add_argument("--num-probes", type=int, default=8)
     parser.add_argument("--prediction-sign", type=float, choices=(-1.0, 1.0), default=1.0)
     args = parser.parse_args()
 
     result_root = SHAPES_ROOT / "result" / args.experiment
+    if args.num_probes <= 0:
+        raise ValueError("--num-probes must be positive")
     shard_dir = (
         result_root
         / "stream_score"
-        / "traj_tracin_predicted_noise_jvp_final_post_square_probe8"
+        / f"traj_tracin_predicted_noise_jvp_final_post_square_probe{args.num_probes}"
         / f"train_seed_{args.train_seed}"
         / f"run_{args.run_id}"
         / "shards"
     )
-    probe_scores, score_indices = load_probe_scores(shard_dir)
+    probe_scores, score_indices = load_probe_scores(shard_dir, args.num_probes)
     records = json.loads((SHAPES_ROOT / "queries_seed_0_9.json").read_text())["queries"]
-    subsets = all_probe_subsets()
+    subsets = all_probe_subsets(args.num_probes)
     per_query_rows: list[dict[str, object]] = []
 
     for query_id, record in enumerate(records):
@@ -125,7 +132,7 @@ def main() -> None:
             )
             for subset in subsets:
                 prediction = per_probe_predictions[list(subset)].mean(axis=0)
-                subset_tag = "".join(str(index) for index in subset)
+                subset_tag = ",".join(str(index + 1) for index in subset)
                 for target in TARGETS:
                     per_query_rows.append(
                         {
@@ -138,7 +145,10 @@ def main() -> None:
                             "prompt": prompt_tag,
                         }
                     )
-        print(f"[query {query_id}/9] evaluated 255 nonempty subsets", flush=True)
+        print(
+            f"[query {query_id}/9] evaluated {len(subsets)} nonempty subsets",
+            flush=True,
+        )
 
     grouped: dict[tuple[int, str, str, str], list[float]] = defaultdict(list)
     for row in per_query_rows:
@@ -184,11 +194,20 @@ def main() -> None:
             }
         )
 
-    output_dir = result_root / "eval" / "probe8_all_subset_sizes_linear" / f"run_{args.run_id}"
+    output_dir = (
+        result_root
+        / "eval"
+        / f"probe{args.num_probes}_all_subset_sizes_linear"
+        / f"run_{args.run_id}"
+    )
     write_csv(output_dir / "per_query.csv", per_query_rows)
     write_csv(output_dir / "combination_ten_query_means.csv", combination_rows)
     write_csv(output_dir / "subset_size_distribution.csv", distribution_rows)
-    save_plot(output_dir / "both_l2_counterfactual_by_subset_size.png", distribution_rows)
+    save_plot(
+        output_dir / "both_l2_counterfactual_by_subset_size.png",
+        distribution_rows,
+        args.num_probes,
+    )
 
     mean_lookup = {
         (int(row["subset_size"]), str(row["combination"]), str(row["target"]), str(row["variant"])):
@@ -201,8 +220,11 @@ def main() -> None:
         f"{'TRAJ MEAN±STD':>21s} {'CF MEAN±STD':>21s} {'BEST':>9s}"
     )
     print("-" * 108)
-    for subset_size in range(1, 9):
-        subset_tags = ["".join(map(str, item)) for item in itertools.combinations(range(8), subset_size)]
+    for subset_size in range(1, args.num_probes + 1):
+        subset_tags = [
+            ",".join(str(index + 1) for index in item)
+            for item in itertools.combinations(range(args.num_probes), subset_size)
+        ]
         endpoints = [
             mean_lookup[(subset_size, tag, "endpoint_contarfactual", "query_train_l2")]
             for tag in subset_tags
