@@ -239,8 +239,9 @@ loss per datapoint/term). For each query term it differentiates one Gaussian
 scalar probe of the vector predicted-noise output, immediately computes and
 squares its dot products with all 5,000 saved train gradients, and retains
 only the final scores. It produces the original raw, query-L2, train-L2, and
-query+train-L2 variants, using learning-rate-squared term weights because the
-directional output change is squared. The transient query-gradient artifacts
+query+train-L2 variants. Only the gradient contraction is squared; checkpoint
+learning-rate weights remain linear and the contributions are summed without
+normalizing by the weight total. The transient query-gradient artifacts
 are deleted after score materialization.
 
 Run the complete one-node/two-GPU RTX-small pipeline, including cached LDS evaluation:

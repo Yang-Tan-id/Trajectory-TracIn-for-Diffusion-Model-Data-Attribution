@@ -75,6 +75,11 @@ class LossDirectionResidualRmsTest(unittest.TestCase):
         self.assertIn("load_predicted_query_probes", scorer)
         self.assertIn("/ float(args.predicted_num_probes)", scorer)
         self.assertIn("jnp.square(dots)", scorer)
+        self.assertIn(
+            'sums[("predicted", "raw")] += float(weight) * predicted_raw', scorer
+        )
+        self.assertNotIn("float(weight) ** 2 * predicted_raw", scorer)
+        self.assertNotIn('totals[("predicted", query_variant)] / predicted_weight', scorer)
 
 
 if __name__ == "__main__":

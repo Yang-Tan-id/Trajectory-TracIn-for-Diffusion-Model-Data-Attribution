@@ -196,8 +196,6 @@ def score_shard(args: argparse.Namespace) -> None:
         for target in ("original", "predicted")
         for query_variant in ("raw", "query_l2")
     }
-    original_weight = 0.0
-    predicted_weight = 0.0
     original_terms = 0
     predicted_terms = 0
     score_indices = None
@@ -243,7 +241,6 @@ def score_shard(args: argparse.Namespace) -> None:
                 sums[("original", "query_l2")] += float(weight) * np.asarray(
                     jax.device_get(dots / query_norms[None, :]), dtype=np.float64
                 ).T
-                original_weight += abs(float(weight))
                 original_terms += 1
 
             predicted_term = lookups["predicted"].get((int(ckpt), int(timestep)))
@@ -264,11 +261,13 @@ def score_shard(args: argparse.Namespace) -> None:
                     jax.device_get(jnp.square(dots / query_norms[None, :])),
                     dtype=np.float64,
                 ).T / float(args.predicted_num_probes)
-            sums[("predicted", "raw")] += float(weight) ** 2 * predicted_raw
+            # Square only the gradient contraction.  Keep the TrajTracIn
+            # learning-rate weight linear; `weight` already includes the
+            # per-snapshot averaging factor.
+            sums[("predicted", "raw")] += float(weight) * predicted_raw
             sums[("predicted", "query_l2")] += (
-                float(weight) ** 2 * predicted_query_l2
+                float(weight) * predicted_query_l2
             )
-            predicted_weight += float(weight) ** 2
             predicted_terms += 1
 
         print(
@@ -285,12 +284,13 @@ def score_shard(args: argparse.Namespace) -> None:
             f"{target}_{query_variant}_sum": values
             for (target, query_variant), values in sums.items()
         },
-        original_weight=np.asarray(original_weight, dtype=np.float64),
-        predicted_weight=np.asarray(predicted_weight, dtype=np.float64),
         original_terms=np.asarray(original_terms, dtype=np.int32),
         predicted_terms=np.asarray(predicted_terms, dtype=np.int32),
         score_indices=score_indices,
         jacobian_norm_probes=np.asarray(jacobian_norm_probes, dtype=np.int32),
+        weighting_semantics=np.asarray(
+            "learning_rate_weighted_sum_of_gradient_contractions"
+        ),
     )
     print(f"[saved] {output}", flush=True)
 
@@ -343,7 +343,6 @@ def merge(args: argparse.Namespace) -> None:
         for target in ("original", "predicted")
         for query_variant in ("raw", "query_l2")
     }
-    original_weight = predicted_weight = 0.0
     original_terms = predicted_terms = 0
     score_indices = None
     jacobian_norm_probes = None
@@ -357,8 +356,12 @@ def merge(args: argparse.Namespace) -> None:
                 totals[(target, query_variant)] += np.asarray(
                     data[f"{target}_{query_variant}_sum"], dtype=np.float64
                 )
-            original_weight += float(data["original_weight"])
-            predicted_weight += float(data["predicted_weight"])
+            semantics = str(np.asarray(data.get("weighting_semantics", "")).item())
+            if semantics != "learning_rate_weighted_sum_of_gradient_contractions":
+                raise ValueError(
+                    f"{path} has incompatible weighting semantics {semantics!r}; "
+                    "recompute this score shard with linear learning-rate weights"
+                )
             original_terms += int(data["original_terms"])
             predicted_terms += int(data["predicted_terms"])
             indices = np.asarray(data["score_indices"], dtype=np.int64)
@@ -385,18 +388,18 @@ def merge(args: argparse.Namespace) -> None:
         materialize_scores(
             args,
             f"{args.score_namespace_prefix}_original_f",
-            totals[("original", query_variant)] / original_weight,
+            totals[("original", query_variant)],
             score_indices,
-            f"learning_rate_weighted_mean(dot(v_l2_train_feature, {query_variant}_grad(original_f)))",
+            f"learning_rate_weighted_sum(dot(v_l2_train_feature, {query_variant}_grad(original_f)))",
             query_variant,
             int(jacobian_norm_probes),
         )
         materialize_scores(
             args,
             f"{args.score_namespace_prefix}_predicted_noise",
-            totals[("predicted", query_variant)] / predicted_weight,
+            totals[("predicted", query_variant)],
             score_indices,
-            f"learning_rate_squared_weighted_mean(square(dot(v_l2_train_feature, {query_variant}_predicted_noise_probe_grad)))",
+            f"learning_rate_weighted_sum(square(dot(v_l2_train_feature, {query_variant}_predicted_noise_probe_grad)))",
             query_variant,
             int(jacobian_norm_probes),
         )

@@ -56,6 +56,23 @@ class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
             np.allclose(actual, np.square(train @ np.mean(probes, axis=0).T))
         )
 
+    def test_learning_rate_is_linear_and_the_term_sum_is_not_normalized(self):
+        directional = np.asarray([2.0, 3.0], dtype=np.float64)
+        learning_rates = np.asarray([0.1, 0.4], dtype=np.float64)
+
+        actual = np.sum(learning_rates * np.square(directional))
+        expected = 0.1 * (2.0**2) + 0.4 * (3.0**2)
+
+        self.assertAlmostEqual(float(actual), expected)
+        self.assertNotAlmostEqual(
+            float(actual),
+            float(np.sum(np.square(learning_rates) * np.square(directional))),
+        )
+        self.assertNotAlmostEqual(
+            float(actual),
+            float(actual / np.sum(learning_rates)),
+        )
+
     def test_query_probe_is_scalar_and_raw_projected(self):
         text = (ROOT / "legacy_jax" / "traj_tracin" / "algorithm.py").read_text()
         self.assertIn('"trajectory_predicted_noise_probe"', text)
@@ -78,7 +95,11 @@ class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
         self.assertIn('"score_query_normalized"', driver)
         self.assertIn('"score_train_l2_normalized"', driver)
         self.assertIn('"score_query_train_l2_normalized"', driver)
-        self.assertIn("weight_squared = float(weight) ** 2", driver)
+        self.assertIn("term_weight = float(weight)", driver)
+        self.assertNotIn("weight_squared = float(weight) ** 2", driver)
+        self.assertIn(
+            "learning_rate_weighted_sum_of_squared_gradient_contractions", driver
+        )
         self.assertIn("trajectory_predicted_noise_probe", driver)
         self.assertIn('f"run_{run_id}"', driver)
         self.assertIn("--cleanup-query-artifacts", launcher)

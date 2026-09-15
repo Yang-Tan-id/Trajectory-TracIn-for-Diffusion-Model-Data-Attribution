@@ -173,7 +173,6 @@ def score_shard(args: argparse.Namespace) -> None:
         "score_train_l2_normalized": np.zeros((10, 5000), dtype=np.float64),
         "score_query_train_l2_normalized": np.zeros((10, 5000), dtype=np.float64),
     }
-    lr2_weight_sum = 0.0
     score_indices = None
     used_terms = 0
 
@@ -226,10 +225,12 @@ def score_shard(args: argparse.Namespace) -> None:
                     term_scores[component] += np.asarray(
                         jax.device_get(values), dtype=np.float64
                     ).T / float(args.num_probes)
-            weight_squared = float(weight) ** 2
+            # Only the gradient-produced directional derivative is squared.
+            # The TrajTracIn learning-rate weight remains linear, and the
+            # stored per-snapshot weight already averages the 10 snapshots.
+            term_weight = float(weight)
             for component, values in term_scores.items():
-                sums[component] += weight_squared * values
-            lr2_weight_sum += weight_squared
+                sums[component] += term_weight * values
             used_terms += 1
         print(f"[score shard {args.shard_index}/{args.shard_count}] checkpoint={ckpt_i} terms={used_terms}", flush=True)
 
@@ -238,9 +239,11 @@ def score_shard(args: argparse.Namespace) -> None:
     atomic_savez(
         output,
         **{f"sums_{component}": values for component, values in sums.items()},
-        lr2_weight_sum=np.asarray(lr2_weight_sum, dtype=np.float64),
         score_indices=score_indices,
         used_terms=np.asarray(used_terms, dtype=np.int32),
+        weighting_semantics=np.asarray(
+            "learning_rate_weighted_sum_of_squared_gradient_contractions"
+        ),
     )
     print(f"[saved] {output}", flush=True)
 
@@ -260,7 +263,6 @@ def merge(args: argparse.Namespace) -> None:
         "score_train_l2_normalized": np.zeros((10, 5000), dtype=np.float64),
         "score_query_train_l2_normalized": np.zeros((10, 5000), dtype=np.float64),
     }
-    lr2_denom = 0.0
     terms = 0
     score_indices = None
     for shard in range(args.shard_count):
@@ -276,20 +278,25 @@ def merge(args: argparse.Namespace) -> None:
                 totals[component] += np.asarray(
                     payload[f"sums_{component}"], dtype=np.float64
                 )
-            lr2_denom += float(payload["lr2_weight_sum"])
+            semantics = str(np.asarray(payload.get("weighting_semantics", "")).item())
+            if semantics != "learning_rate_weighted_sum_of_squared_gradient_contractions":
+                raise ValueError(
+                    f"{path} has incompatible weighting semantics {semantics!r}; "
+                    "recompute this score shard with linear learning-rate weights"
+                )
             terms += int(payload["used_terms"])
             indices = np.asarray(payload["score_indices"], dtype=np.int64)
         if score_indices is None:
             score_indices = indices
         elif not np.array_equal(score_indices, indices):
             raise ValueError(f"score indices differ in {path}")
-    if terms != 500 or lr2_denom <= 0.0:
-        raise ValueError(f"expected 500 terms and positive LR2 weight, got terms={terms} weight={lr2_denom}")
+    if terms != 500:
+        raise ValueError(f"expected 500 terms, got terms={terms}")
     expected = np.asarray(np.load(ATTRIBUTION_INDICES_PATH), dtype=np.int64)
     if score_indices is None or not np.array_equal(np.sort(score_indices), np.sort(expected)):
         raise ValueError("score indices do not match attribution_5k_indices.npy")
 
-    scores = {component: values / lr2_denom for component, values in totals.items()}
+    scores = totals
     for component, values in scores.items():
         for query_id, record in enumerate(records()):
             out_dir = (
@@ -307,7 +314,7 @@ def merge(args: argparse.Namespace) -> None:
             manifest = {
                 "algorithm": score_namespace(args.num_probes),
                 "score_variant": component,
-                "definition": "lr_squared_weighted_mean_terms(squared_normalized_dot_product)",
+                "definition": "learning_rate_weighted_sum_terms(squared_normalized_dot_product)",
                 "normalization_variants": [
                     "raw",
                     "query_l2",
