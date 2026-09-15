@@ -1,10 +1,13 @@
 from pathlib import Path
+import sys
 import unittest
 
 import numpy as np
 
-
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "3dshapes" / "script"))
+
+from run_predicted_noise_jvp_l2_squared import reduce_final_probe_scores
 
 
 class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
@@ -54,6 +57,28 @@ class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
         np.testing.assert_allclose(actual, expected)
         self.assertFalse(
             np.allclose(actual, np.square(train @ np.mean(probes, axis=0).T))
+        )
+
+    def test_final_probe_square_reductions_happen_after_trajectory_sum(self):
+        # Axis 0 is probe. These are already-complete per-probe trajectory scores.
+        probe_scores = np.asarray(
+            [
+                [[1.0, 2.0]],
+                [[-1.0, 4.0]],
+                [[3.0, -2.0]],
+                [[-3.0, 0.0]],
+            ],
+            dtype=np.float64,
+        )
+        reduced = reduce_final_probe_scores(probe_scores)
+
+        np.testing.assert_allclose(reduced["square_then_mean"], [[5.0, 6.0]])
+        np.testing.assert_allclose(reduced["mean_then_square"], [[0.0, 1.0]])
+        self.assertFalse(
+            np.allclose(
+                reduced["square_then_mean"],
+                reduced["mean_then_square"],
+            )
         )
 
     def test_learning_rate_is_linear_and_the_term_sum_is_not_normalized(self):
@@ -136,7 +161,7 @@ class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
             / "run_predicted_noise_jvp_signed_probe4_score_rtx_small.sh"
         ).read_text()
 
-        self.assertIn('choices=("squared", "signed")', driver)
+        self.assertIn('choices=("squared", "signed", "final_post_square")', driver)
         self.assertIn('SIGNED_NAMESPACE = "predicted_noise_jvp_signed"', driver)
         self.assertIn("query_namespace_pattern.format(probe_index=probe_index)", driver)
         self.assertIn("--contraction signed", launcher)
@@ -146,6 +171,25 @@ class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
         )
         self.assertNotIn("run_traj_tracin_queries_and_scores.py", launcher)
         self.assertIn("predicted_noise_jvp_signed_probe4", launcher)
+
+    def test_final_post_square_launcher_emits_both_reductions(self):
+        driver = (
+            ROOT / "3dshapes" / "script" / "run_predicted_noise_jvp_l2_squared.py"
+        ).read_text()
+        launcher = (
+            ROOT
+            / "3dshapes"
+            / "tacc"
+            / "rtx_small"
+            / "run_predicted_noise_probe4_final_post_square_score_rtx_small.sh"
+        ).read_text()
+
+        self.assertIn('"final_post_square"', driver)
+        self.assertIn("reduce_final_probe_scores", driver)
+        self.assertIn("--contraction final_post_square", launcher)
+        self.assertIn("predicted_noise_jvp_final_square_then_mean_probe4", launcher)
+        self.assertIn("predicted_noise_jvp_final_mean_then_square_probe4", launcher)
+        self.assertIn("--prediction-sign 1", launcher)
 
 
 if __name__ == "__main__":

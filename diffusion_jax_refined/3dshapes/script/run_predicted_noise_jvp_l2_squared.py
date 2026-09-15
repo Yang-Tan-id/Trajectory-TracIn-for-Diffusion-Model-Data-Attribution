@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Score squared or signed predicted-noise changes from saved Traj TracIn gradients."""
+"""Score predicted-noise probe contractions from saved Traj TracIn gradients."""
 
 from __future__ import annotations
 
@@ -14,6 +14,9 @@ import numpy as np
 SHAPES_ROOT = Path(__file__).resolve().parents[1]
 SQUARED_NAMESPACE = "predicted_noise_jvp_l2_squared"
 SIGNED_NAMESPACE = "predicted_noise_jvp_signed"
+FINAL_SQUARE_THEN_MEAN_NAMESPACE = "predicted_noise_jvp_final_square_then_mean"
+FINAL_MEAN_THEN_SQUARE_NAMESPACE = "predicted_noise_jvp_final_mean_then_square"
+FINAL_POST_SQUARE_STAGING_NAMESPACE = "predicted_noise_jvp_final_post_square"
 
 import sys
 
@@ -42,7 +45,27 @@ def probe_namespace(num_probes: int, probe_index: int) -> str:
 
 
 def score_namespace(num_probes: int, contraction: str = "squared") -> str:
-    namespace = SIGNED_NAMESPACE if contraction == "signed" else SQUARED_NAMESPACE
+    if contraction == "signed":
+        namespace = SIGNED_NAMESPACE
+    elif contraction == "squared":
+        namespace = SQUARED_NAMESPACE
+    elif contraction == "final_post_square":
+        namespace = FINAL_POST_SQUARE_STAGING_NAMESPACE
+    else:
+        raise ValueError(f"unknown contraction {contraction!r}")
+    suffix = "" if num_probes == 1 else f"_probe{num_probes}"
+    return f"traj_tracin_{namespace}{suffix}"
+
+
+def final_score_namespace(num_probes: int, reduction: str) -> str:
+    namespaces = {
+        "square_then_mean": FINAL_SQUARE_THEN_MEAN_NAMESPACE,
+        "mean_then_square": FINAL_MEAN_THEN_SQUARE_NAMESPACE,
+    }
+    try:
+        namespace = namespaces[reduction]
+    except KeyError as exc:
+        raise ValueError(f"unknown final-score reduction {reduction!r}") from exc
     suffix = "" if num_probes == 1 else f"_probe{num_probes}"
     return f"traj_tracin_{namespace}{suffix}"
 
@@ -50,7 +73,17 @@ def score_namespace(num_probes: int, contraction: str = "squared") -> str:
 def weighting_semantics(contraction: str) -> str:
     if contraction == "squared":
         return "learning_rate_weighted_sum_of_squared_gradient_contractions"
+    if contraction == "final_post_square":
+        return "square_after_learning_rate_weighted_term_sum_per_probe"
     return "learning_rate_weighted_sum_of_signed_gradient_contractions"
+
+
+def reduce_final_probe_scores(probe_scores: np.ndarray) -> dict[str, np.ndarray]:
+    """Reduce fully accumulated per-probe sample scores in the two requested ways."""
+    return {
+        "square_then_mean": np.mean(np.square(probe_scores), axis=0),
+        "mean_then_square": np.square(np.mean(probe_scores, axis=0)),
+    }
 
 
 def query_artifact_path(
@@ -194,11 +227,16 @@ def score_shard(args: argparse.Namespace) -> None:
         (int(ckpt), int(timestep)): term_id
         for term_id, (ckpt, timestep) in enumerate(zip(query_meta["ckpt_indices"], query_meta["timesteps"]))
     }
+    score_shape = (
+        (args.num_probes, 10, 5000)
+        if args.contraction == "final_post_square"
+        else (10, 5000)
+    )
     sums = {
-        "score": np.zeros((10, 5000), dtype=np.float64),
-        "score_query_normalized": np.zeros((10, 5000), dtype=np.float64),
-        "score_train_l2_normalized": np.zeros((10, 5000), dtype=np.float64),
-        "score_query_train_l2_normalized": np.zeros((10, 5000), dtype=np.float64),
+        "score": np.zeros(score_shape, dtype=np.float64),
+        "score_query_normalized": np.zeros(score_shape, dtype=np.float64),
+        "score_train_l2_normalized": np.zeros(score_shape, dtype=np.float64),
+        "score_query_train_l2_normalized": np.zeros(score_shape, dtype=np.float64),
     }
     score_indices = None
     used_terms = 0
@@ -226,10 +264,12 @@ def score_shard(args: argparse.Namespace) -> None:
                 raise ValueError(f"no query feature for checkpoint={ckpt} timestep={timestep}")
             train_device = jax.device_put(jnp.asarray(train[local_term]))
             train_norm = jnp.linalg.norm(train_device, axis=1) + 1e-8
-            term_scores = {
-                component: np.zeros((10, 5000), dtype=np.float64)
-                for component in sums
-            }
+            term_scores = None
+            if args.contraction != "final_post_square":
+                term_scores = {
+                    component: np.zeros((10, 5000), dtype=np.float64)
+                    for component in sums
+                }
             for probe_index in range(args.num_probes):
                 query_device = jax.device_put(
                     jnp.asarray(query[probe_index, :, query_term, :])
@@ -250,15 +290,21 @@ def score_shard(args: argparse.Namespace) -> None:
                     ),
                 }
                 for component, values in probe_scores.items():
-                    term_scores[component] += np.asarray(
-                        jax.device_get(values), dtype=np.float64
-                    ).T / float(args.num_probes)
+                    host_values = np.asarray(jax.device_get(values), dtype=np.float64).T
+                    if args.contraction == "final_post_square":
+                        # Keep each probe separate through the complete trajectory sum.
+                        # Squaring and cross-probe reduction happen only after shards merge.
+                        sums[component][probe_index] += float(weight) * host_values
+                    else:
+                        assert term_scores is not None
+                        term_scores[component] += host_values / float(args.num_probes)
             # The requested transform applies only to the gradient-produced
             # directional derivative. The learning-rate weight remains linear, and the
             # stored per-snapshot weight already averages the 10 snapshots.
-            term_weight = float(weight)
-            for component, values in term_scores.items():
-                sums[component] += term_weight * values
+            if term_scores is not None:
+                term_weight = float(weight)
+                for component, values in term_scores.items():
+                    sums[component] += term_weight * values
             used_terms += 1
         print(f"[score shard {args.shard_index}/{args.shard_count}] checkpoint={ckpt_i} terms={used_terms}", flush=True)
 
@@ -283,11 +329,16 @@ def atomic_save(path: Path, value: np.ndarray) -> None:
 
 
 def merge(args: argparse.Namespace) -> None:
+    score_shape = (
+        (args.num_probes, 10, 5000)
+        if args.contraction == "final_post_square"
+        else (10, 5000)
+    )
     totals = {
-        "score": np.zeros((10, 5000), dtype=np.float64),
-        "score_query_normalized": np.zeros((10, 5000), dtype=np.float64),
-        "score_train_l2_normalized": np.zeros((10, 5000), dtype=np.float64),
-        "score_query_train_l2_normalized": np.zeros((10, 5000), dtype=np.float64),
+        "score": np.zeros(score_shape, dtype=np.float64),
+        "score_query_normalized": np.zeros(score_shape, dtype=np.float64),
+        "score_train_l2_normalized": np.zeros(score_shape, dtype=np.float64),
+        "score_query_train_l2_normalized": np.zeros(score_shape, dtype=np.float64),
     }
     terms = 0
     score_indices = None
@@ -329,45 +380,63 @@ def merge(args: argparse.Namespace) -> None:
     if score_indices is None or not np.array_equal(np.sort(score_indices), np.sort(expected)):
         raise ValueError("score indices do not match attribution_5k_indices.npy")
 
-    scores = totals
-    for component, values in scores.items():
-        for query_id, record in enumerate(records()):
-            out_dir = (
-                result_root(args.experiment)
-                / "attribution_score"
-                / "prompted_solo"
-                / f"train_seed_{args.train_seed}"
-                / f"query_{_prompt_tag(str(record['prompt']))}"
-                / f"initial_seed_{int(record['initial_seed'])}"
-                / score_namespace(args.num_probes, args.contraction)
-                / component
-            )
-            atomic_save(out_dir / "scores.npy", values[query_id])
-            atomic_save(out_dir / "score_indices.npy", score_indices)
-            manifest = {
-                "algorithm": score_namespace(args.num_probes, args.contraction),
-                "score_variant": component,
-                "definition": (
-                    "learning_rate_weighted_sum_terms(squared_normalized_dot_product)"
-                    if args.contraction == "squared"
-                    else "learning_rate_weighted_sum_terms(signed_normalized_dot_product)"
-                ),
-                "normalization_variants": [
-                    "raw",
-                    "query_l2",
-                    "train_l2",
-                    "query_train_l2",
-                ],
-                "num_output_probes_per_term": args.num_probes,
-                "num_checkpoints": 50,
-                "timestamps_per_checkpoint": 10,
-                "train_mc_samples_per_timestamp": 10,
-                "num_terms": 500,
-                "projection_dim": 4096,
-                "query_gradient_retained": False,
-                "transient_run_id": args.run_id,
+    if args.contraction == "final_post_square":
+        score_sets = {
+            final_score_namespace(args.num_probes, reduction): {
+                component: reduced[reduction]
+                for component, probe_values in totals.items()
+                for reduced in (reduce_final_probe_scores(probe_values),)
             }
-            (out_dir / "score_artifact_manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True))
+            for reduction in ("square_then_mean", "mean_then_square")
+        }
+    else:
+        score_sets = {score_namespace(args.num_probes, args.contraction): totals}
+
+    for output_namespace, scores in score_sets.items():
+        for component, values in scores.items():
+            for query_id, record in enumerate(records()):
+                out_dir = (
+                    result_root(args.experiment)
+                    / "attribution_score"
+                    / "prompted_solo"
+                    / f"train_seed_{args.train_seed}"
+                    / f"query_{_prompt_tag(str(record['prompt']))}"
+                    / f"initial_seed_{int(record['initial_seed'])}"
+                    / output_namespace
+                    / component
+                )
+                atomic_save(out_dir / "scores.npy", values[query_id])
+                atomic_save(out_dir / "score_indices.npy", score_indices)
+                manifest = {
+                    "algorithm": output_namespace,
+                    "score_variant": component,
+                    "definition": (
+                        "mean_probes(square(learning_rate_weighted_sum_terms(signed_normalized_dot_product)))"
+                        if "final_square_then_mean" in output_namespace
+                        else "square(mean_probes(learning_rate_weighted_sum_terms(signed_normalized_dot_product)))"
+                        if "final_mean_then_square" in output_namespace
+                        else "learning_rate_weighted_sum_terms(squared_normalized_dot_product)"
+                        if args.contraction == "squared"
+                        else "learning_rate_weighted_sum_terms(signed_normalized_dot_product)"
+                    ),
+                    "normalization_variants": [
+                        "raw",
+                        "query_l2",
+                        "train_l2",
+                        "query_train_l2",
+                    ],
+                    "num_output_probes_per_term": args.num_probes,
+                    "num_checkpoints": 50,
+                    "timestamps_per_checkpoint": 10,
+                    "train_mc_samples_per_timestamp": 10,
+                    "num_terms": 500,
+                    "projection_dim": 4096,
+                    "query_gradient_retained": False,
+                    "transient_run_id": args.run_id,
+                }
+                (out_dir / "score_artifact_manifest.json").write_text(
+                    json.dumps(manifest, indent=2, sort_keys=True)
+                )
     if args.cleanup_query_artifacts:
         for query_id in range(10):
             for probe_index in range(args.num_probes):
@@ -383,7 +452,11 @@ def merge(args: argparse.Namespace) -> None:
                 if path.is_file():
                     path.unlink()
                     print(f"[cleanup] removed transient query gradient: {path}", flush=True)
-    print(f"[done] materialized four normalized score variants for 10 queries; terms={terms}", flush=True)
+    print(
+        f"[done] materialized {len(score_sets)} score reduction(s) x four normalization "
+        f"variants for 10 queries; terms={terms}",
+        flush=True,
+    )
 
 
 def main() -> None:
@@ -398,8 +471,13 @@ def main() -> None:
     parser.add_argument("--num-probes", type=int, default=1)
     parser.add_argument(
         "--contraction",
-        choices=("squared", "signed"),
+        choices=("squared", "signed", "final_post_square"),
         default="squared",
+        help=(
+            "squared: square each term before trajectory accumulation; signed: keep the "
+            "signed term; final_post_square: retain per-probe trajectory sums and emit "
+            "both mean(square(S_r)) and square(mean(S_r))."
+        ),
     )
     parser.add_argument(
         "--query-namespace-pattern",

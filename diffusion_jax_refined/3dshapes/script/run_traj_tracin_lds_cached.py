@@ -40,6 +40,8 @@ PREDICTED_NOISE_JVP_SCHEMES = {
     "predicted_noise_jvp_l2_squared",
     "predicted_noise_jvp_l2_squared_probe4",
     "predicted_noise_jvp_signed_probe4",
+    "predicted_noise_jvp_final_square_then_mean_probe4",
+    "predicted_noise_jvp_final_mean_then_square_probe4",
 }
 SCORE_SCHEMES = {
     "original": "traj_tracin",
@@ -51,6 +53,8 @@ SCORE_SCHEMES = {
     "predicted_noise_jvp_l2_squared": "traj_tracin_predicted_noise_jvp_l2_squared",
     "predicted_noise_jvp_l2_squared_probe4": "traj_tracin_predicted_noise_jvp_l2_squared_probe4",
     "predicted_noise_jvp_signed_probe4": "traj_tracin_predicted_noise_jvp_signed_probe4",
+    "predicted_noise_jvp_final_square_then_mean_probe4": "traj_tracin_predicted_noise_jvp_final_square_then_mean_probe4",
+    "predicted_noise_jvp_final_mean_then_square_probe4": "traj_tracin_predicted_noise_jvp_final_mean_then_square_probe4",
     "expected_residual_jacobian_fnorm_original_f": "traj_tracin_expected_residual_jacobian_fnorm_original_f",
     "expected_residual_jacobian_v_l2_original_f": "traj_tracin_expected_residual_jacobian_v_l2_original_f",
     "expected_residual_jacobian_fnorm_predicted_noise": "traj_tracin_expected_residual_jacobian_fnorm_predicted_noise",
@@ -148,6 +152,8 @@ def main() -> None:
             "aligned100x1_stream, aligned100x1_saved, predicted_noise_jvp_l2_squared, "
             "predicted_noise_jvp_l2_squared_probe4, "
             "predicted_noise_jvp_signed_probe4, "
+            "predicted_noise_jvp_final_square_then_mean_probe4, "
+            "predicted_noise_jvp_final_mean_then_square_probe4, "
             "expected_residual_jacobian_fnorm_original_f, "
             "expected_residual_jacobian_v_l2_original_f, "
             "expected_residual_jacobian_fnorm_predicted_noise, "
