@@ -415,6 +415,31 @@ class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
         )
         self.assertIn('choices=("timestamp_checkpoint_square", "termwise_square")', printer)
 
+    def test_probe8_termwise_square_pipeline_reuses_saved_queries(self):
+        launcher = (
+            ROOT
+            / "3dshapes"
+            / "tacc"
+            / "rtx_small"
+            / "run_predicted_noise_probe8_termwise_square_rtx_small.sh"
+        ).read_text()
+        cached_lds = (
+            ROOT / "3dshapes" / "script" / "run_traj_tracin_lds_cached.py"
+        ).read_text()
+
+        self.assertIn("NUM_PROBES=8", launcher)
+        self.assertIn("--contraction squared", launcher)
+        self.assertIn(
+            "loss_direction_residual_rms_predicted_noise_probe4_r{probe_index}",
+            launcher,
+        )
+        self.assertNotIn("run_traj_tracin_queries_and_scores.py", launcher)
+        self.assertIn("predicted_noise_jvp_l2_squared_probe8", launcher)
+        self.assertIn("--reduction termwise_square", launcher)
+        self.assertIn(
+            '"traj_tracin_predicted_noise_jvp_l2_squared_probe8"', cached_lds
+        )
+
     def test_probe8_choose4_analysis_enumerates_all_subsets(self):
         path = (
             ROOT

@@ -39,6 +39,7 @@ PREDICTED_NOISE_JVP_VARIANTS = VARIANTS
 PREDICTED_NOISE_JVP_SCHEMES = {
     "predicted_noise_jvp_l2_squared",
     "predicted_noise_jvp_l2_squared_probe4",
+    "predicted_noise_jvp_l2_squared_probe8",
     "predicted_noise_jvp_signed_probe4",
     "predicted_noise_jvp_final_linear_mean_probe8",
     "predicted_noise_jvp_final_linear_mean_probe12",
@@ -64,6 +65,7 @@ SCORE_SCHEMES = {
     "aligned100x1_saved": "traj_tracin_aligned100x1_saved",
     "predicted_noise_jvp_l2_squared": "traj_tracin_predicted_noise_jvp_l2_squared",
     "predicted_noise_jvp_l2_squared_probe4": "traj_tracin_predicted_noise_jvp_l2_squared_probe4",
+    "predicted_noise_jvp_l2_squared_probe8": "traj_tracin_predicted_noise_jvp_l2_squared_probe8",
     "predicted_noise_jvp_signed_probe4": "traj_tracin_predicted_noise_jvp_signed_probe4",
     "predicted_noise_jvp_final_linear_mean_probe8": "traj_tracin_predicted_noise_jvp_final_linear_mean_probe8",
     "predicted_noise_jvp_final_linear_mean_probe12": "traj_tracin_predicted_noise_jvp_final_linear_mean_probe12",
