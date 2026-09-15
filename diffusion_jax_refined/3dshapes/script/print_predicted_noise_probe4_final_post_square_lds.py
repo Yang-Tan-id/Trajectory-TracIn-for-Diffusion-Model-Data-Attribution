@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Print per-query and mean LDS for the two final-score probe-square reductions."""
+"""Print per-query and mean LDS for final probe-score reductions."""
 
 from __future__ import annotations
 
@@ -22,22 +22,42 @@ def main() -> None:
     parser.add_argument("--experiment", default="experiment1")
     parser.add_argument("--prediction-sign", choices=("p1", "m1"), default="m1")
     parser.add_argument("--num-probes", type=int, choices=(4, 8), default=4)
+    parser.add_argument(
+        "--method",
+        choices=("linear", "square", "all"),
+        default="square",
+        help="Print the no-square linear mean, the two square reductions, or all three.",
+    )
     args = parser.parse_args()
 
     result_root = SHAPES_ROOT / "result" / args.experiment
     records = json.loads((SHAPES_ROOT / "queries_seed_0_9.json").read_text())["queries"]
-    methods = (
+    square_methods = (
         (
             "SQUARE EACH, THEN MEAN",
             f"traj_tracin_predicted_noise_jvp_final_square_then_mean_probe{args.num_probes}",
+            args.prediction_sign,
         ),
         (
             "MEAN, THEN SQUARE",
             f"traj_tracin_predicted_noise_jvp_final_mean_then_square_probe{args.num_probes}",
+            args.prediction_sign,
         ),
     )
+    linear_method = (
+        "LINEAR MEAN (NO SQUARE)",
+        f"traj_tracin_predicted_noise_jvp_final_linear_mean_probe{args.num_probes}",
+        "p1",
+    )
+    methods = (
+        (linear_method,)
+        if args.method == "linear"
+        else square_methods
+        if args.method == "square"
+        else (linear_method, *square_methods)
+    )
 
-    for title, namespace in methods:
+    for title, namespace, prediction_sign in methods:
         values_by_target_variant: dict[tuple[str, str], list[float]] = {}
         print(f"\n{title}")
         print(
@@ -65,7 +85,7 @@ def main() -> None:
                             / "lds"
                             / f"{namespace}_{variant}"
                             / target
-                            / f"pred_kept_sign_{args.prediction_sign}"
+                            / f"pred_kept_sign_{prediction_sign}"
                         ).glob("*/lds_summary.json")
                     )
                     if len(matches) != 1:

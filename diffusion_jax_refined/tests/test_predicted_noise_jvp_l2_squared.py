@@ -240,6 +240,25 @@ class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
         self.assertIn("predicted_noise_jvp_final_mean_then_square_probe8", launcher)
         self.assertIn("--prediction-sign=-1", launcher)
 
+    def test_eight_probe_linear_mean_can_run_cached_lds_and_print_with_positive_sign(self):
+        cached_lds = (
+            ROOT / "3dshapes" / "script" / "run_traj_tracin_lds_cached.py"
+        ).read_text()
+        printer = (
+            ROOT
+            / "3dshapes"
+            / "script"
+            / "print_predicted_noise_probe4_final_post_square_lds.py"
+        ).read_text()
+
+        self.assertIn('"predicted_noise_jvp_final_linear_mean_probe8"', cached_lds)
+        self.assertIn(
+            '"traj_tracin_predicted_noise_jvp_final_linear_mean_probe8"', cached_lds
+        )
+        self.assertIn('choices=("linear", "square", "all")', printer)
+        self.assertIn('"LINEAR MEAN (NO SQUARE)"', printer)
+        self.assertIn('"p1",', printer)
+
 
 if __name__ == "__main__":
     unittest.main()

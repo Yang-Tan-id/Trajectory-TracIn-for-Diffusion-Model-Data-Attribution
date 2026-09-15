@@ -40,6 +40,7 @@ PREDICTED_NOISE_JVP_SCHEMES = {
     "predicted_noise_jvp_l2_squared",
     "predicted_noise_jvp_l2_squared_probe4",
     "predicted_noise_jvp_signed_probe4",
+    "predicted_noise_jvp_final_linear_mean_probe8",
     "predicted_noise_jvp_final_square_then_mean_probe4",
     "predicted_noise_jvp_final_mean_then_square_probe4",
     "predicted_noise_jvp_final_square_then_mean_probe8",
@@ -58,6 +59,7 @@ SCORE_SCHEMES = {
     "predicted_noise_jvp_l2_squared": "traj_tracin_predicted_noise_jvp_l2_squared",
     "predicted_noise_jvp_l2_squared_probe4": "traj_tracin_predicted_noise_jvp_l2_squared_probe4",
     "predicted_noise_jvp_signed_probe4": "traj_tracin_predicted_noise_jvp_signed_probe4",
+    "predicted_noise_jvp_final_linear_mean_probe8": "traj_tracin_predicted_noise_jvp_final_linear_mean_probe8",
     "predicted_noise_jvp_final_square_then_mean_probe4": "traj_tracin_predicted_noise_jvp_final_square_then_mean_probe4",
     "predicted_noise_jvp_final_mean_then_square_probe4": "traj_tracin_predicted_noise_jvp_final_mean_then_square_probe4",
     "predicted_noise_jvp_final_square_then_mean_probe8": "traj_tracin_predicted_noise_jvp_final_square_then_mean_probe8",
@@ -163,6 +165,7 @@ def main() -> None:
             "aligned100x1_stream, aligned100x1_saved, predicted_noise_jvp_l2_squared, "
             "predicted_noise_jvp_l2_squared_probe4, "
             "predicted_noise_jvp_signed_probe4, "
+            "predicted_noise_jvp_final_linear_mean_probe8, "
             "predicted_noise_jvp_final_square_then_mean_probe4, "
             "predicted_noise_jvp_final_mean_then_square_probe4, "
             "predicted_noise_jvp_final_square_then_mean_probe8, "
