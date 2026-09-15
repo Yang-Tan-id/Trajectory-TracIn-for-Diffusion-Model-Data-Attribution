@@ -22,7 +22,15 @@ PIPELINE = (
     / "rtx_small"
     / "run_loss_direction_residual_rms_pipeline_rtx_small.sh"
 )
+SIGNED_SCORE_PIPELINE = (
+    ROOT
+    / "3dshapes"
+    / "tacc"
+    / "rtx_small"
+    / "run_loss_direction_residual_rms_signed_score_rtx_small.sh"
+)
 SCORER = ROOT / "3dshapes" / "script" / "run_expected_residual_jacobian_scores.py"
+LDS_DRIVER = ROOT / "3dshapes" / "script" / "run_traj_tracin_lds_cached.py"
 
 
 class LossDirectionResidualRmsTest(unittest.TestCase):
@@ -80,6 +88,28 @@ class LossDirectionResidualRmsTest(unittest.TestCase):
         )
         self.assertNotIn("float(weight) ** 2 * predicted_raw", scorer)
         self.assertNotIn('totals[("predicted", query_variant)] / predicted_weight', scorer)
+
+    def test_signed_predicted_noise_score_reuses_saved_artifacts(self) -> None:
+        scorer = SCORER.read_text()
+        self.assertIn('"--predicted-contraction"', scorer)
+        self.assertIn('choices=("squared", "signed")', scorer)
+        self.assertIn("raw_values = dots", scorer)
+        self.assertIn("query_l2_values = dots / query_norms[None, :]", scorer)
+
+        launcher = SIGNED_SCORE_PIPELINE.read_text()
+        self.assertNotIn("run_traj_tracin_queries_and_scores.py", launcher)
+        self.assertNotIn("run_traj_tracin_loss_direction_residual_rms_train", launcher)
+        self.assertIn("--predicted-contraction signed", launcher)
+        self.assertIn(
+            "loss_direction_residual_rms_predicted_noise_signed", launcher
+        )
+
+        lds_driver = LDS_DRIVER.read_text()
+        self.assertIn(
+            '"loss_direction_residual_rms_predicted_noise_signed": '
+            '"traj_tracin_loss_direction_residual_rms_signed_predicted_noise"',
+            lds_driver,
+        )
 
 
 if __name__ == "__main__":

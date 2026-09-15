@@ -254,16 +254,21 @@ def score_shard(args: argparse.Namespace) -> None:
                 )
                 dots = train_device @ query_device.T
                 query_norms = jnp.linalg.norm(query_device, axis=1) + 1e-8
+                if args.predicted_contraction == "squared":
+                    raw_values = jnp.square(dots)
+                    query_l2_values = jnp.square(dots / query_norms[None, :])
+                else:
+                    raw_values = dots
+                    query_l2_values = dots / query_norms[None, :]
                 predicted_raw += np.asarray(
-                    jax.device_get(jnp.square(dots)), dtype=np.float64
+                    jax.device_get(raw_values), dtype=np.float64
                 ).T / float(args.predicted_num_probes)
                 predicted_query_l2 += np.asarray(
-                    jax.device_get(jnp.square(dots / query_norms[None, :])),
+                    jax.device_get(query_l2_values),
                     dtype=np.float64,
                 ).T / float(args.predicted_num_probes)
-            # Square only the gradient contraction.  Keep the TrajTracIn
-            # learning-rate weight linear; `weight` already includes the
-            # per-snapshot averaging factor.
+            # Keep the TrajTracIn learning-rate weight linear; `weight`
+            # already includes the per-snapshot averaging factor.
             sums[("predicted", "raw")] += float(weight) * predicted_raw
             sums[("predicted", "query_l2")] += (
                 float(weight) * predicted_query_l2
@@ -289,7 +294,7 @@ def score_shard(args: argparse.Namespace) -> None:
         score_indices=score_indices,
         jacobian_norm_probes=np.asarray(jacobian_norm_probes, dtype=np.int32),
         weighting_semantics=np.asarray(
-            "learning_rate_weighted_sum_of_gradient_contractions"
+            f"learning_rate_weighted_sum_with_{args.predicted_contraction}_predicted_contractions"
         ),
     )
     print(f"[saved] {output}", flush=True)
@@ -357,10 +362,13 @@ def merge(args: argparse.Namespace) -> None:
                     data[f"{target}_{query_variant}_sum"], dtype=np.float64
                 )
             semantics = str(np.asarray(data.get("weighting_semantics", "")).item())
-            if semantics != "learning_rate_weighted_sum_of_gradient_contractions":
+            expected_semantics = (
+                f"learning_rate_weighted_sum_with_{args.predicted_contraction}_predicted_contractions"
+            )
+            if semantics != expected_semantics:
                 raise ValueError(
                     f"{path} has incompatible weighting semantics {semantics!r}; "
-                    "recompute this score shard with linear learning-rate weights"
+                    f"expected {expected_semantics!r}"
                 )
             original_terms += int(data["original_terms"])
             predicted_terms += int(data["predicted_terms"])
@@ -399,7 +407,14 @@ def merge(args: argparse.Namespace) -> None:
             f"{args.score_namespace_prefix}_predicted_noise",
             totals[("predicted", query_variant)],
             score_indices,
-            f"learning_rate_weighted_sum(square(dot(v_l2_train_feature, {query_variant}_predicted_noise_probe_grad)))",
+            (
+                f"learning_rate_weighted_sum("
+                f"{args.predicted_contraction}(dot(v_l2_train_feature, "
+                f"{query_variant}_predicted_noise_probe_grad)))"
+                if args.predicted_contraction == "squared"
+                else f"learning_rate_weighted_sum(dot(v_l2_train_feature, "
+                f"{query_variant}_predicted_noise_probe_grad))"
+            ),
             query_variant,
             int(jacobian_norm_probes),
         )
@@ -424,6 +439,12 @@ def main() -> None:
     parser.add_argument("--original-query-namespace", default=DEFAULT_ORIGINAL_QUERY_NAMESPACE)
     parser.add_argument("--predicted-query-namespace", default=DEFAULT_PREDICTED_QUERY_NAMESPACE)
     parser.add_argument("--predicted-num-probes", type=int, default=1)
+    parser.add_argument(
+        "--predicted-contraction",
+        choices=("squared", "signed"),
+        default="squared",
+        help="Apply either square(dot) or the signed dot to predicted-noise probes.",
+    )
     parser.add_argument("--score-namespace-prefix", default=DEFAULT_SCORE_NAMESPACE_PREFIX)
     parser.add_argument(
         "--train-feature-semantics", default=DEFAULT_TRAIN_FEATURE_SEMANTICS

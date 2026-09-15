@@ -59,6 +59,7 @@ SCORE_SCHEMES = {
     "expected_residual_jacobian_probe_aligned_100x1_v_l2_predicted_noise": "traj_tracin_expected_residual_jacobian_probe_aligned_100x1_v_l2_predicted_noise",
     "loss_direction_residual_rms_original_f": "traj_tracin_loss_direction_residual_rms_original_f",
     "loss_direction_residual_rms_predicted_noise": "traj_tracin_loss_direction_residual_rms_predicted_noise",
+    "loss_direction_residual_rms_predicted_noise_signed": "traj_tracin_loss_direction_residual_rms_signed_predicted_noise",
 }
 EXPECTED_RESIDUAL_JACOBIAN_SCHEMES = {
     "expected_residual_jacobian_fnorm_original_f",
@@ -71,6 +72,7 @@ EXPECTED_RESIDUAL_JACOBIAN_SCHEMES = {
     "expected_residual_jacobian_probe_aligned_100x1_v_l2_predicted_noise",
     "loss_direction_residual_rms_original_f",
     "loss_direction_residual_rms_predicted_noise",
+    "loss_direction_residual_rms_predicted_noise_signed",
 }
 EXPECTED_RESIDUAL_JACOBIAN_VARIANTS = (
     ("raw", "score"),
@@ -148,7 +150,8 @@ def main() -> None:
             "expected_residual_jacobian_probe_aligned_100x1_v_l2_original_f, "
             "expected_residual_jacobian_probe_aligned_100x1_v_l2_predicted_noise."
             " loss_direction_residual_rms_original_f, "
-            "loss_direction_residual_rms_predicted_noise."
+            "loss_direction_residual_rms_predicted_noise, "
+            "loss_direction_residual_rms_predicted_noise_signed."
         ),
     )
     parser.add_argument("--python-bin", default=os.environ.get("PYTHON_BIN", sys.executable))
