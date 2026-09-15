@@ -382,6 +382,39 @@ class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
         )
         self.assertIn('parser.add_argument("--namespace-suffix"', printer)
 
+    def test_shared_orthogonal_probe4_termwise_square_pipeline(self):
+        launcher = (
+            ROOT
+            / "3dshapes"
+            / "tacc"
+            / "rtx_small"
+            / "run_predicted_noise_shared_orthogonal_probe4_termwise_square_rtx_small.sh"
+        ).read_text()
+        cached_lds = (
+            ROOT / "3dshapes" / "script" / "run_traj_tracin_lds_cached.py"
+        ).read_text()
+        printer = (
+            ROOT
+            / "3dshapes"
+            / "script"
+            / "print_predicted_noise_timestamp_checkpoint_square_lds.py"
+        ).read_text()
+
+        self.assertIn("NUM_PROBES=4", launcher)
+        self.assertIn("--contraction squared", launcher)
+        self.assertIn("--expected-query-probe-mode shared_orthogonal", launcher)
+        self.assertIn("NAMESPACE_SUFFIX=orthogonal_shared", launcher)
+        self.assertIn(
+            "predicted_noise_shared_orthogonal_probe4_termwise_square",
+            launcher,
+        )
+        self.assertIn("--reduction termwise_square", launcher)
+        self.assertIn(
+            '"traj_tracin_predicted_noise_jvp_l2_squared_probe4_orthogonal_shared"',
+            cached_lds,
+        )
+        self.assertIn('choices=("timestamp_checkpoint_square", "termwise_square")', printer)
+
     def test_probe8_choose4_analysis_enumerates_all_subsets(self):
         path = (
             ROOT
