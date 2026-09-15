@@ -414,6 +414,7 @@ def _combine_das_scores(
     damping: float | None = None,
 ) -> np.ndarray:
     score_dtype = _score_float_dtype()
+    score_contraction = _das_score_contraction()
     use_denominator = _env_flag("DAS_SHERMAN_MORRISON_DENOMINATOR", "1")
     use_tqdm = _env_flag("DAS_SCORE_TQDM", "1")
     denom_batch_size = max(1, int(os.environ.get("DAS_SCORE_DENOM_BATCH_SIZE", "256")))
@@ -584,7 +585,7 @@ def _combine_das_scores(
                 if computed_denominator is not None:
                     computed_denominator[i] = denom.astype(np.float32)
             raw = raw / denom
-        scores += np.square(raw)
+        scores += raw if score_contraction == "linear" else np.square(raw)
         print(f"[das-score] term {i + 1}/{train.shape[0]} done", flush=True)
     if computed_denominator is not None:
         _write_das_denominator_cache(
@@ -614,6 +615,7 @@ def _combine_das_scores_jax(
     except Exception as exc:
         raise RuntimeError("DAS_SCORE_BACKEND=jax requires JAX in this environment") from exc
 
+    score_contraction = _das_score_contraction()
     devices = jax.devices()
     print(
         "[das-score] "
@@ -668,14 +670,16 @@ def _combine_das_scores_jax(
                     jnp.where(denom >= 0.0, 1e-6, -1e-6),
                     denom,
                 )
-                chunk_scores = jnp.square(raw / denom)
+                raw = raw / denom
+                chunk_scores = raw if score_contraction == "linear" else jnp.square(raw)
                 scores[start:end] += np.asarray(chunk_scores, dtype=np.float64)
                 if hasattr(denom_iter, "set_postfix"):
                     denom_iter.set_postfix(samples=f"{end}/{train.shape[1]}")
         else:
             print(f"[das-score] term {i + 1}/{train.shape[0]} | scoring", flush=True)
             raw = (train_i @ u) * residual_i
-            scores += np.asarray(jnp.square(raw), dtype=np.float64)
+            term_scores = raw if score_contraction == "linear" else jnp.square(raw)
+            scores += np.asarray(term_scores, dtype=np.float64)
         print(f"[das-score] term {i + 1}/{train.shape[0]} done", flush=True)
     return scores / float(train.shape[0])
 
@@ -798,6 +802,15 @@ def _parse_float_list(text: str) -> tuple[float, ...]:
 
 def _env_flag(name: str, default: str = "0") -> bool:
     return os.environ.get(name, default) not in ("0", "false", "False", "no", "No")
+
+
+def _das_score_contraction() -> str:
+    value = os.environ.get("DAS_SCORE_CONTRACTION", "squared").strip().lower()
+    if value not in ("squared", "linear"):
+        raise ValueError(
+            f"DAS_SCORE_CONTRACTION must be 'squared' or 'linear', got {value!r}"
+        )
+    return value
 
 
 def _score_float_dtype() -> np.dtype:
@@ -1341,6 +1354,7 @@ def run_das_score_batch_stage(config_path: str | Path) -> None:
     damping_values = _das_damping_values(config_path, {**gram_payload, **train_payload})
     indices = _score_indices(train_payload, train.shape[1])
     use_denominator = _env_flag("DAS_SHERMAN_MORRISON_DENOMINATOR", "1")
+    score_contraction = _das_score_contraction()
     denom_batch_size = max(1, int(os.environ.get("DAS_SCORE_DENOM_BATCH_SIZE", "256")))
     use_jax = os.environ.get("DAS_SCORE_BACKEND", "numpy").strip().lower() in ("jax", "gpu")
     if use_jax:
@@ -1352,7 +1366,8 @@ def run_das_score_batch_stage(config_path: str | Path) -> None:
 
     print(
         f"[das-score-batch] ready | train={train.shape} queries={queries.shape} "
-        f"lambdas={len(damping_values)} backend={'jax' if use_jax else 'numpy'} denominator={int(use_denominator)}",
+        f"lambdas={len(damping_values)} backend={'jax' if use_jax else 'numpy'} "
+        f"denominator={int(use_denominator)} contraction={score_contraction}",
         flush=True,
     )
     eye = np.eye(train.shape[2], dtype=train.dtype)
@@ -1422,7 +1437,8 @@ def run_das_score_batch_stage(config_path: str | Path) -> None:
                     denom = np.where(np.abs(denom) < 1e-6, np.where(denom >= 0, 1e-6, -1e-6), denom)
                     denominator[term_i] = denom.astype(np.float32)
                 raw = raw / denominator[term_i, :, None]
-            scores += np.square(raw.T, dtype=np.float64)
+            term_scores = raw.T if score_contraction == "linear" else np.square(raw.T)
+            scores += np.asarray(term_scores, dtype=np.float64)
             if (term_i + 1) % 10 == 0 or term_i + 1 == train.shape[0]:
                 print(f"[das-score-batch] lambda={damping:g} term {term_i + 1}/{train.shape[0]}", flush=True)
 
@@ -1450,6 +1466,7 @@ def run_das_score_batch_stage(config_path: str | Path) -> None:
                     "batched_query_scoring": True,
                     "shared_train_gram_load": True,
                     "batch_query_count": len(jobs),
+                    "score_contraction": score_contraction,
                 },
             )
         print(f"[das-score-batch] lambda={damping:g} complete for {len(jobs)} queries", flush=True)

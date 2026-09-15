@@ -36,11 +36,15 @@ def main() -> None:
     )
     parser.add_argument("--experiment", default="experiment1")
     parser.add_argument("--query-ids", default="0,1,2,3,4,5,6,7,8,9")
+    parser.add_argument("--artifact-namespace", default="")
+    parser.add_argument("--prediction-sign", choices=("p1", "m1"), default="m1")
     args = parser.parse_args()
 
     records = json.loads((SHAPES_ROOT / "queries_seed_0_9.json").read_text())["queries"]
     query_ids = parse_ints(args.query_ids)
     result_root = SHAPES_ROOT / "result" / args.experiment
+    namespace = args.artifact_namespace.strip().strip("_/")
+    das_name = "das" if not namespace else f"das_{namespace}"
     values: dict[float, dict[str, dict[int, float]]] = {}
 
     for query_id in query_ids:
@@ -58,7 +62,10 @@ def main() -> None:
             / "lds"
         )
         for target in TARGETS:
-            pattern = f"das_lambda_*/{target}/pred_kept_sign_m1/*/lds_summary.json"
+            pattern = (
+                f"{das_name}_lambda_*/{target}/"
+                f"pred_kept_sign_{args.prediction_sign}/*/lds_summary.json"
+            )
             for summary_path in lds_root.glob(pattern):
                 payload = json.loads(summary_path.read_text())
                 damping = float(payload["damping"])
@@ -90,7 +97,10 @@ def main() -> None:
     best = max(usable, key=lambda damping: (joint_mean(damping), -damping))
 
     print("=" * 110)
-    print("DAS SHARED LAMBDA: endpoint_counterfactual + traj_counterfactual")
+    print(
+        f"DAS SHARED LAMBDA: {das_name}, sign={args.prediction_sign}, "
+        "endpoint_counterfactual + traj_counterfactual"
+    )
     print(f"BEST SHARED LAMBDA : {best:g}")
     print(f"JOINT MEAN LDS     : {joint_mean(best):.4f}%  (20 query-target values)")
     print("=" * 110)

@@ -50,6 +50,16 @@ def main() -> None:
         default="",
         help="Optional isolated artifact/score namespace, for example aligned10x10.",
     )
+    parser.add_argument(
+        "--score-output-namespace",
+        default="",
+        help="Optional output-only namespace while reusing the selected input artifacts.",
+    )
+    parser.add_argument(
+        "--score-contraction",
+        choices=("squared", "linear"),
+        default="squared",
+    )
     parser.add_argument("--timesteps", default="", help="Optional comma-separated DAS timesteps.")
     parser.add_argument("--num-mc-noise", type=int, default=1)
     parser.add_argument(
@@ -72,6 +82,14 @@ def main() -> None:
 
     namespace = args.artifact_namespace.strip().strip("_/")
     das_name = "das" if not namespace else f"das_{namespace}"
+    score_output_namespace = args.score_output_namespace.strip().strip("_/")
+    score_das_name = (
+        das_name if not score_output_namespace else f"das_{score_output_namespace}"
+    )
+    if args.score_contraction != "squared" and score_das_name == das_name:
+        raise ValueError(
+            "a non-squared DAS score requires --score-output-namespace to avoid overwriting existing scores"
+        )
     query_suffix = "query_gradient" if not namespace else f"query_gradient_{namespace}"
     if args.num_mc_noise <= 0:
         raise ValueError("--num-mc-noise must be positive")
@@ -109,7 +127,8 @@ def main() -> None:
             if not required.is_file():
                 raise FileNotFoundError(str(required))
 
-    log_root = result_root / "logs" / ("das_query_score" if not namespace else f"das_query_score_{namespace}")
+    log_tag = score_output_namespace or namespace
+    log_root = result_root / "logs" / ("das_query_score" if not log_tag else f"das_query_score_{log_tag}")
     base_env = os.environ.copy()
     base_env.update(
         EXPERIMENT_TAG=args.experiment,
@@ -125,6 +144,7 @@ def main() -> None:
         DAS_DAMPING_SWEEP="1",
         DAS_SCORE_DENOMINATOR_CACHE="1",
         DAS_SHERMAN_MORRISON_DENOMINATOR="1",
+        DAS_SCORE_CONTRACTION=args.score_contraction,
         TF_GPU_ALLOCATOR=os.environ.get("TF_GPU_ALLOCATOR", "cuda_malloc_async"),
         JAX_NUM_DEVICES="1",
         JAX_PLATFORMS="cuda",
@@ -201,7 +221,7 @@ def main() -> None:
             / f"train_seed_{args.train_seed}"
             / f"query_{prompt_tag}"
             / f"initial_seed_{seed}"
-            / das_name
+            / score_das_name
             / "score"
         )
         batch_jobs.append(
@@ -235,7 +255,11 @@ def main() -> None:
         for future in futures:
             future.result()
 
-    print("DAS query gradients and all 16 lambda scores completed.", flush=True)
+    print(
+        f"DAS query gradients and all 16 lambda scores completed | "
+        f"contraction={args.score_contraction} output={score_das_name}.",
+        flush=True,
+    )
 
 
 if __name__ == "__main__":

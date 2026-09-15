@@ -99,6 +99,12 @@ def main() -> None:
         default=",".join(f"{float(value):g}" for value in DAS_DAMPING_SWEEP_VALUES),
     )
     parser.add_argument("--python-bin", default=os.environ.get("PYTHON_BIN", sys.executable))
+    parser.add_argument(
+        "--prediction-sign",
+        type=float,
+        choices=(-1.0, 1.0),
+        default=-1.0,
+    )
     args = parser.parse_args()
 
     namespace = args.artifact_namespace.strip().strip("_/")
@@ -166,7 +172,7 @@ def main() -> None:
                     for row in first_rows
                 ]
                 predictions = np.asarray(
-                    [sum_scores(kept, score_map, -1.0) for kept in kept_arrays],
+                    [sum_scores(kept, score_map, args.prediction_sign) for kept in kept_arrays],
                     dtype=np.float64,
                 )
 
@@ -176,7 +182,7 @@ def main() -> None:
                     / "lds"
                     / f"{result_algorithm_prefix}_lambda_{tag}"
                     / target
-                    / "pred_kept_sign_m1"
+                    / f"pred_kept_sign_{'p1' if args.prediction_sign > 0 else 'm1'}"
                     / group.name
                 )
                 if args.execute:
@@ -186,7 +192,7 @@ def main() -> None:
                         row = dict(source_row)
                         row.pop("source_dir", None)
                         row["prediction_subset"] = "kept"
-                        row["prediction_sign"] = -1.0
+                        row["prediction_sign"] = args.prediction_sign
                         row["pred_sum_tau"] = float(prediction)
                         rows.append(row)
                     true = np.asarray([float(row["true_f"]) for row in rows], dtype=np.float64)
@@ -205,7 +211,7 @@ def main() -> None:
                         "target_function": target,
                         "trajectory_reduction": "snapshot_mean",
                         "prediction_subset": "kept",
-                        "prediction_sign": -1.0,
+                        "prediction_sign": args.prediction_sign,
                         "elapsed_sec": time.time() - started,
                     }
                     (out_dir / "lds_summary.json").write_text(json.dumps(summary, indent=2))
