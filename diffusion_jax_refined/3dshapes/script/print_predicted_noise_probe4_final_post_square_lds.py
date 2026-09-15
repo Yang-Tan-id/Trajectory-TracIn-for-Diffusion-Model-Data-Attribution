@@ -17,28 +17,27 @@ TARGETS = (
     "traj_contarfactual",
 )
 VARIANTS = ("raw", "query_l2", "train_l2", "query_train_l2")
-METHODS = (
-    (
-        "SQUARE EACH, THEN MEAN",
-        "traj_tracin_predicted_noise_jvp_final_square_then_mean_probe4",
-    ),
-    (
-        "MEAN, THEN SQUARE",
-        "traj_tracin_predicted_noise_jvp_final_mean_then_square_probe4",
-    ),
-)
-
-
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--experiment", default="experiment1")
-    parser.add_argument("--prediction-sign", choices=("p1", "m1"), default="p1")
+    parser.add_argument("--prediction-sign", choices=("p1", "m1"), default="m1")
+    parser.add_argument("--num-probes", type=int, choices=(4, 8), default=4)
     args = parser.parse_args()
 
     result_root = SHAPES_ROOT / "result" / args.experiment
     records = json.loads((SHAPES_ROOT / "queries_seed_0_9.json").read_text())["queries"]
+    methods = (
+        (
+            "SQUARE EACH, THEN MEAN",
+            f"traj_tracin_predicted_noise_jvp_final_square_then_mean_probe{args.num_probes}",
+        ),
+        (
+            "MEAN, THEN SQUARE",
+            f"traj_tracin_predicted_noise_jvp_final_mean_then_square_probe{args.num_probes}",
+        ),
+    )
 
-    for title, namespace in METHODS:
+    for title, namespace in methods:
         values_by_target_variant: dict[tuple[str, str], list[float]] = {}
         print(f"\n{title}")
         print(

@@ -189,7 +189,27 @@ class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
         self.assertIn("--contraction final_post_square", launcher)
         self.assertIn("predicted_noise_jvp_final_square_then_mean_probe4", launcher)
         self.assertIn("predicted_noise_jvp_final_mean_then_square_probe4", launcher)
-        self.assertIn("--prediction-sign 1", launcher)
+        self.assertIn("--prediction-sign=-1", launcher)
+
+    def test_eight_probe_pipeline_reuses_first_four_and_emits_both_reductions(self):
+        launcher = (
+            ROOT
+            / "3dshapes"
+            / "tacc"
+            / "rtx_small"
+            / "run_predicted_noise_probe8_final_post_square_pipeline_rtx_small.sh"
+        ).read_text()
+
+        self.assertIn("NUM_PROBES=8", launcher)
+        self.assertIn("for probe_index in 0 1 2 3 4 5 6 7", launcher)
+        self.assertIn(
+            "loss_direction_residual_rms_predicted_noise_probe4_r${probe_index}",
+            launcher,
+        )
+        self.assertIn("--contraction final_post_square", launcher)
+        self.assertIn("predicted_noise_jvp_final_square_then_mean_probe8", launcher)
+        self.assertIn("predicted_noise_jvp_final_mean_then_square_probe8", launcher)
+        self.assertIn("--prediction-sign=-1", launcher)
 
 
 if __name__ == "__main__":
