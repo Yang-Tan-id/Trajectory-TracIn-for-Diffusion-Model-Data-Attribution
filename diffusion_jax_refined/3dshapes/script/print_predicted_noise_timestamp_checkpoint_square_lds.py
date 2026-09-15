@@ -24,6 +24,7 @@ def main() -> None:
     parser.add_argument("--experiment", default="experiment1")
     parser.add_argument("--num-probes", type=int, default=8)
     parser.add_argument("--prediction-sign", choices=("p1", "m1"), default="m1")
+    parser.add_argument("--namespace-suffix", default="")
     args = parser.parse_args()
     if args.num_probes <= 0:
         raise ValueError("--num-probes must be positive")
@@ -32,6 +33,9 @@ def main() -> None:
         "traj_tracin_predicted_noise_jvp_timestamp_checkpoint_sum_square_"
         f"probe{args.num_probes}"
     )
+    suffix = args.namespace_suffix.strip().strip("_/")
+    if suffix:
+        namespace = f"{namespace}_{suffix}"
     result_root = SHAPES_ROOT / "result" / args.experiment
     records = json.loads((SHAPES_ROOT / "queries_seed_0_9.json").read_text())["queries"]
     grouped: dict[tuple[str, str], list[float]] = {}

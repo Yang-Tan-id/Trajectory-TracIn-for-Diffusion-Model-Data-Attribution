@@ -346,6 +346,42 @@ class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
         )
         np.testing.assert_allclose(actual, expected)
 
+    def test_shared_orthogonal_probe4_timestamp_checkpoint_square_pipeline(self):
+        launcher = (
+            ROOT
+            / "3dshapes"
+            / "tacc"
+            / "rtx_small"
+            / "run_predicted_noise_shared_orthogonal_probe4_timestamp_checkpoint_square_rtx_small.sh"
+        ).read_text()
+        cached_lds = (
+            ROOT / "3dshapes" / "script" / "run_traj_tracin_lds_cached.py"
+        ).read_text()
+        printer = (
+            ROOT
+            / "3dshapes"
+            / "script"
+            / "print_predicted_noise_timestamp_checkpoint_square_lds.py"
+        ).read_text()
+
+        self.assertIn("NUM_PROBES=4", launcher)
+        self.assertIn(
+            "QUERY_PATTERN='predicted_noise_shared_orthogonal_probe4_r{probe_index}'",
+            launcher,
+        )
+        self.assertIn("--expected-query-probe-mode shared_orthogonal", launcher)
+        self.assertIn("--contraction timestamp_checkpoint_square", launcher)
+        self.assertIn("NAMESPACE_SUFFIX=orthogonal_shared", launcher)
+        self.assertIn(
+            "predicted_noise_shared_orthogonal_probe4_timestamp_checkpoint_sum_square",
+            launcher,
+        )
+        self.assertIn(
+            '"traj_tracin_predicted_noise_jvp_timestamp_checkpoint_sum_square_probe4_orthogonal_shared"',
+            cached_lds,
+        )
+        self.assertIn('parser.add_argument("--namespace-suffix"', printer)
+
     def test_probe8_choose4_analysis_enumerates_all_subsets(self):
         path = (
             ROOT
