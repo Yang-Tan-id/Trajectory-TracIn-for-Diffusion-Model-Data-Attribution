@@ -23,6 +23,8 @@ OUTPUT_NAMESPACE = "traj_tracin_f_next_final_score_squared"
 VARIANTS = (
     ("raw", "score"),
     ("query_l2", "score_query_normalized"),
+    ("train_l2", "score_train_l2_normalized"),
+    ("query_train_l2", "score_query_train_l2_normalized"),
 )
 
 

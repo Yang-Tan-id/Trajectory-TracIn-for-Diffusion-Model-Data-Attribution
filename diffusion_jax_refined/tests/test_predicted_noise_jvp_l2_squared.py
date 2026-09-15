@@ -89,6 +89,26 @@ class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
             [9.0, 0.25, 0.0, 4.0],
         )
 
+    def test_f_next_final_square_materializes_all_normalizations(self):
+        materializer = (
+            ROOT / "3dshapes" / "script" / "materialize_f_next_final_score_squared.py"
+        ).read_text()
+        lds_driver = (
+            ROOT / "3dshapes" / "script" / "run_traj_tracin_lds_cached.py"
+        ).read_text()
+
+        self.assertIn('("raw", "score")', materializer)
+        self.assertIn('("query_l2", "score_query_normalized")', materializer)
+        self.assertIn('("train_l2", "score_train_l2_normalized")', materializer)
+        self.assertIn(
+            '("query_train_l2", "score_query_train_l2_normalized")',
+            materializer,
+        )
+        expected_set = lds_driver.split(
+            "EXPECTED_RESIDUAL_JACOBIAN_SCHEMES = {", 1
+        )[1].split("}", 1)[0]
+        self.assertNotIn('"f_next_final_score_squared"', expected_set)
+
     def test_learning_rate_is_linear_and_the_term_sum_is_not_normalized(self):
         directional = np.asarray([2.0, 3.0], dtype=np.float64)
         learning_rates = np.asarray([0.1, 0.4], dtype=np.float64)

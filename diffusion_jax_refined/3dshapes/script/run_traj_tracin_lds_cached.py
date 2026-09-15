@@ -88,7 +88,6 @@ EXPECTED_RESIDUAL_JACOBIAN_SCHEMES = {
     "loss_direction_residual_rms_predicted_noise_signed",
     "f_next_dot_squared",
     "f_next_linear_square_z50",
-    "f_next_final_score_squared",
 }
 EXPECTED_RESIDUAL_JACOBIAN_VARIANTS = (
     ("raw", "score"),

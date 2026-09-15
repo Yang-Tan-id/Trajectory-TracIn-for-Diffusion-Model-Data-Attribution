@@ -17,7 +17,7 @@ TARGETS = (
     "simple_loss",
     "traj_contarfactual",
 )
-VARIANTS = ("raw", "query_l2")
+VARIANTS = ("raw", "query_l2", "train_l2", "query_train_l2")
 
 
 def main() -> None:
@@ -31,8 +31,11 @@ def main() -> None:
     grouped: dict[tuple[str, str], list[float]] = {}
 
     print("ORIGINAL F-NEXT: SQUARE EACH DATASAMPLE'S FINAL SCORE")
-    print(f"{'TARGET':24s} {'Q':>2s} {'RAW':>9s} {'QUERY-L2':>9s}  PROMPT")
-    print("-" * 112)
+    print(
+        f"{'TARGET':24s} {'Q':>2s} {'RAW':>9s} {'QUERY-L2':>9s} "
+        f"{'TRAIN-L2':>9s} {'BOTH-L2':>9s}  PROMPT"
+    )
+    print("-" * 132)
     for query_id, record in enumerate(records):
         prompt_tag = str(record["prompt"]).replace(",", "_")
         eval_root = (
@@ -63,16 +66,26 @@ def main() -> None:
                 row.append(value)
                 grouped.setdefault((target, variant), []).append(value)
             print(
-                f"{target:24s} {query_id:2d} {row[0]:8.3f}% {row[1]:8.3f}%  {prompt_tag}"
+                f"{target:24s} {query_id:2d} "
+                + " ".join(f"{value:8.3f}%" for value in row)
+                + f"  {prompt_tag}"
             )
 
     print("\n10-query mean")
-    print(f"{'TARGET':24s} {'RAW':>9s} {'QUERY-L2':>9s}")
-    print("-" * 46)
+    print(
+        f"{'TARGET':24s} {'RAW':>9s} {'QUERY-L2':>9s} "
+        f"{'TRAIN-L2':>9s} {'BOTH-L2':>9s}"
+    )
+    print("-" * 68)
     for target in TARGETS:
-        raw = statistics.mean(grouped[(target, "raw")])
-        query_l2 = statistics.mean(grouped[(target, "query_l2")])
-        print(f"{target:24s} {raw:8.3f}% {query_l2:8.3f}%")
+        means = [
+            statistics.mean(grouped[(target, variant)])
+            for variant in VARIANTS
+        ]
+        print(
+            f"{target:24s} "
+            + " ".join(f"{value:8.3f}%" for value in means)
+        )
 
 
 if __name__ == "__main__":
