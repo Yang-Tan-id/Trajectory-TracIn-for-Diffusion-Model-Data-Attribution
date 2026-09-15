@@ -21,7 +21,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--experiment", default="experiment1")
     parser.add_argument("--prediction-sign", choices=("p1", "m1"), default="m1")
-    parser.add_argument("--num-probes", type=int, choices=(4, 8), default=4)
+    parser.add_argument("--num-probes", type=int, choices=(4, 8, 12), default=4)
     parser.add_argument(
         "--method",
         choices=("linear", "square", "all"),

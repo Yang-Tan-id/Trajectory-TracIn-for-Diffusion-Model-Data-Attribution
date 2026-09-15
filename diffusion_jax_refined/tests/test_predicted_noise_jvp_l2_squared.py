@@ -260,6 +260,41 @@ class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
         self.assertIn('"LINEAR MEAN (NO SQUARE)"', printer)
         self.assertIn('"p1",', printer)
 
+    def test_twelve_probe_pipeline_reuses_first_eight_and_runs_all_reductions(self):
+        launcher = (
+            ROOT
+            / "3dshapes"
+            / "tacc"
+            / "rtx_small"
+            / "run_predicted_noise_probe12_final_post_square_pipeline_rtx_small.sh"
+        ).read_text()
+        cached_lds = (
+            ROOT / "3dshapes" / "script" / "run_traj_tracin_lds_cached.py"
+        ).read_text()
+        printer = (
+            ROOT
+            / "3dshapes"
+            / "script"
+            / "print_predicted_noise_probe4_final_post_square_lds.py"
+        ).read_text()
+
+        self.assertIn("NUM_PROBES=12", launcher)
+        self.assertIn("for probe_index in 0 1 2 3 4 5 6 7 8 9 10 11", launcher)
+        self.assertIn("reuse 0-7 and generate missing 8-11", launcher)
+        self.assertIn("predicted_noise_jvp_final_linear_mean_probe12", launcher)
+        self.assertIn("predicted_noise_jvp_final_square_then_mean_probe12", launcher)
+        self.assertIn("predicted_noise_jvp_final_mean_then_square_probe12", launcher)
+        self.assertIn("--prediction-sign=1", launcher)
+        self.assertIn("--prediction-sign=-1", launcher)
+        self.assertIn(
+            '"predicted_noise_jvp_final_linear_mean_probe12"', cached_lds
+        )
+        self.assertIn(
+            '"traj_tracin_predicted_noise_jvp_final_mean_then_square_probe12"',
+            cached_lds,
+        )
+        self.assertIn("choices=(4, 8, 12)", printer)
+
     def test_probe8_choose4_analysis_enumerates_all_subsets(self):
         path = (
             ROOT

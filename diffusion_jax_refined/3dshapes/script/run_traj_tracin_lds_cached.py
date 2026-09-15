@@ -41,10 +41,13 @@ PREDICTED_NOISE_JVP_SCHEMES = {
     "predicted_noise_jvp_l2_squared_probe4",
     "predicted_noise_jvp_signed_probe4",
     "predicted_noise_jvp_final_linear_mean_probe8",
+    "predicted_noise_jvp_final_linear_mean_probe12",
     "predicted_noise_jvp_final_square_then_mean_probe4",
     "predicted_noise_jvp_final_mean_then_square_probe4",
     "predicted_noise_jvp_final_square_then_mean_probe8",
     "predicted_noise_jvp_final_mean_then_square_probe8",
+    "predicted_noise_jvp_final_square_then_mean_probe12",
+    "predicted_noise_jvp_final_mean_then_square_probe12",
     "predicted_noise_shared_orthogonal_probe4_linear",
     "predicted_noise_shared_orthogonal_probe4_square_then_mean",
     "predicted_noise_shared_orthogonal_probe4_mean_then_square",
@@ -60,10 +63,13 @@ SCORE_SCHEMES = {
     "predicted_noise_jvp_l2_squared_probe4": "traj_tracin_predicted_noise_jvp_l2_squared_probe4",
     "predicted_noise_jvp_signed_probe4": "traj_tracin_predicted_noise_jvp_signed_probe4",
     "predicted_noise_jvp_final_linear_mean_probe8": "traj_tracin_predicted_noise_jvp_final_linear_mean_probe8",
+    "predicted_noise_jvp_final_linear_mean_probe12": "traj_tracin_predicted_noise_jvp_final_linear_mean_probe12",
     "predicted_noise_jvp_final_square_then_mean_probe4": "traj_tracin_predicted_noise_jvp_final_square_then_mean_probe4",
     "predicted_noise_jvp_final_mean_then_square_probe4": "traj_tracin_predicted_noise_jvp_final_mean_then_square_probe4",
     "predicted_noise_jvp_final_square_then_mean_probe8": "traj_tracin_predicted_noise_jvp_final_square_then_mean_probe8",
     "predicted_noise_jvp_final_mean_then_square_probe8": "traj_tracin_predicted_noise_jvp_final_mean_then_square_probe8",
+    "predicted_noise_jvp_final_square_then_mean_probe12": "traj_tracin_predicted_noise_jvp_final_square_then_mean_probe12",
+    "predicted_noise_jvp_final_mean_then_square_probe12": "traj_tracin_predicted_noise_jvp_final_mean_then_square_probe12",
     "predicted_noise_shared_orthogonal_probe4_linear": "traj_tracin_predicted_noise_jvp_final_linear_mean_probe4_orthogonal_shared",
     "predicted_noise_shared_orthogonal_probe4_square_then_mean": "traj_tracin_predicted_noise_jvp_final_square_then_mean_probe4_orthogonal_shared",
     "predicted_noise_shared_orthogonal_probe4_mean_then_square": "traj_tracin_predicted_noise_jvp_final_mean_then_square_probe4_orthogonal_shared",
@@ -166,10 +172,13 @@ def main() -> None:
             "predicted_noise_jvp_l2_squared_probe4, "
             "predicted_noise_jvp_signed_probe4, "
             "predicted_noise_jvp_final_linear_mean_probe8, "
+            "predicted_noise_jvp_final_linear_mean_probe12, "
             "predicted_noise_jvp_final_square_then_mean_probe4, "
             "predicted_noise_jvp_final_mean_then_square_probe4, "
             "predicted_noise_jvp_final_square_then_mean_probe8, "
             "predicted_noise_jvp_final_mean_then_square_probe8, "
+            "predicted_noise_jvp_final_square_then_mean_probe12, "
+            "predicted_noise_jvp_final_mean_then_square_probe12, "
             "predicted_noise_shared_orthogonal_probe4_linear, "
             "predicted_noise_shared_orthogonal_probe4_square_then_mean, "
             "predicted_noise_shared_orthogonal_probe4_mean_then_square, "
