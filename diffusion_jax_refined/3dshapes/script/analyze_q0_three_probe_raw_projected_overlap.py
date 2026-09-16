@@ -19,7 +19,7 @@ if str(SHAPES_ROOT / "script") not in sys.path:
     sys.path.insert(0, str(SHAPES_ROOT / "script"))
 
 from analyze_predicted_noise_old_fresh_term_signs import BANKS, write_csv
-from analyze_predicted_noise_probe_independence import predicted_noise_probe_key
+from analyze_predicted_noise_probe_independence import DOMAIN_TAG
 from run_predicted_noise_jvp_l2_squared import query_artifact_path
 
 
@@ -137,36 +137,39 @@ def main():
     signs = load_selected_signs(args)
     projected, metadata, artifact_paths = load_projected(args)
     dimension = 64 * 64 * 3
-    raw = np.empty((3, 500, dimension), dtype=np.float32)
-    generate = jax.jit(
-        jax.vmap(lambda key: jax.random.normal(key, (1, 64, 64, 3), dtype=jnp.float32))
+    print("[phase 1/3] batch-generate 3 x 500 raw probes", flush=True)
+
+    def make_key(checkpoint, timestep, position, probe_index):
+        key = jax.random.PRNGKey(args.train_seed)
+        for value in (DOMAIN_TAG, checkpoint, timestep, position):
+            key = jax.random.fold_in(key, value)
+        return jax.lax.cond(
+            probe_index != 0,
+            lambda operand: jax.random.fold_in(operand[0], operand[1]),
+            lambda operand: operand[0],
+            (key, probe_index),
+        )
+
+    checkpoints = np.tile(metadata["ckpt_indices"], 3).astype(np.int32)
+    timesteps_flat = np.tile(metadata["timesteps"], 3).astype(np.int32)
+    positions = np.tile(metadata["snapshot_positions"], 3).astype(np.int32)
+    probe_indices = np.repeat(
+        np.asarray(args.probes, dtype=np.int32) - 1, 500
     )
-    for term, (checkpoint, timestep, position) in enumerate(
-        zip(
-            metadata["ckpt_indices"],
-            metadata["timesteps"],
-            metadata["snapshot_positions"],
+    make_keys = jax.jit(jax.vmap(make_key))
+    generate = jax.jit(
+        jax.vmap(
+            lambda key: jax.random.normal(
+                key, (1, 64, 64, 3), dtype=jnp.float32
+            )
         )
-    ):
-        keys = jnp.stack(
-            [
-                predicted_noise_probe_key(
-                    args.train_seed,
-                    int(checkpoint),
-                    int(timestep),
-                    int(position),
-                    probe - 1,
-                )
-                for probe in args.probes
-            ]
-        )
-        generated = np.asarray(jax.device_get(generate(keys)), dtype=np.float32).reshape(
-            3, dimension
-        )
-        generated /= np.maximum(np.linalg.norm(generated, axis=1, keepdims=True), 1e-12)
-        raw[:, term] = generated
-        if (term + 1) % 50 == 0:
-            print(f"[raw probes] terms={term + 1}/500", flush=True)
+    )
+    keys = make_keys(checkpoints, timesteps_flat, positions, probe_indices)
+    raw = np.asarray(jax.device_get(generate(keys)), dtype=np.float32).reshape(
+        3, 500, dimension
+    )
+    raw /= np.maximum(np.linalg.norm(raw, axis=2, keepdims=True), 1e-12)
+    print("[phase 1/3] raw probes ready", flush=True)
 
     term_signs = np.asarray(
         [
@@ -177,6 +180,7 @@ def main():
     )
     raw_flipped = raw.astype(np.float64) * term_signs[:, :, None]
     projected_flipped = projected * term_signs[:, :, None]
+    print("[phase 2/3] compute raw/projected pairwise overlap", flush=True)
     pairs = list(combinations(range(3), 2))
     raw_pair = {
         pair: np.einsum("td,td->t", raw_flipped[pair[0]], raw_flipped[pair[1]])
@@ -251,6 +255,8 @@ def main():
                 },
             }
         )
+
+    print("[phase 3/3] save tables and print summary", flush=True)
 
     if args.out_dir is None:
         out_dir = (
