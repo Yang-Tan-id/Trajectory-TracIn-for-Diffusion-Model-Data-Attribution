@@ -110,6 +110,26 @@ class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
         ).read_text()
         self.assertIn("np.mean(np.square(values), axis=1)", analyzer)
 
+    def test_old_and_fresh12_absolute_launcher_uses_both_cached_banks(self):
+        launcher = (
+            ROOT
+            / "3dshapes"
+            / "tacc"
+            / "rtx_small"
+            / "run_predicted_noise_old_fresh12_termwise_absolute_rtx_small.sh"
+        ).read_text()
+        self.assertIn("--contraction absolute", launcher)
+        self.assertIn("sqrt(product^2)=abs(product)", launcher)
+        self.assertIn(
+            "loss_direction_residual_rms_predicted_noise_probe4_r{probe_index}",
+            launcher,
+        )
+        self.assertIn(
+            "loss_direction_residual_rms_predicted_noise_fresh_seed20260915_r{probe_index}",
+            launcher,
+        )
+        self.assertNotIn("run_traj_tracin_queries_and_scores.py", launcher)
+
     def test_three_output_direction_selection_rules_exist(self):
         self.assertEqual(
             "cosine_to_next_predicted_noise_delta",
