@@ -30,9 +30,13 @@ export PYTHONUNBUFFERED=1
 export TF_GPU_ALLOCATOR="${TF_GPU_ALLOCATOR:-cuda_malloc_async}"
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 
-NUM_PROBES=8
+NUM_PROBES="${NUM_PROBES:-8}"
+if [[ "${NUM_PROBES}" != "8" && "${NUM_PROBES}" != "12" ]]; then
+  echo "NUM_PROBES must be 8 or 12, got ${NUM_PROBES}" >&2
+  exit 2
+fi
 QUERY_PATTERN='loss_direction_residual_rms_predicted_noise_probe4_r{probe_index}'
-LOG_ROOT="${SHAPES_ROOT}/result/${EXPERIMENT_TAG}/logs/predicted_noise_probe8_signed_coordinate_square/${SLURM_JOB_ID}"
+LOG_ROOT="${SHAPES_ROOT}/result/${EXPERIMENT_TAG}/logs/predicted_noise_probe${NUM_PROBES}_signed_coordinate_square/${SLURM_JOB_ID}"
 mkdir -p "${LOG_ROOT}"
 
 run_score() {
@@ -72,18 +76,18 @@ run_score coordinatewise_squared coordinate_square
 echo "[phase 3/4] cached LDS: signed square uses sign +1"
 JAX_PLATFORMS=cpu "${PYTHON_BIN}" "${SHAPES_ROOT}/script/run_traj_tracin_lds_cached.py" \
   --execute --experiment "${EXPERIMENT_TAG}" --train-seed "${TRAIN_SEED}" \
-  --score-schemes predicted_noise_jvp_signed_squared_probe8 --prediction-sign=1
+  --score-schemes "predicted_noise_jvp_signed_squared_probe${NUM_PROBES}" --prediction-sign=1
 
 echo "[phase 4/4] cached LDS: coordinate energy uses sign -1"
 JAX_PLATFORMS=cpu "${PYTHON_BIN}" "${SHAPES_ROOT}/script/run_traj_tracin_lds_cached.py" \
   --execute --experiment "${EXPERIMENT_TAG}" --train-seed "${TRAIN_SEED}" \
-  --score-schemes predicted_noise_jvp_coordinatewise_squared_probe8 --prediction-sign=-1
+  --score-schemes "predicted_noise_jvp_coordinatewise_squared_probe${NUM_PROBES}" --prediction-sign=-1
 
 "${PYTHON_BIN}" "${SHAPES_ROOT}/script/print_predicted_noise_timestamp_checkpoint_square_lds.py" \
-  --experiment "${EXPERIMENT_TAG}" --num-probes 8 \
+  --experiment "${EXPERIMENT_TAG}" --num-probes "${NUM_PROBES}" \
   --reduction signed_square --prediction-sign p1
 "${PYTHON_BIN}" "${SHAPES_ROOT}/script/print_predicted_noise_timestamp_checkpoint_square_lds.py" \
-  --experiment "${EXPERIMENT_TAG}" --num-probes 8 \
+  --experiment "${EXPERIMENT_TAG}" --num-probes "${NUM_PROBES}" \
   --reduction coordinate_square --prediction-sign m1
 
-echo "[done] eight-probe signed-square and coordinate-square LDS complete"
+echo "[done] ${NUM_PROBES}-probe signed-square and coordinate-square LDS complete"
