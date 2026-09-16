@@ -19,9 +19,20 @@ from materialize_f_next_final_score_squared import square_final_scores
 from analyze_predicted_noise_angle_oriented_scores import aggregate_oriented_queries
 from analyze_predicted_noise_probe24_term_winners import select_nearest_probe_scores
 from analyze_nearest_train_probe_predicted_noise_relation import selected_probe_indices
+from analyze_nearest_train_probe_predicted_noise_relation import OUTPUT_SELECTIONS
 
 
 class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
+    def test_three_output_direction_selection_rules_exist(self):
+        self.assertEqual(
+            {
+                "current_noise_direction": "cosine_to_current_predicted_noise",
+                "next_noise_direction": "cosine_to_next_predicted_noise",
+                "delta_noise_direction": "cosine_to_next_predicted_noise_delta",
+            },
+            OUTPUT_SELECTIONS,
+        )
+
     def test_nearest_probe_indices_are_per_datapoint(self):
         scores = np.asarray(
             [[-0.9, 0.4, 0.2], [-0.1, -0.3, -0.2]], dtype=np.float32

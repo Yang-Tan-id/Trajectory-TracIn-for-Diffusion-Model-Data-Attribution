@@ -49,7 +49,7 @@ failed=0
 for pid in "${pids[@]}"; do wait "${pid}" || failed=1; done
 (( failed == 0 )) || { echo "Analysis shard failed; inspect ${OUT_DIR}" >&2; exit 1; }
 
-echo "[phase 2/2] merge per-term, per-checkpoint, and per-query summaries"
+echo "[phase 2/2] merge summaries and evaluate current/next/delta-selected LDS"
 JAX_PLATFORMS=cpu "${PYTHON_BIN}" "${ANALYZER}" merge \
   --experiment "${EXPERIMENT_TAG}" --train-seed "${TRAIN_SEED}" \
   --query-ids "${QUERY_IDS}" --run-id "${SLURM_JOB_ID}" \
