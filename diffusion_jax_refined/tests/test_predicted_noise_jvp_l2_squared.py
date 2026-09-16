@@ -9,6 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "3dshapes" / "script"))
 
 from run_predicted_noise_jvp_l2_squared import (
+    reduce_checkpoint_timestamp_means,
     reduce_final_probe_scores,
     reduce_timestamp_checkpoint_sums,
 )
@@ -387,6 +388,45 @@ class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
         )
         np.testing.assert_allclose(actual, expected)
 
+    def test_checkpoint_timestamp_means_average_timestamps_before_square(self):
+        probe_timestamp_scores = np.asarray(
+            [
+                [[[1.0, 2.0]], [[3.0, 4.0]]],
+                [[[-2.0, 1.0]], [[2.0, 3.0]]],
+            ],
+            dtype=np.float64,
+        )
+        actual = reduce_checkpoint_timestamp_means(probe_timestamp_scores)
+        expected = np.asarray([[(2.0**2 + 0.0**2) / 2.0, (3.0**2 + 2.0**2) / 2.0]])
+        np.testing.assert_allclose(actual, expected)
+        self.assertFalse(
+            np.allclose(
+                actual,
+                np.mean(np.square(probe_timestamp_scores), axis=(0, 1)),
+            )
+        )
+
+    def test_probe12_checkpoint_timestamp_mean_square_pipeline(self):
+        launcher = (
+            ROOT
+            / "3dshapes"
+            / "tacc"
+            / "rtx_small"
+            / "run_predicted_noise_probe12_checkpoint_timestamp_square_rtx_small.sh"
+        ).read_text()
+        cached_lds = (
+            ROOT / "3dshapes" / "script" / "run_traj_tracin_lds_cached.py"
+        ).read_text()
+
+        self.assertIn("NUM_PROBES=12", launcher)
+        self.assertIn("--contraction checkpoint_timestamp_sum_square", launcher)
+        self.assertIn("checkpoint_timestamp_sum_square_probe12", launcher)
+        self.assertIn("--prediction-sign=-1", launcher)
+        self.assertIn(
+            '"traj_tracin_predicted_noise_jvp_checkpoint_timestamp_sum_square_probe12"',
+            cached_lds,
+        )
+
     def test_shared_orthogonal_probe4_timestamp_checkpoint_square_pipeline(self):
         launcher = (
             ROOT
@@ -454,7 +494,8 @@ class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
             '"traj_tracin_predicted_noise_jvp_l2_squared_probe4_orthogonal_shared"',
             cached_lds,
         )
-        self.assertIn('"timestamp_checkpoint_square", "termwise_square"', printer)
+        self.assertIn('"timestamp_checkpoint_square"', printer)
+        self.assertIn('"termwise_square"', printer)
 
     def test_probe8_termwise_square_pipeline_reuses_saved_queries(self):
         launcher = (

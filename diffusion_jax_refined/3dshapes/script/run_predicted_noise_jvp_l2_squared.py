@@ -71,6 +71,8 @@ def score_namespace(
         namespace = "predicted_noise_jvp_signed_squared"
     elif contraction == "coordinatewise_squared":
         namespace = "predicted_noise_jvp_coordinatewise_squared"
+    elif contraction == "checkpoint_timestamp_sum_square":
+        namespace = "predicted_noise_jvp_checkpoint_timestamp_sum_square"
     else:
         raise ValueError(f"unknown contraction {contraction!r}")
     suffix = "" if num_probes == 1 else f"_probe{num_probes}"
@@ -108,6 +110,8 @@ def weighting_semantics(contraction: str) -> str:
         return "learning_rate_weighted_sum_of_signed_squared_gradient_contractions"
     if contraction == "coordinatewise_squared":
         return "learning_rate_weighted_sum_of_coordinatewise_squared_gradient_products"
+    if contraction == "checkpoint_timestamp_sum_square":
+        return "sum_checkpoint_lr_times_mean_probe_square_of_mean_timestamps"
     return "learning_rate_weighted_sum_of_signed_gradient_contractions"
 
 
@@ -128,6 +132,19 @@ def reduce_timestamp_checkpoint_sums(checkpoint_sums: np.ndarray) -> np.ndarray:
             "(timestamps, probes, queries, datapoints)"
         )
     return np.mean(np.square(checkpoint_sums), axis=(0, 1))
+
+
+def reduce_checkpoint_timestamp_means(probe_timestamp_scores: np.ndarray) -> np.ndarray:
+    """Mean timestamps per probe, square, then average probes."""
+    if probe_timestamp_scores.ndim != 4:
+        raise ValueError(
+            "probe_timestamp_scores must have shape "
+            "(probes, timestamps, queries, datapoints)"
+        )
+    return np.mean(
+        np.square(np.mean(probe_timestamp_scores, axis=1)),
+        axis=0,
+    )
 
 
 def query_artifact_path(
@@ -351,6 +368,13 @@ def score_shard(args: argparse.Namespace) -> None:
         elif not np.array_equal(score_indices, indices):
             raise ValueError(f"score indices differ in {part_path}")
 
+        checkpoint_probe_sums = None
+        if args.contraction == "checkpoint_timestamp_sum_square":
+            checkpoint_probe_sums = {
+                component: np.zeros((args.num_probes, 10, 5000), dtype=np.float64)
+                for component in sums
+            }
+
         for local_term, (ckpt, timestep, weight) in enumerate(zip(ckpts, timesteps, weights)):
             query_term = lookup.get((int(ckpt), int(timestep)))
             if query_term is None:
@@ -367,6 +391,7 @@ def score_shard(args: argparse.Namespace) -> None:
                 "final_post_square",
                 "timestamp_checkpoint_square",
                 "termwise_squared_per_probe",
+                "checkpoint_timestamp_sum_square",
             ):
                 term_scores = {
                     component: np.zeros((10, 5000), dtype=np.float64)
@@ -425,6 +450,11 @@ def score_shard(args: argparse.Namespace) -> None:
                         sums[component][timestep_slots[int(timestep)], probe_index] += (
                             checkpoint_lr * host_values
                         )
+                    elif args.contraction == "checkpoint_timestamp_sum_square":
+                        assert checkpoint_probe_sums is not None
+                        checkpoint_probe_sums[component][probe_index] += (
+                            host_values / float(len(timesteps))
+                        )
                     else:
                         assert term_scores is not None
                         term_scores[component] += host_values / float(args.num_probes)
@@ -436,6 +466,24 @@ def score_shard(args: argparse.Namespace) -> None:
                 for component, values in term_scores.items():
                     sums[component] += term_weight * values
             used_terms += 1
+
+        if args.contraction == "checkpoint_timestamp_sum_square":
+            assert checkpoint_probe_sums is not None
+            checkpoint_lr_values = weights * float(len(timesteps))
+            if not np.allclose(
+                checkpoint_lr_values,
+                checkpoint_lr_values[0],
+                rtol=1e-6,
+                atol=1e-12,
+            ):
+                raise ValueError(
+                    f"checkpoint {ckpt_i} has inconsistent learning-rate weights"
+                )
+            checkpoint_lr = float(checkpoint_lr_values[0])
+            for component, values in checkpoint_probe_sums.items():
+                sums[component] += checkpoint_lr * reduce_checkpoint_timestamp_means(
+                    values
+                )
         print(f"[score shard {args.shard_index}/{args.shard_count}] checkpoint={ckpt_i} terms={used_terms}", flush=True)
 
     if score_indices is None:
@@ -578,6 +626,8 @@ def merge(args: argparse.Namespace) -> None:
                         if args.contraction == "signed_squared"
                         else "learning_rate_weighted_sum_terms(sum_coordinate_squared_products_after_normalization)"
                         if args.contraction == "coordinatewise_squared"
+                        else "sum_checkpoint(learning_rate_times_mean_probe(square(mean_timestamp(normalized_dot_product))))"
+                        if args.contraction == "checkpoint_timestamp_sum_square"
                         else "learning_rate_weighted_sum_terms(signed_normalized_dot_product)"
                     ),
                     "normalization_variants": [
@@ -640,6 +690,7 @@ def main() -> None:
             "termwise_squared_per_probe",
             "signed_squared",
             "coordinatewise_squared",
+            "checkpoint_timestamp_sum_square",
         ),
         default="squared",
         help=(
@@ -651,6 +702,8 @@ def main() -> None:
             "termwise_squared_per_probe: square each product and retain every probe "
             "through the trajectory sum for subgroup analysis; signed_squared: z*abs(z); "
             "coordinatewise_squared: sum_k (train_k*query_k)^2."
+            " checkpoint_timestamp_sum_square: within each checkpoint and probe, "
+            "mean timestamps, square, mean probes, then apply the checkpoint LR once."
         ),
     )
     parser.add_argument(
