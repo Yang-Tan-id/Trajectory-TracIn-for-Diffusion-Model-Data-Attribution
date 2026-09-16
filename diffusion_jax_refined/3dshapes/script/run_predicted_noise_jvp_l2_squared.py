@@ -345,6 +345,17 @@ def score_shard(args: argparse.Namespace) -> None:
         "score_train_l2_normalized": np.zeros(score_shape, dtype=np.float64),
         "score_query_train_l2_normalized": np.zeros(score_shape, dtype=np.float64),
     }
+    checkpoint_scores = None
+    if args.retain_checkpoint_scores:
+        if args.contraction != "checkpoint_timestamp_sum_square":
+            raise ValueError(
+                "--retain-checkpoint-scores currently requires "
+                "--contraction checkpoint_timestamp_sum_square"
+            )
+        checkpoint_scores = {
+            component: np.zeros((50, 10, 5000), dtype=np.float64)
+            for component in sums
+        }
     score_indices = None
     used_terms = 0
 
@@ -478,16 +489,29 @@ def score_shard(args: argparse.Namespace) -> None:
                 )
             checkpoint_lr = float(checkpoint_lr_values[0])
             for component, values in checkpoint_probe_sums.items():
-                sums[component] += checkpoint_lr * reduce_checkpoint_timestamp_means(
-                    values
-                )
+                checkpoint_unweighted_score = reduce_checkpoint_timestamp_means(values)
+                checkpoint_score = checkpoint_lr * checkpoint_unweighted_score
+                sums[component] += checkpoint_score
+                if checkpoint_scores is not None:
+                    # A positive checkpoint-wide LR scalar cannot change Spearman LDS.
+                    # Retain the unweighted score so the final cosine-LR=0 checkpoint
+                    # can still be audited independently.
+                    checkpoint_scores[component][ckpt_i] = checkpoint_unweighted_score
         print(f"[score shard {args.shard_index}/{args.shard_count}] checkpoint={ckpt_i} terms={used_terms}", flush=True)
 
     if score_indices is None:
         raise RuntimeError("checkpoint shard selected no train parts")
+    arrays = {f"sums_{component}": values for component, values in sums.items()}
+    if checkpoint_scores is not None:
+        arrays.update(
+            {
+                f"checkpoint_scores_{component}": values
+                for component, values in checkpoint_scores.items()
+            }
+        )
     atomic_savez(
         output,
-        **{f"sums_{component}": values for component, values in sums.items()},
+        **arrays,
         score_indices=score_indices,
         used_terms=np.asarray(used_terms, dtype=np.int32),
         weighting_semantics=np.asarray(weighting_semantics(args.contraction)),
@@ -516,6 +540,17 @@ def merge(args: argparse.Namespace) -> None:
         "score_train_l2_normalized": np.zeros(score_shape, dtype=np.float64),
         "score_query_train_l2_normalized": np.zeros(score_shape, dtype=np.float64),
     }
+    checkpoint_totals = None
+    if args.retain_checkpoint_scores:
+        if args.contraction != "checkpoint_timestamp_sum_square":
+            raise ValueError(
+                "--retain-checkpoint-scores currently requires "
+                "--contraction checkpoint_timestamp_sum_square"
+            )
+        checkpoint_totals = {
+            component: np.zeros((50, 10, 5000), dtype=np.float64)
+            for component in totals
+        }
     terms = 0
     score_indices = None
     for shard in range(args.shard_count):
@@ -538,6 +573,11 @@ def merge(args: argparse.Namespace) -> None:
                 totals[component] += np.asarray(
                     payload[f"sums_{component}"], dtype=np.float64
                 )
+                if checkpoint_totals is not None:
+                    checkpoint_totals[component] += np.asarray(
+                        payload[f"checkpoint_scores_{component}"],
+                        dtype=np.float64,
+                    )
             semantics = str(np.asarray(payload.get("weighting_semantics", "")).item())
             expected_semantics = weighting_semantics(args.contraction)
             if semantics != expected_semantics:
@@ -556,6 +596,31 @@ def merge(args: argparse.Namespace) -> None:
     expected = np.asarray(np.load(ATTRIBUTION_INDICES_PATH), dtype=np.int64)
     if score_indices is None or not np.array_equal(np.sort(score_indices), np.sort(expected)):
         raise ValueError("score indices do not match attribution_5k_indices.npy")
+
+    if checkpoint_totals is not None:
+        per_checkpoint_path = (
+            shard_root(
+                args.experiment,
+                args.train_seed,
+                args.run_id,
+                args.num_probes,
+                args.contraction,
+                args.namespace_suffix,
+            )
+            / "per_checkpoint_scores.npz"
+        )
+        atomic_savez(
+            per_checkpoint_path,
+            **{
+                f"checkpoint_scores_{component}": values
+                for component, values in checkpoint_totals.items()
+            },
+            score_indices=score_indices,
+            checkpoint_indices=np.arange(50, dtype=np.int32),
+            checkpoint_learning_rate_applied=np.asarray(False),
+            weighting_semantics=np.asarray(weighting_semantics(args.contraction)),
+        )
+        print(f"[saved] {per_checkpoint_path}", flush=True)
 
     if args.contraction == "final_post_square":
         score_sets = {
@@ -730,6 +795,11 @@ def main() -> None:
         help="Reject query artifacts that were generated from a different probe-bank seed.",
     )
     parser.add_argument("--cleanup-query-artifacts", action="store_true")
+    parser.add_argument(
+        "--retain-checkpoint-scores",
+        action="store_true",
+        help="Also retain each checkpoint's independent score contribution.",
+    )
     args = parser.parse_args()
     if args.shard_count <= 0 or not 0 <= args.shard_index < args.shard_count:
         raise ValueError("invalid shard index/count")

@@ -449,6 +449,34 @@ class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
             cached_lds,
         )
 
+    def test_probe8_per_checkpoint_lds_pipeline_retains_checkpoint_axis(self):
+        driver = (
+            ROOT / "3dshapes" / "script" / "run_predicted_noise_jvp_l2_squared.py"
+        ).read_text()
+        analyzer = (
+            ROOT
+            / "3dshapes"
+            / "script"
+            / "analyze_predicted_noise_per_checkpoint_lds.py"
+        ).read_text()
+        launcher = (
+            ROOT
+            / "3dshapes"
+            / "tacc"
+            / "rtx_small"
+            / "run_predicted_noise_probe8_per_checkpoint_lds_rtx_small.sh"
+        ).read_text()
+
+        self.assertIn('np.zeros((50, 10, 5000)', driver)
+        self.assertIn('"per_checkpoint_scores.npz"', driver)
+        self.assertIn('checkpoint_learning_rate_applied=np.asarray(False)', driver)
+        self.assertIn('checkpoint_unweighted_score', driver)
+        self.assertIn('--retain-checkpoint-scores', launcher)
+        self.assertIn('NUM_PROBES=8', launcher)
+        self.assertIn('per_query_checkpoint_lds.csv', analyzer)
+        self.assertIn('checkpoint_summary.csv', analyzer)
+        self.assertIn('values[:, query_id, :] @ kept_matrix.T', analyzer)
+
     def test_shared_orthogonal_probe4_timestamp_checkpoint_square_pipeline(self):
         launcher = (
             ROOT
