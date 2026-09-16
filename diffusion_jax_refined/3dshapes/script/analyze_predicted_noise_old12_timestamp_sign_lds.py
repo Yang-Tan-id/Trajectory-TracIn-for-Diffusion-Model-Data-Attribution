@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate old12 LDS after splitting timestamps by their train-score mean sign."""
+"""Evaluate a 12-probe bank after splitting timestamps by score-mean sign."""
 
 from __future__ import annotations
 
@@ -22,12 +22,6 @@ from analyze_predicted_noise_probe8_choose4 import (
 
 
 SHAPES_ROOT = Path(__file__).resolve().parents[1]
-METHODS = (
-    "positive_timestamp_means",
-    "negative_timestamp_means",
-    "negative_timestamp_means_flipped",
-    "full_old12",
-)
 
 
 def main() -> None:
@@ -35,6 +29,7 @@ def main() -> None:
     parser.add_argument("--experiment", default="experiment1")
     parser.add_argument("--train-seed", type=int, default=42)
     parser.add_argument("--source-run-id", required=True)
+    parser.add_argument("--bank", choices=("old12", "fresh12"), default="old12")
     parser.add_argument("--prediction-sign", type=float, choices=(-1.0, 1.0), default=1.0)
     args = parser.parse_args()
 
@@ -49,19 +44,36 @@ def main() -> None:
     if not source.is_file():
         raise FileNotFoundError(source)
     with np.load(source, allow_pickle=False) as payload:
-        old = np.asarray(payload["old_timestamp"], dtype=np.float64)
+        timestamp_scores = np.asarray(
+            payload["old_timestamp" if args.bank == "old12" else "fresh_timestamp"],
+            dtype=np.float64,
+        )
         query_ids = np.asarray(payload["query_ids"], dtype=np.int32)
         timesteps = np.asarray(payload["timesteps"], dtype=np.int32)
         score_indices = np.asarray(payload["score_indices"], dtype=np.int64)
     expected_shape = (len(query_ids), 10, len(score_indices))
-    if old.shape != expected_shape:
-        raise ValueError(f"old_timestamp expected {expected_shape}, got {old.shape}")
+    if timestamp_scores.shape != expected_shape:
+        raise ValueError(
+            f"{args.bank} timestamp scores expected {expected_shape}, "
+            f"got {timestamp_scores.shape}"
+        )
+
+    full_method = f"full_{args.bank}"
+    methods = (
+        "positive_timestamp_means",
+        "negative_timestamp_means",
+        "negative_timestamp_means_flipped",
+        full_method,
+    )
 
     records = json.loads((SHAPES_ROOT / "queries_seed_0_9.json").read_text())["queries"]
     rows: list[dict[str, object]] = []
     split_rows: list[dict[str, object]] = []
 
-    print("OLD12 TIMESTAMP-MEAN SIGN SPLIT — BOTH-L2, prediction sign +1")
+    print(
+        f"{args.bank.upper()} TIMESTAMP-MEAN SIGN SPLIT — BOTH-L2, "
+        f"prediction sign {args.prediction_sign:+g}"
+    )
     print(
         f"{'Q':>2s} {'METHOD':35s} {'ENDPOINT':>10s} {'TRAJ':>10s} "
         f"{'CF JOINT':>10s} {'NOISE':>10s} {'SIMPLE':>10s}  TIMESTAMPS"
@@ -82,7 +94,7 @@ def main() -> None:
         )
         incidence, true_values = load_target_data(cache_group(eval_root), score_indices)
 
-        timestamp_means = old[qslot].mean(axis=1)
+        timestamp_means = timestamp_scores[qslot].mean(axis=1)
         positive = timestamp_means > 0.0
         negative = timestamp_means < 0.0
         if not positive.any() or not negative.any():
@@ -90,30 +102,32 @@ def main() -> None:
         positive_ts = [int(value) for value in timesteps[positive]]
         negative_ts = [int(value) for value in timesteps[negative]]
         scores = {
-            "positive_timestamp_means": old[qslot, positive].sum(axis=0),
-            "negative_timestamp_means": old[qslot, negative].sum(axis=0),
-            "negative_timestamp_means_flipped": -old[qslot, negative].sum(axis=0),
-            "full_old12": old[qslot].sum(axis=0),
+            "positive_timestamp_means": timestamp_scores[qslot, positive].sum(axis=0),
+            "negative_timestamp_means": timestamp_scores[qslot, negative].sum(axis=0),
+            "negative_timestamp_means_flipped": -timestamp_scores[
+                qslot, negative
+            ].sum(axis=0),
+            full_method: timestamp_scores[qslot].sum(axis=0),
         }
         method_timestamps = {
             "positive_timestamp_means": positive_ts,
             "negative_timestamp_means": negative_ts,
             "negative_timestamp_means_flipped": negative_ts,
-            "full_old12": [int(value) for value in timesteps],
+            full_method: [int(value) for value in timesteps],
         }
         for slot, timestep in enumerate(timesteps):
             split_rows.append(
                 {
                     "query": query_id,
                     "timestep": int(timestep),
-                    "old_mean": float(timestamp_means[slot]),
+                    "bank_mean": float(timestamp_means[slot]),
                     "mean_sign_group": "positive" if positive[slot] else "negative",
                     "prompt": prompt_tag,
                 }
             )
 
         query_lookup: dict[tuple[str, str], float] = {}
-        for method in METHODS:
+        for method in methods:
             prediction = args.prediction_sign * scores[method] @ incidence.T
             for target in TARGETS:
                 value = 100.0 * spearman(prediction, true_values[target])
@@ -152,7 +166,7 @@ def main() -> None:
         f"{'CF JOINT':>10s} {'NOISE':>10s} {'SIMPLE':>10s}"
     )
     print("-" * 94)
-    for method in METHODS:
+    for method in methods:
         means = {
             target: statistics.mean(grouped[(method, target)]) for target in TARGETS
         }
@@ -178,7 +192,7 @@ def main() -> None:
     output = (
         result_root
         / "eval"
-        / "predicted_noise_old12_timestamp_mean_sign_lds"
+        / f"predicted_noise_{args.bank}_timestamp_mean_sign_lds"
         / f"source_run_{args.source_run_id}"
     )
     write_csv(output / "per_query_lds.csv", rows)
