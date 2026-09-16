@@ -67,6 +67,10 @@ def score_namespace(
         namespace = TIMESTAMP_CHECKPOINT_SQUARE_NAMESPACE
     elif contraction == "termwise_squared_per_probe":
         namespace = "predicted_noise_jvp_termwise_squared_per_probe"
+    elif contraction == "signed_squared":
+        namespace = "predicted_noise_jvp_signed_squared"
+    elif contraction == "coordinatewise_squared":
+        namespace = "predicted_noise_jvp_coordinatewise_squared"
     else:
         raise ValueError(f"unknown contraction {contraction!r}")
     suffix = "" if num_probes == 1 else f"_probe{num_probes}"
@@ -100,6 +104,10 @@ def weighting_semantics(contraction: str) -> str:
         return "mean_timestamp_probe_square_of_checkpoint_lr_weighted_sum"
     if contraction == "termwise_squared_per_probe":
         return "per_probe_learning_rate_weighted_sum_of_squared_gradient_contractions"
+    if contraction == "signed_squared":
+        return "learning_rate_weighted_sum_of_signed_squared_gradient_contractions"
+    if contraction == "coordinatewise_squared":
+        return "learning_rate_weighted_sum_of_coordinatewise_squared_gradient_products"
     return "learning_rate_weighted_sum_of_signed_gradient_contractions"
 
 
@@ -349,6 +357,11 @@ def score_shard(args: argparse.Namespace) -> None:
                 raise ValueError(f"no query feature for checkpoint={ckpt} timestep={timestep}")
             train_device = jax.device_put(jnp.asarray(train[local_term]))
             train_norm = jnp.linalg.norm(train_device, axis=1) + 1e-8
+            train_squared = (
+                jnp.square(train_device)
+                if args.contraction == "coordinatewise_squared"
+                else None
+            )
             term_scores = None
             if args.contraction not in (
                 "final_post_square",
@@ -363,25 +376,40 @@ def score_shard(args: argparse.Namespace) -> None:
                 query_device = jax.device_put(
                     jnp.asarray(query[probe_index, :, query_term, :])
                 )
-                directional = train_device @ query_device.T
                 query_norm = jnp.linalg.norm(query_device, axis=1) + 1e-8
-                transform = (
-                    jnp.square
-                    if args.contraction in ("squared", "termwise_squared_per_probe")
-                    else lambda x: x
-                )
-                probe_scores = {
-                    "score": transform(directional),
-                    "score_query_normalized": transform(
-                        directional / query_norm[None, :]
-                    ),
-                    "score_train_l2_normalized": transform(
-                        directional / train_norm[:, None]
-                    ),
-                    "score_query_train_l2_normalized": transform(
-                        directional / train_norm[:, None] / query_norm[None, :]
-                    ),
-                }
+                if args.contraction == "coordinatewise_squared":
+                    assert train_squared is not None
+                    coordinate_energy = train_squared @ jnp.square(query_device).T
+                    train_norm_sq = jnp.square(train_norm[:, None])
+                    query_norm_sq = jnp.square(query_norm[None, :])
+                    probe_scores = {
+                        "score": coordinate_energy,
+                        "score_query_normalized": coordinate_energy / query_norm_sq,
+                        "score_train_l2_normalized": coordinate_energy / train_norm_sq,
+                        "score_query_train_l2_normalized": (
+                            coordinate_energy / train_norm_sq / query_norm_sq
+                        ),
+                    }
+                else:
+                    directional = train_device @ query_device.T
+                    if args.contraction in ("squared", "termwise_squared_per_probe"):
+                        transform = jnp.square
+                    elif args.contraction == "signed_squared":
+                        transform = lambda value: value * jnp.abs(value)
+                    else:
+                        transform = lambda value: value
+                    probe_scores = {
+                        "score": transform(directional),
+                        "score_query_normalized": transform(
+                            directional / query_norm[None, :]
+                        ),
+                        "score_train_l2_normalized": transform(
+                            directional / train_norm[:, None]
+                        ),
+                        "score_query_train_l2_normalized": transform(
+                            directional / train_norm[:, None] / query_norm[None, :]
+                        ),
+                    }
                 for component, values in probe_scores.items():
                     host_values = np.asarray(jax.device_get(values), dtype=np.float64).T
                     if args.contraction == "final_post_square":
@@ -546,6 +574,10 @@ def merge(args: argparse.Namespace) -> None:
                         if "final_linear_mean" in output_namespace
                         else "learning_rate_weighted_sum_terms(squared_normalized_dot_product)"
                         if args.contraction == "squared"
+                        else "learning_rate_weighted_sum_terms(signed_square(normalized_dot_product))"
+                        if args.contraction == "signed_squared"
+                        else "learning_rate_weighted_sum_terms(sum_coordinate_squared_products_after_normalization)"
+                        if args.contraction == "coordinatewise_squared"
                         else "learning_rate_weighted_sum_terms(signed_normalized_dot_product)"
                     ),
                     "normalization_variants": [
@@ -606,6 +638,8 @@ def main() -> None:
             "final_post_square",
             "timestamp_checkpoint_square",
             "termwise_squared_per_probe",
+            "signed_squared",
+            "coordinatewise_squared",
         ),
         default="squared",
         help=(
@@ -615,7 +649,8 @@ def main() -> None:
             "timestamp_checkpoint_square: for each timestamp/probe, sum all "
             "learning-rate-weighted checkpoints, square, then average timestamps/probes; "
             "termwise_squared_per_probe: square each product and retain every probe "
-            "through the trajectory sum for subgroup analysis."
+            "through the trajectory sum for subgroup analysis; signed_squared: z*abs(z); "
+            "coordinatewise_squared: sum_k (train_k*query_k)^2."
         ),
     )
     parser.add_argument(

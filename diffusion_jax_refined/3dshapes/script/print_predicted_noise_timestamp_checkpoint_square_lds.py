@@ -27,7 +27,13 @@ def main() -> None:
     parser.add_argument("--namespace-suffix", default="")
     parser.add_argument(
         "--reduction",
-        choices=("linear", "timestamp_checkpoint_square", "termwise_square"),
+        choices=(
+            "linear",
+            "timestamp_checkpoint_square",
+            "termwise_square",
+            "signed_square",
+            "coordinate_square",
+        ),
         default="timestamp_checkpoint_square",
     )
     args = parser.parse_args()
@@ -40,6 +46,8 @@ def main() -> None:
             "traj_tracin_predicted_noise_jvp_timestamp_checkpoint_sum_square"
         ),
         "termwise_square": "traj_tracin_predicted_noise_jvp_l2_squared",
+        "signed_square": "traj_tracin_predicted_noise_jvp_signed_squared",
+        "coordinate_square": "traj_tracin_predicted_noise_jvp_coordinatewise_squared",
     }
     namespace_base = namespace_bases[args.reduction]
     namespace = f"{namespace_base}_probe{args.num_probes}"
@@ -54,6 +62,8 @@ def main() -> None:
         "linear": "LINEAR TERM SUM (NO SQUARE)",
         "timestamp_checkpoint_square": "TIMESTAMP-GROUPED CHECKPOINT-SUM SQUARE",
         "termwise_square": "TERMWISE GRADIENT-PRODUCT SQUARE",
+        "signed_square": "SIGNED SQUARE z*abs(z)",
+        "coordinate_square": "COORDINATEWISE PRODUCT SQUARE",
     }
     title = titles[args.reduction]
     print(f"{title} ({args.num_probes} probes, sign {args.prediction_sign})")
