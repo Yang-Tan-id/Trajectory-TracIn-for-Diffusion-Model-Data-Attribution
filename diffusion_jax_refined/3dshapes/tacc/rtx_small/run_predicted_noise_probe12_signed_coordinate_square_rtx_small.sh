@@ -10,6 +10,12 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+candidate="${REPO_ROOT:-${SLURM_SUBMIT_DIR:-$PWD}}"
+while [[ "${candidate}" != "/" && ! -f "${candidate}/diffusion_jax_refined/3dshapes/tacc/rtx_small/run_predicted_noise_probe8_signed_coordinate_square_rtx_small.sh" ]]; do
+  candidate="$(dirname "${candidate}")"
+done
+REPO_ROOT="${candidate}"
+BASE_SCRIPT="${REPO_ROOT}/diffusion_jax_refined/3dshapes/tacc/rtx_small/run_predicted_noise_probe8_signed_coordinate_square_rtx_small.sh"
+[[ -f "${BASE_SCRIPT}" ]] || { echo "Could not locate repository" >&2; exit 1; }
 export NUM_PROBES=12
-source "${SCRIPT_DIR}/run_predicted_noise_probe8_signed_coordinate_square_rtx_small.sh"
+source "${BASE_SCRIPT}"
