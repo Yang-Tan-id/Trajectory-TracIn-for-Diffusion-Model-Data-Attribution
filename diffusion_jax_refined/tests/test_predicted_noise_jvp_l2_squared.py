@@ -477,6 +477,21 @@ class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
         self.assertIn('checkpoint_summary.csv', analyzer)
         self.assertIn('values[:, query_id, :] @ kept_matrix.T', analyzer)
 
+    def test_probe12_per_checkpoint_lds_pipeline_reuses_generic_analyzer(self):
+        launcher = (
+            ROOT
+            / "3dshapes"
+            / "tacc"
+            / "rtx_small"
+            / "run_predicted_noise_probe12_per_checkpoint_lds_rtx_small.sh"
+        ).read_text()
+
+        self.assertIn('NUM_PROBES=12', launcher)
+        self.assertIn('--retain-checkpoint-scores', launcher)
+        self.assertIn('analyze_predicted_noise_per_checkpoint_lds.py', launcher)
+        self.assertIn('--num-probes "${NUM_PROBES}"', launcher)
+        self.assertIn('predicted_noise_probe12_per_checkpoint_lds', launcher)
+
     def test_shared_orthogonal_probe4_timestamp_checkpoint_square_pipeline(self):
         launcher = (
             ROOT
