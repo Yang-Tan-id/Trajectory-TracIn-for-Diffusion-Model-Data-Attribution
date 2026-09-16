@@ -68,6 +68,13 @@ class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
         )
         np.testing.assert_allclose(actual, expected, rtol=1e-5, atol=1e-6)
 
+    def test_absolute_contraction_is_probe_sign_invariant(self):
+        train = np.asarray([[1.0, 2.0], [-3.0, 1.0]], dtype=np.float64)
+        query = np.asarray([[2.0, -1.0], [0.5, 4.0]], dtype=np.float64)
+        score = np.abs(train @ query.T)
+        flipped = np.abs(train @ (-query).T)
+        np.testing.assert_allclose(score, flipped)
+
     def test_original_four_normalization_variants(self):
         train = np.asarray([[3.0, 4.0], [1.0, 0.0]], dtype=np.float64)
         query = np.asarray([[0.0, 2.0]], dtype=np.float64)

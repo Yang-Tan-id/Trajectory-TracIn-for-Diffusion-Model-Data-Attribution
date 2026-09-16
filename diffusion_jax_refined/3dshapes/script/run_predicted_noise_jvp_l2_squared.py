@@ -69,6 +69,8 @@ def score_namespace(
         namespace = "predicted_noise_jvp_termwise_squared_per_probe"
     elif contraction == "signed_squared":
         namespace = "predicted_noise_jvp_signed_squared"
+    elif contraction == "absolute":
+        namespace = "predicted_noise_jvp_absolute"
     elif contraction == "coordinatewise_squared":
         namespace = "predicted_noise_jvp_coordinatewise_squared"
     elif contraction == "checkpoint_timestamp_sum_square":
@@ -108,6 +110,8 @@ def weighting_semantics(contraction: str) -> str:
         return "per_probe_learning_rate_weighted_sum_of_squared_gradient_contractions"
     if contraction == "signed_squared":
         return "learning_rate_weighted_sum_of_signed_squared_gradient_contractions"
+    if contraction == "absolute":
+        return "learning_rate_weighted_sum_of_absolute_gradient_contractions"
     if contraction == "coordinatewise_squared":
         return "learning_rate_weighted_sum_of_coordinatewise_squared_gradient_products"
     if contraction == "checkpoint_timestamp_sum_square":
@@ -429,6 +433,8 @@ def score_shard(args: argparse.Namespace) -> None:
                         transform = jnp.square
                     elif args.contraction == "signed_squared":
                         transform = lambda value: value * jnp.abs(value)
+                    elif args.contraction == "absolute":
+                        transform = jnp.abs
                     else:
                         transform = lambda value: value
                     probe_scores = {
@@ -695,6 +701,8 @@ def merge(args: argparse.Namespace) -> None:
                         if args.contraction == "squared"
                         else "learning_rate_weighted_sum_terms(signed_square(normalized_dot_product))"
                         if args.contraction == "signed_squared"
+                        else "learning_rate_weighted_sum_terms(abs(normalized_dot_product))"
+                        if args.contraction == "absolute"
                         else "learning_rate_weighted_sum_terms(sum_coordinate_squared_products_after_normalization)"
                         if args.contraction == "coordinatewise_squared"
                         else "sum_checkpoint(learning_rate_times_mean_probe(square(mean_timestamp(normalized_dot_product))))"
@@ -760,6 +768,7 @@ def main() -> None:
             "timestamp_checkpoint_square",
             "termwise_squared_per_probe",
             "signed_squared",
+            "absolute",
             "coordinatewise_squared",
             "checkpoint_timestamp_sum_square",
         ),
@@ -772,6 +781,7 @@ def main() -> None:
             "learning-rate-weighted checkpoints, square, then average timestamps/probes; "
             "termwise_squared_per_probe: square each product and retain every probe "
             "through the trajectory sum for subgroup analysis; signed_squared: z*abs(z); "
+            "absolute: abs(z); "
             "coordinatewise_squared: sum_k (train_k*query_k)^2."
             " checkpoint_timestamp_sum_square: within each checkpoint and probe, "
             "mean timestamps, square, mean probes, then apply the checkpoint LR once."

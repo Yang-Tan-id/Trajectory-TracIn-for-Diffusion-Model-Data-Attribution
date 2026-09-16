@@ -32,6 +32,7 @@ def main() -> None:
             "timestamp_checkpoint_square",
             "termwise_square",
             "signed_square",
+            "absolute",
             "coordinate_square",
             "checkpoint_timestamp_square",
         ),
@@ -48,6 +49,7 @@ def main() -> None:
         ),
         "termwise_square": "traj_tracin_predicted_noise_jvp_l2_squared",
         "signed_square": "traj_tracin_predicted_noise_jvp_signed_squared",
+        "absolute": "traj_tracin_predicted_noise_jvp_absolute",
         "coordinate_square": "traj_tracin_predicted_noise_jvp_coordinatewise_squared",
         "checkpoint_timestamp_square": "traj_tracin_predicted_noise_jvp_checkpoint_timestamp_sum_square",
     }
@@ -65,6 +67,7 @@ def main() -> None:
         "timestamp_checkpoint_square": "TIMESTAMP-GROUPED CHECKPOINT-SUM SQUARE",
         "termwise_square": "TERMWISE GRADIENT-PRODUCT SQUARE",
         "signed_square": "SIGNED SQUARE z*abs(z)",
+        "absolute": "TERMWISE ABSOLUTE CONTRACTION |z|",
         "coordinate_square": "COORDINATEWISE PRODUCT SQUARE",
         "checkpoint_timestamp_square": "CHECKPOINT-GROUPED TIMESTAMP-MEAN SQUARE",
     }
