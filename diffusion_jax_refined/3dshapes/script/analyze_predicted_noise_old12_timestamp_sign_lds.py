@@ -63,6 +63,8 @@ def main() -> None:
         "positive_timestamp_means",
         "negative_timestamp_means",
         "negative_timestamp_means_flipped",
+        "timestamp_means_oriented_negative",
+        "datapoint_timestamp_scores_forced_negative",
         full_method,
     )
 
@@ -75,7 +77,7 @@ def main() -> None:
         f"prediction sign {args.prediction_sign:+g}"
     )
     print(
-        f"{'Q':>2s} {'METHOD':35s} {'ENDPOINT':>10s} {'TRAJ':>10s} "
+        f"{'Q':>2s} {'METHOD':45s} {'ENDPOINT':>10s} {'TRAJ':>10s} "
         f"{'CF JOINT':>10s} {'NOISE':>10s} {'SIMPLE':>10s}  TIMESTAMPS"
     )
     print("-" * 132)
@@ -107,12 +109,23 @@ def main() -> None:
             "negative_timestamp_means_flipped": -timestamp_scores[
                 qslot, negative
             ].sum(axis=0),
+            "timestamp_means_oriented_negative": (
+                timestamp_scores[qslot, negative].sum(axis=0)
+                - timestamp_scores[qslot, positive].sum(axis=0)
+            ),
+            "datapoint_timestamp_scores_forced_negative": -np.abs(
+                timestamp_scores[qslot]
+            ).sum(axis=0),
             full_method: timestamp_scores[qslot].sum(axis=0),
         }
         method_timestamps = {
             "positive_timestamp_means": positive_ts,
             "negative_timestamp_means": negative_ts,
             "negative_timestamp_means_flipped": negative_ts,
+            "timestamp_means_oriented_negative": [int(value) for value in timesteps],
+            "datapoint_timestamp_scores_forced_negative": [
+                int(value) for value in timesteps
+            ],
             full_method: [int(value) for value in timesteps],
         }
         for slot, timestep in enumerate(timesteps):
@@ -146,7 +159,7 @@ def main() -> None:
             endpoint = query_lookup[(method, "endpoint_contarfactual")]
             trajectory = query_lookup[(method, "traj_contarfactual")]
             print(
-                f"{query_id:2d} {method:35s} "
+                f"{query_id:2d} {method:45s} "
                 f"{endpoint:9.3f}% {trajectory:9.3f}% "
                 f"{0.5 * (endpoint + trajectory):9.3f}% "
                 f"{query_lookup[(method, 'noise_trajectory')]:9.3f}% "
@@ -162,7 +175,7 @@ def main() -> None:
     summary_rows: list[dict[str, object]] = []
     print("\n10-query mean")
     print(
-        f"{'METHOD':35s} {'ENDPOINT':>10s} {'TRAJ':>10s} "
+        f"{'METHOD':45s} {'ENDPOINT':>10s} {'TRAJ':>10s} "
         f"{'CF JOINT':>10s} {'NOISE':>10s} {'SIMPLE':>10s}"
     )
     print("-" * 94)
@@ -174,7 +187,7 @@ def main() -> None:
             means["endpoint_contarfactual"] + means["traj_contarfactual"]
         )
         print(
-            f"{method:35s} "
+            f"{method:45s} "
             f"{means['endpoint_contarfactual']:9.3f}% "
             f"{means['traj_contarfactual']:9.3f}% {joint:9.3f}% "
             f"{means['noise_trajectory']:9.3f}% {means['simple_loss']:9.3f}%"
