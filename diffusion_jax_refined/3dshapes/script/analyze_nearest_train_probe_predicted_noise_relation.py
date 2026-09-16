@@ -39,6 +39,7 @@ ALIGNMENT_KEYS = (
     "cosine_to_future_lr_weighted_predicted_noise_delta",
     "delta_continuity_cosine",
     "delta_continuity_sign",
+    "projection_on_next_predicted_noise_delta",
 )
 METHODS = ("nearest_direction", "nearest_axis_signed")
 OUTPUT_SELECTIONS = {
@@ -107,6 +108,8 @@ def enabled_output_selections(args: argparse.Namespace) -> tuple[str, ...]:
         result += ("future_lr_weighted_delta_noise_direction",)
     if args.include_delta_continuity:
         result += ("delta_noise_direction_continuity_signed",)
+    if args.include_delta_mc24:
+        result += ("delta_noise_mc24",)
     return result
 
 
@@ -140,6 +143,26 @@ def transform_output_selected_scores(
             raise ValueError("delta continuity sign is missing from alignment data")
         return selected_scores * float(output["delta_continuity_sign"][0])
     return selected_scores
+
+
+def combine_probe_query_features_mc(
+    query_features: np.ndarray,
+    projection_scalars: np.ndarray,
+) -> np.ndarray:
+    query_features = np.asarray(query_features, dtype=np.float64)
+    projection_scalars = np.asarray(projection_scalars, dtype=np.float64)
+    if query_features.ndim != 2:
+        raise ValueError("query_features must have shape (probes, projected_dim)")
+    if projection_scalars.shape != (query_features.shape[0],):
+        raise ValueError(
+            "projection_scalars must have one value per probe: "
+            f"{projection_scalars.shape} != {(query_features.shape[0],)}"
+        )
+    return np.mean(
+        projection_scalars[:, None] * query_features,
+        axis=0,
+        dtype=np.float64,
+    )
 
 
 def probe_alignment_matrix(
@@ -295,18 +318,50 @@ def analyze_shard(args: argparse.Namespace) -> None:
                 dtype=np.float64,
             )
 
-            for qslot, query_id in enumerate(args.query_ids):
-                scores = scores_all[:, qslot * 24 : (qslot + 1) * 24]
-                output = probe_alignment_matrix(
+            outputs = [
+                probe_alignment_matrix(
                     alignments, query_id, int(ckpt) + 1, int(timestep)
                 )
+                for query_id in args.query_ids
+            ]
+            mc_scores_all = None
+            if args.include_delta_mc24:
+                combined_queries = np.stack(
+                    [
+                        combine_probe_query_features_mc(
+                            probes[:, qslot, term, :],
+                            output["projection_on_next_predicted_noise_delta"],
+                        )
+                        for qslot, output in enumerate(outputs)
+                    ],
+                    axis=0,
+                )
+                combined_query_units = unit_rows(combined_queries)
+                mc_scores_all = np.asarray(
+                    jax.device_get(
+                        jnp.asarray(train_unit)
+                        @ jnp.asarray(combined_query_units).T
+                    ),
+                    dtype=np.float64,
+                )
+
+            for qslot, query_id in enumerate(args.query_ids):
+                scores = scores_all[:, qslot * 24 : (qslot + 1) * 24]
+                output = outputs[qslot]
                 assert output_selected_totals is not None
                 for method in enabled_output_selections(args):
-                    selection_values = output_selection_values(output, method)
-                    selected_probe = int(np.argmax(selection_values))
-                    selected_scores = transform_output_selected_scores(
-                        scores[:, selected_probe], method, output
-                    )
+                    if method == "delta_noise_mc24":
+                        assert mc_scores_all is not None
+                        selected_scores = mc_scores_all[:, qslot]
+                        selected_probe = -1
+                        selection_value = np.nan
+                    else:
+                        selection_values = output_selection_values(output, method)
+                        selected_probe = int(np.argmax(selection_values))
+                        selected_scores = transform_output_selected_scores(
+                            scores[:, selected_probe], method, output
+                        )
+                        selection_value = float(selection_values[selected_probe])
                     output_selected_totals[method][qslot] += (
                         float(term_weights[local_term]) * selected_scores
                     )
@@ -319,16 +374,22 @@ def analyze_shard(args: argparse.Namespace) -> None:
                             "method": method,
                             "selected_probe": selected_probe + 1,
                             "selected_bank": (
-                                "original" if selected_probe < 12 else "fresh"
+                                "combined24"
+                                if selected_probe < 0
+                                else (
+                                    "original" if selected_probe < 12 else "fresh"
+                                )
                             ),
                             "selected_bank_probe": (
-                                selected_probe + 1
-                                if selected_probe < 12
-                                else selected_probe - 11
+                                0
+                                if selected_probe < 0
+                                else (
+                                    selected_probe + 1
+                                    if selected_probe < 12
+                                    else selected_probe - 11
+                                )
                             ),
-                            "selection_cosine": float(
-                                selection_values[selected_probe]
-                            ),
+                            "selection_cosine": selection_value,
                             "delta_orientation_sign": reference_orientation_sign(
                                 output, method
                             ),
@@ -682,6 +743,7 @@ def main() -> None:
         "--include-future-lr-weighted-delta", action="store_true"
     )
     parser.add_argument("--include-delta-continuity", action="store_true")
+    parser.add_argument("--include-delta-mc24", action="store_true")
     parser.add_argument(
         "--checkpoint-direction",
         choices=("next", "previous"),

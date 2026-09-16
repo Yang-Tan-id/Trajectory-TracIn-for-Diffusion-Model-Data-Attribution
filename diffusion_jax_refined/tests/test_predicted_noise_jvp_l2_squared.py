@@ -21,6 +21,7 @@ from analyze_predicted_noise_probe24_term_winners import select_nearest_probe_sc
 from analyze_nearest_train_probe_predicted_noise_relation import (
     ALIGNMENT_KEYS,
     OUTPUT_SELECTIONS,
+    combine_probe_query_features_mc,
     output_selection_values,
     selected_probe_indices,
     transform_output_selected_scores,
@@ -28,6 +29,43 @@ from analyze_nearest_train_probe_predicted_noise_relation import (
 
 
 class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
+    def test_mc_delta_pullback_combines_all_probes_and_is_sign_invariant(self):
+        query_features = np.asarray(
+            [[1.0, 2.0, -1.0], [-3.0, 4.0, 2.0]], dtype=np.float64
+        )
+        projection_scalars = np.asarray([0.5, -2.0], dtype=np.float64)
+        expected = np.mean(
+            projection_scalars[:, None] * query_features, axis=0
+        )
+        actual = combine_probe_query_features_mc(
+            query_features, projection_scalars
+        )
+        np.testing.assert_allclose(actual, expected)
+
+        flipped_features = query_features.copy()
+        flipped_scalars = projection_scalars.copy()
+        flipped_features[0] *= -1.0
+        flipped_scalars[0] *= -1.0
+        np.testing.assert_allclose(
+            combine_probe_query_features_mc(
+                flipped_features, flipped_scalars
+            ),
+            actual,
+        )
+
+    def test_mc_delta_pullback_launcher_uses_cached_24_probe_banks(self):
+        launcher = (
+            ROOT
+            / "3dshapes"
+            / "tacc"
+            / "rtx_small"
+            / "run_delta_noise_mc24_cached_rtx_small.sh"
+        ).read_text()
+        self.assertIn("--include-delta-mc24", launcher)
+        self.assertIn("predicted_noise_output_next_original12", launcher)
+        self.assertIn("predicted_noise_output_next_fresh12", launcher)
+        self.assertNotIn("run_traj_tracin_queries_and_scores.py", launcher)
+
     def test_three_output_direction_selection_rules_exist(self):
         self.assertEqual(
             "cosine_to_next_predicted_noise_delta",
