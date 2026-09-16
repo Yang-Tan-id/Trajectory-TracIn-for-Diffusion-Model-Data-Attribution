@@ -159,6 +159,9 @@ def main() -> None:
     per_timestamp_counts = defaultdict(lambda: np.zeros((pair_count, 3), dtype=np.int64))
     reconstructed = np.zeros((pair_count, len(timesteps), datapoint_count), dtype=np.float64)
     term_count = np.zeros(pair_count, dtype=np.int64)
+    term_positive_grid = np.full((pair_count, 50, len(timesteps)), np.nan, dtype=np.float32)
+    term_mean_grid = np.full((pair_count, 50, len(timesteps)), np.nan, dtype=np.float32)
+    term_std_grid = np.full((pair_count, 50, len(timesteps)), np.nan, dtype=np.float32)
     selected_signs = np.asarray(
         [
             best_signs[int(item["probe_slot"]), int(item["query_slot"])]
@@ -203,6 +206,7 @@ def main() -> None:
             total_negative += negative.sum(axis=1)
             total_zero += zero.sum(axis=1)
             term_means = oriented.mean(axis=1)
+            term_stds = oriented.std(axis=1)
             term_mean_positive += term_means > 0.0
             term_mean_negative += term_means < 0.0
             term_count += 1
@@ -212,6 +216,9 @@ def main() -> None:
             per_timestamp_counts[int(timestep)][:, 1] += negative.sum(axis=1)
             per_timestamp_counts[int(timestep)][:, 2] += zero.sum(axis=1)
             reconstructed[:, timestamp_slot] += float(weight) * values
+            term_positive_grid[:, checkpoint_slot, timestamp_slot] = positive.mean(axis=1)
+            term_mean_grid[:, checkpoint_slot, timestamp_slot] = term_means
+            term_std_grid[:, checkpoint_slot, timestamp_slot] = term_stds
         print(f"[term signs] checkpoint={checkpoint_slot + 1}/50", flush=True)
 
     summary_rows = []
@@ -277,6 +284,83 @@ def main() -> None:
     )
     write_csv(out_dir / "extreme_probe_term_sign_summary.csv", summary_rows)
     write_csv(out_dir / "extreme_probe_term_sign_by_timestamp.csv", timestamp_rows)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        out_dir / "extreme_probe_term_grids.npz",
+        query=np.asarray([int(item["query"]) for item in selections], dtype=np.int32),
+        global_probe=np.asarray(
+            [int(item["global_probe"]) for item in selections], dtype=np.int32
+        ),
+        selection=np.asarray([str(item["selection"]) for item in selections]),
+        timesteps=timesteps,
+        checkpoints=np.arange(1, 51, dtype=np.int32),
+        selected_signs=selected_signs,
+        positive_fraction=term_positive_grid,
+        mean=term_mean_grid,
+        std=term_std_grid,
+    )
+
+    # Q0/P1 is the closest-to-0%-positive probe; Q0/P20 is the
+    # closest-to-100%-positive probe. Plot their full 50x10 term maps.
+    plot_pairs = []
+    for query_id, probe in ((0, 1), (0, 20)):
+        matches = [
+            pair
+            for pair, item in enumerate(selections)
+            if int(item["query"]) == query_id and int(item["global_probe"]) == probe
+        ]
+        if len(matches) != 1:
+            raise ValueError(f"expected one selected Q{query_id}/P{probe}, got {matches}")
+        plot_pairs.append(matches[0])
+    try:
+        import matplotlib.pyplot as plt
+
+        fig, axes = plt.subplots(2, 2, figsize=(15, 12), constrained_layout=True)
+        for column, (pair, probe) in enumerate(zip(plot_pairs, (1, 20))):
+            positive_values = term_positive_grid[pair]
+            image = axes[0, column].imshow(
+                positive_values,
+                vmin=0.35,
+                vmax=0.65,
+                cmap="RdBu",
+                aspect="auto",
+                origin="lower",
+            )
+            axes[0, column].set_title(
+                f"Q0 P{probe}: component positive fraction"
+            )
+            axes[0, column].set_xlabel("timestamp")
+            axes[0, column].set_ylabel("checkpoint")
+            axes[0, column].set_xticks(range(len(timesteps)), timesteps)
+            axes[0, column].set_yticks(range(0, 50, 5), range(1, 51, 5))
+            fig.colorbar(image, ax=axes[0, column], pad=0.01)
+
+            standardized = term_mean_grid[pair] / np.maximum(
+                term_std_grid[pair], 1e-12
+            )
+            limit = max(0.5, float(np.nanmax(np.abs(standardized))))
+            image = axes[1, column].imshow(
+                standardized,
+                vmin=-limit,
+                vmax=limit,
+                cmap="RdBu_r",
+                aspect="auto",
+                origin="lower",
+            )
+            axes[1, column].set_title(f"Q0 P{probe}: component mean / SD")
+            axes[1, column].set_xlabel("timestamp")
+            axes[1, column].set_ylabel("checkpoint")
+            axes[1, column].set_xticks(range(len(timesteps)), timesteps)
+            axes[1, column].set_yticks(range(0, 50, 5), range(1, 51, 5))
+            fig.colorbar(image, ax=axes[1, column], pad=0.01)
+        fig.suptitle(
+            "Q0 extreme probes after best timestamp flips: 50 checkpoints x 10 timestamps"
+        )
+        fig.savefig(out_dir / "q0_probe1_probe20_term_maps.png", dpi=180)
+        fig.savefig(out_dir / "q0_probe1_probe20_term_maps.svg")
+        plt.close(fig)
+    except ImportError:
+        print("[warning] matplotlib unavailable; saved term grids without plots", flush=True)
 
     print("EXTREME PROPER-SCORE PROBES — INTERNAL 50x10 TERM SIGNS")
     print(
