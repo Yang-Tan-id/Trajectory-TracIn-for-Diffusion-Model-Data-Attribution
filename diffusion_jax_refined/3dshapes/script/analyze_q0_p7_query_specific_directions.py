@@ -108,10 +108,12 @@ def main():
     parser.add_argument("--repeat", type=int, default=1)
     parser.add_argument("--train-fold", type=int, choices=(0, 1), default=0)
     parser.add_argument(
-        "--original-namespace", default="predicted_noise_output_next_original12"
+        "--original-namespace",
+        default="predicted_noise_output_reference_delta_original12",
     )
     parser.add_argument(
-        "--fresh-namespace", default="predicted_noise_output_next_fresh12"
+        "--fresh-namespace",
+        default="predicted_noise_output_reference_delta_fresh12",
     )
     parser.add_argument("--out-dir", type=Path)
     args = parser.parse_args()
@@ -218,11 +220,19 @@ def main():
     print("-" * 68)
     next_key = "pullback_cosine_next_delta_mc23_leave_p7_out"
     reference_key = "pullback_cosine_reference_delta_mc23_leave_p7_out"
+    if next_key not in rows[0]:
+        raise ValueError(f"required next-delta metric is unavailable: {next_key}")
+    reference_available = reference_key in rows[0]
     for timestep in sorted({int(row["timestep"]) for row in rows}, reverse=True):
         next_values = [row[next_key] for row in rows if row["timestep"] == timestep]
-        ref_values = [row[reference_key] for row in rows if row["timestep"] == timestep]
         ns = summarize(next_values)
-        rs = summarize(ref_values)
+        rs = (
+            summarize(
+                [row[reference_key] for row in rows if row["timestep"] == timestep]
+            )
+            if reference_available
+            else {"mean": float("nan"), "mean_abs": float("nan"), "positive_fraction": float("nan")}
+        )
         print(
             f"{timestep:4d} {ns['mean']:+9.5f} {ns['mean_abs']:9.5f} "
             f"{ns['positive_fraction']:6.3f} {rs['mean']:+9.5f} "
@@ -237,7 +247,8 @@ def main():
             if row["checkpoint"] == checkpoint:
                 print(
                     f"{checkpoint:4d} {checkpoint*4:5d} {int(row['timestep']):4d} "
-                    f"{float(row[next_key]):+9.5f} {float(row[reference_key]):+9.5f}"
+                    f"{float(row[next_key]):+9.5f} "
+                    f"{float(row.get(reference_key, float('nan'))):+9.5f}"
                 )
     print(f"[saved] {out_dir}")
 
