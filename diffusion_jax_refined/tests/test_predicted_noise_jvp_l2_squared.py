@@ -16,6 +16,29 @@ from materialize_f_next_final_score_squared import square_final_scores
 
 
 class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
+    def test_probe_independence_audit_replays_exact_key_dimensions(self):
+        audit = (
+            ROOT
+            / "3dshapes"
+            / "script"
+            / "analyze_predicted_noise_probe_independence.py"
+        ).read_text()
+        algorithm = (ROOT / "legacy_jax" / "traj_tracin" / "algorithm.py").read_text()
+
+        for token in (
+            "0x50524F42",
+            "checkpoint_index",
+            "timestep",
+            "snapshot_position",
+            "probe_index",
+        ):
+            self.assertIn(token, audit)
+            self.assertIn(token, algorithm)
+        self.assertIn('default=(1, 64, 64, 3)', audit)
+        self.assertIn('global_gram += probes @ probes.T', audit)
+        self.assertIn('dc_z[term_id] = probes.sum(axis=1) / term_norms', audit)
+        self.assertIn('1.0 / math.sqrt(dimension * term_count)', audit)
+
     def test_squared_batched_dot_matches_explicit_rows(self):
         rng = np.random.default_rng(42)
         train = rng.normal(size=(7, 5)).astype(np.float32)
