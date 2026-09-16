@@ -768,6 +768,29 @@ class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
         self.assertIn('NUM_PROBES=12', launcher)
         self.assertIn("all 4095 nonempty subsets", launcher)
 
+    def test_probe24_term_winner_analysis_compares_next_update_and_train_directions(self):
+        analyzer = (
+            ROOT
+            / "3dshapes"
+            / "script"
+            / "analyze_predicted_noise_probe24_term_winners.py"
+        ).read_text()
+        launcher = (
+            ROOT
+            / "3dshapes"
+            / "tacc"
+            / "rtx_small"
+            / "run_predicted_noise_probe24_term_winner_analysis_rtx_small.sh"
+        ).read_text()
+        self.assertIn("ORIGINAL_PATTERN", analyzer)
+        self.assertIn("FRESH_PATTERN", analyzer)
+        self.assertIn("NEXT_PATTERN", analyzer)
+        self.assertIn("winner = int(np.argmax(joint))", analyzer)
+        self.assertIn('"cosine_to_next_update"', analyzer)
+        self.assertIn('"mean_train_gradient_cosine"', analyzer)
+        self.assertIn('"all_probe_term_lds.csv"', analyzer)
+        self.assertIn('export QUERY_IDS="${QUERY_IDS:-2,3}"', launcher)
+
     def test_probe12_sign_flip_analysis_covers_all_4096_assignments(self):
         analyzer = (
             ROOT
