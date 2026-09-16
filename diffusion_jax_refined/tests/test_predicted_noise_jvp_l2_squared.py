@@ -99,6 +99,36 @@ class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
         self.assertIn("--checkpoint-direction previous", launcher)
         self.assertIn("checkpoints 2-50", launcher)
 
+    def test_direct_reference_delta_direction_contract(self):
+        output = {
+            "cosine_to_reference_predicted_noise_delta": np.asarray(
+                [-0.2, 0.8, 0.3]
+            )
+        }
+        np.testing.assert_allclose(
+            output_selection_values(output, "reference_delta_noise_direction"),
+            [-0.2, 0.8, 0.3],
+        )
+
+        algorithm = (
+            ROOT / "legacy_jax" / "traj_tracin" / "algorithm.py"
+        ).read_text()
+        self.assertIn("reference_checkpoint_delta_probe_cosines", algorithm)
+        self.assertIn(
+            "delta_ref=eps(params[reference],x_t)-eps(params[c],x_t)",
+            algorithm,
+        )
+
+        launcher = (
+            ROOT
+            / "3dshapes"
+            / "tacc"
+            / "rtx_small"
+            / "run_reference_delta_direction_all_queries_rtx_small.sh"
+        ).read_text()
+        self.assertIn("--include-reference-delta", launcher)
+        self.assertIn("eps(reference)-eps(c)", launcher)
+
     def test_all_query_delta_launcher_uses_fixed_full_query_list(self):
         launcher = (
             ROOT

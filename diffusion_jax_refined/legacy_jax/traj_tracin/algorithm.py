@@ -2980,6 +2980,9 @@ def run_attribution(cfg: TrajAttributionConfig):
         probe_alignment_delta_cosines = []
         probe_alignment_delta_norms = []
         probe_alignment_reference_norms = []
+        probe_alignment_reference_delta_scalars = []
+        probe_alignment_reference_delta_cosines = []
+        probe_alignment_reference_delta_norms = []
         probe_alignment_current_reference_l2 = []
         probe_alignment_next_reference_l2 = []
         probe_alignment_current_reference_cosines = []
@@ -3417,6 +3420,14 @@ def run_attribution(cfg: TrajAttributionConfig):
                                         axis=tuple(range(1, reference_eps_chunk.ndim)),
                                     )
                                 )
+                                reference_delta_eps_chunk = (
+                                    reference_eps_chunk - eps_chunk
+                                )
+                                (
+                                    reference_delta_scalar,
+                                    reference_delta_cosine,
+                                    reference_delta_norm,
+                                ) = alignment_values(reference_delta_eps_chunk)
                                 output_axes = tuple(range(1, eps_chunk.ndim))
                                 current_reference_dot = jnp.sum(
                                     eps_chunk * reference_eps_chunk, axis=output_axes
@@ -3480,6 +3491,24 @@ def run_attribution(cfg: TrajAttributionConfig):
                                 probe_alignment_reference_norms.append(
                                     np.asarray(
                                         jax.device_get(reference_norm), dtype=np.float32
+                                    )
+                                )
+                                probe_alignment_reference_delta_scalars.append(
+                                    np.asarray(
+                                        jax.device_get(reference_delta_scalar),
+                                        dtype=np.float32,
+                                    )
+                                )
+                                probe_alignment_reference_delta_cosines.append(
+                                    np.asarray(
+                                        jax.device_get(reference_delta_cosine),
+                                        dtype=np.float32,
+                                    )
+                                )
+                                probe_alignment_reference_delta_norms.append(
+                                    np.asarray(
+                                        jax.device_get(reference_delta_norm),
+                                        dtype=np.float32,
                                     )
                                 )
                                 probe_alignment_current_reference_l2.append(
@@ -4411,6 +4440,19 @@ def run_attribution(cfg: TrajAttributionConfig):
                     ),
                     "reference_predicted_noise_norms": np.concatenate(
                         probe_alignment_reference_norms
+                    ),
+                    "reference_checkpoint_delta_probe_scalars": np.concatenate(
+                        probe_alignment_reference_delta_scalars, axis=1
+                    ),
+                    "reference_checkpoint_delta_probe_cosines": np.concatenate(
+                        probe_alignment_reference_delta_cosines, axis=1
+                    ),
+                    "reference_checkpoint_delta_norms": np.concatenate(
+                        probe_alignment_reference_delta_norms
+                    ),
+                    "reference_checkpoint_delta_definition": np.asarray(
+                        "delta_ref=eps(params[reference],x_t)-eps(params[c],x_t); "
+                        "x_t and conditioning are held fixed"
                     ),
                     "current_to_reference_predicted_noise_l2": np.concatenate(
                         probe_alignment_current_reference_l2

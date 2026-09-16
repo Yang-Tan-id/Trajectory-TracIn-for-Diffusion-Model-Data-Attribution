@@ -33,6 +33,7 @@ ALIGNMENT_KEYS = (
     "cosine_to_current_predicted_noise",
     "cosine_to_next_predicted_noise",
     "cosine_to_next_predicted_noise_delta",
+    "cosine_to_reference_predicted_noise_delta",
 )
 METHODS = ("nearest_direction", "nearest_axis_signed")
 OUTPUT_SELECTIONS = {
@@ -45,6 +46,7 @@ OUTPUT_SELECTIONS = {
     "previous_delta_noise_direction": "cosine_to_next_predicted_noise_delta",
     "reference_l2_oriented_previous_delta": "reference_l2_oriented_delta",
     "reference_cosine_oriented_previous_delta": "reference_cosine_oriented_delta",
+    "reference_delta_noise_direction": "cosine_to_reference_predicted_noise_delta",
 }
 
 
@@ -55,23 +57,29 @@ def enabled_output_selections(args: argparse.Namespace) -> tuple[str, ...]:
             "previous_noise_direction",
             "previous_delta_noise_direction",
         )
-        if not args.include_reference_oriented:
-            return base
-        return base + (
+        result = base
+        if args.include_reference_oriented:
+            result += (
             "reference_l2_oriented_previous_delta",
             "reference_cosine_oriented_previous_delta",
-        )
+            )
+        if args.include_reference_delta:
+            result += ("reference_delta_noise_direction",)
+        return result
     base = (
         "current_noise_direction",
         "next_noise_direction",
         "delta_noise_direction",
     )
-    if not args.include_reference_oriented:
-        return base
-    return base + (
-        "reference_l2_oriented_delta",
-        "reference_cosine_oriented_delta",
-    )
+    result = base
+    if args.include_reference_oriented:
+        result += (
+            "reference_l2_oriented_delta",
+            "reference_cosine_oriented_delta",
+        )
+    if args.include_reference_delta:
+        result += ("reference_delta_noise_direction",)
+    return result
 
 
 def write_csv(path: Path, rows: list[dict[str, object]]) -> None:
@@ -112,7 +120,11 @@ def probe_alignment_matrix(
         for key in result:
             if key in values:
                 result[key].append(values[key])
-    return {key: np.asarray(values, dtype=np.float64) for key, values in result.items()}
+    return {
+        key: np.asarray(values, dtype=np.float64)
+        for key, values in result.items()
+        if values
+    }
 
 
 def output_selection_values(output: dict[str, np.ndarray], method: str) -> np.ndarray:
@@ -606,6 +618,7 @@ def main() -> None:
         "--fresh-namespace", default="predicted_noise_output_next_fresh12"
     )
     parser.add_argument("--include-reference-oriented", action="store_true")
+    parser.add_argument("--include-reference-delta", action="store_true")
     parser.add_argument(
         "--checkpoint-direction",
         choices=("next", "previous"),
