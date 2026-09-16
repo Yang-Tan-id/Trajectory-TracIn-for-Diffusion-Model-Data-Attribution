@@ -150,6 +150,18 @@ def unit_rows(values: np.ndarray) -> np.ndarray:
     return values / np.maximum(np.linalg.norm(values, axis=-1, keepdims=True), 1e-8)
 
 
+def select_nearest_probe_scores(scores: np.ndarray) -> dict[str, np.ndarray]:
+    """Reduce (datapoints, probes) cosines with per-datapoint probe selection."""
+    values = np.asarray(scores)
+    if values.ndim != 2 or values.shape[1] == 0:
+        raise ValueError("scores must have shape (datapoints, probes) with probes > 0")
+    axis_probe = np.argmax(np.abs(values), axis=1)
+    return {
+        "nearest_direction": np.max(values, axis=1),
+        "nearest_axis_signed": values[np.arange(len(values)), axis_probe],
+    }
+
+
 def analyze_shard(args: argparse.Namespace) -> None:
     import jax
     import jax.numpy as jnp
@@ -174,6 +186,7 @@ def analyze_shard(args: argparse.Namespace) -> None:
     targets = None
     incidence_devices = None
     score_indices_ref = None
+    nearest_totals = None
 
     for ckpt_i in range(args.shard_index, 49, args.shard_count):
         path = train_part_dir(args.experiment, args.train_seed) / f"ckpt_{ckpt_i:04d}.npz"
@@ -184,8 +197,13 @@ def analyze_shard(args: argparse.Namespace) -> None:
             indices = np.asarray(payload["score_indices"], dtype=np.int64)
             ckpts = np.asarray(payload["ckpt_indices"], dtype=np.int32)
             timesteps = np.asarray(payload["timesteps"], dtype=np.int32)
+            term_weights = np.asarray(payload["term_weights"], dtype=np.float64)
         if score_indices_ref is None:
             score_indices_ref = indices
+            nearest_totals = {
+                name: np.zeros((len(args.query_ids), len(indices)), dtype=np.float64)
+                for name in ("nearest_direction", "nearest_axis_signed")
+            }
             targets = target_data(args, indices)
             incidence_devices = {
                 query_id: jax.device_put(jnp.asarray(targets[query_id][0]))
@@ -213,6 +231,11 @@ def analyze_shard(args: argparse.Namespace) -> None:
                 columns = slice(qslot * 24, (qslot + 1) * 24)
                 scores_device = directional_device[:, columns]
                 scores = np.asarray(jax.device_get(scores_device), dtype=np.float64)
+                assert nearest_totals is not None
+                weight = float(term_weights[local_term])
+                selected_scores = select_nearest_probe_scores(scores)
+                for method, values in selected_scores.items():
+                    nearest_totals[method][qslot] += weight * values
                 incidence, true_values = targets[query_id]
                 del incidence
                 predictions = np.asarray(
@@ -275,6 +298,13 @@ def analyze_shard(args: argparse.Namespace) -> None:
 
     write_csv(output_dir / f"all_probes_shard_{args.shard_index:02d}.csv", all_rows)
     write_csv(output_dir / f"selected_shard_{args.shard_index:02d}.csv", selected_rows)
+    assert nearest_totals is not None and score_indices_ref is not None
+    np.savez_compressed(
+        output_dir / f"nearest_train_direction_shard_{args.shard_index:02d}.npz",
+        score_indices=score_indices_ref,
+        nearest_direction=nearest_totals["nearest_direction"],
+        nearest_axis_signed=nearest_totals["nearest_axis_signed"],
+    )
 
 
 def read_rows(paths: list[Path]) -> list[dict[str, str]]:
@@ -342,6 +372,49 @@ def merge(args: argparse.Namespace) -> None:
         )
     write_csv(output_dir / "query_summary.csv", summaries)
 
+    nearest_totals = None
+    nearest_indices = None
+    for shard_index in range(args.shard_count):
+        path = output_dir / f"nearest_train_direction_shard_{shard_index:02d}.npz"
+        if not path.is_file():
+            raise FileNotFoundError(path)
+        with np.load(path, allow_pickle=False) as payload:
+            indices = np.asarray(payload["score_indices"], dtype=np.int64)
+            shard_values = {
+                name: np.asarray(payload[name], dtype=np.float64)
+                for name in ("nearest_direction", "nearest_axis_signed")
+            }
+        if nearest_indices is None:
+            nearest_indices = indices
+            nearest_totals = {
+                name: np.zeros_like(values) for name, values in shard_values.items()
+            }
+        elif not np.array_equal(nearest_indices, indices):
+            raise ValueError(f"score indices differ in {path}")
+        assert nearest_totals is not None
+        for name, values in shard_values.items():
+            nearest_totals[name] += values
+
+    assert nearest_totals is not None and nearest_indices is not None
+    nearest_targets = target_data(args, nearest_indices)
+    nearest_rows = []
+    for qslot, query_id in enumerate(args.query_ids):
+        incidence, true_values = nearest_targets[query_id]
+        for method, method_scores in nearest_totals.items():
+            for prediction_sign in (1.0, -1.0):
+                predictions = prediction_sign * method_scores[qslot] @ incidence.T
+                for target, truth in true_values.items():
+                    nearest_rows.append(
+                        {
+                            "query": query_id,
+                            "method": method,
+                            "prediction_sign": "p1" if prediction_sign > 0 else "m1",
+                            "target": target,
+                            "lds_percent": 100.0 * spearman(predictions, truth),
+                        }
+                    )
+    write_csv(output_dir / "nearest_train_direction_lds.csv", nearest_rows)
+
     print("24-PROBE PER-TERM WINNER ANALYSIS — BOTH-L2, CF JOINT")
     print(
         f"{'Q':>2s} {'TERMS':>5s} {'OLD':>5s} {'FRESH':>5s} {'BEST LDS':>10s} "
@@ -359,6 +432,18 @@ def merge(args: argparse.Namespace) -> None:
             f"{float(row['next_update_positive_fraction']):7.3f} "
             f"{float(row['mean_train_gradient_cosine']):+10.5f} "
             f"{float(row['mean_probe_lds_vs_next_update_spearman_percent']):9.3f}%"
+        )
+    print("\nPER-DATAPOINT/PER-TERM NEAREST-PROBE LDS — BOTH-L2")
+    print(f"{'METHOD':24s} {'SIGN':>4s} {'TARGET':24s} {'MEAN':>9s}")
+    print("-" * 68)
+    grouped_nearest = {}
+    for row in nearest_rows:
+        key = (str(row["method"]), str(row["prediction_sign"]), str(row["target"]))
+        grouped_nearest.setdefault(key, []).append(float(row["lds_percent"]))
+    for (method, sign, target), values in sorted(grouped_nearest.items()):
+        print(
+            f"{method:24s} {sign:>4s} {target:24s} "
+            f"{statistics.mean(values):8.3f}%"
         )
     print(f"[saved] {output_dir}")
 
