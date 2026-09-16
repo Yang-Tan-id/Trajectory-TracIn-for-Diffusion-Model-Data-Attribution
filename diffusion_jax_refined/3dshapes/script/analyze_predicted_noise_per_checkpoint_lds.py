@@ -62,6 +62,11 @@ def main() -> None:
     parser.add_argument("--train-seed", type=int, default=42)
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--num-probes", type=int, default=8)
+    parser.add_argument(
+        "--contraction",
+        choices=("checkpoint_timestamp_sum_square", "squared"),
+        default="checkpoint_timestamp_sum_square",
+    )
     parser.add_argument("--prediction-sign", type=float, choices=(-1.0, 1.0), default=-1.0)
     args = parser.parse_args()
 
@@ -76,7 +81,7 @@ def main() -> None:
             args.train_seed,
             args.run_id,
             args.num_probes,
-            "checkpoint_timestamp_sum_square",
+            args.contraction,
             "",
         )
         / "per_checkpoint_scores.npz"
@@ -97,10 +102,15 @@ def main() -> None:
 
     records = json.loads((SHAPES_ROOT / "queries_seed_0_9.json").read_text())["queries"]
     result_root = SHAPES_ROOT / "result" / args.experiment
+    reduction_tag = (
+        "checkpoint_timestamp_mean_square"
+        if args.contraction == "checkpoint_timestamp_sum_square"
+        else "termwise_product_square"
+    )
     output = (
         result_root
         / "eval"
-        / f"probe{args.num_probes}_checkpoint_timestamp_mean_square_per_checkpoint"
+        / f"probe{args.num_probes}_{reduction_tag}_per_checkpoint"
         / f"run_{args.run_id}"
     )
     rows: list[dict] = []
@@ -179,7 +189,7 @@ def main() -> None:
                 )
     write_rows(output / "checkpoint_summary.csv", summary_rows)
 
-    print("\nBOTH-L2 — 10-query mean LDS per checkpoint")
+    print(f"\nBOTH-L2 — {reduction_tag} — 10-query mean LDS per checkpoint")
     print(f"{'CKPT':>4s} {'EPOCH':>5s} {'ENDPOINT':>10s} {'TRAJ':>10s} {'CF JOINT':>10s} {'NOISE':>10s} {'SIMPLE':>10s}")
     print("-" * 78)
     for checkpoint in range(1, 51):

@@ -347,10 +347,10 @@ def score_shard(args: argparse.Namespace) -> None:
     }
     checkpoint_scores = None
     if args.retain_checkpoint_scores:
-        if args.contraction != "checkpoint_timestamp_sum_square":
+        if args.contraction not in ("checkpoint_timestamp_sum_square", "squared"):
             raise ValueError(
-                "--retain-checkpoint-scores currently requires "
-                "--contraction checkpoint_timestamp_sum_square"
+                "--retain-checkpoint-scores currently requires contraction "
+                "checkpoint_timestamp_sum_square or squared"
             )
         checkpoint_scores = {
             component: np.zeros((50, 10, 5000), dtype=np.float64)
@@ -473,6 +473,15 @@ def score_shard(args: argparse.Namespace) -> None:
                 term_weight = float(weight)
                 for component, values in term_scores.items():
                     sums[component] += term_weight * values
+                    if (
+                        checkpoint_scores is not None
+                        and args.contraction == "squared"
+                    ):
+                        # Retain E_timestamp[E_probe[z^2]] without the positive
+                        # checkpoint-wide LR scalar for independent LDS auditing.
+                        checkpoint_scores[component][ckpt_i] += (
+                            values / float(len(timesteps))
+                        )
             used_terms += 1
 
         if args.contraction == "checkpoint_timestamp_sum_square":
@@ -542,10 +551,10 @@ def merge(args: argparse.Namespace) -> None:
     }
     checkpoint_totals = None
     if args.retain_checkpoint_scores:
-        if args.contraction != "checkpoint_timestamp_sum_square":
+        if args.contraction not in ("checkpoint_timestamp_sum_square", "squared"):
             raise ValueError(
-                "--retain-checkpoint-scores currently requires "
-                "--contraction checkpoint_timestamp_sum_square"
+                "--retain-checkpoint-scores currently requires contraction "
+                "checkpoint_timestamp_sum_square or squared"
             )
         checkpoint_totals = {
             component: np.zeros((50, 10, 5000), dtype=np.float64)

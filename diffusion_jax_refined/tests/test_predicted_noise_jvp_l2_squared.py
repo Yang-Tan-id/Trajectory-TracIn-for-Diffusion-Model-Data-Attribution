@@ -492,6 +492,31 @@ class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
         self.assertIn('--num-probes "${NUM_PROBES}"', launcher)
         self.assertIn('predicted_noise_probe12_per_checkpoint_lds', launcher)
 
+    def test_product_square_per_checkpoint_supports_probe8_and_probe12(self):
+        driver = (
+            ROOT / "3dshapes" / "script" / "run_predicted_noise_jvp_l2_squared.py"
+        ).read_text()
+        analyzer = (
+            ROOT
+            / "3dshapes"
+            / "script"
+            / "analyze_predicted_noise_per_checkpoint_lds.py"
+        ).read_text()
+        launcher = (
+            ROOT
+            / "3dshapes"
+            / "tacc"
+            / "rtx_small"
+            / "run_predicted_noise_product_square_per_checkpoint_lds_rtx_small.sh"
+        ).read_text()
+
+        self.assertIn('args.contraction == "squared"', driver)
+        self.assertIn('values / float(len(timesteps))', driver)
+        self.assertIn('choices=("checkpoint_timestamp_sum_square", "squared")', analyzer)
+        self.assertIn('termwise_product_square', analyzer)
+        self.assertIn('export NUM_PROBES="${NUM_PROBES:-8}"', launcher)
+        self.assertIn('--contraction squared --retain-checkpoint-scores', launcher)
+
     def test_shared_orthogonal_probe4_timestamp_checkpoint_square_pipeline(self):
         launcher = (
             ROOT
