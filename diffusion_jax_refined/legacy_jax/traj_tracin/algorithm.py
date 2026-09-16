@@ -2300,6 +2300,19 @@ def run_attribution(cfg: TrajAttributionConfig):
         )
         return next_params
 
+    def previous_checkpoint_params(ckpt_i: int):
+        previous_ckpt_path = ckpts[ckpt_i - 1]
+        previous_state, _ = adapter.restore_state(previous_ckpt_path, state_template)
+        previous_params = tree_to_device(
+            select_state_params(previous_state, cfg.parameter_source), device
+        )
+        print(
+            f"[checkpoint {ckpt_i + 1}/{len(ckpts)}] "
+            f"alignment target is previous checkpoint: "
+            f"{os.path.basename(previous_ckpt_path)}"
+        )
+        return previous_params
+
     def query_target_params_for_checkpoint(ckpt_i: int):
         if not uses_next_checkpoint_target:
             return reference_params
@@ -2908,6 +2921,18 @@ def run_attribution(cfg: TrajAttributionConfig):
             ).strip().lower()
             in ("1", "true", "yes", "on")
         )
+        probe_alignment_previous_checkpoint = (
+            probe_alignment_only
+            and os.environ.get(
+                "TRAJ_TRACIN_PROBE_ALIGNMENT_PREVIOUS_CHECKPOINT", "0"
+            ).strip().lower()
+            in ("1", "true", "yes", "on")
+        )
+        if probe_alignment_next_checkpoint and probe_alignment_previous_checkpoint:
+            raise ValueError(
+                "TRAJ_TRACIN_PROBE_ALIGNMENT_NEXT_CHECKPOINT and "
+                "TRAJ_TRACIN_PROBE_ALIGNMENT_PREVIOUS_CHECKPOINT are mutually exclusive"
+            )
         probe_alignment_count = int(
             os.environ.get(
                 "TRAJ_TRACIN_PROBE_ALIGNMENT_COUNT",
@@ -2933,7 +2958,11 @@ def run_attribution(cfg: TrajAttributionConfig):
             if stage_mode == "train"
             else (
                 len(ckpts) - 1
-                if uses_next_checkpoint_target or probe_alignment_next_checkpoint
+                if (
+                    uses_next_checkpoint_target
+                    or probe_alignment_next_checkpoint
+                    or probe_alignment_previous_checkpoint
+                )
                 else len(ckpts)
             )
         )
@@ -3022,6 +3051,17 @@ def run_attribution(cfg: TrajAttributionConfig):
                 continue
             if (
                 stage_mode != "train"
+                and probe_alignment_previous_checkpoint
+                and ckpt_i == 0
+            ):
+                print(
+                    f"[stage:{stage_mode}] skipping first checkpoint "
+                    f"{ckpt_i + 1}/{len(ckpts)}: no previous-checkpoint alignment target",
+                    flush=True,
+                )
+                continue
+            if (
+                stage_mode != "train"
                 and (uses_next_checkpoint_target or probe_alignment_next_checkpoint)
                 and ckpt_i + 1 >= len(ckpts)
             ):
@@ -3071,6 +3111,11 @@ def run_attribution(cfg: TrajAttributionConfig):
             alignment_next_params = (
                 next_checkpoint_params(ckpt_i)
                 if probe_alignment_next_checkpoint
+                else None
+            )
+            alignment_previous_params = (
+                previous_checkpoint_params(ckpt_i)
+                if probe_alignment_previous_checkpoint
                 else None
             )
             projector = None
@@ -3310,15 +3355,27 @@ def run_attribution(cfg: TrajAttributionConfig):
                             probe_alignment_probe_norms.append(
                                 np.asarray(jax.device_get(probe_norm), dtype=np.float32)
                             )
-                            if probe_alignment_next_checkpoint:
-                                assert alignment_next_params is not None
-                                next_eps_chunk = alignment_eps_chunk_fn(
-                                    alignment_next_params,
+                            if (
+                                probe_alignment_next_checkpoint
+                                or probe_alignment_previous_checkpoint
+                            ):
+                                adjacent_params = (
+                                    alignment_next_params
+                                    if probe_alignment_next_checkpoint
+                                    else alignment_previous_params
+                                )
+                                assert adjacent_params is not None
+                                adjacent_eps_chunk = alignment_eps_chunk_fn(
+                                    adjacent_params,
                                     xt_chunk,
                                     t_chunk,
                                     query_cond,
                                 )
-                                delta_eps_chunk = next_eps_chunk - eps_chunk
+                                delta_eps_chunk = (
+                                    adjacent_eps_chunk - eps_chunk
+                                    if probe_alignment_next_checkpoint
+                                    else eps_chunk - adjacent_eps_chunk
+                                )
 
                                 def alignment_values(output):
                                     output_dot = jnp.sum(
@@ -3343,7 +3400,7 @@ def run_attribution(cfg: TrajAttributionConfig):
                                     return output_scalar, output_cosine, output_norm
 
                                 next_scalar, next_cosine, next_norm = alignment_values(
-                                    next_eps_chunk
+                                    adjacent_eps_chunk
                                 )
                                 delta_scalar, delta_cosine, delta_norm = alignment_values(
                                     delta_eps_chunk
@@ -3365,7 +3422,8 @@ def run_attribution(cfg: TrajAttributionConfig):
                                     eps_chunk * reference_eps_chunk, axis=output_axes
                                 )
                                 next_reference_dot = jnp.sum(
-                                    next_eps_chunk * reference_eps_chunk, axis=output_axes
+                                    adjacent_eps_chunk * reference_eps_chunk,
+                                    axis=output_axes,
                                 )
                                 current_reference_l2 = jnp.sqrt(
                                     jnp.sum(
@@ -3375,7 +3433,9 @@ def run_attribution(cfg: TrajAttributionConfig):
                                 )
                                 next_reference_l2 = jnp.sqrt(
                                     jnp.sum(
-                                        jnp.square(next_eps_chunk - reference_eps_chunk),
+                                        jnp.square(
+                                            adjacent_eps_chunk - reference_eps_chunk
+                                        ),
                                         axis=output_axes,
                                     )
                                 )
@@ -4316,45 +4376,63 @@ def run_attribution(cfg: TrajAttributionConfig):
                     "scalar=dot(v,eps)/sqrt(D); cosine=dot(v,eps)/(norm(v)*norm(eps))"
                 ),
             )
-            if probe_alignment_next_checkpoint:
+            if probe_alignment_next_checkpoint or probe_alignment_previous_checkpoint:
+                adjacent_prefix = (
+                    "next" if probe_alignment_next_checkpoint else "previous"
+                )
+                delta_prefix = (
+                    "next_checkpoint" if probe_alignment_next_checkpoint
+                    else "previous_checkpoint"
+                )
+                delta_probe_cosines_key = (
+                    "next_checkpoint_delta_probe_cosines"
+                    if probe_alignment_next_checkpoint
+                    else "previous_checkpoint_delta_probe_cosines"
+                )
                 alignment_payload.update(
-                    next_predicted_noise_probe_scalars=np.concatenate(
+                    **{
+                    f"{adjacent_prefix}_predicted_noise_probe_scalars": np.concatenate(
                         probe_alignment_next_scalars, axis=1
                     ),
-                    next_predicted_noise_probe_cosines=np.concatenate(
+                    f"{adjacent_prefix}_predicted_noise_probe_cosines": np.concatenate(
                         probe_alignment_next_cosines, axis=1
                     ),
-                    next_predicted_noise_norms=np.concatenate(
+                    f"{adjacent_prefix}_predicted_noise_norms": np.concatenate(
                         probe_alignment_next_eps_norms
                     ),
-                    next_checkpoint_delta_probe_scalars=np.concatenate(
+                    f"{delta_prefix}_delta_probe_scalars": np.concatenate(
                         probe_alignment_delta_scalars, axis=1
                     ),
-                    next_checkpoint_delta_probe_cosines=np.concatenate(
+                    delta_probe_cosines_key: np.concatenate(
                         probe_alignment_delta_cosines, axis=1
                     ),
-                    next_checkpoint_delta_norms=np.concatenate(
+                    f"{delta_prefix}_delta_norms": np.concatenate(
                         probe_alignment_delta_norms
                     ),
-                    reference_predicted_noise_norms=np.concatenate(
+                    "reference_predicted_noise_norms": np.concatenate(
                         probe_alignment_reference_norms
                     ),
-                    current_to_reference_predicted_noise_l2=np.concatenate(
+                    "current_to_reference_predicted_noise_l2": np.concatenate(
                         probe_alignment_current_reference_l2
                     ),
-                    next_to_reference_predicted_noise_l2=np.concatenate(
+                    f"{adjacent_prefix}_to_reference_predicted_noise_l2": np.concatenate(
                         probe_alignment_next_reference_l2
                     ),
-                    current_to_reference_predicted_noise_cosines=np.concatenate(
+                    "current_to_reference_predicted_noise_cosines": np.concatenate(
                         probe_alignment_current_reference_cosines
                     ),
-                    next_to_reference_predicted_noise_cosines=np.concatenate(
+                    f"{adjacent_prefix}_to_reference_predicted_noise_cosines": np.concatenate(
                         probe_alignment_next_reference_cosines
                     ),
-                    next_checkpoint_delta_definition=np.asarray(
-                        "delta_eps=eps(params[c+1],x_t)-eps(params[c],x_t); "
-                        "x_t and conditioning are held fixed"
+                    f"{delta_prefix}_delta_definition": np.asarray(
+                        (
+                            "delta_eps=eps(params[c+1],x_t)-eps(params[c],x_t); "
+                            if probe_alignment_next_checkpoint
+                            else "delta_eps=eps(params[c],x_t)-eps(params[c-1],x_t); "
+                        )
+                        + "x_t and conditioning are held fixed"
                     ),
+                    },
                 )
             save_npz_compressed_atomic(stage_artifact_path, **alignment_payload)
             print(

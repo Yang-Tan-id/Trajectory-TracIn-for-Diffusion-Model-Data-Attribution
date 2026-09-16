@@ -53,7 +53,51 @@ class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
             ROOT / "legacy_jax" / "traj_tracin" / "algorithm.py"
         ).read_text()
         self.assertIn("current_to_reference_predicted_noise_l2", algorithm)
-        self.assertIn("next_to_reference_predicted_noise_cosines", algorithm)
+        self.assertIn(
+            'f"{adjacent_prefix}_to_reference_predicted_noise_cosines"',
+            algorithm,
+        )
+
+    def test_previous_delta_uses_same_reference_orientation_rule(self):
+        output = {
+            "cosine_to_next_predicted_noise_delta": np.asarray([0.25, -0.75]),
+            "current_to_reference_predicted_noise_l2": np.asarray([1.0, 1.0]),
+            "next_to_reference_predicted_noise_l2": np.asarray([2.0, 2.0]),
+            "current_to_reference_predicted_noise_cosines": np.asarray([0.8, 0.8]),
+            "next_to_reference_predicted_noise_cosines": np.asarray([0.7, 0.7]),
+        }
+        np.testing.assert_allclose(
+            output_selection_values(
+                output, "reference_l2_oriented_previous_delta"
+            ),
+            [0.25, -0.75],
+        )
+        np.testing.assert_allclose(
+            output_selection_values(
+                output, "reference_cosine_oriented_previous_delta"
+            ),
+            [0.25, -0.75],
+        )
+
+        algorithm = (
+            ROOT / "legacy_jax" / "traj_tracin" / "algorithm.py"
+        ).read_text()
+        self.assertIn("TRAJ_TRACIN_PROBE_ALIGNMENT_PREVIOUS_CHECKPOINT", algorithm)
+        self.assertIn('else "previous_checkpoint"', algorithm)
+        self.assertIn("previous_checkpoint_delta_probe_cosines", algorithm)
+        self.assertIn("eps(params[c],x_t)-eps(params[c-1],x_t)", algorithm)
+
+    def test_previous_delta_launcher_starts_from_checkpoint_two(self):
+        launcher = (
+            ROOT
+            / "3dshapes"
+            / "tacc"
+            / "rtx_small"
+            / "run_reference_oriented_previous_delta_all_queries_rtx_small.sh"
+        ).read_text()
+        self.assertIn("TRAJ_TRACIN_PROBE_ALIGNMENT_PREVIOUS_CHECKPOINT=1", launcher)
+        self.assertIn("--checkpoint-direction previous", launcher)
+        self.assertIn("checkpoints 2-50", launcher)
 
     def test_all_query_delta_launcher_uses_fixed_full_query_list(self):
         launcher = (

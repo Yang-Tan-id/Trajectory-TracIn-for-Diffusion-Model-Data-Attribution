@@ -41,10 +41,26 @@ OUTPUT_SELECTIONS = {
     "delta_noise_direction": "cosine_to_next_predicted_noise_delta",
     "reference_l2_oriented_delta": "reference_l2_oriented_delta",
     "reference_cosine_oriented_delta": "reference_cosine_oriented_delta",
+    "previous_noise_direction": "cosine_to_next_predicted_noise",
+    "previous_delta_noise_direction": "cosine_to_next_predicted_noise_delta",
+    "reference_l2_oriented_previous_delta": "reference_l2_oriented_delta",
+    "reference_cosine_oriented_previous_delta": "reference_cosine_oriented_delta",
 }
 
 
 def enabled_output_selections(args: argparse.Namespace) -> tuple[str, ...]:
+    if args.checkpoint_direction == "previous":
+        base = (
+            "current_noise_direction",
+            "previous_noise_direction",
+            "previous_delta_noise_direction",
+        )
+        if not args.include_reference_oriented:
+            return base
+        return base + (
+            "reference_l2_oriented_previous_delta",
+            "reference_cosine_oriented_previous_delta",
+        )
     base = (
         "current_noise_direction",
         "next_noise_direction",
@@ -104,10 +120,20 @@ def output_selection_values(output: dict[str, np.ndarray], method: str) -> np.nd
     if key in output:
         return output[key]
     delta = output["cosine_to_next_predicted_noise_delta"]
+    if method == "reference_l2_oriented_previous_delta":
+        current = output["current_to_reference_predicted_noise_l2"]
+        previous = output["next_to_reference_predicted_noise_l2"]
+        orientation = 1.0 if current[0] <= previous[0] else -1.0
+        return orientation * delta
     if method == "reference_l2_oriented_delta":
         current = output["current_to_reference_predicted_noise_l2"]
         following = output["next_to_reference_predicted_noise_l2"]
         orientation = 1.0 if following[0] <= current[0] else -1.0
+        return orientation * delta
+    if method == "reference_cosine_oriented_previous_delta":
+        current = output["current_to_reference_predicted_noise_cosines"]
+        previous = output["next_to_reference_predicted_noise_cosines"]
+        orientation = 1.0 if current[0] >= previous[0] else -1.0
         return orientation * delta
     if method == "reference_cosine_oriented_delta":
         current = output["current_to_reference_predicted_noise_cosines"]
@@ -118,11 +144,25 @@ def output_selection_values(output: dict[str, np.ndarray], method: str) -> np.nd
 
 
 def reference_orientation_sign(output: dict[str, np.ndarray], method: str) -> float:
+    if method == "reference_l2_oriented_previous_delta":
+        return (
+            1.0
+            if output["current_to_reference_predicted_noise_l2"][0]
+            <= output["next_to_reference_predicted_noise_l2"][0]
+            else -1.0
+        )
     if method == "reference_l2_oriented_delta":
         return (
             1.0
             if output["next_to_reference_predicted_noise_l2"][0]
             <= output["current_to_reference_predicted_noise_l2"][0]
+            else -1.0
+        )
+    if method == "reference_cosine_oriented_previous_delta":
+        return (
+            1.0
+            if output["current_to_reference_predicted_noise_cosines"][0]
+            >= output["next_to_reference_predicted_noise_cosines"][0]
             else -1.0
         )
     if method == "reference_cosine_oriented_delta":
@@ -161,7 +201,13 @@ def analyze_shard(args: argparse.Namespace) -> None:
     output_selection_rows: list[dict[str, object]] = []
     output_selected_totals = None
     score_indices_ref = None
-    for ckpt_i in range(args.shard_index, 49, args.shard_count):
+    checkpoint_start = 0 if args.checkpoint_direction == "next" else 1
+    checkpoint_stop = 49 if args.checkpoint_direction == "next" else 50
+    for ckpt_i in range(
+        checkpoint_start + args.shard_index,
+        checkpoint_stop,
+        args.shard_count,
+    ):
         path = train_part_dir(args.experiment, args.train_seed) / f"ckpt_{ckpt_i:04d}.npz"
         if not path.is_file():
             raise FileNotFoundError(path)
@@ -560,6 +606,11 @@ def main() -> None:
         "--fresh-namespace", default="predicted_noise_output_next_fresh12"
     )
     parser.add_argument("--include-reference-oriented", action="store_true")
+    parser.add_argument(
+        "--checkpoint-direction",
+        choices=("next", "previous"),
+        default="next",
+    )
     args = parser.parse_args()
     args.query_ids = tuple(int(value) for value in args.query_ids.split(","))
     args.out_dir = args.out_dir or (

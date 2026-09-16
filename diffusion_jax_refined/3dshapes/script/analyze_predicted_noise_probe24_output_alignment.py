@@ -77,28 +77,50 @@ def load_bank(args: argparse.Namespace, query_id: int, bank: str) -> dict[tuple[
     )
     if not path.is_file():
         raise FileNotFoundError(path)
+    checkpoint_direction = getattr(args, "checkpoint_direction", "next")
+    if checkpoint_direction not in ("next", "previous"):
+        raise ValueError(f"unsupported checkpoint direction: {checkpoint_direction}")
+    adjacent = checkpoint_direction
+    delta_prefix = (
+        "next_checkpoint" if checkpoint_direction == "next" else "previous_checkpoint"
+    )
     with np.load(path, allow_pickle=False) as payload:
         ckpts = np.asarray(payload["ckpt_indices"], dtype=np.int32)
         timesteps = np.asarray(payload["timesteps"], dtype=np.int32)
         current = np.asarray(payload["probe_cosines"], dtype=np.float64)
         following = np.asarray(
-            payload["next_predicted_noise_probe_cosines"], dtype=np.float64
+            payload[f"{adjacent}_predicted_noise_probe_cosines"], dtype=np.float64
         )
         delta = np.asarray(
-            payload["next_checkpoint_delta_probe_cosines"], dtype=np.float64
+            payload[f"{delta_prefix}_delta_probe_cosines"], dtype=np.float64
         )
         delta_scalar = np.asarray(
-            payload["next_checkpoint_delta_probe_scalars"], dtype=np.float64
+            payload[f"{delta_prefix}_delta_probe_scalars"], dtype=np.float64
         )
         reference_metrics = {}
-        for key in (
-            "current_to_reference_predicted_noise_l2",
-            "next_to_reference_predicted_noise_l2",
-            "current_to_reference_predicted_noise_cosines",
-            "next_to_reference_predicted_noise_cosines",
-        ):
-            if key in payload:
-                reference_metrics[key] = np.asarray(payload[key], dtype=np.float64)
+        reference_key_pairs = (
+            (
+                "current_to_reference_predicted_noise_l2",
+                "current_to_reference_predicted_noise_l2",
+            ),
+            (
+                f"{adjacent}_to_reference_predicted_noise_l2",
+                "next_to_reference_predicted_noise_l2",
+            ),
+            (
+                "current_to_reference_predicted_noise_cosines",
+                "current_to_reference_predicted_noise_cosines",
+            ),
+            (
+                f"{adjacent}_to_reference_predicted_noise_cosines",
+                "next_to_reference_predicted_noise_cosines",
+            ),
+        )
+        for payload_key, canonical_key in reference_key_pairs:
+            if payload_key in payload:
+                reference_metrics[canonical_key] = np.asarray(
+                    payload[payload_key], dtype=np.float64
+                )
     result = {}
     for term, (ckpt, timestep) in enumerate(zip(ckpts, timesteps)):
         for probe in range(current.shape[0]):
