@@ -19,6 +19,7 @@ from materialize_f_next_final_score_squared import square_final_scores
 from analyze_predicted_noise_angle_oriented_scores import aggregate_oriented_queries
 from analyze_predicted_noise_probe24_term_winners import select_nearest_probe_scores
 from analyze_nearest_train_probe_predicted_noise_relation import (
+    ALIGNMENT_KEYS,
     OUTPUT_SELECTIONS,
     output_selection_values,
     selected_probe_indices,
@@ -185,6 +186,7 @@ class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
             / "run_delta_noise_direction_continuity_all_queries_rtx_small.sh"
         ).read_text()
         self.assertIn("--include-delta-continuity", launcher)
+        self.assertIn("delta_continuity_sign", ALIGNMENT_KEYS)
 
     def test_next_noise_selected_product_is_squared_before_term_sum(self):
         selected = np.asarray([-0.5, 0.0, 0.75], dtype=np.float64)

@@ -37,6 +37,8 @@ ALIGNMENT_KEYS = (
     "cosine_to_reference_predicted_noise_direction_delta",
     "cosine_to_future_mean_predicted_noise_delta",
     "cosine_to_future_lr_weighted_predicted_noise_delta",
+    "delta_continuity_cosine",
+    "delta_continuity_sign",
 )
 METHODS = ("nearest_direction", "nearest_axis_signed")
 OUTPUT_SELECTIONS = {
