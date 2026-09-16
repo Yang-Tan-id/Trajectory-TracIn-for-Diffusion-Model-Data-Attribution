@@ -150,6 +150,25 @@ class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
         )
         self.assertNotIn("run_traj_tracin_queries_and_scores.py", launcher)
 
+    def test_old_and_fresh12_final_square_launcher_is_cached(self):
+        launcher = (
+            ROOT
+            / "3dshapes"
+            / "tacc"
+            / "rtx_small"
+            / "run_predicted_noise_old_fresh12_final_square_lds_cached_rtx_small.sh"
+        ).read_text()
+        self.assertIn("complete trajectory per probe, then square", launcher)
+        self.assertIn(
+            "predicted_noise_jvp_final_square_then_mean_probe12", launcher
+        )
+        self.assertIn(
+            "predicted_noise_jvp_final_square_then_mean_probe12_fresh_seed20260915",
+            launcher,
+        )
+        self.assertNotIn("score-shard", launcher)
+        self.assertNotIn("run_traj_tracin_queries_and_scores.py", launcher)
+
     def test_three_output_direction_selection_rules_exist(self):
         self.assertEqual(
             "cosine_to_next_predicted_noise_delta",
