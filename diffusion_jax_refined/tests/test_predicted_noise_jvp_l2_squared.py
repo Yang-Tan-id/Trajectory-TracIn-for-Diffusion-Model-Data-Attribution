@@ -22,6 +22,7 @@ from analyze_nearest_train_probe_predicted_noise_relation import (
     ALIGNMENT_KEYS,
     OUTPUT_SELECTIONS,
     combine_probe_query_features_mc,
+    mc24_product_square_scores,
     output_selection_values,
     selected_probe_indices,
     transform_output_selected_scores,
@@ -64,6 +65,27 @@ class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
         self.assertIn("--include-delta-mc24", launcher)
         self.assertIn("predicted_noise_output_next_original12", launcher)
         self.assertIn("predicted_noise_output_next_fresh12", launcher)
+        self.assertNotIn("run_traj_tracin_queries_and_scores.py", launcher)
+
+    def test_mc24_product_square_has_all_four_normalization_variants(self):
+        train = np.asarray([[3.0, 4.0], [0.0, 2.0]])
+        query = np.asarray([[1.0, -2.0], [2.0, 1.0]])
+        scores = mc24_product_square_scores(train, query)
+        self.assertEqual(
+            {"raw", "query_l2", "train_l2", "query_train_l2"},
+            set(scores),
+        )
+        np.testing.assert_allclose(scores["raw"], np.square(train @ query.T))
+        self.assertTrue(all(np.all(values >= 0.0) for values in scores.values()))
+
+        launcher = (
+            ROOT
+            / "3dshapes"
+            / "tacc"
+            / "rtx_small"
+            / "run_delta_noise_mc24_product_square_cached_rtx_small.sh"
+        ).read_text()
+        self.assertIn("--include-delta-mc24-product-square", launcher)
         self.assertNotIn("run_traj_tracin_queries_and_scores.py", launcher)
 
     def test_three_output_direction_selection_rules_exist(self):

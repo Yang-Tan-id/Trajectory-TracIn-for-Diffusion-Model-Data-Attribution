@@ -67,6 +67,12 @@ OUTPUT_SELECTIONS = {
         "cosine_to_future_lr_weighted_predicted_noise_delta"
     ),
 }
+MC24_PRODUCT_SQUARE_VARIANTS = (
+    "raw",
+    "query_l2",
+    "train_l2",
+    "query_train_l2",
+)
 
 
 def enabled_output_selections(args: argparse.Namespace) -> tuple[str, ...]:
@@ -110,6 +116,11 @@ def enabled_output_selections(args: argparse.Namespace) -> tuple[str, ...]:
         result += ("delta_noise_direction_continuity_signed",)
     if args.include_delta_mc24:
         result += ("delta_noise_mc24",)
+    if args.include_delta_mc24_product_square:
+        result += tuple(
+            f"delta_noise_mc24_product_square_{variant}"
+            for variant in MC24_PRODUCT_SQUARE_VARIANTS
+        )
     return result
 
 
@@ -163,6 +174,26 @@ def combine_probe_query_features_mc(
         axis=0,
         dtype=np.float64,
     )
+
+
+def mc24_product_square_scores(
+    train_features: np.ndarray,
+    query_features: np.ndarray,
+) -> dict[str, np.ndarray]:
+    train_features = np.asarray(train_features, dtype=np.float64)
+    query_features = np.asarray(query_features, dtype=np.float64)
+    if train_features.ndim != 2 or query_features.ndim != 2:
+        raise ValueError("train_features and query_features must both be matrices")
+    if train_features.shape[1] != query_features.shape[1]:
+        raise ValueError("train/query projected dimensions differ")
+    train_unit = unit_rows(train_features)
+    query_unit = unit_rows(query_features)
+    return {
+        "raw": np.square(train_features @ query_features.T),
+        "query_l2": np.square(train_features @ query_unit.T),
+        "train_l2": np.square(train_unit @ query_features.T),
+        "query_train_l2": np.square(train_unit @ query_unit.T),
+    }
 
 
 def probe_alignment_matrix(
@@ -325,7 +356,8 @@ def analyze_shard(args: argparse.Namespace) -> None:
                 for query_id in args.query_ids
             ]
             mc_scores_all = None
-            if args.include_delta_mc24:
+            mc_product_square_all = None
+            if args.include_delta_mc24 or args.include_delta_mc24_product_square:
                 combined_queries = np.stack(
                     [
                         combine_probe_query_features_mc(
@@ -344,6 +376,38 @@ def analyze_shard(args: argparse.Namespace) -> None:
                     ),
                     dtype=np.float64,
                 )
+                if args.include_delta_mc24_product_square:
+                    train_raw_device = jnp.asarray(train[local_term])
+                    query_raw_device = jnp.asarray(combined_queries)
+                    query_unit_device = jnp.asarray(combined_query_units)
+                    train_unit_device = jnp.asarray(train_unit)
+                    mc_product_square_all = {
+                        "raw": np.asarray(
+                            jax.device_get(
+                                jnp.square(
+                                    train_raw_device @ query_raw_device.T
+                                )
+                            ),
+                            dtype=np.float64,
+                        ),
+                        "query_l2": np.asarray(
+                            jax.device_get(
+                                jnp.square(
+                                    train_raw_device @ query_unit_device.T
+                                )
+                            ),
+                            dtype=np.float64,
+                        ),
+                        "train_l2": np.asarray(
+                            jax.device_get(
+                                jnp.square(
+                                    train_unit_device @ query_raw_device.T
+                                )
+                            ),
+                            dtype=np.float64,
+                        ),
+                        "query_train_l2": np.square(mc_scores_all),
+                    }
 
             for qslot, query_id in enumerate(args.query_ids):
                 scores = scores_all[:, qslot * 24 : (qslot + 1) * 24]
@@ -353,6 +417,14 @@ def analyze_shard(args: argparse.Namespace) -> None:
                     if method == "delta_noise_mc24":
                         assert mc_scores_all is not None
                         selected_scores = mc_scores_all[:, qslot]
+                        selected_probe = -1
+                        selection_value = np.nan
+                    elif method.startswith("delta_noise_mc24_product_square_"):
+                        assert mc_product_square_all is not None
+                        variant = method.removeprefix(
+                            "delta_noise_mc24_product_square_"
+                        )
+                        selected_scores = mc_product_square_all[variant][:, qslot]
                         selected_probe = -1
                         selection_value = np.nan
                     else:
@@ -744,6 +816,9 @@ def main() -> None:
     )
     parser.add_argument("--include-delta-continuity", action="store_true")
     parser.add_argument("--include-delta-mc24", action="store_true")
+    parser.add_argument(
+        "--include-delta-mc24-product-square", action="store_true"
+    )
     parser.add_argument(
         "--checkpoint-direction",
         choices=("next", "previous"),
