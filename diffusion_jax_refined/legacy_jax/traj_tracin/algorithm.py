@@ -2928,6 +2928,18 @@ def run_attribution(cfg: TrajAttributionConfig):
             ).strip().lower()
             in ("1", "true", "yes", "on")
         )
+        probe_alignment_future_mean = (
+            probe_alignment_only
+            and os.environ.get(
+                "TRAJ_TRACIN_PROBE_ALIGNMENT_FUTURE_MEAN", "0"
+            ).strip().lower()
+            in ("1", "true", "yes", "on")
+        )
+        if probe_alignment_future_mean and not probe_alignment_next_checkpoint:
+            raise ValueError(
+                "TRAJ_TRACIN_PROBE_ALIGNMENT_FUTURE_MEAN requires "
+                "TRAJ_TRACIN_PROBE_ALIGNMENT_NEXT_CHECKPOINT=1"
+            )
         if probe_alignment_next_checkpoint and probe_alignment_previous_checkpoint:
             raise ValueError(
                 "TRAJ_TRACIN_PROBE_ALIGNMENT_NEXT_CHECKPOINT and "
@@ -2983,6 +2995,8 @@ def run_attribution(cfg: TrajAttributionConfig):
         probe_alignment_reference_delta_scalars = []
         probe_alignment_reference_delta_cosines = []
         probe_alignment_reference_delta_norms = []
+        probe_alignment_current_eps_outputs = []
+        probe_alignment_final_eps_outputs = []
         probe_alignment_current_reference_l2 = []
         probe_alignment_next_reference_l2 = []
         probe_alignment_current_reference_cosines = []
@@ -3324,6 +3338,12 @@ def run_attribution(cfg: TrajAttributionConfig):
                             eps_chunk = alignment_eps_chunk_fn(
                                 params, xt_chunk, t_chunk, query_cond
                             )
+                            if probe_alignment_future_mean:
+                                probe_alignment_current_eps_outputs.append(
+                                    np.asarray(
+                                        jax.device_get(eps_chunk), dtype=np.float32
+                                    )
+                                )
                             reduction_axes = tuple(range(2, probe_bank.ndim))
                             dot = jnp.sum(
                                 probe_bank * eps_chunk[None, ...],
@@ -3374,6 +3394,17 @@ def run_attribution(cfg: TrajAttributionConfig):
                                     t_chunk,
                                     query_cond,
                                 )
+                                if (
+                                    probe_alignment_future_mean
+                                    and probe_alignment_next_checkpoint
+                                    and ckpt_i + 2 == len(ckpts)
+                                ):
+                                    probe_alignment_final_eps_outputs.append(
+                                        np.asarray(
+                                            jax.device_get(adjacent_eps_chunk),
+                                            dtype=np.float32,
+                                        )
+                                    )
                                 delta_eps_chunk = (
                                     adjacent_eps_chunk - eps_chunk
                                     if probe_alignment_next_checkpoint
@@ -4405,6 +4436,128 @@ def run_attribution(cfg: TrajAttributionConfig):
                     "scalar=dot(v,eps)/sqrt(D); cosine=dot(v,eps)/(norm(v)*norm(eps))"
                 ),
             )
+            if probe_alignment_future_mean:
+                current_outputs = np.concatenate(
+                    probe_alignment_current_eps_outputs, axis=0
+                )
+                final_outputs = np.concatenate(
+                    probe_alignment_final_eps_outputs, axis=0
+                )
+                checkpoint_indices = np.asarray(stage_ckpt_indices, dtype=np.int32)
+                term_timestamps = np.asarray(stage_timesteps, dtype=np.int32)
+                term_positions = np.asarray(stage_snapshot_positions, dtype=np.int32)
+                checkpoint_values = np.unique(checkpoint_indices)
+                snapshots_per_checkpoint = int(cfg.num_traj_snapshots)
+                if not np.array_equal(
+                    checkpoint_values,
+                    np.arange(len(ckpts) - 1, dtype=np.int32),
+                ):
+                    raise ValueError(
+                        "future-mean alignment requires complete checkpoints 1..49"
+                    )
+                expected_current_shape = (
+                    (len(ckpts) - 1) * snapshots_per_checkpoint,
+                ) + tuple(current_outputs.shape[1:])
+                if current_outputs.shape != expected_current_shape:
+                    raise ValueError(
+                        "future-mean current output shape mismatch: "
+                        f"{current_outputs.shape} != {expected_current_shape}"
+                    )
+                if final_outputs.shape[0] != snapshots_per_checkpoint:
+                    raise ValueError(
+                        "future-mean final checkpoint output count mismatch: "
+                        f"{final_outputs.shape[0]} != {snapshots_per_checkpoint}"
+                    )
+                all_outputs = np.concatenate(
+                    (
+                        current_outputs.reshape(
+                            (len(ckpts) - 1, snapshots_per_checkpoint)
+                            + tuple(current_outputs.shape[1:])
+                        ),
+                        final_outputs[None, ...],
+                    ),
+                    axis=0,
+                ).astype(np.float64)
+                future_sums = np.cumsum(all_outputs[::-1], axis=0)[::-1]
+                future_deltas = []
+                for checkpoint_index in range(len(ckpts) - 1):
+                    future_count = len(ckpts) - checkpoint_index - 1
+                    future_mean = (
+                        future_sums[checkpoint_index + 1] / float(future_count)
+                    )
+                    future_deltas.append(
+                        future_mean - all_outputs[checkpoint_index]
+                    )
+                future_deltas = np.stack(future_deltas, axis=0).reshape(
+                    expected_current_shape
+                ).astype(np.float32)
+
+                def future_mean_alignment_one(keys, delta_output):
+                    probes = jax.vmap(
+                        lambda key: jax.random.normal(
+                            key, delta_output.shape, dtype=jnp.float32
+                        )
+                    )(keys)
+                    axes = tuple(range(1, probes.ndim))
+                    dots = jnp.sum(probes * delta_output[None, ...], axis=axes)
+                    probe_norms = jnp.sqrt(jnp.sum(jnp.square(probes), axis=axes))
+                    delta_norm = jnp.sqrt(jnp.sum(jnp.square(delta_output)))
+                    output_dimension = int(np.prod(delta_output.shape))
+                    scalars = dots / jnp.sqrt(
+                        jnp.asarray(output_dimension, dtype=jnp.float32)
+                    )
+                    cosines = dots / jnp.maximum(
+                        probe_norms * delta_norm,
+                        jnp.asarray(1e-12, dtype=jnp.float32),
+                    )
+                    return scalars, cosines, delta_norm
+
+                future_mean_alignment_fn = jax.jit(future_mean_alignment_one)
+                future_scalars = []
+                future_cosines = []
+                future_norms = []
+                for term_id, delta_output in enumerate(future_deltas):
+                    keys = array_to_device(
+                        jnp.stack(
+                            [
+                                predicted_noise_probe_key(
+                                    predicted_noise_probe_seed,
+                                    int(checkpoint_indices[term_id]),
+                                    int(term_timestamps[term_id]),
+                                    int(term_positions[term_id]),
+                                    probe_index,
+                                )
+                                for probe_index in range(probe_alignment_count)
+                            ],
+                            axis=0,
+                        ),
+                        device,
+                    )
+                    scalars, cosines, delta_norm = future_mean_alignment_fn(
+                        keys, array_to_device(jnp.asarray(delta_output), device)
+                    )
+                    future_scalars.append(
+                        np.asarray(jax.device_get(scalars), dtype=np.float32)
+                    )
+                    future_cosines.append(
+                        np.asarray(jax.device_get(cosines), dtype=np.float32)
+                    )
+                    future_norms.append(float(jax.device_get(delta_norm)))
+                alignment_payload.update(
+                    future_mean_delta_probe_scalars=np.stack(
+                        future_scalars, axis=1
+                    ),
+                    future_mean_delta_probe_cosines=np.stack(
+                        future_cosines, axis=1
+                    ),
+                    future_mean_delta_norms=np.asarray(
+                        future_norms, dtype=np.float32
+                    ),
+                    future_mean_delta_definition=np.asarray(
+                        "delta_future_mean=mean_{k>c}(eps(params[k],x_t))"
+                        "-eps(params[c],x_t); x_t and conditioning are held fixed"
+                    ),
+                )
             if probe_alignment_next_checkpoint or probe_alignment_previous_checkpoint:
                 adjacent_prefix = (
                     "next" if probe_alignment_next_checkpoint else "previous"

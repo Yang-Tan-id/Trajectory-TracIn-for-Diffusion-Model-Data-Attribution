@@ -114,6 +114,20 @@ def load_bank(args: argparse.Namespace, query_id: int, bank: str) -> dict[tuple[
             if "reference_checkpoint_delta_probe_scalars" in payload
             else None
         )
+        future_mean_delta = (
+            np.asarray(
+                payload["future_mean_delta_probe_cosines"], dtype=np.float64
+            )
+            if "future_mean_delta_probe_cosines" in payload
+            else None
+        )
+        future_mean_delta_scalar = (
+            np.asarray(
+                payload["future_mean_delta_probe_scalars"], dtype=np.float64
+            )
+            if "future_mean_delta_probe_scalars" in payload
+            else None
+        )
         reference_key_pairs = (
             (
                 "current_to_reference_predicted_noise_l2",
@@ -155,6 +169,14 @@ def load_bank(args: argparse.Namespace, query_id: int, bank: str) -> dict[tuple[
             if reference_delta_scalar is not None:
                 values["projection_on_reference_predicted_noise_delta"] = float(
                     reference_delta_scalar[probe, term]
+                )
+            if future_mean_delta is not None:
+                values["cosine_to_future_mean_predicted_noise_delta"] = float(
+                    future_mean_delta[probe, term]
+                )
+            if future_mean_delta_scalar is not None:
+                values["projection_on_future_mean_predicted_noise_delta"] = float(
+                    future_mean_delta_scalar[probe, term]
                 )
             values.update(
                 {key: float(metric[term]) for key, metric in reference_metrics.items()}

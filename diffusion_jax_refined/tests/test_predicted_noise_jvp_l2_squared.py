@@ -153,6 +153,35 @@ class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
         self.assertIn("--include-next-product-square", launcher)
         self.assertIn("square every Both-L2 product", launcher)
 
+    def test_future_mean_delta_direction_contract(self):
+        output = {
+            "cosine_to_future_mean_predicted_noise_delta": np.asarray(
+                [-0.4, 0.1, 0.9]
+            )
+        }
+        np.testing.assert_allclose(
+            output_selection_values(output, "future_mean_delta_noise_direction"),
+            [-0.4, 0.1, 0.9],
+        )
+
+        algorithm = (
+            ROOT / "legacy_jax" / "traj_tracin" / "algorithm.py"
+        ).read_text()
+        self.assertIn("TRAJ_TRACIN_PROBE_ALIGNMENT_FUTURE_MEAN", algorithm)
+        self.assertIn("future_sums[checkpoint_index + 1]", algorithm)
+        self.assertIn("future_mean - all_outputs[checkpoint_index]", algorithm)
+        self.assertIn("future_mean_delta_probe_cosines", algorithm)
+
+        launcher = (
+            ROOT
+            / "3dshapes"
+            / "tacc"
+            / "rtx_small"
+            / "run_future_mean_delta_direction_all_queries_rtx_small.sh"
+        ).read_text()
+        self.assertIn("TRAJ_TRACIN_PROBE_ALIGNMENT_FUTURE_MEAN=1", launcher)
+        self.assertIn("--include-future-mean-delta", launcher)
+
     def test_all_query_delta_launcher_uses_fixed_full_query_list(self):
         launcher = (
             ROOT
