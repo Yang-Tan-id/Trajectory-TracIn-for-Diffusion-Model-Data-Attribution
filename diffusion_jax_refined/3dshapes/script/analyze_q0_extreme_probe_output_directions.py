@@ -172,7 +172,9 @@ def main() -> None:
         pair = np.asarray(jax.device_get(generate_pair(keys)), dtype=np.float32).reshape(
             2, dimension
         )
-        pair /= np.maximum(np.linalg.norm(pair, axis=1, keepdims=True), 1e-12)
+        pair = pair / np.maximum(
+            np.linalg.norm(pair, axis=1, keepdims=True), 1e-12
+        )
         tslot = timestep_slots[int(timestep)]
         negative_units[term] = float(negative_signs[tslot]) * pair[0]
         positive_units[term] = float(positive_signs[tslot]) * pair[1]
