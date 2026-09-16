@@ -11,7 +11,26 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
+resolve_repo_root() {
+  local start candidate
+  for start in "${REPO_ROOT:-}" "${SLURM_SUBMIT_DIR:-}" "${SCRIPT_DIR}"; do
+    [[ -n "${start}" && -d "${start}" ]] || continue
+    candidate="$(cd "${start}" && pwd)"
+    while [[ "${candidate}" != "/" ]]; do
+      if [[ -f "${candidate}/diffusion_jax_refined/3dshapes/script/run_traj_tracin_queries_and_scores.py" ]]; then
+        printf '%s\n' "${candidate}"
+        return 0
+      fi
+      candidate="$(dirname "${candidate}")"
+    done
+  done
+  return 1
+}
+
+REPO_ROOT="$(resolve_repo_root)" || {
+  echo "Could not locate repository from REPO_ROOT, SLURM_SUBMIT_DIR, or SCRIPT_DIR" >&2
+  exit 1
+}
 SHAPES_ROOT="${REPO_ROOT}/diffusion_jax_refined/3dshapes"
 
 source /scratch/11447/yangtan7447/miniforge3/etc/profile.d/conda.sh
