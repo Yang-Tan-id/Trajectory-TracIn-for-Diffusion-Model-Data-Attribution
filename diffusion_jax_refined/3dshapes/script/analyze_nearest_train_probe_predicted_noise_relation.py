@@ -117,6 +117,24 @@ def output_selection_values(output: dict[str, np.ndarray], method: str) -> np.nd
     raise ValueError(method)
 
 
+def reference_orientation_sign(output: dict[str, np.ndarray], method: str) -> float:
+    if method == "reference_l2_oriented_delta":
+        return (
+            1.0
+            if output["next_to_reference_predicted_noise_l2"][0]
+            <= output["current_to_reference_predicted_noise_l2"][0]
+            else -1.0
+        )
+    if method == "reference_cosine_oriented_delta":
+        return (
+            1.0
+            if output["next_to_reference_predicted_noise_cosines"][0]
+            >= output["current_to_reference_predicted_noise_cosines"][0]
+            else -1.0
+        )
+    return 1.0
+
+
 def analyze_shard(args: argparse.Namespace) -> None:
     import jax
     import jax.numpy as jnp
@@ -208,6 +226,33 @@ def analyze_shard(args: argparse.Namespace) -> None:
                             ),
                             "selection_cosine": float(
                                 selection_values[selected_probe]
+                            ),
+                            "delta_orientation_sign": reference_orientation_sign(
+                                output, method
+                            ),
+                            "current_reference_l2": float(
+                                output.get(
+                                    "current_to_reference_predicted_noise_l2",
+                                    np.asarray([np.nan]),
+                                )[0]
+                            ),
+                            "next_reference_l2": float(
+                                output.get(
+                                    "next_to_reference_predicted_noise_l2",
+                                    np.asarray([np.nan]),
+                                )[0]
+                            ),
+                            "current_reference_cosine": float(
+                                output.get(
+                                    "current_to_reference_predicted_noise_cosines",
+                                    np.asarray([np.nan]),
+                                )[0]
+                            ),
+                            "next_reference_cosine": float(
+                                output.get(
+                                    "next_to_reference_predicted_noise_cosines",
+                                    np.asarray([np.nan]),
+                                )[0]
                             ),
                             "mean_selected_train_query_cosine": float(
                                 np.mean(selected_scores)
