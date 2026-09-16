@@ -26,7 +26,11 @@ export EXPERIMENT_TAG="${EXPERIMENT_TAG:-experiment1}"
 export TRAIN_SEED="${TRAIN_SEED:-42}"
 
 PART_DIR="${SHAPES_ROOT}/result/${EXPERIMENT_TAG}/model/prompted_solo/seed_${TRAIN_SEED}_train_gradient/traj_tracin_loss_direction_residual_rms/train_datapoint_gradient_artifact.npz.parts"
-part_count="$(find "${PART_DIR}" -maxdepth 1 -type f -name 'ckpt_*.npz' 2>/dev/null | wc -l | tr -d ' ')"
+if [[ -d "${PART_DIR}" ]]; then
+  part_count="$(find "${PART_DIR}" -maxdepth 1 -type f -name 'ckpt_*.npz' | wc -l | tr -d ' ')"
+else
+  part_count=0
+fi
 if [[ "${part_count}" != "50" ]]; then
   echo "[phase 1/2] restore forward-only residual-RMS parts (${part_count}/50 present)"
   bash "${SHAPES_ROOT}/tacc/rtx_small/run_traj_tracin_loss_direction_residual_rms_train_rtx_small.sh"
