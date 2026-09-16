@@ -88,6 +88,28 @@ class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
         self.assertIn("--include-delta-mc24-product-square", launcher)
         self.assertNotIn("run_traj_tracin_queries_and_scores.py", launcher)
 
+    def test_mc24_per_probe_final_square_launcher_preserves_reduction_order(self):
+        launcher = (
+            ROOT
+            / "3dshapes"
+            / "tacc"
+            / "rtx_small"
+            / "run_delta_noise_mc24_per_probe_final_square_cached_rtx_small.sh"
+        ).read_text()
+        self.assertIn(
+            "--include-delta-mc24-per-probe-final-square", launcher
+        )
+        self.assertIn("square final scores; mean 24 probes", launcher)
+        self.assertNotIn("run_traj_tracin_queries_and_scores.py", launcher)
+
+        analyzer = (
+            ROOT
+            / "3dshapes"
+            / "script"
+            / "analyze_nearest_train_probe_predicted_noise_relation.py"
+        ).read_text()
+        self.assertIn("np.mean(np.square(values), axis=1)", analyzer)
+
     def test_three_output_direction_selection_rules_exist(self):
         self.assertEqual(
             "cosine_to_next_predicted_noise_delta",

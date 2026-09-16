@@ -73,6 +73,7 @@ MC24_PRODUCT_SQUARE_VARIANTS = (
     "train_l2",
     "query_train_l2",
 )
+MC24_PER_PROBE_FINAL_SQUARE_PREFIX = "delta_noise_mc24_per_probe_final_square_"
 
 
 def enabled_output_selections(args: argparse.Namespace) -> tuple[str, ...]:
@@ -308,6 +309,7 @@ def analyze_shard(args: argparse.Namespace) -> None:
     rows: list[dict[str, object]] = []
     output_selection_rows: list[dict[str, object]] = []
     output_selected_totals = None
+    mc24_per_probe_totals = None
     score_indices_ref = None
     checkpoint_start = 0 if args.checkpoint_direction == "next" else 1
     checkpoint_stop = 49 if args.checkpoint_direction == "next" else 50
@@ -333,6 +335,14 @@ def analyze_shard(args: argparse.Namespace) -> None:
                 )
                 for method in enabled_output_selections(args)
             }
+            if args.include_delta_mc24_per_probe_final_square:
+                mc24_per_probe_totals = {
+                    variant: np.zeros(
+                        (len(args.query_ids), 24, len(score_indices)),
+                        dtype=np.float64,
+                    )
+                    for variant in MC24_PRODUCT_SQUARE_VARIANTS
+                }
         elif not np.array_equal(score_indices_ref, score_indices):
             raise ValueError(f"score indices differ in {path}")
 
@@ -348,6 +358,28 @@ def analyze_shard(args: argparse.Namespace) -> None:
                 jax.device_get(jnp.asarray(train_unit) @ jnp.asarray(query_unit).T),
                 dtype=np.float64,
             )
+
+            per_probe_variant_scores = None
+            if args.include_delta_mc24_per_probe_final_square:
+                train_raw_device = jnp.asarray(train[local_term])
+                query_raw_device = jnp.asarray(query_matrix)
+                query_unit_device = jnp.asarray(query_unit)
+                train_unit_device = jnp.asarray(train_unit)
+                per_probe_variant_scores = {
+                    "raw": np.asarray(
+                        jax.device_get(train_raw_device @ query_raw_device.T),
+                        dtype=np.float64,
+                    ),
+                    "query_l2": np.asarray(
+                        jax.device_get(train_raw_device @ query_unit_device.T),
+                        dtype=np.float64,
+                    ),
+                    "train_l2": np.asarray(
+                        jax.device_get(train_unit_device @ query_raw_device.T),
+                        dtype=np.float64,
+                    ),
+                    "query_train_l2": scores_all,
+                }
 
             outputs = [
                 probe_alignment_matrix(
@@ -412,6 +444,21 @@ def analyze_shard(args: argparse.Namespace) -> None:
             for qslot, query_id in enumerate(args.query_ids):
                 scores = scores_all[:, qslot * 24 : (qslot + 1) * 24]
                 output = outputs[qslot]
+                if args.include_delta_mc24_per_probe_final_square:
+                    assert mc24_per_probe_totals is not None
+                    assert per_probe_variant_scores is not None
+                    delta_projections = output[
+                        "projection_on_next_predicted_noise_delta"
+                    ][:, None]
+                    for variant, variant_scores in per_probe_variant_scores.items():
+                        probe_scores = variant_scores[
+                            :, qslot * 24 : (qslot + 1) * 24
+                        ].T
+                        mc24_per_probe_totals[variant][qslot] += (
+                            float(term_weights[local_term])
+                            * delta_projections
+                            * probe_scores
+                        )
                 assert output_selected_totals is not None
                 for method in enabled_output_selections(args):
                     if method == "delta_noise_mc24":
@@ -583,6 +630,14 @@ def analyze_shard(args: argparse.Namespace) -> None:
         score_indices=score_indices_ref,
         **output_selected_totals,
     )
+    if args.include_delta_mc24_per_probe_final_square:
+        assert mc24_per_probe_totals is not None
+        np.savez_compressed(
+            args.out_dir
+            / f"mc24_per_probe_totals_shard_{args.shard_index:02d}.npz",
+            score_indices=score_indices_ref,
+            **mc24_per_probe_totals,
+        )
 
 
 def read_rows(paths: list[Path]) -> list[dict[str, str]]:
@@ -671,6 +726,34 @@ def merge(args: argparse.Namespace) -> None:
             output_totals[method] += values
 
     assert output_totals is not None and output_indices is not None
+    if args.include_delta_mc24_per_probe_final_square:
+        per_probe_totals = None
+        for shard_index in range(args.shard_count):
+            path = (
+                args.out_dir
+                / f"mc24_per_probe_totals_shard_{shard_index:02d}.npz"
+            )
+            with np.load(path, allow_pickle=False) as payload:
+                indices = np.asarray(payload["score_indices"], dtype=np.int64)
+                shard_values = {
+                    variant: np.asarray(payload[variant], dtype=np.float64)
+                    for variant in MC24_PRODUCT_SQUARE_VARIANTS
+                }
+            if not np.array_equal(output_indices, indices):
+                raise ValueError(f"score indices differ in {path}")
+            if per_probe_totals is None:
+                per_probe_totals = {
+                    variant: np.zeros_like(values)
+                    for variant, values in shard_values.items()
+                }
+            for variant, values in shard_values.items():
+                per_probe_totals[variant] += values
+        assert per_probe_totals is not None
+        for variant, values in per_probe_totals.items():
+            output_totals[
+                f"{MC24_PER_PROBE_FINAL_SQUARE_PREFIX}{variant}"
+            ] = np.mean(np.square(values), axis=1)
+
     targets = target_data(args, output_indices)
     output_lds_rows = []
     for qslot, query_id in enumerate(args.query_ids):
@@ -818,6 +901,10 @@ def main() -> None:
     parser.add_argument("--include-delta-mc24", action="store_true")
     parser.add_argument(
         "--include-delta-mc24-product-square", action="store_true"
+    )
+    parser.add_argument(
+        "--include-delta-mc24-per-probe-final-square",
+        action="store_true",
     )
     parser.add_argument(
         "--checkpoint-direction",
