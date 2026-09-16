@@ -20,6 +20,23 @@ from analyze_predicted_noise_angle_oriented_scores import aggregate_oriented_que
 
 
 class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
+    def test_next_checkpoint_output_alignment_contract(self):
+        algorithm = (
+            ROOT / "legacy_jax" / "traj_tracin" / "algorithm.py"
+        ).read_text()
+        analyzer = (
+            ROOT
+            / "3dshapes"
+            / "script"
+            / "analyze_predicted_noise_probe24_output_alignment.py"
+        ).read_text()
+
+        self.assertIn("TRAJ_TRACIN_PROBE_ALIGNMENT_NEXT_CHECKPOINT", algorithm)
+        self.assertIn("next_checkpoint_delta_probe_cosines", algorithm)
+        self.assertIn("delta_eps=eps(params[c+1],x_t)-eps(params[c],x_t)", algorithm)
+        self.assertIn("cosine_to_next_predicted_noise_delta", analyzer)
+        self.assertIn("mean_lds_vs_abs_delta_cosine_spearman_percent", analyzer)
+
     def test_angle_oriented_queries_aggregate_before_normalization(self):
         query = np.asarray(
             [

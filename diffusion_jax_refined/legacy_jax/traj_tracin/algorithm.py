@@ -2290,9 +2290,7 @@ def run_attribution(cfg: TrajAttributionConfig):
     cfg.reference_ckpt = reference_ckpt
     print(f"[device-check] reference_params={first_leaf_device_str(reference_params)}")
 
-    def query_target_params_for_checkpoint(ckpt_i: int):
-        if not uses_next_checkpoint_target:
-            return reference_params
+    def next_checkpoint_params(ckpt_i: int):
         next_ckpt_path = ckpts[ckpt_i + 1]
         next_state, _ = adapter.restore_state(next_ckpt_path, state_template)
         next_params = tree_to_device(select_state_params(next_state, cfg.parameter_source), device)
@@ -2301,6 +2299,11 @@ def run_attribution(cfg: TrajAttributionConfig):
             f"query target is next checkpoint: {os.path.basename(next_ckpt_path)}"
         )
         return next_params
+
+    def query_target_params_for_checkpoint(ckpt_i: int):
+        if not uses_next_checkpoint_target:
+            return reference_params
+        return next_checkpoint_params(ckpt_i)
 
     example_x, _ = adapter.get_example_batch(ds)
     print(f"[setup] example input shape={tuple(example_x.shape)}")
@@ -2898,6 +2901,13 @@ def run_attribution(cfg: TrajAttributionConfig):
             and os.environ.get("TRAJ_TRACIN_PROBE_ALIGNMENT_ONLY", "0").strip().lower()
             in ("1", "true", "yes", "on")
         )
+        probe_alignment_next_checkpoint = (
+            probe_alignment_only
+            and os.environ.get(
+                "TRAJ_TRACIN_PROBE_ALIGNMENT_NEXT_CHECKPOINT", "0"
+            ).strip().lower()
+            in ("1", "true", "yes", "on")
+        )
         probe_alignment_count = int(
             os.environ.get(
                 "TRAJ_TRACIN_PROBE_ALIGNMENT_COUNT",
@@ -2921,7 +2931,11 @@ def run_attribution(cfg: TrajAttributionConfig):
         stage_checkpoint_count = (
             len(ckpts)
             if stage_mode == "train"
-            else (len(ckpts) - 1 if uses_next_checkpoint_target else len(ckpts))
+            else (
+                len(ckpts) - 1
+                if uses_next_checkpoint_target or probe_alignment_next_checkpoint
+                else len(ckpts)
+            )
         )
         stage_total_terms = stage_checkpoint_count * int(cfg.num_traj_snapshots)
         stage_terms_done = 0
@@ -2930,6 +2944,12 @@ def run_attribution(cfg: TrajAttributionConfig):
         probe_alignment_cosines = []
         probe_alignment_eps_norms = []
         probe_alignment_probe_norms = []
+        probe_alignment_next_scalars = []
+        probe_alignment_next_cosines = []
+        probe_alignment_next_eps_norms = []
+        probe_alignment_delta_scalars = []
+        probe_alignment_delta_cosines = []
+        probe_alignment_delta_norms = []
         alignment_eps_chunk_fn = None
         if probe_alignment_only:
             def alignment_eps_one(p, xt_value, timestep_value, cond):
@@ -2995,7 +3015,11 @@ def run_attribution(cfg: TrajAttributionConfig):
                     flush=True,
                 )
                 continue
-            if stage_mode != "train" and uses_next_checkpoint_target and ckpt_i + 1 >= len(ckpts):
+            if (
+                stage_mode != "train"
+                and (uses_next_checkpoint_target or probe_alignment_next_checkpoint)
+                and ckpt_i + 1 >= len(ckpts)
+            ):
                 print(
                     f"[stage:{stage_mode}] skipping final checkpoint "
                     f"{ckpt_i + 1}/{len(ckpts)}: no next-checkpoint query target",
@@ -3039,6 +3063,11 @@ def run_attribution(cfg: TrajAttributionConfig):
                 raise
             params = tree_to_device(select_state_params(state, cfg.parameter_source), device)
             print(f"[stage:{stage_mode}] checkpoint {ckpt_i + 1}/{len(ckpts)} restored", flush=True)
+            alignment_next_params = (
+                next_checkpoint_params(ckpt_i)
+                if probe_alignment_next_checkpoint
+                else None
+            )
             projector = None
             if not probe_alignment_only and not (
                 stage_mode == "train" and reuse_gradient_residual_rms
@@ -3276,6 +3305,74 @@ def run_attribution(cfg: TrajAttributionConfig):
                             probe_alignment_probe_norms.append(
                                 np.asarray(jax.device_get(probe_norm), dtype=np.float32)
                             )
+                            if probe_alignment_next_checkpoint:
+                                assert alignment_next_params is not None
+                                next_eps_chunk = alignment_eps_chunk_fn(
+                                    alignment_next_params,
+                                    xt_chunk,
+                                    t_chunk,
+                                    query_cond,
+                                )
+                                delta_eps_chunk = next_eps_chunk - eps_chunk
+
+                                def alignment_values(output):
+                                    output_dot = jnp.sum(
+                                        probe_bank * output[None, ...],
+                                        axis=reduction_axes,
+                                    )
+                                    output_norm = jnp.sqrt(
+                                        jnp.sum(
+                                            jnp.square(output),
+                                            axis=tuple(range(1, output.ndim)),
+                                        )
+                                    )
+                                    output_scalar = output_dot / jnp.sqrt(
+                                        jnp.asarray(
+                                            output_dimension, dtype=jnp.float32
+                                        )
+                                    )
+                                    output_cosine = output_dot / jnp.maximum(
+                                        probe_norm * output_norm[None, :],
+                                        jnp.asarray(1e-12, dtype=jnp.float32),
+                                    )
+                                    return output_scalar, output_cosine, output_norm
+
+                                next_scalar, next_cosine, next_norm = alignment_values(
+                                    next_eps_chunk
+                                )
+                                delta_scalar, delta_cosine, delta_norm = alignment_values(
+                                    delta_eps_chunk
+                                )
+                                probe_alignment_next_scalars.append(
+                                    np.asarray(
+                                        jax.device_get(next_scalar), dtype=np.float32
+                                    )
+                                )
+                                probe_alignment_next_cosines.append(
+                                    np.asarray(
+                                        jax.device_get(next_cosine), dtype=np.float32
+                                    )
+                                )
+                                probe_alignment_next_eps_norms.append(
+                                    np.asarray(
+                                        jax.device_get(next_norm), dtype=np.float32
+                                    )
+                                )
+                                probe_alignment_delta_scalars.append(
+                                    np.asarray(
+                                        jax.device_get(delta_scalar), dtype=np.float32
+                                    )
+                                )
+                                probe_alignment_delta_cosines.append(
+                                    np.asarray(
+                                        jax.device_get(delta_cosine), dtype=np.float32
+                                    )
+                                )
+                                probe_alignment_delta_norms.append(
+                                    np.asarray(
+                                        jax.device_get(delta_norm), dtype=np.float32
+                                    )
+                                )
                             for snap_id in chunk_ids:
                                 stage_ckpt_indices.append(int(ckpt_i))
                                 stage_timesteps.append(int(t_seq[snap_id]))
@@ -3285,7 +3382,7 @@ def run_attribution(cfg: TrajAttributionConfig):
                                     ckpt_lr_weight / float(max(1, len(t_seq)))
                                 )
                             stage_terms_done += len(chunk_ids)
-                            query_total_terms = len(ckpts) * len(t_seq)
+                            query_total_terms = stage_checkpoint_count * len(t_seq)
                             print(
                                 f"[stage:query-alignment] checkpoint "
                                 f"{ckpt_i + 1}/{len(ckpts)} snapshot "
@@ -4127,8 +4224,7 @@ def run_attribution(cfg: TrajAttributionConfig):
         if probe_alignment_only:
             if not probe_alignment_scalars:
                 raise RuntimeError("No predicted-noise probe alignments were produced")
-            save_npz_compressed_atomic(
-                stage_artifact_path,
+            alignment_payload = dict(
                 probe_scalars=np.concatenate(probe_alignment_scalars, axis=1),
                 probe_cosines=np.concatenate(probe_alignment_cosines, axis=1),
                 predicted_noise_norms=np.concatenate(probe_alignment_eps_norms),
@@ -4147,6 +4243,32 @@ def run_attribution(cfg: TrajAttributionConfig):
                     "scalar=dot(v,eps)/sqrt(D); cosine=dot(v,eps)/(norm(v)*norm(eps))"
                 ),
             )
+            if probe_alignment_next_checkpoint:
+                alignment_payload.update(
+                    next_predicted_noise_probe_scalars=np.concatenate(
+                        probe_alignment_next_scalars, axis=1
+                    ),
+                    next_predicted_noise_probe_cosines=np.concatenate(
+                        probe_alignment_next_cosines, axis=1
+                    ),
+                    next_predicted_noise_norms=np.concatenate(
+                        probe_alignment_next_eps_norms
+                    ),
+                    next_checkpoint_delta_probe_scalars=np.concatenate(
+                        probe_alignment_delta_scalars, axis=1
+                    ),
+                    next_checkpoint_delta_probe_cosines=np.concatenate(
+                        probe_alignment_delta_cosines, axis=1
+                    ),
+                    next_checkpoint_delta_norms=np.concatenate(
+                        probe_alignment_delta_norms
+                    ),
+                    next_checkpoint_delta_definition=np.asarray(
+                        "delta_eps=eps(params[c+1],x_t)-eps(params[c],x_t); "
+                        "x_t and conditioning are held fixed"
+                    ),
+                )
+            save_npz_compressed_atomic(stage_artifact_path, **alignment_payload)
             print(
                 f"[saved] predicted-noise probe alignment artifact: "
                 f"{stage_artifact_path}",
