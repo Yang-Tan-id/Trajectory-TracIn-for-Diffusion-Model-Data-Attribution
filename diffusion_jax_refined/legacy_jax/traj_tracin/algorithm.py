@@ -2884,6 +2884,24 @@ def run_attribution(cfg: TrajAttributionConfig):
         from dtrak.algorithm import build_countsketch_projector_jax
 
         proj_dim = int(getattr(cfg, "proj_dim", int(os.environ.get("TRAJ_TRACIN_PROJ_DIM", "4096"))))
+        probe_alignment_only = (
+            stage_mode == "query"
+            and uses_predicted_noise_probe
+            and os.environ.get("TRAJ_TRACIN_PROBE_ALIGNMENT_ONLY", "0").strip().lower()
+            in ("1", "true", "yes", "on")
+        )
+        probe_alignment_count = int(
+            os.environ.get(
+                "TRAJ_TRACIN_PROBE_ALIGNMENT_COUNT",
+                str(cfg.predicted_noise_probe_count),
+            )
+        )
+        if probe_alignment_only and predicted_noise_probe_mode != "independent_gaussian":
+            raise ValueError(
+                "probe-alignment-only currently requires independent_gaussian probes"
+            )
+        if probe_alignment_only and probe_alignment_count <= 0:
+            raise ValueError("TRAJ_TRACIN_PROBE_ALIGNMENT_COUNT must be positive")
         stage_features = []
         stage_ckpt_indices = []
         stage_timesteps = []
@@ -2900,6 +2918,26 @@ def run_attribution(cfg: TrajAttributionConfig):
         stage_total_terms = stage_checkpoint_count * int(cfg.num_traj_snapshots)
         stage_terms_done = 0
         stage_start_time = time.time()
+        probe_alignment_scalars = []
+        probe_alignment_cosines = []
+        probe_alignment_eps_norms = []
+        probe_alignment_probe_norms = []
+        alignment_eps_chunk_fn = None
+        if probe_alignment_only:
+            def alignment_eps_one(p, xt_value, timestep_value, cond):
+                t_value = jnp.full(
+                    (xt_value.shape[0],),
+                    timestep_value,
+                    dtype=jnp.int32,
+                )
+                return adapter.eps_apply(model, p, xt_value, t_value, cond)
+
+            alignment_eps_chunk_fn = jax.jit(
+                jax.vmap(
+                    alignment_eps_one,
+                    in_axes=(None, 0, 0, None),
+                )
+            )
         shared_orthogonal_probe_bank = None
         ckpt_shard_count = max(1, int(os.environ.get("TRAJ_TRACIN_CKPT_SHARD_COUNT", "1")))
         ckpt_shard_index = int(os.environ.get("TRAJ_TRACIN_CKPT_SHARD_INDEX", "0"))
@@ -2994,7 +3032,9 @@ def run_attribution(cfg: TrajAttributionConfig):
             params = tree_to_device(select_state_params(state, cfg.parameter_source), device)
             print(f"[stage:{stage_mode}] checkpoint {ckpt_i + 1}/{len(ckpts)} restored", flush=True)
             projector = None
-            if not (stage_mode == "train" and reuse_gradient_residual_rms):
+            if not probe_alignment_only and not (
+                stage_mode == "train" and reuse_gradient_residual_rms
+            ):
                 projector = build_countsketch_projector_jax(
                     params,
                     proj_dim,
@@ -3160,6 +3200,92 @@ def run_attribution(cfg: TrajAttributionConfig):
                             future_eps_chunk,
                         )
                     elif uses_predicted_noise_probe:
+                        if probe_alignment_only:
+                            probe_bank = []
+                            for probe_index in range(probe_alignment_count):
+                                alignment_keys = array_to_device(
+                                    jnp.stack(
+                                        [
+                                            predicted_noise_probe_key(
+                                                cfg.seed,
+                                                ckpt_i,
+                                                int(t_seq[i]),
+                                                int(pos_seq[i]),
+                                                probe_index,
+                                            )
+                                            for i in chunk_ids
+                                        ],
+                                        axis=0,
+                                    ),
+                                    device,
+                                )
+                                probe_bank.append(
+                                    jax.vmap(
+                                        lambda key: jax.random.normal(
+                                            key,
+                                            xt_chunk.shape[1:],
+                                            dtype=jnp.float32,
+                                        )
+                                    )(alignment_keys)
+                                )
+                            probe_bank = jnp.stack(probe_bank, axis=0)
+
+                            assert alignment_eps_chunk_fn is not None
+                            eps_chunk = alignment_eps_chunk_fn(
+                                params, xt_chunk, t_chunk, query_cond
+                            )
+                            reduction_axes = tuple(range(2, probe_bank.ndim))
+                            dot = jnp.sum(
+                                probe_bank * eps_chunk[None, ...],
+                                axis=reduction_axes,
+                            )
+                            probe_norm = jnp.sqrt(
+                                jnp.sum(jnp.square(probe_bank), axis=reduction_axes)
+                            )
+                            eps_norm = jnp.sqrt(
+                                jnp.sum(
+                                    jnp.square(eps_chunk),
+                                    axis=tuple(range(1, eps_chunk.ndim)),
+                                )
+                            )
+                            output_dimension = int(np.prod(xt_chunk.shape[1:]))
+                            scalar = dot / jnp.sqrt(
+                                jnp.asarray(output_dimension, dtype=jnp.float32)
+                            )
+                            cosine = dot / jnp.maximum(
+                                probe_norm * eps_norm[None, :],
+                                jnp.asarray(1e-12, dtype=jnp.float32),
+                            )
+                            probe_alignment_scalars.append(
+                                np.asarray(jax.device_get(scalar), dtype=np.float32)
+                            )
+                            probe_alignment_cosines.append(
+                                np.asarray(jax.device_get(cosine), dtype=np.float32)
+                            )
+                            probe_alignment_eps_norms.append(
+                                np.asarray(jax.device_get(eps_norm), dtype=np.float32)
+                            )
+                            probe_alignment_probe_norms.append(
+                                np.asarray(jax.device_get(probe_norm), dtype=np.float32)
+                            )
+                            for snap_id in chunk_ids:
+                                stage_ckpt_indices.append(int(ckpt_i))
+                                stage_timesteps.append(int(t_seq[snap_id]))
+                                stage_snapshot_positions.append(int(pos_seq[snap_id]))
+                                stage_ckpt_paths.append(str(ckpt_path))
+                                stage_term_weights.append(
+                                    ckpt_lr_weight / float(max(1, len(t_seq)))
+                                )
+                            stage_terms_done += len(chunk_ids)
+                            query_total_terms = len(ckpts) * len(t_seq)
+                            print(
+                                f"[stage:query-alignment] checkpoint "
+                                f"{ckpt_i + 1}/{len(ckpts)} snapshot "
+                                f"{chunk_start + 1}-{chunk_end}/{len(t_seq)} | "
+                                f"terms={stage_terms_done}/{query_total_terms}",
+                                flush=True,
+                            )
+                            continue
                         if predicted_noise_probe_mode in (
                             "shared_orthogonal",
                             "shared_orthogonal_extended",
@@ -3988,6 +4114,36 @@ def run_attribution(cfg: TrajAttributionConfig):
                 ),
             )
             print(f"[saved] TrajTracIn train artifact: {stage_artifact_path}")
+            return
+
+        if probe_alignment_only:
+            if not probe_alignment_scalars:
+                raise RuntimeError("No predicted-noise probe alignments were produced")
+            save_npz_compressed_atomic(
+                stage_artifact_path,
+                probe_scalars=np.concatenate(probe_alignment_scalars, axis=1),
+                probe_cosines=np.concatenate(probe_alignment_cosines, axis=1),
+                predicted_noise_norms=np.concatenate(probe_alignment_eps_norms),
+                probe_norms=np.concatenate(probe_alignment_probe_norms, axis=1),
+                ckpt_indices=np.asarray(stage_ckpt_indices, dtype=np.int32),
+                timesteps=np.asarray(stage_timesteps, dtype=np.int32),
+                snapshot_positions=np.asarray(stage_snapshot_positions, dtype=np.int32),
+                term_weights=np.asarray(stage_term_weights, dtype=np.float32),
+                ckpt_paths=np.asarray(stage_ckpt_paths),
+                output_probe_mode=np.asarray(predicted_noise_probe_mode),
+                output_probe_bank_size=np.asarray(
+                    probe_alignment_count, dtype=np.int32
+                ),
+                output_probe_normalization=np.asarray("sqrt_num_output_elements"),
+                alignment_definition=np.asarray(
+                    "scalar=dot(v,eps)/sqrt(D); cosine=dot(v,eps)/(norm(v)*norm(eps))"
+                ),
+            )
+            print(
+                f"[saved] predicted-noise probe alignment artifact: "
+                f"{stage_artifact_path}",
+                flush=True,
+            )
             return
 
         if not stage_features:

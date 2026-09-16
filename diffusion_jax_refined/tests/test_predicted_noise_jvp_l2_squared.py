@@ -13,9 +13,27 @@ from run_predicted_noise_jvp_l2_squared import (
     reduce_timestamp_checkpoint_sums,
 )
 from materialize_f_next_final_score_squared import square_final_scores
+from analyze_predicted_noise_angle_oriented_scores import aggregate_oriented_queries
 
 
 class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
+    def test_angle_oriented_queries_aggregate_before_normalization(self):
+        query = np.asarray(
+            [
+                [[1.0, 0.0]],
+                [[0.0, 2.0]],
+                [[-1.0, 1.0]],
+            ],
+            dtype=np.float32,
+        )
+        scalar = np.asarray([[2.0], [-3.0], [0.5]], dtype=np.float32)
+        sign = aggregate_oriented_queries(query, scalar, (0, 1, 2), "angle_sign")
+        weighted = aggregate_oriented_queries(
+            query, scalar, (0, 1, 2), "angle_weighted"
+        )
+        np.testing.assert_allclose(sign, [[0.0, -1.0 / 3.0]])
+        np.testing.assert_allclose(weighted, [[0.5, -11.0 / 6.0]])
+
     def test_probe_independence_audit_replays_exact_key_dimensions(self):
         audit = (
             ROOT
