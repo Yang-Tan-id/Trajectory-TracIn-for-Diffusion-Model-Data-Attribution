@@ -30,6 +30,13 @@ SIGNED_SCORE_PIPELINE = (
     / "rtx_small"
     / "run_loss_direction_residual_rms_signed_score_rtx_small.sh"
 )
+ORIGINAL_F_FOUR_NORM_PIPELINE = (
+    ROOT
+    / "3dshapes"
+    / "tacc"
+    / "rtx_small"
+    / "run_loss_direction_residual_rms_original_f_four_norm_q0_rtx_small.sh"
+)
 F_NEXT_SQUARED_PIPELINE = (
     ROOT
     / "3dshapes"
@@ -189,6 +196,24 @@ class LossDirectionResidualRmsTest(unittest.TestCase):
             '"traj_tracin_loss_direction_residual_rms_signed_predicted_noise"',
             lds_driver,
         )
+
+    def test_original_f_four_l2_normalizations_are_materialized(self) -> None:
+        scorer = SCORER.read_text()
+        self.assertIn('"train_l2": train_l2_original', scorer)
+        self.assertIn('"query_train_l2": query_train_l2_original', scorer)
+        self.assertIn('"train_l2": "score_train_l2_normalized"', scorer)
+        self.assertIn(
+            '"query_train_l2": "score_query_train_l2_normalized"', scorer
+        )
+
+        lds_driver = LDS_DRIVER.read_text()
+        self.assertIn('FOUR_NORM_EXPECTED_SCHEMES', lds_driver)
+        self.assertIn('"loss_direction_residual_rms_original_f"', lds_driver)
+
+        launcher = ORIGINAL_F_FOUR_NORM_PIPELINE.read_text()
+        self.assertIn("--skip-predicted", launcher)
+        self.assertIn("--query-ids 0", launcher)
+        self.assertIn("loss_direction_residual_rms_original_f", launcher)
 
     def test_original_train_f_next_squared_score_is_score_only(self) -> None:
         scorer = SCORER.read_text()

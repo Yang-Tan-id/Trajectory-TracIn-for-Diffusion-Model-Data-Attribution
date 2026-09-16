@@ -198,10 +198,11 @@ def score_shard(args: argparse.Namespace) -> None:
         for name, (_, meta) in query_banks.items()
     }
 
+    query_variants = ("raw", "query_l2", "train_l2", "query_train_l2")
     sums = {
         (target, query_variant): np.zeros((10, 5000), dtype=np.float64)
         for target in query_banks
-        for query_variant in ("raw", "query_l2")
+        for query_variant in query_variants
     }
     original_terms = 0
     predicted_terms = 0
@@ -243,6 +244,7 @@ def score_shard(args: argparse.Namespace) -> None:
 
         for local_term, (ckpt, timestep, weight) in enumerate(zip(ckpts, timesteps, weights)):
             train_device = jax.device_put(jnp.asarray(train[local_term]))
+            train_norms = jnp.linalg.norm(train_device, axis=1) + 1e-8
 
             original_term = lookups["original"].get((int(ckpt), int(timestep)))
             if original_term is not None:
@@ -252,15 +254,27 @@ def score_shard(args: argparse.Namespace) -> None:
                 if args.original_contraction == "squared":
                     raw_original = jnp.square(dots)
                     query_l2_original = jnp.square(dots / query_norms[None, :])
+                    train_l2_original = jnp.square(dots / train_norms[:, None])
+                    query_train_l2_original = jnp.square(
+                        dots / (train_norms[:, None] * query_norms[None, :])
+                    )
                 else:
                     raw_original = dots
                     query_l2_original = dots / query_norms[None, :]
-                sums[("original", "raw")] += float(weight) * np.asarray(
-                    jax.device_get(raw_original), dtype=np.float64
-                ).T
-                sums[("original", "query_l2")] += float(weight) * np.asarray(
-                    jax.device_get(query_l2_original), dtype=np.float64
-                ).T
+                    train_l2_original = dots / train_norms[:, None]
+                    query_train_l2_original = dots / (
+                        train_norms[:, None] * query_norms[None, :]
+                    )
+                original_values = {
+                    "raw": raw_original,
+                    "query_l2": query_l2_original,
+                    "train_l2": train_l2_original,
+                    "query_train_l2": query_train_l2_original,
+                }
+                for query_variant, values in original_values.items():
+                    sums[("original", query_variant)] += float(weight) * np.asarray(
+                        jax.device_get(values), dtype=np.float64
+                    ).T
                 original_terms += 1
 
             if not args.skip_predicted:
@@ -269,6 +283,8 @@ def score_shard(args: argparse.Namespace) -> None:
                     raise ValueError(f"missing predicted-noise query term ckpt={ckpt} t={timestep}")
                 predicted_raw = np.zeros((10, 5000), dtype=np.float64)
                 predicted_query_l2 = np.zeros((10, 5000), dtype=np.float64)
+                predicted_train_l2 = np.zeros((10, 5000), dtype=np.float64)
+                predicted_query_train_l2 = np.zeros((10, 5000), dtype=np.float64)
                 assert predicted_query is not None
                 for probe_index in range(args.predicted_num_probes):
                     query_device = jax.device_put(
@@ -279,9 +295,17 @@ def score_shard(args: argparse.Namespace) -> None:
                     if args.predicted_contraction == "squared":
                         raw_values = jnp.square(dots)
                         query_l2_values = jnp.square(dots / query_norms[None, :])
+                        train_l2_values = jnp.square(dots / train_norms[:, None])
+                        query_train_l2_values = jnp.square(
+                            dots / (train_norms[:, None] * query_norms[None, :])
+                        )
                     else:
                         raw_values = dots
                         query_l2_values = dots / query_norms[None, :]
+                        train_l2_values = dots / train_norms[:, None]
+                        query_train_l2_values = dots / (
+                            train_norms[:, None] * query_norms[None, :]
+                        )
                     predicted_raw += np.asarray(
                         jax.device_get(raw_values), dtype=np.float64
                     ).T / float(args.predicted_num_probes)
@@ -289,9 +313,19 @@ def score_shard(args: argparse.Namespace) -> None:
                         jax.device_get(query_l2_values),
                         dtype=np.float64,
                     ).T / float(args.predicted_num_probes)
+                    predicted_train_l2 += np.asarray(
+                        jax.device_get(train_l2_values), dtype=np.float64
+                    ).T / float(args.predicted_num_probes)
+                    predicted_query_train_l2 += np.asarray(
+                        jax.device_get(query_train_l2_values), dtype=np.float64
+                    ).T / float(args.predicted_num_probes)
                 sums[("predicted", "raw")] += float(weight) * predicted_raw
                 sums[("predicted", "query_l2")] += (
                     float(weight) * predicted_query_l2
+                )
+                sums[("predicted", "train_l2")] += float(weight) * predicted_train_l2
+                sums[("predicted", "query_train_l2")] += (
+                    float(weight) * predicted_query_train_l2
                 )
                 predicted_terms += 1
 
@@ -328,7 +362,12 @@ def materialize_scores(
     jacobian_norm_probes: int,
 ):
     for query_id, record in enumerate(records()):
-        component = "score" if query_variant == "raw" else "score_query_normalized"
+        component = {
+            "raw": "score",
+            "query_l2": "score_query_normalized",
+            "train_l2": "score_train_l2_normalized",
+            "query_train_l2": "score_query_train_l2_normalized",
+        }[query_variant]
         out_dir = (
             result_root(args.experiment)
             / "attribution_score"
@@ -346,7 +385,11 @@ def materialize_scores(
             "score_variant": f"fixed_train_jacobian_normalization_{query_variant}",
             "definition": definition,
             "train_feature": args.train_feature_description,
-            "train_normalization": "fixed_in_saved_train_feature",
+            "train_normalization": (
+                "termwise_l2"
+                if query_variant in ("train_l2", "query_train_l2")
+                else "fixed_in_saved_train_feature"
+            ),
             "query_normalization": query_variant,
             "train_mc_samples": 10,
             "jacobian_norm_probes": jacobian_norm_probes,
@@ -365,7 +408,7 @@ def merge(args: argparse.Namespace) -> None:
     totals = {
         (target, query_variant): np.zeros((10, 5000), dtype=np.float64)
         for target in targets
-        for query_variant in ("raw", "query_l2")
+        for query_variant in ("raw", "query_l2", "train_l2", "query_train_l2")
     }
     original_terms = predicted_terms = 0
     score_indices = None
@@ -411,7 +454,7 @@ def merge(args: argparse.Namespace) -> None:
     expected = np.asarray(np.load(ATTRIBUTION_INDICES_PATH), dtype=np.int64)
     if score_indices is None or not np.array_equal(np.sort(score_indices), np.sort(expected)):
         raise ValueError("score indices do not match attribution subset")
-    for query_variant in ("raw", "query_l2"):
+    for query_variant in ("raw", "query_l2", "train_l2", "query_train_l2"):
         original_definition = (
             f"learning_rate_weighted_sum(square(dot(v_l2_train_feature, "
             f"{query_variant}_grad(original_f))))"
@@ -445,12 +488,11 @@ def merge(args: argparse.Namespace) -> None:
                 query_variant,
                 int(jacobian_norm_probes),
             )
-    target_count = 1 if args.skip_predicted else 2
-    print(
-        f"[done] materialized 1 train normalization x {target_count} query targets "
-        "x 2 query normalizations",
-        flush=True,
-    )
+    if args.skip_predicted:
+        message = "[done] materialized four L2 normalization variants x 1 query target"
+    else:
+        message = "[done] materialized four L2 normalization variants x 2 query targets"
+    print(message, flush=True)
 
 
 def main() -> None:
