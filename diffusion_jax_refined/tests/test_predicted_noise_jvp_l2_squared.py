@@ -724,6 +724,28 @@ class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
         self.assertIn("--num-probes 12", launcher)
         self.assertIn('RUN_ID="${SOURCE_RUN_ID:-3502474}"', launcher)
 
+    def test_probe12_termwise_square_all_subset_launcher_retains_probe_axis(self):
+        launcher = (
+            ROOT
+            / "3dshapes"
+            / "tacc"
+            / "rtx_small"
+            / "run_predicted_noise_probe12_termwise_square_all_subsets_rtx_small.sh"
+        ).read_text()
+        analyzer = (
+            ROOT
+            / "3dshapes"
+            / "script"
+            / "analyze_predicted_noise_probe8_all_subset_sizes.py"
+        ).read_text()
+        self.assertIn("--contraction termwise_squared_per_probe", launcher)
+        self.assertIn("--prediction-sign=-1", launcher)
+        self.assertIn("probe12_all_subset_sizes_termwise_square", launcher)
+        self.assertIn("--score-namespace", analyzer)
+        self.assertIn("all_probe_subsets(args.num_probes)", analyzer)
+        self.assertIn('NUM_PROBES=12', launcher)
+        self.assertIn("all 4095 nonempty subsets", launcher)
+
     def test_probe12_sign_flip_analysis_covers_all_4096_assignments(self):
         analyzer = (
             ROOT

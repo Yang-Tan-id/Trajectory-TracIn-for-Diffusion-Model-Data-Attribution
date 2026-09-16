@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Evaluate every nonempty subset of a saved per-probe linear score run."""
+"""Evaluate every nonempty subset of a saved per-probe score run."""
 
 from __future__ import annotations
 
@@ -40,6 +40,7 @@ def save_plot(
     path: Path,
     distribution_rows: list[dict[str, object]],
     num_probes: int,
+    score_label: str = "linear",
 ) -> None:
     try:
         import matplotlib.pyplot as plt
@@ -80,7 +81,7 @@ def save_plot(
     ax.set_xticks(subset_sizes)
     ax.set_xlabel("Number of probes in subset (k)")
     ax.set_ylabel("10-query mean LDS (%)")
-    ax.set_title(f"{num_probes}-probe linear score: all subsets, Both-L2")
+    ax.set_title(f"{num_probes}-probe {score_label} score: all subsets, Both-L2")
     ax.grid(alpha=0.2)
     ax.legend(frameon=False)
     fig.tight_layout()
@@ -97,15 +98,32 @@ def main() -> None:
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--num-probes", type=int, default=8)
     parser.add_argument("--prediction-sign", type=float, choices=(-1.0, 1.0), default=1.0)
+    parser.add_argument(
+        "--score-namespace",
+        default="",
+        help=(
+            "Stream-score namespace containing per-probe shard arrays. Defaults to "
+            "the historical final-post-square staging namespace."
+        ),
+    )
+    parser.add_argument(
+        "--analysis-label",
+        default="",
+        help="Output directory label; defaults to probeN_all_subset_sizes_linear.",
+    )
+    parser.add_argument("--score-label", default="linear")
     args = parser.parse_args()
 
     result_root = SHAPES_ROOT / "result" / args.experiment
     if args.num_probes <= 0:
         raise ValueError("--num-probes must be positive")
+    score_namespace = args.score_namespace or (
+        f"traj_tracin_predicted_noise_jvp_final_post_square_probe{args.num_probes}"
+    )
     shard_dir = (
         result_root
         / "stream_score"
-        / f"traj_tracin_predicted_noise_jvp_final_post_square_probe{args.num_probes}"
+        / score_namespace
         / f"train_seed_{args.train_seed}"
         / f"run_{args.run_id}"
         / "shards"
@@ -194,10 +212,13 @@ def main() -> None:
             }
         )
 
+    analysis_label = args.analysis_label or (
+        f"probe{args.num_probes}_all_subset_sizes_linear"
+    )
     output_dir = (
         result_root
         / "eval"
-        / f"probe{args.num_probes}_all_subset_sizes_linear"
+        / analysis_label
         / f"run_{args.run_id}"
     )
     write_csv(output_dir / "per_query.csv", per_query_rows)
@@ -207,6 +228,7 @@ def main() -> None:
         output_dir / "both_l2_counterfactual_by_subset_size.png",
         distribution_rows,
         args.num_probes,
+        args.score_label,
     )
 
     mean_lookup = {
