@@ -34,6 +34,7 @@ ALIGNMENT_KEYS = (
     "cosine_to_next_predicted_noise",
     "cosine_to_next_predicted_noise_delta",
     "cosine_to_reference_predicted_noise_delta",
+    "cosine_to_reference_predicted_noise_direction_delta",
     "cosine_to_future_mean_predicted_noise_delta",
     "cosine_to_future_lr_weighted_predicted_noise_delta",
 )
@@ -49,6 +50,9 @@ OUTPUT_SELECTIONS = {
     "reference_l2_oriented_previous_delta": "reference_l2_oriented_delta",
     "reference_cosine_oriented_previous_delta": "reference_cosine_oriented_delta",
     "reference_delta_noise_direction": "cosine_to_reference_predicted_noise_delta",
+    "reference_direction_delta_noise_direction": (
+        "cosine_to_reference_predicted_noise_direction_delta"
+    ),
     "next_noise_direction_product_square": "cosine_to_next_predicted_noise",
     "future_mean_delta_noise_direction": (
         "cosine_to_future_mean_predicted_noise_delta"
@@ -88,6 +92,8 @@ def enabled_output_selections(args: argparse.Namespace) -> tuple[str, ...]:
         )
     if args.include_reference_delta:
         result += ("reference_delta_noise_direction",)
+    if args.include_reference_direction_delta:
+        result += ("reference_direction_delta_noise_direction",)
     if args.include_next_product_square:
         result += ("next_noise_direction_product_square",)
     if args.include_future_mean_delta:
@@ -644,6 +650,7 @@ def main() -> None:
     )
     parser.add_argument("--include-reference-oriented", action="store_true")
     parser.add_argument("--include-reference-delta", action="store_true")
+    parser.add_argument("--include-reference-direction-delta", action="store_true")
     parser.add_argument("--include-next-product-square", action="store_true")
     parser.add_argument("--include-future-mean-delta", action="store_true")
     parser.add_argument(

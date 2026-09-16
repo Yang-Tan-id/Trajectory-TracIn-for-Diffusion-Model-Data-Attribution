@@ -3006,6 +3006,9 @@ def run_attribution(cfg: TrajAttributionConfig):
         probe_alignment_reference_delta_scalars = []
         probe_alignment_reference_delta_cosines = []
         probe_alignment_reference_delta_norms = []
+        probe_alignment_reference_direction_delta_scalars = []
+        probe_alignment_reference_direction_delta_cosines = []
+        probe_alignment_reference_direction_delta_norms = []
         probe_alignment_current_eps_outputs = []
         probe_alignment_final_eps_outputs = []
         probe_alignment_current_reference_l2 = []
@@ -3471,6 +3474,27 @@ def run_attribution(cfg: TrajAttributionConfig):
                                     reference_delta_norm,
                                 ) = alignment_values(reference_delta_eps_chunk)
                                 output_axes = tuple(range(1, eps_chunk.ndim))
+                                current_unit = eps_chunk / jnp.maximum(
+                                    eps_norm[(slice(None),) + (None,) * (eps_chunk.ndim - 1)],
+                                    jnp.asarray(1e-12, dtype=jnp.float32),
+                                )
+                                reference_unit = reference_eps_chunk / jnp.maximum(
+                                    reference_norm[
+                                        (slice(None),)
+                                        + (None,) * (reference_eps_chunk.ndim - 1)
+                                    ],
+                                    jnp.asarray(1e-12, dtype=jnp.float32),
+                                )
+                                reference_direction_delta_eps_chunk = (
+                                    reference_unit - current_unit
+                                )
+                                (
+                                    reference_direction_delta_scalar,
+                                    reference_direction_delta_cosine,
+                                    reference_direction_delta_norm,
+                                ) = alignment_values(
+                                    reference_direction_delta_eps_chunk
+                                )
                                 current_reference_dot = jnp.sum(
                                     eps_chunk * reference_eps_chunk, axis=output_axes
                                 )
@@ -3550,6 +3574,28 @@ def run_attribution(cfg: TrajAttributionConfig):
                                 probe_alignment_reference_delta_norms.append(
                                     np.asarray(
                                         jax.device_get(reference_delta_norm),
+                                        dtype=np.float32,
+                                    )
+                                )
+                                probe_alignment_reference_direction_delta_scalars.append(
+                                    np.asarray(
+                                        jax.device_get(
+                                            reference_direction_delta_scalar
+                                        ),
+                                        dtype=np.float32,
+                                    )
+                                )
+                                probe_alignment_reference_direction_delta_cosines.append(
+                                    np.asarray(
+                                        jax.device_get(
+                                            reference_direction_delta_cosine
+                                        ),
+                                        dtype=np.float32,
+                                    )
+                                )
+                                probe_alignment_reference_direction_delta_norms.append(
+                                    np.asarray(
+                                        jax.device_get(reference_direction_delta_norm),
                                         dtype=np.float32,
                                     )
                                 )
@@ -4665,6 +4711,19 @@ def run_attribution(cfg: TrajAttributionConfig):
                     "reference_checkpoint_delta_definition": np.asarray(
                         "delta_ref=eps(params[reference],x_t)-eps(params[c],x_t); "
                         "x_t and conditioning are held fixed"
+                    ),
+                    "reference_direction_delta_probe_scalars": np.concatenate(
+                        probe_alignment_reference_direction_delta_scalars, axis=1
+                    ),
+                    "reference_direction_delta_probe_cosines": np.concatenate(
+                        probe_alignment_reference_direction_delta_cosines, axis=1
+                    ),
+                    "reference_direction_delta_norms": np.concatenate(
+                        probe_alignment_reference_direction_delta_norms
+                    ),
+                    "reference_direction_delta_definition": np.asarray(
+                        "delta_ref_direction=unit(eps(params[reference],x_t))"
+                        "-unit(eps(params[c],x_t)); x_t and conditioning are held fixed"
                     ),
                     "current_to_reference_predicted_noise_l2": np.concatenate(
                         probe_alignment_current_reference_l2

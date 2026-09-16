@@ -130,6 +130,34 @@ class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
         self.assertIn("--include-reference-delta", launcher)
         self.assertIn("eps(reference)-eps(c)", launcher)
 
+    def test_reference_direction_delta_contract(self):
+        output = {
+            "cosine_to_reference_predicted_noise_direction_delta": np.asarray(
+                [-0.3, 0.8, 0.2]
+            )
+        }
+        np.testing.assert_allclose(
+            output_selection_values(
+                output, "reference_direction_delta_noise_direction"
+            ),
+            [-0.3, 0.8, 0.2],
+        )
+
+        algorithm = (
+            ROOT / "legacy_jax" / "traj_tracin" / "algorithm.py"
+        ).read_text()
+        self.assertIn("reference_unit - current_unit", algorithm)
+        self.assertIn("reference_direction_delta_probe_cosines", algorithm)
+
+        launcher = (
+            ROOT
+            / "3dshapes"
+            / "tacc"
+            / "rtx_small"
+            / "run_reference_direction_delta_all_queries_rtx_small.sh"
+        ).read_text()
+        self.assertIn("--include-reference-direction-delta", launcher)
+
     def test_next_noise_selected_product_is_squared_before_term_sum(self):
         selected = np.asarray([-0.5, 0.0, 0.75], dtype=np.float64)
         np.testing.assert_allclose(
