@@ -130,6 +130,26 @@ class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
         )
         self.assertNotIn("run_traj_tracin_queries_and_scores.py", launcher)
 
+    def test_old_and_fresh12_rms_launcher_keeps_lr_outside_root(self):
+        launcher = (
+            ROOT
+            / "3dshapes"
+            / "tacc"
+            / "rtx_small"
+            / "run_predicted_noise_old_fresh12_termwise_rms_rtx_small.sh"
+        ).read_text()
+        self.assertIn("--contraction rms", launcher)
+        self.assertIn("LR outside root", launcher)
+        self.assertIn(
+            "loss_direction_residual_rms_predicted_noise_probe4_r{probe_index}",
+            launcher,
+        )
+        self.assertIn(
+            "loss_direction_residual_rms_predicted_noise_fresh_seed20260915_r{probe_index}",
+            launcher,
+        )
+        self.assertNotIn("run_traj_tracin_queries_and_scores.py", launcher)
+
     def test_three_output_direction_selection_rules_exist(self):
         self.assertEqual(
             "cosine_to_next_predicted_noise_delta",
