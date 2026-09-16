@@ -35,6 +35,7 @@ ALIGNMENT_KEYS = (
     "cosine_to_next_predicted_noise_delta",
     "cosine_to_reference_predicted_noise_delta",
     "cosine_to_future_mean_predicted_noise_delta",
+    "cosine_to_future_lr_weighted_predicted_noise_delta",
 )
 METHODS = ("nearest_direction", "nearest_axis_signed")
 OUTPUT_SELECTIONS = {
@@ -51,6 +52,9 @@ OUTPUT_SELECTIONS = {
     "next_noise_direction_product_square": "cosine_to_next_predicted_noise",
     "future_mean_delta_noise_direction": (
         "cosine_to_future_mean_predicted_noise_delta"
+    ),
+    "future_lr_weighted_delta_noise_direction": (
+        "cosine_to_future_lr_weighted_predicted_noise_delta"
     ),
 }
 
@@ -88,6 +92,8 @@ def enabled_output_selections(args: argparse.Namespace) -> tuple[str, ...]:
         result += ("next_noise_direction_product_square",)
     if args.include_future_mean_delta:
         result += ("future_mean_delta_noise_direction",)
+    if args.include_future_lr_weighted_delta:
+        result += ("future_lr_weighted_delta_noise_direction",)
     return result
 
 
@@ -640,6 +646,9 @@ def main() -> None:
     parser.add_argument("--include-reference-delta", action="store_true")
     parser.add_argument("--include-next-product-square", action="store_true")
     parser.add_argument("--include-future-mean-delta", action="store_true")
+    parser.add_argument(
+        "--include-future-lr-weighted-delta", action="store_true"
+    )
     parser.add_argument(
         "--checkpoint-direction",
         choices=("next", "previous"),

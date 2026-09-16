@@ -2935,9 +2935,20 @@ def run_attribution(cfg: TrajAttributionConfig):
             ).strip().lower()
             in ("1", "true", "yes", "on")
         )
-        if probe_alignment_future_mean and not probe_alignment_next_checkpoint:
+        probe_alignment_future_lr_weighted_delta = (
+            probe_alignment_only
+            and os.environ.get(
+                "TRAJ_TRACIN_PROBE_ALIGNMENT_FUTURE_LR_WEIGHTED_DELTA", "0"
+            ).strip().lower()
+            in ("1", "true", "yes", "on")
+        )
+        probe_alignment_collect_all_outputs = (
+            probe_alignment_future_mean
+            or probe_alignment_future_lr_weighted_delta
+        )
+        if probe_alignment_collect_all_outputs and not probe_alignment_next_checkpoint:
             raise ValueError(
-                "TRAJ_TRACIN_PROBE_ALIGNMENT_FUTURE_MEAN requires "
+                "future probe alignment requires "
                 "TRAJ_TRACIN_PROBE_ALIGNMENT_NEXT_CHECKPOINT=1"
             )
         if probe_alignment_next_checkpoint and probe_alignment_previous_checkpoint:
@@ -3338,7 +3349,7 @@ def run_attribution(cfg: TrajAttributionConfig):
                             eps_chunk = alignment_eps_chunk_fn(
                                 params, xt_chunk, t_chunk, query_cond
                             )
-                            if probe_alignment_future_mean:
+                            if probe_alignment_collect_all_outputs:
                                 probe_alignment_current_eps_outputs.append(
                                     np.asarray(
                                         jax.device_get(eps_chunk), dtype=np.float32
@@ -3395,7 +3406,7 @@ def run_attribution(cfg: TrajAttributionConfig):
                                     query_cond,
                                 )
                                 if (
-                                    probe_alignment_future_mean
+                                    probe_alignment_collect_all_outputs
                                     and probe_alignment_next_checkpoint
                                     and ckpt_i + 2 == len(ckpts)
                                 ):
@@ -4436,7 +4447,7 @@ def run_attribution(cfg: TrajAttributionConfig):
                     "scalar=dot(v,eps)/sqrt(D); cosine=dot(v,eps)/(norm(v)*norm(eps))"
                 ),
             )
-            if probe_alignment_future_mean:
+            if probe_alignment_collect_all_outputs:
                 current_outputs = np.concatenate(
                     probe_alignment_current_eps_outputs, axis=0
                 )
@@ -4478,21 +4489,7 @@ def run_attribution(cfg: TrajAttributionConfig):
                     ),
                     axis=0,
                 ).astype(np.float64)
-                future_sums = np.cumsum(all_outputs[::-1], axis=0)[::-1]
-                future_deltas = []
-                for checkpoint_index in range(len(ckpts) - 1):
-                    future_count = len(ckpts) - checkpoint_index - 1
-                    future_mean = (
-                        future_sums[checkpoint_index + 1] / float(future_count)
-                    )
-                    future_deltas.append(
-                        future_mean - all_outputs[checkpoint_index]
-                    )
-                future_deltas = np.stack(future_deltas, axis=0).reshape(
-                    expected_current_shape
-                ).astype(np.float32)
-
-                def future_mean_alignment_one(keys, delta_output):
+                def future_alignment_one(keys, delta_output):
                     probes = jax.vmap(
                         lambda key: jax.random.normal(
                             key, delta_output.shape, dtype=jnp.float32
@@ -4512,52 +4509,114 @@ def run_attribution(cfg: TrajAttributionConfig):
                     )
                     return scalars, cosines, delta_norm
 
-                future_mean_alignment_fn = jax.jit(future_mean_alignment_one)
-                future_scalars = []
-                future_cosines = []
-                future_norms = []
-                for term_id, delta_output in enumerate(future_deltas):
-                    keys = array_to_device(
-                        jnp.stack(
-                            [
-                                predicted_noise_probe_key(
-                                    predicted_noise_probe_seed,
-                                    int(checkpoint_indices[term_id]),
-                                    int(term_timestamps[term_id]),
-                                    int(term_positions[term_id]),
-                                    probe_index,
-                                )
-                                for probe_index in range(probe_alignment_count)
-                            ],
-                            axis=0,
-                        ),
-                        device,
+                future_alignment_fn = jax.jit(future_alignment_one)
+
+                def add_future_alignment(prefix, future_deltas, definition):
+                    flattened = np.asarray(future_deltas, dtype=np.float32).reshape(
+                        expected_current_shape
                     )
-                    scalars, cosines, delta_norm = future_mean_alignment_fn(
-                        keys, array_to_device(jnp.asarray(delta_output), device)
+                    future_scalars = []
+                    future_cosines = []
+                    future_norms = []
+                    for term_id, delta_output in enumerate(flattened):
+                        keys = array_to_device(
+                            jnp.stack(
+                                [
+                                    predicted_noise_probe_key(
+                                        predicted_noise_probe_seed,
+                                        int(checkpoint_indices[term_id]),
+                                        int(term_timestamps[term_id]),
+                                        int(term_positions[term_id]),
+                                        probe_index,
+                                    )
+                                    for probe_index in range(probe_alignment_count)
+                                ],
+                                axis=0,
+                            ),
+                            device,
+                        )
+                        scalars, cosines, delta_norm = future_alignment_fn(
+                            keys,
+                            array_to_device(jnp.asarray(delta_output), device),
+                        )
+                        future_scalars.append(
+                            np.asarray(jax.device_get(scalars), dtype=np.float32)
+                        )
+                        future_cosines.append(
+                            np.asarray(jax.device_get(cosines), dtype=np.float32)
+                        )
+                        future_norms.append(float(jax.device_get(delta_norm)))
+                    alignment_payload.update(
+                        {
+                            f"{prefix}_probe_scalars": np.stack(
+                                future_scalars, axis=1
+                            ),
+                            f"{prefix}_probe_cosines": np.stack(
+                                future_cosines, axis=1
+                            ),
+                            f"{prefix}_norms": np.asarray(
+                                future_norms, dtype=np.float32
+                            ),
+                            f"{prefix}_definition": np.asarray(definition),
+                        }
                     )
-                    future_scalars.append(
-                        np.asarray(jax.device_get(scalars), dtype=np.float32)
-                    )
-                    future_cosines.append(
-                        np.asarray(jax.device_get(cosines), dtype=np.float32)
-                    )
-                    future_norms.append(float(jax.device_get(delta_norm)))
-                alignment_payload.update(
-                    future_mean_delta_probe_scalars=np.stack(
-                        future_scalars, axis=1
-                    ),
-                    future_mean_delta_probe_cosines=np.stack(
-                        future_cosines, axis=1
-                    ),
-                    future_mean_delta_norms=np.asarray(
-                        future_norms, dtype=np.float32
-                    ),
-                    future_mean_delta_definition=np.asarray(
+
+                if probe_alignment_future_mean:
+                    future_sums = np.cumsum(all_outputs[::-1], axis=0)[::-1]
+                    future_deltas = []
+                    for checkpoint_index in range(len(ckpts) - 1):
+                        future_count = len(ckpts) - checkpoint_index - 1
+                        future_mean = (
+                            future_sums[checkpoint_index + 1]
+                            / float(future_count)
+                        )
+                        future_deltas.append(
+                            future_mean - all_outputs[checkpoint_index]
+                        )
+                    add_future_alignment(
+                        "future_mean_delta",
+                        np.stack(future_deltas, axis=0),
                         "delta_future_mean=mean_{k>c}(eps(params[k],x_t))"
-                        "-eps(params[c],x_t); x_t and conditioning are held fixed"
-                    ),
-                )
+                        "-eps(params[c],x_t); x_t and conditioning are held fixed",
+                    )
+
+                if probe_alignment_future_lr_weighted_delta:
+                    transition_deltas = all_outputs[1:] - all_outputs[:-1]
+                    transition_weights = np.asarray(
+                        [
+                            tracin_checkpoint_lr_weight(
+                                cfg, ckpt_path, ckpt_index, len(ckpts), len(ds)
+                            )
+                            for ckpt_index, ckpt_path in enumerate(ckpts[:-1])
+                        ],
+                        dtype=np.float64,
+                    )
+                    weighted = (
+                        transition_deltas
+                        * transition_weights[
+                            (slice(None),)
+                            + (None,) * (transition_deltas.ndim - 1)
+                        ]
+                    )
+                    reverse_weighted_sums = np.cumsum(weighted[::-1], axis=0)[::-1]
+                    reverse_weight_sums = np.cumsum(transition_weights[::-1])[::-1]
+                    if np.any(reverse_weight_sums <= 0.0):
+                        raise ValueError(
+                            "future LR-weighted delta requires positive remaining LR mass"
+                        )
+                    future_lr_deltas = reverse_weighted_sums / reverse_weight_sums[
+                        (slice(None),) + (None,) * (reverse_weighted_sums.ndim - 1)
+                    ]
+                    add_future_alignment(
+                        "future_lr_weighted_delta",
+                        future_lr_deltas,
+                        "delta_future_lr=sum_{j>=c}(eta_j*(eps(params[j+1],x_t)"
+                        "-eps(params[j],x_t)))/sum_{j>=c}(eta_j); x_t and "
+                        "conditioning are held fixed",
+                    )
+                    alignment_payload[
+                        "future_lr_weighted_delta_transition_weights"
+                    ] = transition_weights.astype(np.float32)
             if probe_alignment_next_checkpoint or probe_alignment_previous_checkpoint:
                 adjacent_prefix = (
                     "next" if probe_alignment_next_checkpoint else "previous"
