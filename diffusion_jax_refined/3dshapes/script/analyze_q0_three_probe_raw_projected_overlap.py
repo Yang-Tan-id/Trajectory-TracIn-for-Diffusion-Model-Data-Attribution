@@ -168,7 +168,7 @@ def main():
     raw = np.asarray(jax.device_get(generate(keys)), dtype=np.float32).reshape(
         3, 500, dimension
     )
-    raw /= np.maximum(np.linalg.norm(raw, axis=2, keepdims=True), 1e-12)
+    raw = raw / np.maximum(np.linalg.norm(raw, axis=2, keepdims=True), 1e-12)
     print("[phase 1/3] raw probes ready", flush=True)
 
     term_signs = np.asarray(
