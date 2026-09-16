@@ -134,17 +134,14 @@ def reduce_timestamp_checkpoint_sums(checkpoint_sums: np.ndarray) -> np.ndarray:
     return np.mean(np.square(checkpoint_sums), axis=(0, 1))
 
 
-def reduce_checkpoint_timestamp_means(probe_timestamp_scores: np.ndarray) -> np.ndarray:
-    """Mean timestamps per probe, square, then average probes."""
-    if probe_timestamp_scores.ndim != 4:
+def reduce_checkpoint_timestamp_means(probe_timestamp_means: np.ndarray) -> np.ndarray:
+    """Square per-probe timestamp means, then average probes."""
+    if probe_timestamp_means.ndim != 3:
         raise ValueError(
-            "probe_timestamp_scores must have shape "
-            "(probes, timestamps, queries, datapoints)"
+            "probe_timestamp_means must have shape "
+            "(probes, queries, datapoints)"
         )
-    return np.mean(
-        np.square(np.mean(probe_timestamp_scores, axis=1)),
-        axis=0,
-    )
+    return np.mean(np.square(probe_timestamp_means), axis=0)
 
 
 def query_artifact_path(

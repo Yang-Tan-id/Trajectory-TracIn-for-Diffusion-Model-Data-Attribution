@@ -396,7 +396,8 @@ class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
             ],
             dtype=np.float64,
         )
-        actual = reduce_checkpoint_timestamp_means(probe_timestamp_scores)
+        probe_timestamp_means = np.mean(probe_timestamp_scores, axis=1)
+        actual = reduce_checkpoint_timestamp_means(probe_timestamp_means)
         expected = np.asarray([[(2.0**2 + 0.0**2) / 2.0, (3.0**2 + 2.0**2) / 2.0]])
         np.testing.assert_allclose(actual, expected)
         self.assertFalse(
