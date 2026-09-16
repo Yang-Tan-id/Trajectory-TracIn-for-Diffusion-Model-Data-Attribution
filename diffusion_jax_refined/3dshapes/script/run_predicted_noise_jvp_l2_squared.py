@@ -71,6 +71,8 @@ def score_namespace(
         namespace = "predicted_noise_jvp_signed_squared"
     elif contraction == "absolute":
         namespace = "predicted_noise_jvp_absolute"
+    elif contraction == "rms":
+        namespace = "predicted_noise_jvp_rms"
     elif contraction == "coordinatewise_squared":
         namespace = "predicted_noise_jvp_coordinatewise_squared"
     elif contraction == "checkpoint_timestamp_sum_square":
@@ -112,6 +114,8 @@ def weighting_semantics(contraction: str) -> str:
         return "learning_rate_weighted_sum_of_signed_squared_gradient_contractions"
     if contraction == "absolute":
         return "learning_rate_weighted_sum_of_absolute_gradient_contractions"
+    if contraction == "rms":
+        return "learning_rate_weighted_sum_of_probe_rms_gradient_contractions"
     if contraction == "coordinatewise_squared":
         return "learning_rate_weighted_sum_of_coordinatewise_squared_gradient_products"
     if contraction == "checkpoint_timestamp_sum_square":
@@ -146,6 +150,11 @@ def reduce_checkpoint_timestamp_means(probe_timestamp_means: np.ndarray) -> np.n
             "(probes, queries, datapoints)"
         )
     return np.mean(np.square(probe_timestamp_means), axis=0)
+
+
+def reduce_probe_rms(mean_probe_squares: np.ndarray, eps: float = 1e-12) -> np.ndarray:
+    """Convert a per-term mean of probe squares into its RMS magnitude."""
+    return np.sqrt(np.maximum(mean_probe_squares, 0.0) + eps)
 
 
 def query_artifact_path(
@@ -429,7 +438,7 @@ def score_shard(args: argparse.Namespace) -> None:
                     }
                 else:
                     directional = train_device @ query_device.T
-                    if args.contraction in ("squared", "termwise_squared_per_probe"):
+                    if args.contraction in ("squared", "termwise_squared_per_probe", "rms"):
                         transform = jnp.square
                     elif args.contraction == "signed_squared":
                         transform = lambda value: value * jnp.abs(value)
@@ -478,6 +487,8 @@ def score_shard(args: argparse.Namespace) -> None:
             if term_scores is not None:
                 term_weight = float(weight)
                 for component, values in term_scores.items():
+                    if args.contraction == "rms":
+                        values = reduce_probe_rms(values)
                     sums[component] += term_weight * values
                     if (
                         checkpoint_scores is not None
@@ -703,6 +714,8 @@ def merge(args: argparse.Namespace) -> None:
                         if args.contraction == "signed_squared"
                         else "learning_rate_weighted_sum_terms(abs(normalized_dot_product))"
                         if args.contraction == "absolute"
+                        else "learning_rate_weighted_sum_terms(sqrt(mean_probe(square(normalized_dot_product))))"
+                        if args.contraction == "rms"
                         else "learning_rate_weighted_sum_terms(sum_coordinate_squared_products_after_normalization)"
                         if args.contraction == "coordinatewise_squared"
                         else "sum_checkpoint(learning_rate_times_mean_probe(square(mean_timestamp(normalized_dot_product))))"
@@ -769,6 +782,7 @@ def main() -> None:
             "termwise_squared_per_probe",
             "signed_squared",
             "absolute",
+            "rms",
             "coordinatewise_squared",
             "checkpoint_timestamp_sum_square",
         ),
@@ -782,6 +796,7 @@ def main() -> None:
             "termwise_squared_per_probe: square each product and retain every probe "
             "through the trajectory sum for subgroup analysis; signed_squared: z*abs(z); "
             "absolute: abs(z); "
+            "rms: sqrt(mean_probe(z^2)) for every checkpoint/timestamp term; "
             "coordinatewise_squared: sum_k (train_k*query_k)^2."
             " checkpoint_timestamp_sum_square: within each checkpoint and probe, "
             "mean timestamps, square, mean probes, then apply the checkpoint LR once."

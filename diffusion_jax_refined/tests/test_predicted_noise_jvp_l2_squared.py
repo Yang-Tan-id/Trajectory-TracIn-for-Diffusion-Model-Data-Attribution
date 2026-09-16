@@ -11,6 +11,7 @@ sys.path.insert(0, str(ROOT / "3dshapes" / "script"))
 from run_predicted_noise_jvp_l2_squared import (
     reduce_checkpoint_timestamp_means,
     reduce_final_probe_scores,
+    reduce_probe_rms,
     reduce_timestamp_checkpoint_sums,
 )
 from materialize_f_next_final_score_squared import square_final_scores
@@ -74,6 +75,17 @@ class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
         score = np.abs(train @ query.T)
         flipped = np.abs(train @ (-query).T)
         np.testing.assert_allclose(score, flipped)
+
+    def test_probe_rms_is_sign_invariant_and_reduces_before_trajectory_sum(self):
+        probe_scores = np.asarray([3.0, -4.0, 0.0, 0.0], dtype=np.float64)
+        mean_squares = np.mean(np.square(probe_scores))
+        actual = reduce_probe_rms(mean_squares, eps=0.0)
+        flipped = reduce_probe_rms(
+            np.mean(np.square(-probe_scores)),
+            eps=0.0,
+        )
+        self.assertAlmostEqual(float(actual), 2.5)
+        self.assertAlmostEqual(float(actual), float(flipped))
 
     def test_original_four_normalization_variants(self):
         train = np.asarray([[3.0, 4.0], [1.0, 0.0]], dtype=np.float64)
