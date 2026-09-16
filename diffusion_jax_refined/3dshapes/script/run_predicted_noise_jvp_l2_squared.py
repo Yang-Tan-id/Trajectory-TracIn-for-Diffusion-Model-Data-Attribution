@@ -73,6 +73,8 @@ def score_namespace(
         namespace = "predicted_noise_jvp_absolute"
     elif contraction == "rms":
         namespace = "predicted_noise_jvp_rms"
+    elif contraction == "median_absolute":
+        namespace = "predicted_noise_jvp_median_absolute"
     elif contraction == "coordinatewise_squared":
         namespace = "predicted_noise_jvp_coordinatewise_squared"
     elif contraction == "checkpoint_timestamp_sum_square":
@@ -116,6 +118,8 @@ def weighting_semantics(contraction: str) -> str:
         return "learning_rate_weighted_sum_of_absolute_gradient_contractions"
     if contraction == "rms":
         return "learning_rate_weighted_sum_of_probe_rms_gradient_contractions"
+    if contraction == "median_absolute":
+        return "learning_rate_weighted_sum_of_probe_median_absolute_gradient_contractions"
     if contraction == "coordinatewise_squared":
         return "learning_rate_weighted_sum_of_coordinatewise_squared_gradient_products"
     if contraction == "checkpoint_timestamp_sum_square":
@@ -155,6 +159,13 @@ def reduce_checkpoint_timestamp_means(probe_timestamp_means: np.ndarray) -> np.n
 def reduce_probe_rms(mean_probe_squares: np.ndarray, eps: float = 1e-12) -> np.ndarray:
     """Convert a per-term mean of probe squares into its RMS magnitude."""
     return np.sqrt(np.maximum(mean_probe_squares, 0.0) + eps)
+
+
+def reduce_probe_median_absolute(probe_values: np.ndarray) -> np.ndarray:
+    """Take the median absolute contraction across the probe axis."""
+    if probe_values.ndim < 1:
+        raise ValueError("probe_values must include a probe axis")
+    return np.median(np.abs(probe_values), axis=0)
 
 
 def query_artifact_path(
@@ -408,7 +419,13 @@ def score_shard(args: argparse.Namespace) -> None:
                 else None
             )
             term_scores = None
-            if args.contraction not in (
+            term_probe_values = None
+            if args.contraction == "median_absolute":
+                term_probe_values = {
+                    component: np.zeros((args.num_probes, 10, 5000), dtype=np.float64)
+                    for component in sums
+                }
+            elif args.contraction not in (
                 "final_post_square",
                 "timestamp_checkpoint_square",
                 "termwise_squared_per_probe",
@@ -460,7 +477,10 @@ def score_shard(args: argparse.Namespace) -> None:
                     }
                 for component, values in probe_scores.items():
                     host_values = np.asarray(jax.device_get(values), dtype=np.float64).T
-                    if args.contraction == "final_post_square":
+                    if args.contraction == "median_absolute":
+                        assert term_probe_values is not None
+                        term_probe_values[component][probe_index] = host_values
+                    elif args.contraction == "final_post_square":
                         # Keep each probe separate through the complete trajectory sum.
                         # Squaring and cross-probe reduction happen only after shards merge.
                         sums[component][probe_index] += float(weight) * host_values
@@ -499,6 +519,10 @@ def score_shard(args: argparse.Namespace) -> None:
                         checkpoint_scores[component][ckpt_i] += (
                             values / float(len(timesteps))
                         )
+            if term_probe_values is not None:
+                term_weight = float(weight)
+                for component, values in term_probe_values.items():
+                    sums[component] += term_weight * reduce_probe_median_absolute(values)
             used_terms += 1
 
         if args.contraction == "checkpoint_timestamp_sum_square":
@@ -716,6 +740,8 @@ def merge(args: argparse.Namespace) -> None:
                         if args.contraction == "absolute"
                         else "learning_rate_weighted_sum_terms(sqrt(mean_probe(square(normalized_dot_product))))"
                         if args.contraction == "rms"
+                        else "learning_rate_weighted_sum_terms(median_probe(abs(normalized_dot_product)))"
+                        if args.contraction == "median_absolute"
                         else "learning_rate_weighted_sum_terms(sum_coordinate_squared_products_after_normalization)"
                         if args.contraction == "coordinatewise_squared"
                         else "sum_checkpoint(learning_rate_times_mean_probe(square(mean_timestamp(normalized_dot_product))))"
@@ -783,6 +809,7 @@ def main() -> None:
             "signed_squared",
             "absolute",
             "rms",
+            "median_absolute",
             "coordinatewise_squared",
             "checkpoint_timestamp_sum_square",
         ),
@@ -797,6 +824,7 @@ def main() -> None:
             "through the trajectory sum for subgroup analysis; signed_squared: z*abs(z); "
             "absolute: abs(z); "
             "rms: sqrt(mean_probe(z^2)) for every checkpoint/timestamp term; "
+            "median_absolute: median_probe(abs(z)) for every checkpoint/timestamp term; "
             "coordinatewise_squared: sum_k (train_k*query_k)^2."
             " checkpoint_timestamp_sum_square: within each checkpoint and probe, "
             "mean timestamps, square, mean probes, then apply the checkpoint LR once."

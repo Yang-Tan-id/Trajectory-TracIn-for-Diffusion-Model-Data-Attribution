@@ -12,6 +12,7 @@ from run_predicted_noise_jvp_l2_squared import (
     reduce_checkpoint_timestamp_means,
     reduce_final_probe_scores,
     reduce_probe_rms,
+    reduce_probe_median_absolute,
     reduce_timestamp_checkpoint_sums,
 )
 from materialize_f_next_final_score_squared import square_final_scores
@@ -86,6 +87,27 @@ class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
         )
         self.assertAlmostEqual(float(actual), 2.5)
         self.assertAlmostEqual(float(actual), float(flipped))
+
+    def test_probe_median_absolute_is_independently_sign_invariant(self):
+        probe_values = np.asarray(
+            [
+                [[-100.0, 1.0]],
+                [[2.0, -2.0]],
+                [[3.0, 3.0]],
+                [[4.0, -4.0]],
+            ],
+            dtype=np.float64,
+        )
+        expected = np.asarray([[3.5, 2.5]])
+        np.testing.assert_allclose(
+            reduce_probe_median_absolute(probe_values),
+            expected,
+        )
+        probe_values[[0, 2]] *= -1.0
+        np.testing.assert_allclose(
+            reduce_probe_median_absolute(probe_values),
+            expected,
+        )
 
     def test_original_four_normalization_variants(self):
         train = np.asarray([[3.0, 4.0], [1.0, 0.0]], dtype=np.float64)
