@@ -198,7 +198,7 @@ def score_shard(args: argparse.Namespace) -> None:
         for name, (_, meta) in query_banks.items()
     }
 
-    query_variants = ("raw", "query_l2", "train_l2", "query_train_l2")
+    query_variants = args.score_variants
     sums = {
         (target, query_variant): np.zeros((10, 5000), dtype=np.float64)
         for target in query_banks
@@ -271,7 +271,8 @@ def score_shard(args: argparse.Namespace) -> None:
                     "train_l2": train_l2_original,
                     "query_train_l2": query_train_l2_original,
                 }
-                for query_variant, values in original_values.items():
+                for query_variant in query_variants:
+                    values = original_values[query_variant]
                     sums[("original", query_variant)] += float(weight) * np.asarray(
                         jax.device_get(values), dtype=np.float64
                     ).T
@@ -319,14 +320,16 @@ def score_shard(args: argparse.Namespace) -> None:
                     predicted_query_train_l2 += np.asarray(
                         jax.device_get(query_train_l2_values), dtype=np.float64
                     ).T / float(args.predicted_num_probes)
-                sums[("predicted", "raw")] += float(weight) * predicted_raw
-                sums[("predicted", "query_l2")] += (
-                    float(weight) * predicted_query_l2
-                )
-                sums[("predicted", "train_l2")] += float(weight) * predicted_train_l2
-                sums[("predicted", "query_train_l2")] += (
-                    float(weight) * predicted_query_train_l2
-                )
+                predicted_values = {
+                    "raw": predicted_raw,
+                    "query_l2": predicted_query_l2,
+                    "train_l2": predicted_train_l2,
+                    "query_train_l2": predicted_query_train_l2,
+                }
+                for query_variant in query_variants:
+                    sums[("predicted", query_variant)] += (
+                        float(weight) * predicted_values[query_variant]
+                    )
                 predicted_terms += 1
 
         print(
@@ -408,7 +411,7 @@ def merge(args: argparse.Namespace) -> None:
     totals = {
         (target, query_variant): np.zeros((10, 5000), dtype=np.float64)
         for target in targets
-        for query_variant in ("raw", "query_l2", "train_l2", "query_train_l2")
+        for query_variant in args.score_variants
     }
     original_terms = predicted_terms = 0
     score_indices = None
@@ -454,7 +457,7 @@ def merge(args: argparse.Namespace) -> None:
     expected = np.asarray(np.load(ATTRIBUTION_INDICES_PATH), dtype=np.int64)
     if score_indices is None or not np.array_equal(np.sort(score_indices), np.sort(expected)):
         raise ValueError("score indices do not match attribution subset")
-    for query_variant in ("raw", "query_l2", "train_l2", "query_train_l2"):
+    for query_variant in args.score_variants:
         original_definition = (
             f"learning_rate_weighted_sum(square(dot(v_l2_train_feature, "
             f"{query_variant}_grad(original_f))))"
@@ -489,9 +492,15 @@ def merge(args: argparse.Namespace) -> None:
                 int(jacobian_norm_probes),
             )
     if args.skip_predicted:
-        message = "[done] materialized four L2 normalization variants x 1 query target"
+        message = (
+            f"[done] materialized {len(args.score_variants)} normalization variants "
+            "x 1 query target"
+        )
     else:
-        message = "[done] materialized four L2 normalization variants x 2 query targets"
+        message = (
+            f"[done] materialized {len(args.score_variants)} normalization variants "
+            "x 2 query targets"
+        )
     print(message, flush=True)
 
 
@@ -526,6 +535,14 @@ def main() -> None:
         action="store_true",
         help="Score only original f; avoids loading or multiplying predicted-noise probes.",
     )
+    parser.add_argument(
+        "--score-variants",
+        default="raw,query_l2",
+        help=(
+            "Comma-separated subset of raw, query_l2, train_l2, "
+            "query_train_l2."
+        ),
+    )
     parser.add_argument("--score-namespace-prefix", default=DEFAULT_SCORE_NAMESPACE_PREFIX)
     parser.add_argument(
         "--train-feature-semantics", default=DEFAULT_TRAIN_FEATURE_SEMANTICS
@@ -535,6 +552,14 @@ def main() -> None:
         default="mean_l (projected_residual_l * unit(P E[J]^T v_l))",
     )
     args = parser.parse_args()
+    allowed_variants = {"raw", "query_l2", "train_l2", "query_train_l2"}
+    args.score_variants = tuple(
+        value.strip() for value in args.score_variants.split(",") if value.strip()
+    )
+    if not args.score_variants or any(
+        value not in allowed_variants for value in args.score_variants
+    ):
+        raise ValueError(f"invalid --score-variants: {args.score_variants}")
     if not 0 <= args.shard_index < args.shard_count:
         raise ValueError("invalid shard index/count")
     if args.predicted_num_probes <= 0:

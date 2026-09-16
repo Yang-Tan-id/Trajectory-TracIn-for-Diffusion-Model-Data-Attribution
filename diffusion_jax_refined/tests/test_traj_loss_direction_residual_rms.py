@@ -169,8 +169,9 @@ class LossDirectionResidualRmsTest(unittest.TestCase):
         self.assertIn("load_predicted_query_probes", scorer)
         self.assertIn("/ float(args.predicted_num_probes)", scorer)
         self.assertIn("jnp.square(dots)", scorer)
+        self.assertIn('"raw": predicted_raw', scorer)
         self.assertIn(
-            'sums[("predicted", "raw")] += float(weight) * predicted_raw', scorer
+            'float(weight) * predicted_values[query_variant]', scorer
         )
         self.assertNotIn("float(weight) ** 2 * predicted_raw", scorer)
         self.assertNotIn('totals[("predicted", query_variant)] / predicted_weight', scorer)
@@ -205,6 +206,7 @@ class LossDirectionResidualRmsTest(unittest.TestCase):
         self.assertIn(
             '"query_train_l2": "score_query_train_l2_normalized"', scorer
         )
+        self.assertIn('"--score-variants"', scorer)
 
         lds_driver = LDS_DRIVER.read_text()
         self.assertIn('FOUR_NORM_EXPECTED_SCHEMES', lds_driver)
@@ -212,6 +214,8 @@ class LossDirectionResidualRmsTest(unittest.TestCase):
 
         launcher = ORIGINAL_F_FOUR_NORM_PIPELINE.read_text()
         self.assertIn("--skip-predicted", launcher)
+        self.assertIn("TRAIN_NAMESPACE=traj_tracin", launcher)
+        self.assertIn("--score-variants train_l2,query_train_l2", launcher)
         self.assertIn("--query-ids 0", launcher)
         self.assertIn("loss_direction_residual_rms_original_f", launcher)
 

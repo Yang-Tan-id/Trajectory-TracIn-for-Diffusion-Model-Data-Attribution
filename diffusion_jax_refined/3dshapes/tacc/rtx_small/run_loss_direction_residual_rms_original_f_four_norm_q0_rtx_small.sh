@@ -47,13 +47,13 @@ export PYTHONUNBUFFERED=1
 export TF_GPU_ALLOCATOR="${TF_GPU_ALLOCATOR:-cuda_malloc_async}"
 export XLA_PYTHON_CLIENT_PREALLOCATE="${XLA_PYTHON_CLIENT_PREALLOCATE:-false}"
 
-TRAIN_NAMESPACE=traj_tracin_loss_direction_residual_rms
+TRAIN_NAMESPACE=traj_tracin
 ORIGINAL_QUERY_NAMESPACE=loss_direction_residual_rms_original_f
 SCORE_PREFIX=traj_tracin_loss_direction_residual_rms
 LOG_ROOT="${SHAPES_ROOT}/result/${EXPERIMENT_TAG}/logs/original_f_four_norm_q0/${SLURM_JOB_ID}"
 mkdir -p "${LOG_ROOT}"
 
-echo "[phase 1/2] original-f four-normalization scores from cached train/query artifacts"
+echo "[phase 1/2] original-f train-L2/both-L2 from cached raw train-gradient artifacts"
 pids=()
 for shard in 0 1; do
   (
@@ -66,11 +66,12 @@ for shard in 0 1; do
         --shard-index "${shard}" \
         --shard-count 2 \
         --train-namespace "${TRAIN_NAMESPACE}" \
-        --train-feature-semantics unit_projected_expected_loss_gradient_times_matching_mc_residual_rms \
-        --train-feature-description residual_RMS_times_unit_projected_expected_loss_gradient \
+        --train-feature-semantics raw_projected_expected_loss_gradient \
+        --train-feature-description raw_projected_expected_loss_gradient \
         --original-query-namespace "${ORIGINAL_QUERY_NAMESPACE}" \
         --original-contraction signed \
         --skip-predicted \
+        --score-variants train_l2,query_train_l2 \
         --score-namespace-prefix "${SCORE_PREFIX}"
   ) >"${LOG_ROOT}/score_shard_${shard}.log" 2>&1 &
   pids+=("$!")
@@ -89,11 +90,12 @@ done
   --run-id "${SLURM_JOB_ID}" \
   --shard-count 2 \
   --train-namespace "${TRAIN_NAMESPACE}" \
-  --train-feature-semantics unit_projected_expected_loss_gradient_times_matching_mc_residual_rms \
-  --train-feature-description residual_RMS_times_unit_projected_expected_loss_gradient \
+  --train-feature-semantics raw_projected_expected_loss_gradient \
+  --train-feature-description raw_projected_expected_loss_gradient \
   --original-query-namespace "${ORIGINAL_QUERY_NAMESPACE}" \
   --original-contraction signed \
   --skip-predicted \
+  --score-variants train_l2,query_train_l2 \
   --score-namespace-prefix "${SCORE_PREFIX}"
 
 echo "[phase 2/2] Q0 cached LDS for raw/query-L2/train-L2/both-L2"
