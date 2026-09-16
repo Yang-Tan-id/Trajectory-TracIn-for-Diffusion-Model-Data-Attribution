@@ -428,6 +428,27 @@ class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
             cached_lds,
         )
 
+    def test_probe8_checkpoint_timestamp_mean_square_pipeline(self):
+        launcher = (
+            ROOT
+            / "3dshapes"
+            / "tacc"
+            / "rtx_small"
+            / "run_predicted_noise_probe8_checkpoint_timestamp_square_rtx_small.sh"
+        ).read_text()
+        cached_lds = (
+            ROOT / "3dshapes" / "script" / "run_traj_tracin_lds_cached.py"
+        ).read_text()
+
+        self.assertIn("NUM_PROBES=8", launcher)
+        self.assertIn("--contraction checkpoint_timestamp_sum_square", launcher)
+        self.assertIn("checkpoint_timestamp_sum_square_probe8", launcher)
+        self.assertIn("--prediction-sign=-1", launcher)
+        self.assertIn(
+            '"traj_tracin_predicted_noise_jvp_checkpoint_timestamp_sum_square_probe8"',
+            cached_lds,
+        )
+
     def test_shared_orthogonal_probe4_timestamp_checkpoint_square_pipeline(self):
         launcher = (
             ROOT
