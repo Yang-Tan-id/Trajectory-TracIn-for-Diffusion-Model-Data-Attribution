@@ -47,6 +47,7 @@ OUTPUT_SELECTIONS = {
     "reference_l2_oriented_previous_delta": "reference_l2_oriented_delta",
     "reference_cosine_oriented_previous_delta": "reference_cosine_oriented_delta",
     "reference_delta_noise_direction": "cosine_to_reference_predicted_noise_delta",
+    "next_noise_direction_product_square": "cosine_to_next_predicted_noise",
 }
 
 
@@ -60,8 +61,8 @@ def enabled_output_selections(args: argparse.Namespace) -> tuple[str, ...]:
         result = base
         if args.include_reference_oriented:
             result += (
-            "reference_l2_oriented_previous_delta",
-            "reference_cosine_oriented_previous_delta",
+                "reference_l2_oriented_previous_delta",
+                "reference_cosine_oriented_previous_delta",
             )
         if args.include_reference_delta:
             result += ("reference_delta_noise_direction",)
@@ -79,6 +80,8 @@ def enabled_output_selections(args: argparse.Namespace) -> tuple[str, ...]:
         )
     if args.include_reference_delta:
         result += ("reference_delta_noise_direction",)
+    if args.include_next_product_square:
+        result += ("next_noise_direction_product_square",)
     return result
 
 
@@ -98,6 +101,14 @@ def selected_probe_indices(scores: np.ndarray, method: str) -> np.ndarray:
     if method == "nearest_axis_signed":
         return np.argmax(np.abs(scores), axis=1)
     raise ValueError(method)
+
+
+def transform_output_selected_scores(
+    selected_scores: np.ndarray, method: str
+) -> np.ndarray:
+    if method == "next_noise_direction_product_square":
+        return np.square(selected_scores)
+    return selected_scores
 
 
 def probe_alignment_matrix(
@@ -262,7 +273,9 @@ def analyze_shard(args: argparse.Namespace) -> None:
                 for method in enabled_output_selections(args):
                     selection_values = output_selection_values(output, method)
                     selected_probe = int(np.argmax(selection_values))
-                    selected_scores = scores[:, selected_probe]
+                    selected_scores = transform_output_selected_scores(
+                        scores[:, selected_probe], method
+                    )
                     output_selected_totals[method][qslot] += (
                         float(term_weights[local_term]) * selected_scores
                     )
@@ -619,6 +632,7 @@ def main() -> None:
     )
     parser.add_argument("--include-reference-oriented", action="store_true")
     parser.add_argument("--include-reference-delta", action="store_true")
+    parser.add_argument("--include-next-product-square", action="store_true")
     parser.add_argument(
         "--checkpoint-direction",
         choices=("next", "previous"),

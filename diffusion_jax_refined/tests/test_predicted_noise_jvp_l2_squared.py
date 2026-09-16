@@ -22,6 +22,7 @@ from analyze_nearest_train_probe_predicted_noise_relation import (
     OUTPUT_SELECTIONS,
     output_selection_values,
     selected_probe_indices,
+    transform_output_selected_scores,
 )
 
 
@@ -128,6 +129,29 @@ class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
         ).read_text()
         self.assertIn("--include-reference-delta", launcher)
         self.assertIn("eps(reference)-eps(c)", launcher)
+
+    def test_next_noise_selected_product_is_squared_before_term_sum(self):
+        selected = np.asarray([-0.5, 0.0, 0.75], dtype=np.float64)
+        np.testing.assert_allclose(
+            transform_output_selected_scores(
+                selected, "next_noise_direction_product_square"
+            ),
+            [0.25, 0.0, 0.5625],
+        )
+        np.testing.assert_allclose(
+            transform_output_selected_scores(selected, "next_noise_direction"),
+            selected,
+        )
+
+        launcher = (
+            ROOT
+            / "3dshapes"
+            / "tacc"
+            / "rtx_small"
+            / "run_next_noise_direction_product_square_cached_rtx_small.sh"
+        ).read_text()
+        self.assertIn("--include-next-product-square", launcher)
+        self.assertIn("square every Both-L2 product", launcher)
 
     def test_all_query_delta_launcher_uses_fixed_full_query_list(self):
         launcher = (
