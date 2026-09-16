@@ -23,30 +23,36 @@ def main() -> None:
     parser.add_argument("--prediction-sign", choices=("p1", "m1"), default="m1")
     parser.add_argument("--num-probes", type=int, choices=(4, 8, 12), default=4)
     parser.add_argument(
+        "--namespace-suffix",
+        default="",
+        help="Optional score namespace suffix, without the leading underscore.",
+    )
+    parser.add_argument(
         "--method",
         choices=("linear", "square", "all"),
         default="square",
         help="Print the no-square linear mean, the two square reductions, or all three.",
     )
     args = parser.parse_args()
+    suffix = f"_{args.namespace_suffix}" if args.namespace_suffix else ""
 
     result_root = SHAPES_ROOT / "result" / args.experiment
     records = json.loads((SHAPES_ROOT / "queries_seed_0_9.json").read_text())["queries"]
     square_methods = (
         (
             "SQUARE EACH, THEN MEAN",
-            f"traj_tracin_predicted_noise_jvp_final_square_then_mean_probe{args.num_probes}",
+            f"traj_tracin_predicted_noise_jvp_final_square_then_mean_probe{args.num_probes}{suffix}",
             args.prediction_sign,
         ),
         (
             "MEAN, THEN SQUARE",
-            f"traj_tracin_predicted_noise_jvp_final_mean_then_square_probe{args.num_probes}",
+            f"traj_tracin_predicted_noise_jvp_final_mean_then_square_probe{args.num_probes}{suffix}",
             args.prediction_sign,
         ),
     )
     linear_method = (
         "LINEAR MEAN (NO SQUARE)",
-        f"traj_tracin_predicted_noise_jvp_final_linear_mean_probe{args.num_probes}",
+        f"traj_tracin_predicted_noise_jvp_final_linear_mean_probe{args.num_probes}{suffix}",
         "p1",
     )
     methods = (

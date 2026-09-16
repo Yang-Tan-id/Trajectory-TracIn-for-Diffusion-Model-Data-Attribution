@@ -1416,6 +1416,9 @@ class TrajAttributionConfig:
     predicted_noise_probe_index: int = 0
     predicted_noise_probe_mode: str = "independent_gaussian"
     predicted_noise_probe_count: int = 1
+    # None preserves the historical behavior: derive probes from cfg.seed.
+    # Set this independently for a genuinely fresh validation probe bank.
+    predicted_noise_probe_seed: Optional[int] = None
     parameter_source: str = "ema"  # "ema" for historical behavior, "raw" for TrainState.params
 
     # optional precomputed sampler trajectory
@@ -2116,6 +2119,11 @@ def run_attribution(cfg: TrajAttributionConfig):
     cfg.query_objective = normalize_query_objective_name(cfg.query_objective)
     uses_predicted_noise_probe = cfg.query_objective == "trajectory_predicted_noise_probe"
     predicted_noise_probe_mode = str(cfg.predicted_noise_probe_mode).strip().lower()
+    predicted_noise_probe_seed = (
+        int(cfg.seed)
+        if cfg.predicted_noise_probe_seed is None
+        else int(cfg.predicted_noise_probe_seed)
+    )
     if predicted_noise_probe_mode not in (
         "independent_gaussian",
         "shared_orthogonal",
@@ -3207,7 +3215,7 @@ def run_attribution(cfg: TrajAttributionConfig):
                                     jnp.stack(
                                         [
                                             predicted_noise_probe_key(
-                                                cfg.seed,
+                                                predicted_noise_probe_seed,
                                                 ckpt_i,
                                                 int(t_seq[i]),
                                                 int(pos_seq[i]),
@@ -3299,7 +3307,7 @@ def run_attribution(cfg: TrajAttributionConfig):
                                 )
                                 shared_orthogonal_probe_bank = array_to_device(
                                     probe_factory(
-                                        cfg.seed,
+                                        predicted_noise_probe_seed,
                                         xt_chunk.shape[1:],
                                         cfg.predicted_noise_probe_count,
                                     ),
@@ -3317,7 +3325,7 @@ def run_attribution(cfg: TrajAttributionConfig):
                                 jnp.stack(
                                     [
                                         predicted_noise_probe_key(
-                                            cfg.seed,
+                                            predicted_noise_probe_seed,
                                             ckpt_i,
                                             int(t_seq[i]),
                                             int(pos_seq[i]),
@@ -4189,6 +4197,9 @@ def run_attribution(cfg: TrajAttributionConfig):
                     output_probe_mode=np.asarray(predicted_noise_probe_mode),
                     output_probe_bank_size=np.asarray(
                         cfg.predicted_noise_probe_count, dtype=np.int32
+                    ),
+                    output_probe_seed=np.asarray(
+                        predicted_noise_probe_seed, dtype=np.int64
                     ),
                     output_probe_seed_rule=np.asarray(
                         "historical fixed four, then domain-separated Gaussian columns "

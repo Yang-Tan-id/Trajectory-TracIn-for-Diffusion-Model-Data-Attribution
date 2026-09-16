@@ -116,6 +116,15 @@ def main() -> None:
     )
     parser.add_argument("--predicted-noise-probe-count", type=int, default=1)
     parser.add_argument(
+        "--predicted-noise-probe-seed",
+        type=int,
+        default=None,
+        help=(
+            "Independent seed for the output-probe bank. Omit to preserve the "
+            "historical behavior of using --train-seed."
+        ),
+    )
+    parser.add_argument(
         "--log-prefix",
         default="",
         help="Optional prefix that keeps concurrent multi-node worker logs distinct.",
@@ -212,6 +221,10 @@ def main() -> None:
         JAX_NUM_DEVICES="1",
         JAX_PLATFORMS="cuda",
     )
+    if args.predicted_noise_probe_seed is not None:
+        base_env["TRAJ_PREDICTED_NOISE_PROBE_SEED"] = str(
+            args.predicted_noise_probe_seed
+        )
     if snapshot_positions:
         base_env["TRAJ_SNAPSHOT_POSITIONS"] = ",".join(str(value) for value in snapshot_positions)
 

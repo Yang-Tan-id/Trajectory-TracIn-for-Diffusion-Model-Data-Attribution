@@ -150,6 +150,11 @@ ATTRIBUTION_CONFIGS = {
         "predicted_noise_probe_count": int(
             os.environ.get("TRAJ_PREDICTED_NOISE_PROBE_COUNT", "1")
         ),
+        "predicted_noise_probe_seed": (
+            int(os.environ["TRAJ_PREDICTED_NOISE_PROBE_SEED"])
+            if os.environ.get("TRAJ_PREDICTED_NOISE_PROBE_SEED")
+            else None
+        ),
         "parameter_source": os.environ.get("TRAJ_PARAMETER_SOURCE", "raw"),
         "attribution_sample_dir": ATTRIBUTION_SAMPLE_DIR,
         "attribution_sample_seed": INITIAL_SEED,

@@ -216,6 +216,9 @@ def load_query_bank(args: argparse.Namespace) -> tuple[np.ndarray, dict[str, np.
                 stored_probe_bank_size = int(
                     np.asarray(payload.get("output_probe_bank_size", 1)).item()
                 )
+                stored_probe_seed = int(
+                    np.asarray(payload.get("output_probe_seed", args.train_seed)).item()
+                )
                 metadata = {
                     "ckpt_indices": np.asarray(payload["ckpt_indices"], dtype=np.int32),
                     "timesteps": np.asarray(payload["timesteps"], dtype=np.int32),
@@ -226,6 +229,14 @@ def load_query_bank(args: argparse.Namespace) -> tuple[np.ndarray, dict[str, np.
             if stored_probe_index != probe_index:
                 raise ValueError(
                     f"{path} contains output probe {stored_probe_index}, expected {probe_index}"
+                )
+            if (
+                args.expected_query_probe_seed is not None
+                and stored_probe_seed != args.expected_query_probe_seed
+            ):
+                raise ValueError(
+                    f"{path} contains output probe seed {stored_probe_seed}, expected "
+                    f"{args.expected_query_probe_seed}"
                 )
             expected_mode = args.expected_query_probe_mode
             mode_matches = stored_probe_mode == expected_mode
@@ -612,6 +623,12 @@ def main() -> None:
         "--namespace-suffix",
         default="",
         help="Optional suffix keeping a specialized probe experiment independent.",
+    )
+    parser.add_argument(
+        "--expected-query-probe-seed",
+        type=int,
+        default=None,
+        help="Reject query artifacts that were generated from a different probe-bank seed.",
     )
     parser.add_argument("--cleanup-query-artifacts", action="store_true")
     args = parser.parse_args()
