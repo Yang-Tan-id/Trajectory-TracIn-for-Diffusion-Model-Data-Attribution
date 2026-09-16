@@ -39,7 +39,23 @@ OUTPUT_SELECTIONS = {
     "current_noise_direction": "cosine_to_current_predicted_noise",
     "next_noise_direction": "cosine_to_next_predicted_noise",
     "delta_noise_direction": "cosine_to_next_predicted_noise_delta",
+    "reference_l2_oriented_delta": "reference_l2_oriented_delta",
+    "reference_cosine_oriented_delta": "reference_cosine_oriented_delta",
 }
+
+
+def enabled_output_selections(args: argparse.Namespace) -> tuple[str, ...]:
+    base = (
+        "current_noise_direction",
+        "next_noise_direction",
+        "delta_noise_direction",
+    )
+    if not args.include_reference_oriented:
+        return base
+    return base + (
+        "reference_l2_oriented_delta",
+        "reference_cosine_oriented_delta",
+    )
 
 
 def write_csv(path: Path, rows: list[dict[str, object]]) -> None:
@@ -66,14 +82,39 @@ def probe_alignment_matrix(
     checkpoint: int,
     timestep: int,
 ) -> dict[str, np.ndarray]:
-    result = {key: [] for key in ALIGNMENT_KEYS}
+    reference_keys = (
+        "current_to_reference_predicted_noise_l2",
+        "next_to_reference_predicted_noise_l2",
+        "current_to_reference_predicted_noise_cosines",
+        "next_to_reference_predicted_noise_cosines",
+    )
+    result = {key: [] for key in ALIGNMENT_KEYS + reference_keys}
     for probe in range(24):
         bank = "original" if probe < 12 else "fresh"
         bank_probe = probe + 1 if probe < 12 else probe - 11
         values = alignments[(query_id, bank)][(checkpoint, timestep, bank_probe)]
-        for key in ALIGNMENT_KEYS:
-            result[key].append(values[key])
+        for key in result:
+            if key in values:
+                result[key].append(values[key])
     return {key: np.asarray(values, dtype=np.float64) for key, values in result.items()}
+
+
+def output_selection_values(output: dict[str, np.ndarray], method: str) -> np.ndarray:
+    key = OUTPUT_SELECTIONS[method]
+    if key in output:
+        return output[key]
+    delta = output["cosine_to_next_predicted_noise_delta"]
+    if method == "reference_l2_oriented_delta":
+        current = output["current_to_reference_predicted_noise_l2"]
+        following = output["next_to_reference_predicted_noise_l2"]
+        orientation = 1.0 if following[0] <= current[0] else -1.0
+        return orientation * delta
+    if method == "reference_cosine_oriented_delta":
+        current = output["current_to_reference_predicted_noise_cosines"]
+        following = output["next_to_reference_predicted_noise_cosines"]
+        orientation = 1.0 if following[0] >= current[0] else -1.0
+        return orientation * delta
+    raise ValueError(method)
 
 
 def analyze_shard(args: argparse.Namespace) -> None:
@@ -118,7 +159,7 @@ def analyze_shard(args: argparse.Namespace) -> None:
                 method: np.zeros(
                     (len(args.query_ids), len(score_indices)), dtype=np.float64
                 )
-                for method in OUTPUT_SELECTIONS
+                for method in enabled_output_selections(args)
             }
         elif not np.array_equal(score_indices_ref, score_indices):
             raise ValueError(f"score indices differ in {path}")
@@ -142,8 +183,9 @@ def analyze_shard(args: argparse.Namespace) -> None:
                     alignments, query_id, int(ckpt) + 1, int(timestep)
                 )
                 assert output_selected_totals is not None
-                for method, alignment_key in OUTPUT_SELECTIONS.items():
-                    selected_probe = int(np.argmax(output[alignment_key]))
+                for method in enabled_output_selections(args):
+                    selection_values = output_selection_values(output, method)
+                    selected_probe = int(np.argmax(selection_values))
                     selected_scores = scores[:, selected_probe]
                     output_selected_totals[method][qslot] += (
                         float(term_weights[local_term]) * selected_scores
@@ -165,7 +207,7 @@ def analyze_shard(args: argparse.Namespace) -> None:
                                 else selected_probe - 11
                             ),
                             "selection_cosine": float(
-                                output[alignment_key][selected_probe]
+                                selection_values[selected_probe]
                             ),
                             "mean_selected_train_query_cosine": float(
                                 np.mean(selected_scores)
@@ -322,7 +364,7 @@ def merge(args: argparse.Namespace) -> None:
             indices = np.asarray(payload["score_indices"], dtype=np.int64)
             shard_totals = {
                 method: np.asarray(payload[method], dtype=np.float64)
-                for method in OUTPUT_SELECTIONS
+                for method in enabled_output_selections(args)
             }
         if output_indices is None:
             output_indices = indices
@@ -472,6 +514,7 @@ def main() -> None:
     parser.add_argument(
         "--fresh-namespace", default="predicted_noise_output_next_fresh12"
     )
+    parser.add_argument("--include-reference-oriented", action="store_true")
     args = parser.parse_args()
     args.query_ids = tuple(int(value) for value in args.query_ids.split(","))
     args.out_dir = args.out_dir or (

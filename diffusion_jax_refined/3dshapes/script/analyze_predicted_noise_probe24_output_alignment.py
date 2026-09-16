@@ -90,10 +90,19 @@ def load_bank(args: argparse.Namespace, query_id: int, bank: str) -> dict[tuple[
         delta_scalar = np.asarray(
             payload["next_checkpoint_delta_probe_scalars"], dtype=np.float64
         )
+        reference_metrics = {}
+        for key in (
+            "current_to_reference_predicted_noise_l2",
+            "next_to_reference_predicted_noise_l2",
+            "current_to_reference_predicted_noise_cosines",
+            "next_to_reference_predicted_noise_cosines",
+        ):
+            if key in payload:
+                reference_metrics[key] = np.asarray(payload[key], dtype=np.float64)
     result = {}
     for term, (ckpt, timestep) in enumerate(zip(ckpts, timesteps)):
         for probe in range(current.shape[0]):
-            result[(int(ckpt) + 1, int(timestep), probe + 1)] = {
+            values = {
                 "cosine_to_current_predicted_noise": float(current[probe, term]),
                 "cosine_to_next_predicted_noise": float(following[probe, term]),
                 "cosine_to_next_predicted_noise_delta": float(delta[probe, term]),
@@ -101,6 +110,10 @@ def load_bank(args: argparse.Namespace, query_id: int, bank: str) -> dict[tuple[
                     delta_scalar[probe, term]
                 ),
             }
+            values.update(
+                {key: float(metric[term]) for key, metric in reference_metrics.items()}
+            )
+            result[(int(ckpt) + 1, int(timestep), probe + 1)] = values
     return result
 
 

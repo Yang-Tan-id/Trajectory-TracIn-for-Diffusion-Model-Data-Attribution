@@ -18,20 +18,42 @@ from run_predicted_noise_jvp_l2_squared import (
 from materialize_f_next_final_score_squared import square_final_scores
 from analyze_predicted_noise_angle_oriented_scores import aggregate_oriented_queries
 from analyze_predicted_noise_probe24_term_winners import select_nearest_probe_scores
-from analyze_nearest_train_probe_predicted_noise_relation import selected_probe_indices
-from analyze_nearest_train_probe_predicted_noise_relation import OUTPUT_SELECTIONS
+from analyze_nearest_train_probe_predicted_noise_relation import (
+    OUTPUT_SELECTIONS,
+    output_selection_values,
+    selected_probe_indices,
+)
 
 
 class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
     def test_three_output_direction_selection_rules_exist(self):
         self.assertEqual(
-            {
-                "current_noise_direction": "cosine_to_current_predicted_noise",
-                "next_noise_direction": "cosine_to_next_predicted_noise",
-                "delta_noise_direction": "cosine_to_next_predicted_noise_delta",
-            },
-            OUTPUT_SELECTIONS,
+            "cosine_to_next_predicted_noise_delta",
+            OUTPUT_SELECTIONS["delta_noise_direction"],
         )
+
+    def test_reference_closeness_orients_delta_without_lds(self):
+        output = {
+            "cosine_to_next_predicted_noise_delta": np.asarray([0.3, -0.5]),
+            "current_to_reference_predicted_noise_l2": np.asarray([2.0, 2.0]),
+            "next_to_reference_predicted_noise_l2": np.asarray([1.0, 1.0]),
+            "current_to_reference_predicted_noise_cosines": np.asarray([0.7, 0.7]),
+            "next_to_reference_predicted_noise_cosines": np.asarray([0.6, 0.6]),
+        }
+        np.testing.assert_allclose(
+            output_selection_values(output, "reference_l2_oriented_delta"),
+            [0.3, -0.5],
+        )
+        np.testing.assert_allclose(
+            output_selection_values(output, "reference_cosine_oriented_delta"),
+            [-0.3, 0.5],
+        )
+
+        algorithm = (
+            ROOT / "legacy_jax" / "traj_tracin" / "algorithm.py"
+        ).read_text()
+        self.assertIn("current_to_reference_predicted_noise_l2", algorithm)
+        self.assertIn("next_to_reference_predicted_noise_cosines", algorithm)
 
     def test_all_query_delta_launcher_uses_fixed_full_query_list(self):
         launcher = (

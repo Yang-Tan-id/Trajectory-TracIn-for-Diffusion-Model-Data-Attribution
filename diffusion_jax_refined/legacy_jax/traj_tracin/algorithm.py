@@ -2950,6 +2950,11 @@ def run_attribution(cfg: TrajAttributionConfig):
         probe_alignment_delta_scalars = []
         probe_alignment_delta_cosines = []
         probe_alignment_delta_norms = []
+        probe_alignment_reference_norms = []
+        probe_alignment_current_reference_l2 = []
+        probe_alignment_next_reference_l2 = []
+        probe_alignment_current_reference_cosines = []
+        probe_alignment_next_reference_cosines = []
         alignment_eps_chunk_fn = None
         if probe_alignment_only:
             def alignment_eps_one(p, xt_value, timestep_value, cond):
@@ -3343,6 +3348,45 @@ def run_attribution(cfg: TrajAttributionConfig):
                                 delta_scalar, delta_cosine, delta_norm = alignment_values(
                                     delta_eps_chunk
                                 )
+                                reference_eps_chunk = alignment_eps_chunk_fn(
+                                    reference_params,
+                                    xt_chunk,
+                                    t_chunk,
+                                    query_cond,
+                                )
+                                reference_norm = jnp.sqrt(
+                                    jnp.sum(
+                                        jnp.square(reference_eps_chunk),
+                                        axis=tuple(range(1, reference_eps_chunk.ndim)),
+                                    )
+                                )
+                                output_axes = tuple(range(1, eps_chunk.ndim))
+                                current_reference_dot = jnp.sum(
+                                    eps_chunk * reference_eps_chunk, axis=output_axes
+                                )
+                                next_reference_dot = jnp.sum(
+                                    next_eps_chunk * reference_eps_chunk, axis=output_axes
+                                )
+                                current_reference_l2 = jnp.sqrt(
+                                    jnp.sum(
+                                        jnp.square(eps_chunk - reference_eps_chunk),
+                                        axis=output_axes,
+                                    )
+                                )
+                                next_reference_l2 = jnp.sqrt(
+                                    jnp.sum(
+                                        jnp.square(next_eps_chunk - reference_eps_chunk),
+                                        axis=output_axes,
+                                    )
+                                )
+                                current_reference_cosine = current_reference_dot / jnp.maximum(
+                                    eps_norm * reference_norm,
+                                    jnp.asarray(1e-12, dtype=jnp.float32),
+                                )
+                                next_reference_cosine = next_reference_dot / jnp.maximum(
+                                    next_norm * reference_norm,
+                                    jnp.asarray(1e-12, dtype=jnp.float32),
+                                )
                                 probe_alignment_next_scalars.append(
                                     np.asarray(
                                         jax.device_get(next_scalar), dtype=np.float32
@@ -3371,6 +3415,35 @@ def run_attribution(cfg: TrajAttributionConfig):
                                 probe_alignment_delta_norms.append(
                                     np.asarray(
                                         jax.device_get(delta_norm), dtype=np.float32
+                                    )
+                                )
+                                probe_alignment_reference_norms.append(
+                                    np.asarray(
+                                        jax.device_get(reference_norm), dtype=np.float32
+                                    )
+                                )
+                                probe_alignment_current_reference_l2.append(
+                                    np.asarray(
+                                        jax.device_get(current_reference_l2),
+                                        dtype=np.float32,
+                                    )
+                                )
+                                probe_alignment_next_reference_l2.append(
+                                    np.asarray(
+                                        jax.device_get(next_reference_l2),
+                                        dtype=np.float32,
+                                    )
+                                )
+                                probe_alignment_current_reference_cosines.append(
+                                    np.asarray(
+                                        jax.device_get(current_reference_cosine),
+                                        dtype=np.float32,
+                                    )
+                                )
+                                probe_alignment_next_reference_cosines.append(
+                                    np.asarray(
+                                        jax.device_get(next_reference_cosine),
+                                        dtype=np.float32,
                                     )
                                 )
                             for snap_id in chunk_ids:
@@ -4262,6 +4335,21 @@ def run_attribution(cfg: TrajAttributionConfig):
                     ),
                     next_checkpoint_delta_norms=np.concatenate(
                         probe_alignment_delta_norms
+                    ),
+                    reference_predicted_noise_norms=np.concatenate(
+                        probe_alignment_reference_norms
+                    ),
+                    current_to_reference_predicted_noise_l2=np.concatenate(
+                        probe_alignment_current_reference_l2
+                    ),
+                    next_to_reference_predicted_noise_l2=np.concatenate(
+                        probe_alignment_next_reference_l2
+                    ),
+                    current_to_reference_predicted_noise_cosines=np.concatenate(
+                        probe_alignment_current_reference_cosines
+                    ),
+                    next_to_reference_predicted_noise_cosines=np.concatenate(
+                        probe_alignment_next_reference_cosines
                     ),
                     next_checkpoint_delta_definition=np.asarray(
                         "delta_eps=eps(params[c+1],x_t)-eps(params[c],x_t); "
