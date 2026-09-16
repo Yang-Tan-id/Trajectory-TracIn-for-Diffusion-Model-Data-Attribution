@@ -25,8 +25,14 @@ export PYTHONUNBUFFERED=1
 export EXPERIMENT_TAG="${EXPERIMENT_TAG:-experiment1}"
 export TRAIN_SEED="${TRAIN_SEED:-42}"
 export SOURCE_RUN_ID="${SOURCE_RUN_ID:-3506389}"
+export COMPARISON_GLOBAL_PROBE="${COMPARISON_GLOBAL_PROBE:-1}"
+export ANCHOR_GLOBAL_PROBE="${ANCHOR_GLOBAL_PROBE:-20}"
+export OUTPUT_TAG="${OUTPUT_TAG:-p1_p20}"
 
 python "${ANALYZER}" \
   --experiment "${EXPERIMENT_TAG}" \
   --train-seed "${TRAIN_SEED}" \
-  --source-run-id "${SOURCE_RUN_ID}"
+  --source-run-id "${SOURCE_RUN_ID}" \
+  --negative-global-probe "${COMPARISON_GLOBAL_PROBE}" \
+  --positive-global-probe "${ANCHOR_GLOBAL_PROBE}" \
+  --output-tag "${OUTPUT_TAG}"

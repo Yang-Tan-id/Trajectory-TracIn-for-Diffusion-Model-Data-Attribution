@@ -84,6 +84,7 @@ def main() -> None:
     parser.add_argument("--query-id", type=int, default=0)
     parser.add_argument("--negative-global-probe", type=int, default=1)
     parser.add_argument("--positive-global-probe", type=int, default=20)
+    parser.add_argument("--output-tag", default="p1_p20")
     parser.add_argument("--fresh-probe-seed", type=int, default=20260915)
     parser.add_argument("--output-shape", type=parse_shape, default=(1, 64, 64, 3))
     args = parser.parse_args()
@@ -202,9 +203,11 @@ def main() -> None:
     negative_dc = negative_units @ dc_anchor
 
     rows = []
+    positive_label = f"p{args.positive_global_probe}"
+    comparison_label = f"p{args.negative_global_probe}"
     matrices = {
-        "near100_p20": np.full((50, 10), np.nan, dtype=np.float64),
-        "near0_p1": np.full((50, 10), np.nan, dtype=np.float64),
+        positive_label: np.full((50, 10), np.nan, dtype=np.float64),
+        comparison_label: np.full((50, 10), np.nan, dtype=np.float64),
     }
     checkpoint_slots = {value: slot for slot, value in enumerate(checkpoint_values)}
     for term, (checkpoint, timestep, position) in enumerate(
@@ -216,8 +219,8 @@ def main() -> None:
     ):
         cslot = checkpoint_slots[int(checkpoint)]
         tslot = timestep_slots[int(timestep)]
-        matrices["near100_p20"][cslot, tslot] = positive_cos[term]
-        matrices["near0_p1"][cslot, tslot] = negative_cos[term]
+        matrices[positive_label][cslot, tslot] = positive_cos[term]
+        matrices[comparison_label][cslot, tslot] = negative_cos[term]
         rows.append(
             {
                 "term": term,
@@ -239,8 +242,8 @@ def main() -> None:
     summary_rows = []
     for split_name, mask in (("anchor_train", train_mask), ("heldout_test", heldout_mask)):
         for label, values in (
-            ("near100_p20", positive_cos),
-            ("near0_p1", negative_cos),
+            (positive_label, positive_cos),
+            (comparison_label, negative_cos),
         ):
             selected = values[mask]
             summary_rows.append(
@@ -260,6 +263,7 @@ def main() -> None:
         / "eval"
         / "q0_extreme_probe_output_directions"
         / f"source_run_{args.source_run_id}"
+        / args.output_tag
     )
     write_csv(out_dir / "per_term_cosines.csv", rows)
     write_csv(out_dir / "split_summary.csv", summary_rows)
@@ -279,7 +283,7 @@ def main() -> None:
         save_heatmap(
             out_dir / f"{label}_cosine_to_p20_train_anchor.png",
             matrix,
-            f"Q0 {label}: flipped raw-v cosine to P20 train-half anchor",
+            f"Q0 {label}: flipped raw-v cosine to P{args.positive_global_probe} train-half anchor",
         )
 
     summary = {
@@ -288,7 +292,10 @@ def main() -> None:
         "near100_global_probe": args.positive_global_probe,
         "near0_artifact": str(negative_artifact),
         "near100_artifact": str(positive_artifact),
-        "anchor_definition": "normalized mean of flipped near100 P20 unit probes over checkpoints 1-25",
+        "anchor_definition": (
+            f"normalized mean of flipped P{args.positive_global_probe} unit probes "
+            "over checkpoints 1-25"
+        ),
         "anchor_resultant_norm": anchor_resultant,
         "random_resultant_baseline": 1.0 / math.sqrt(np.count_nonzero(train_mask)),
         "heldout_same_term_pair_cosine_mean": float(pair_cos[heldout_mask].mean()),
@@ -300,7 +307,8 @@ def main() -> None:
 
     print("Q0 FLIPPED RAW OUTPUT-PROBE DIRECTIONS")
     print(
-        f"anchor=P20 near100, checkpoints 1-25 | resultant={anchor_resultant:.6f} "
+        f"anchor=P{args.positive_global_probe}, checkpoints 1-25 | "
+        f"resultant={anchor_resultant:.6f} "
         f"random_baseline={summary['random_resultant_baseline']:.6f}"
     )
     print(f"{'SPLIT':13s} {'PROBE':12s} {'MEAN COS':>10s} {'STD':>10s} {'COS+':>8s}")
@@ -313,7 +321,8 @@ def main() -> None:
             f"{float(row['positive_cosine_fraction']):8.3f}"
         )
     print(
-        f"heldout same-term P20/P1 cosine: "
+        f"heldout same-term P{args.positive_global_probe}/"
+        f"P{args.negative_global_probe} cosine: "
         f"{summary['heldout_same_term_pair_cosine_mean']:+.6f} "
         f"± {summary['heldout_same_term_pair_cosine_std']:.6f}"
     )
