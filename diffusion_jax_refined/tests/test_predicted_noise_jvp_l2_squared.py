@@ -18,9 +18,21 @@ from run_predicted_noise_jvp_l2_squared import (
 from materialize_f_next_final_score_squared import square_final_scores
 from analyze_predicted_noise_angle_oriented_scores import aggregate_oriented_queries
 from analyze_predicted_noise_probe24_term_winners import select_nearest_probe_scores
+from analyze_nearest_train_probe_predicted_noise_relation import selected_probe_indices
 
 
 class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
+    def test_nearest_probe_indices_are_per_datapoint(self):
+        scores = np.asarray(
+            [[-0.9, 0.4, 0.2], [-0.1, -0.3, -0.2]], dtype=np.float32
+        )
+        np.testing.assert_array_equal(
+            selected_probe_indices(scores, "nearest_direction"), [1, 0]
+        )
+        np.testing.assert_array_equal(
+            selected_probe_indices(scores, "nearest_axis_signed"), [0, 1]
+        )
+
     def test_per_datapoint_nearest_probe_reductions(self):
         scores = np.asarray(
             [[-0.9, 0.4, 0.2], [-0.1, -0.3, -0.2]], dtype=np.float32
