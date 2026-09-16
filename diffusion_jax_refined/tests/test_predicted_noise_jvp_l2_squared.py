@@ -33,6 +33,19 @@ class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
             OUTPUT_SELECTIONS,
         )
 
+    def test_all_query_delta_launcher_uses_fixed_full_query_list(self):
+        launcher = (
+            ROOT
+            / "3dshapes"
+            / "tacc"
+            / "rtx_small"
+            / "run_delta_noise_direction_all_queries_rtx_small.sh"
+        ).read_text()
+        self.assertIn("0,1,2,3,4,5,6,7,8,9", launcher)
+        self.assertIn("predicted_noise_output_next_original12", launcher)
+        self.assertIn("predicted_noise_output_next_fresh12", launcher)
+        self.assertIn("[phase 4/4]", launcher)
+
     def test_nearest_probe_indices_are_per_datapoint(self):
         scores = np.asarray(
             [[-0.9, 0.4, 0.2], [-0.1, -0.3, -0.2]], dtype=np.float32

@@ -357,6 +357,58 @@ def merge(args: argparse.Namespace) -> None:
                         }
                     )
     write_csv(args.out_dir / "output_direction_selected_lds.csv", output_lds_rows)
+    output_lds_summary = []
+    grouped_output_lds: dict[tuple[str, str, str], list[float]] = defaultdict(list)
+    for row in output_lds_rows:
+        grouped_output_lds[
+            (
+                str(row["method"]),
+                str(row["prediction_sign"]),
+                str(row["target"]),
+            )
+        ].append(float(row["lds_percent"]))
+    for (method, sign, target), values in sorted(grouped_output_lds.items()):
+        output_lds_summary.append(
+            {
+                "method": method,
+                "prediction_sign": sign,
+                "target": target,
+                "num_queries": len(values),
+                "mean_lds_percent": statistics.mean(values),
+                "std_lds_percent": (
+                    statistics.stdev(values) if len(values) > 1 else 0.0
+                ),
+            }
+        )
+    write_csv(
+        args.out_dir / "output_direction_selected_lds_summary.csv",
+        output_lds_summary,
+    )
+
+    by_query_method_sign: dict[tuple[int, str, str], dict[str, float]] = defaultdict(dict)
+    for row in output_lds_rows:
+        by_query_method_sign[
+            (
+                int(row["query"]),
+                str(row["method"]),
+                str(row["prediction_sign"]),
+            )
+        ][str(row["target"])] = float(row["lds_percent"])
+    cf_joint_rows = []
+    for (query_id, method, sign), values in sorted(by_query_method_sign.items()):
+        endpoint = values["endpoint_contarfactual"]
+        trajectory = values["traj_contarfactual"]
+        cf_joint_rows.append(
+            {
+                "query": query_id,
+                "method": method,
+                "prediction_sign": sign,
+                "endpoint_lds_percent": endpoint,
+                "traj_lds_percent": trajectory,
+                "cf_joint_lds_percent": 0.5 * (endpoint + trajectory),
+            }
+        )
+    write_csv(args.out_dir / "output_direction_cf_joint.csv", cf_joint_rows)
 
     print("NEAREST TRAIN-GRADIENT PROBE VS PREDICTED NOISE — 490 TERMS")
     print(
@@ -386,6 +438,19 @@ def merge(args: argparse.Namespace) -> None:
             f"{int(row['query']):2d} {str(row['method']):24s} "
             f"{str(row['prediction_sign']):>4s} {str(row['target']):24s} "
             f"{float(row['lds_percent']):8.3f}%"
+        )
+    print("\nOUTPUT-DIRECTION-SELECTED LDS — QUERY MEAN")
+    print(
+        f"{'METHOD':24s} {'SIGN':>4s} {'TARGET':24s} "
+        f"{'N':>3s} {'MEAN':>9s} {'STD':>9s}"
+    )
+    print("-" * 82)
+    for row in output_lds_summary:
+        print(
+            f"{str(row['method']):24s} {str(row['prediction_sign']):>4s} "
+            f"{str(row['target']):24s} {int(row['num_queries']):3d} "
+            f"{float(row['mean_lds_percent']):8.3f}% "
+            f"{float(row['std_lds_percent']):8.3f}%"
         )
     print(f"[saved] {args.out_dir}")
 
