@@ -158,6 +158,34 @@ class PredictedNoiseJvpL2SquaredTests(unittest.TestCase):
         ).read_text()
         self.assertIn("--include-reference-direction-delta", launcher)
 
+    def test_delta_continuity_signed_contract(self):
+        selected = np.asarray([-0.5, 0.2, 0.7], dtype=np.float64)
+        output = {"delta_continuity_sign": np.asarray([-1.0, -1.0, -1.0])}
+        np.testing.assert_allclose(
+            transform_output_selected_scores(
+                selected,
+                "delta_noise_direction_continuity_signed",
+                output,
+            ),
+            [0.5, -0.2, -0.7],
+        )
+
+        algorithm = (
+            ROOT / "legacy_jax" / "traj_tracin" / "algorithm.py"
+        ).read_text()
+        self.assertIn("TRAJ_TRACIN_PROBE_ALIGNMENT_DELTA_CONTINUITY", algorithm)
+        self.assertIn("delta_continuity_signs", algorithm)
+        self.assertIn("first and last scored checkpoints use sign=+1", algorithm)
+
+        launcher = (
+            ROOT
+            / "3dshapes"
+            / "tacc"
+            / "rtx_small"
+            / "run_delta_noise_direction_continuity_all_queries_rtx_small.sh"
+        ).read_text()
+        self.assertIn("--include-delta-continuity", launcher)
+
     def test_next_noise_selected_product_is_squared_before_term_sum(self):
         selected = np.asarray([-0.5, 0.0, 0.75], dtype=np.float64)
         np.testing.assert_allclose(

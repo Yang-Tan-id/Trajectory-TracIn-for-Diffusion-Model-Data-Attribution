@@ -43,6 +43,9 @@ OUTPUT_SELECTIONS = {
     "current_noise_direction": "cosine_to_current_predicted_noise",
     "next_noise_direction": "cosine_to_next_predicted_noise",
     "delta_noise_direction": "cosine_to_next_predicted_noise_delta",
+    "delta_noise_direction_continuity_signed": (
+        "cosine_to_next_predicted_noise_delta"
+    ),
     "reference_l2_oriented_delta": "reference_l2_oriented_delta",
     "reference_cosine_oriented_delta": "reference_cosine_oriented_delta",
     "previous_noise_direction": "cosine_to_next_predicted_noise",
@@ -100,6 +103,8 @@ def enabled_output_selections(args: argparse.Namespace) -> tuple[str, ...]:
         result += ("future_mean_delta_noise_direction",)
     if args.include_future_lr_weighted_delta:
         result += ("future_lr_weighted_delta_noise_direction",)
+    if args.include_delta_continuity:
+        result += ("delta_noise_direction_continuity_signed",)
     return result
 
 
@@ -122,10 +127,16 @@ def selected_probe_indices(scores: np.ndarray, method: str) -> np.ndarray:
 
 
 def transform_output_selected_scores(
-    selected_scores: np.ndarray, method: str
+    selected_scores: np.ndarray,
+    method: str,
+    output: dict[str, np.ndarray] | None = None,
 ) -> np.ndarray:
     if method == "next_noise_direction_product_square":
         return np.square(selected_scores)
+    if method == "delta_noise_direction_continuity_signed":
+        if output is None or "delta_continuity_sign" not in output:
+            raise ValueError("delta continuity sign is missing from alignment data")
+        return selected_scores * float(output["delta_continuity_sign"][0])
     return selected_scores
 
 
@@ -292,7 +303,7 @@ def analyze_shard(args: argparse.Namespace) -> None:
                     selection_values = output_selection_values(output, method)
                     selected_probe = int(np.argmax(selection_values))
                     selected_scores = transform_output_selected_scores(
-                        scores[:, selected_probe], method
+                        scores[:, selected_probe], method, output
                     )
                     output_selected_totals[method][qslot] += (
                         float(term_weights[local_term]) * selected_scores
@@ -318,6 +329,18 @@ def analyze_shard(args: argparse.Namespace) -> None:
                             ),
                             "delta_orientation_sign": reference_orientation_sign(
                                 output, method
+                            ),
+                            "delta_continuity_cosine": float(
+                                output.get(
+                                    "delta_continuity_cosine",
+                                    np.asarray([np.nan]),
+                                )[0]
+                            ),
+                            "delta_continuity_sign": float(
+                                output.get(
+                                    "delta_continuity_sign",
+                                    np.asarray([np.nan]),
+                                )[0]
                             ),
                             "current_reference_l2": float(
                                 output.get(
@@ -656,6 +679,7 @@ def main() -> None:
     parser.add_argument(
         "--include-future-lr-weighted-delta", action="store_true"
     )
+    parser.add_argument("--include-delta-continuity", action="store_true")
     parser.add_argument(
         "--checkpoint-direction",
         choices=("next", "previous"),

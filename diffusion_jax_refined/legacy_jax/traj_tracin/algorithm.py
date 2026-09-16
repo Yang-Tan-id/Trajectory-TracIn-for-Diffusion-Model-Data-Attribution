@@ -2942,9 +2942,17 @@ def run_attribution(cfg: TrajAttributionConfig):
             ).strip().lower()
             in ("1", "true", "yes", "on")
         )
+        probe_alignment_delta_continuity = (
+            probe_alignment_only
+            and os.environ.get(
+                "TRAJ_TRACIN_PROBE_ALIGNMENT_DELTA_CONTINUITY", "0"
+            ).strip().lower()
+            in ("1", "true", "yes", "on")
+        )
         probe_alignment_collect_all_outputs = (
             probe_alignment_future_mean
             or probe_alignment_future_lr_weighted_delta
+            or probe_alignment_delta_continuity
         )
         if probe_alignment_collect_all_outputs and not probe_alignment_next_checkpoint:
             raise ValueError(
@@ -4663,6 +4671,35 @@ def run_attribution(cfg: TrajAttributionConfig):
                     alignment_payload[
                         "future_lr_weighted_delta_transition_weights"
                     ] = transition_weights.astype(np.float32)
+
+                if probe_alignment_delta_continuity:
+                    next_deltas = all_outputs[1:] - all_outputs[:-1]
+                    continuity_cosines = np.ones(
+                        (len(ckpts) - 1, snapshots_per_checkpoint),
+                        dtype=np.float32,
+                    )
+                    for checkpoint_index in range(1, len(ckpts) - 2):
+                        previous_delta = next_deltas[checkpoint_index - 1]
+                        next_delta = next_deltas[checkpoint_index]
+                        axes = tuple(range(1, previous_delta.ndim))
+                        dot = np.sum(previous_delta * next_delta, axis=axes)
+                        denominator = np.sqrt(
+                            np.sum(np.square(previous_delta), axis=axes)
+                            * np.sum(np.square(next_delta), axis=axes)
+                        )
+                        continuity_cosines[checkpoint_index] = dot / np.maximum(
+                            denominator, 1e-12
+                        )
+                    alignment_payload.update(
+                        delta_continuity_cosines=continuity_cosines.reshape(-1),
+                        delta_continuity_signs=np.where(
+                            continuity_cosines.reshape(-1) < 0.0, -1.0, 1.0
+                        ).astype(np.float32),
+                        delta_continuity_definition=np.asarray(
+                            "sign=-1 iff cos(eps[c]-eps[c-1],eps[c+1]-eps[c])<0; "
+                            "first and last scored checkpoints use sign=+1"
+                        ),
+                    )
             if probe_alignment_next_checkpoint or probe_alignment_previous_checkpoint:
                 adjacent_prefix = (
                     "next" if probe_alignment_next_checkpoint else "previous"
