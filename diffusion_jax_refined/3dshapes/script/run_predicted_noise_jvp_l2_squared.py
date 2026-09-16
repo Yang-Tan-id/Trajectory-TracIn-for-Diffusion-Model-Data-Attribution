@@ -65,6 +65,8 @@ def score_namespace(
         namespace = FINAL_POST_SQUARE_STAGING_NAMESPACE
     elif contraction == "timestamp_checkpoint_square":
         namespace = TIMESTAMP_CHECKPOINT_SQUARE_NAMESPACE
+    elif contraction == "termwise_squared_per_probe":
+        namespace = "predicted_noise_jvp_termwise_squared_per_probe"
     else:
         raise ValueError(f"unknown contraction {contraction!r}")
     suffix = "" if num_probes == 1 else f"_probe{num_probes}"
@@ -96,6 +98,8 @@ def weighting_semantics(contraction: str) -> str:
         return "square_after_learning_rate_weighted_term_sum_per_probe"
     if contraction == "timestamp_checkpoint_square":
         return "mean_timestamp_probe_square_of_checkpoint_lr_weighted_sum"
+    if contraction == "termwise_squared_per_probe":
+        return "per_probe_learning_rate_weighted_sum_of_squared_gradient_contractions"
     return "learning_rate_weighted_sum_of_signed_gradient_contractions"
 
 
@@ -307,7 +311,7 @@ def score_shard(args: argparse.Namespace) -> None:
     if len(timestep_values) != 10:
         raise ValueError(f"expected 10 unique query timesteps, got {timestep_values}")
     timestep_slots = {value: slot for slot, value in enumerate(timestep_values)}
-    if args.contraction == "final_post_square":
+    if args.contraction in ("final_post_square", "termwise_squared_per_probe"):
         score_shape = (args.num_probes, 10, 5000)
     elif args.contraction == "timestamp_checkpoint_square":
         score_shape = (len(timestep_values), args.num_probes, 10, 5000)
@@ -349,6 +353,7 @@ def score_shard(args: argparse.Namespace) -> None:
             if args.contraction not in (
                 "final_post_square",
                 "timestamp_checkpoint_square",
+                "termwise_squared_per_probe",
             ):
                 term_scores = {
                     component: np.zeros((10, 5000), dtype=np.float64)
@@ -360,7 +365,11 @@ def score_shard(args: argparse.Namespace) -> None:
                 )
                 directional = train_device @ query_device.T
                 query_norm = jnp.linalg.norm(query_device, axis=1) + 1e-8
-                transform = jnp.square if args.contraction == "squared" else lambda x: x
+                transform = (
+                    jnp.square
+                    if args.contraction in ("squared", "termwise_squared_per_probe")
+                    else lambda x: x
+                )
                 probe_scores = {
                     "score": transform(directional),
                     "score_query_normalized": transform(
@@ -378,6 +387,8 @@ def score_shard(args: argparse.Namespace) -> None:
                     if args.contraction == "final_post_square":
                         # Keep each probe separate through the complete trajectory sum.
                         # Squaring and cross-probe reduction happen only after shards merge.
+                        sums[component][probe_index] += float(weight) * host_values
+                    elif args.contraction == "termwise_squared_per_probe":
                         sums[component][probe_index] += float(weight) * host_values
                     elif args.contraction == "timestamp_checkpoint_square":
                         # Stored term weights are eta_c / num_timestamps. Restore eta_c
@@ -594,6 +605,7 @@ def main() -> None:
             "signed",
             "final_post_square",
             "timestamp_checkpoint_square",
+            "termwise_squared_per_probe",
         ),
         default="squared",
         help=(
@@ -601,7 +613,9 @@ def main() -> None:
             "signed term; final_post_square: retain per-probe trajectory sums and emit "
             "both mean(square(S_r)) and square(mean(S_r)); "
             "timestamp_checkpoint_square: for each timestamp/probe, sum all "
-            "learning-rate-weighted checkpoints, square, then average timestamps/probes."
+            "learning-rate-weighted checkpoints, square, then average timestamps/probes; "
+            "termwise_squared_per_probe: square each product and retain every probe "
+            "through the trajectory sum for subgroup analysis."
         ),
     )
     parser.add_argument(

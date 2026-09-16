@@ -36,19 +36,26 @@ def main() -> None:
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--prediction-sign", type=float, choices=(-1.0, 1.0), default=1.0)
     parser.add_argument(
+        "--reduction",
+        choices=("linear", "termwise_square"),
+        default="linear",
+    )
+    parser.add_argument(
         "--namespace-suffix",
         default="orthogonal_extended_groupaudit",
     )
     args = parser.parse_args()
 
     result_root = SHAPES_ROOT / "result" / args.experiment
+    staging_namespace = (
+        "traj_tracin_predicted_noise_jvp_final_post_square_probe8"
+        if args.reduction == "linear"
+        else "traj_tracin_predicted_noise_jvp_termwise_squared_per_probe_probe8"
+    )
     shard_dir = (
         result_root
         / "stream_score"
-        / (
-            "traj_tracin_predicted_noise_jvp_final_post_square_probe8_"
-            f"{args.namespace_suffix}"
-        )
+        / f"{staging_namespace}_{args.namespace_suffix}"
         / f"train_seed_{args.train_seed}"
         / f"run_{args.run_id}"
         / "shards"
@@ -92,7 +99,8 @@ def main() -> None:
         float(row["lds_percent"])
         for row in rows
     }
-    print("FIXED ORTHOGONAL 4-PROBE GROUPS — LINEAR sign +1")
+    title = "LINEAR" if args.reduction == "linear" else "PRODUCT SQUARE"
+    print(f"FIXED ORTHOGONAL 4-PROBE GROUPS — {title} sign {args.prediction_sign:+g}")
     print(
         f"{'TARGET':24s} {'Q':>2s} | "
         f"{'1-4 RAW':>8s} {'1-4 QL2':>8s} {'1-4 TL2':>8s} {'1-4 BL2':>8s} | "
@@ -138,7 +146,7 @@ def main() -> None:
     output_dir = (
         result_root
         / "eval"
-        / "predicted_noise_fixed8_two_group_linear"
+        / f"predicted_noise_fixed8_two_group_{args.reduction}"
         / f"run_{args.run_id}"
     )
     write_csv(output_dir / "per_query.csv", rows)
