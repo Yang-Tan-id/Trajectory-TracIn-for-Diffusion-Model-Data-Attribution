@@ -79,6 +79,7 @@ def main() -> None:
     score_indices = None
     incidence = endpoint = trajectory = None
     component_predictions = None
+    square_component_predictions = None
     query_norms = np.full(num_terms, np.nan, dtype=np.float64)
     train_norm_means = np.full(num_terms, np.nan, dtype=np.float64)
     train_norm_medians = np.full(num_terms, np.nan, dtype=np.float64)
@@ -116,6 +117,10 @@ def main() -> None:
                 variant: np.zeros((num_terms, incidence.shape[0]), dtype=np.float64)
                 for variant in VARIANTS
             }
+            square_component_predictions = {
+                variant: np.zeros((num_terms, incidence.shape[0]), dtype=np.float64)
+                for variant in VARIANTS
+            }
         elif not np.array_equal(score_indices, indices):
             raise ValueError(f"score indices mismatch: {path}")
 
@@ -147,13 +152,23 @@ def main() -> None:
                     jax.device_get(value), dtype=np.float64
                 )
                 component_predictions[variant][term] = -(datapoint_score @ incidence.T)
+                square_datapoint_score = float(weight) * np.square(
+                    np.asarray(jax.device_get(value), dtype=np.float64)
+                )
+                square_component_predictions[variant][term] = (
+                    square_datapoint_score @ incidence.T
+                )
             used_terms += 1
         print(
             f"[components] checkpoint={checkpoint + 1}/50 terms={used_terms}",
             flush=True,
         )
 
-    if used_terms != num_terms or component_predictions is None:
+    if (
+        used_terms != num_terms
+        or component_predictions is None
+        or square_component_predictions is None
+    ):
         raise ValueError(f"expected {num_terms} terms, found {used_terms}")
     if np.isnan(query_norms).any():
         raise ValueError("some query norms were not populated")
@@ -161,6 +176,18 @@ def main() -> None:
     totals = {variant: values.sum(axis=0) for variant, values in component_predictions.items()}
     total_joint = {
         variant: joint(values, endpoint, trajectory) for variant, values in totals.items()
+    }
+    square_totals = {
+        variant: values.sum(axis=0)
+        for variant, values in square_component_predictions.items()
+    }
+    square_p1_joint = {
+        variant: joint(values, endpoint, trajectory)
+        for variant, values in square_totals.items()
+    }
+    square_oracle_multiplier = {
+        variant: 1.0 if value >= 0.0 else -1.0
+        for variant, value in square_p1_joint.items()
     }
     rows = []
     for term in range(num_terms):
@@ -181,6 +208,22 @@ def main() -> None:
             without = joint(totals[variant] - component, endpoint, trajectory)
             row[f"{variant}_standalone_joint_percent"] = standalone
             row[f"{variant}_leave_one_out_delta_percent"] = total_joint[variant] - without
+            square_component = square_component_predictions[variant][term]
+            multiplier = square_oracle_multiplier[variant]
+            square_standalone = joint(
+                multiplier * square_component, endpoint, trajectory
+            )
+            square_without = joint(
+                multiplier * (square_totals[variant] - square_component),
+                endpoint,
+                trajectory,
+            )
+            row[f"{variant}_square_oriented_standalone_joint_percent"] = (
+                square_standalone
+            )
+            row[f"{variant}_square_oriented_leave_one_out_delta_percent"] = (
+                abs(square_p1_joint[variant]) - square_without
+            )
         rows.append(row)
 
     write_csv(args.out_dir / "per_component.csv", rows)
@@ -194,12 +237,26 @@ def main() -> None:
         train_norm_means=train_norm_means,
         train_norm_medians=train_norm_medians,
         **component_predictions,
+        **{
+            f"square_{variant}": values
+            for variant, values in square_component_predictions.items()
+        },
     )
 
     print(f"Q{args.query_id} OWN-TRAJECTORY COMPONENT NORM/LDS DIAGNOSTIC")
     print("TOTAL LINEAR ORIGINAL-F")
     for variant in VARIANTS:
         print(f"{variant:<19s} {total_joint[variant]:+9.3f}%")
+
+    print("\nTOTAL PRODUCT-SQUARE (FULL-DATA ORIENTED FOR DIAGNOSIS)")
+    print("VARIANT               P1 LDS  BEST SIGN  ORIENTED LDS")
+    print("-" * 57)
+    for variant in VARIANTS:
+        sign = "p1" if square_oracle_multiplier[variant] > 0 else "m1"
+        print(
+            f"{variant:<19s} {square_p1_joint[variant]:+9.3f}% "
+            f"{sign:>9s} {abs(square_p1_joint[variant]):+12.3f}%"
+        )
 
     for variant in VARIANTS:
         key = f"{variant}_leave_one_out_delta_percent"
@@ -214,6 +271,23 @@ def main() -> None:
                 f"{float(row['query_norm']):10.4e} "
                 f"{float(row['train_norm_mean']):9.4e} "
                 f"{float(row[f'{variant}_standalone_joint_percent']):+10.3f}% "
+                f"{float(row[key]):+9.3f}%"
+            )
+
+    for variant in VARIANTS:
+        key = f"{variant}_square_oriented_leave_one_out_delta_percent"
+        ranked = sorted(rows, key=lambda row: abs(float(row[key])), reverse=True)[:15]
+        sign = "p1" if square_oracle_multiplier[variant] > 0 else "m1"
+        print(f"\nTOP 15 |SQUARE ORIENTED LOO DELTA| — {variant} ({sign})")
+        print("CKPT EPOCH    T      QNORM    TRAINN   STANDALONE  LOO DELTA")
+        print("-" * 76)
+        for row in ranked:
+            print(
+                f"{int(row['checkpoint']):4d} {int(row['epoch']):5d} "
+                f"{int(row['timestep']):4d} "
+                f"{float(row['query_norm']):10.4e} "
+                f"{float(row['train_norm_mean']):9.4e} "
+                f"{float(row[f'{variant}_square_oriented_standalone_joint_percent']):+10.3f}% "
                 f"{float(row[key]):+9.3f}%"
             )
 
