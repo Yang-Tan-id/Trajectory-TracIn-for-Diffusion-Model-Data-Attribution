@@ -21,6 +21,8 @@ from analyze_predicted_noise_probe24_output_alignment import artifact_path, writ
 
 METRICS = (
     "cosine_current_next",
+    "cosine_current_reference",
+    "cosine_next_reference",
     "cosine_current_endpoint_direction",
     "cosine_next_endpoint_direction",
     "cosine_step_endpoint_direction",
@@ -187,6 +189,10 @@ def main():
                 "majority_flip_sign": signs[checkpoint],
                 "flip_sign_stability": stability[checkpoint],
                 "cosine_current_next": float(cosine_current_next[term]),
+                "cosine_current_reference": float(
+                    current_reference_cosine[term]
+                ),
+                "cosine_next_reference": float(next_reference_cosine[term]),
                 "cosine_current_endpoint_direction": float(
                     cosine_current_endpoint[term]
                 ),
@@ -205,9 +211,17 @@ def main():
     by_sign = summarize(rows, "majority_flip_sign")
     by_bin = summarize(rows, "checkpoint_bin")
     by_timestep = summarize(rows, "timestep")
+    for row in rows:
+        row["timestep_flip_sign"] = (
+            f"{int(row['timestep'])}:{int(row['majority_flip_sign']):+d}"
+        )
+    by_timestep_and_sign = summarize(rows, "timestep_flip_sign")
     write_csv(args.out_dir / "by_flip_sign.csv", by_sign)
     write_csv(args.out_dir / "by_checkpoint_bin.csv", by_bin)
     write_csv(args.out_dir / "by_timestep.csv", by_timestep)
+    write_csv(
+        args.out_dir / "by_timestep_and_flip_sign.csv", by_timestep_and_sign
+    )
 
     print(
         f"Q{args.query_id} {args.variant} {args.method}; "
@@ -234,6 +248,18 @@ def main():
             f"{int(row['terms']):5d} "
             f"{row['cosine_current_next_mean']:+9.5f} "
             f"{row['cosine_next_endpoint_direction_mean']:+9.5f} "
+            f"{row['cosine_step_endpoint_direction_mean']:+9.5f} "
+            f"{row['next_minus_current_reference_l2_mean']:+12.6f}"
+        )
+    print("\nBY TIMESTAMP AND CHECKPOINT FLIP SIGN")
+    print("T SIGN TERMS CURR~REF NEXT~REF STEP~END DELTA_REF_L2")
+    for row in by_timestep_and_sign:
+        timestep, flip_sign = row["timestep_flip_sign"].split(":")
+        print(
+            f"{int(timestep):4d} {int(flip_sign):+4d} "
+            f"{int(row['terms']):5d} "
+            f"{row['cosine_current_reference_mean']:+9.5f} "
+            f"{row['cosine_next_reference_mean']:+9.5f} "
             f"{row['cosine_step_endpoint_direction_mean']:+9.5f} "
             f"{row['next_minus_current_reference_l2_mean']:+12.6f}"
         )
