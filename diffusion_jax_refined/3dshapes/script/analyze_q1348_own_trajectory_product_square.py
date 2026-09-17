@@ -78,6 +78,10 @@ def main():
         variant: np.zeros((len(query_ids), 5000), dtype=np.float64)
         for variant in VARIANTS
     }
+    linear_scores = {
+        variant: np.zeros((len(query_ids), 5000), dtype=np.float64)
+        for variant in VARIANTS
+    }
     score_indices = None
     used_terms = 0
 
@@ -127,7 +131,9 @@ def main():
                 "query_train_l2": dots / (train_norm[:, None] * query_norm[None, :]),
             }
             for variant, value in values.items():
-                squared = np.asarray(jax.device_get(jnp.square(value)), dtype=np.float64)
+                linear = np.asarray(jax.device_get(value), dtype=np.float64)
+                squared = np.square(linear)
+                linear_scores[variant] += float(weight) * linear.T
                 scores[variant] += float(weight) * squared.T
             used_terms += 1
         print(
@@ -141,6 +147,8 @@ def main():
     rows = []
     crossfit_rows = []
     crossfit_summary = []
+    linear_guided_rows = []
+    linear_guided_summary = []
     for query_slot, query_id in enumerate(query_ids):
         incidence, true = target_data(args, query_id, score_indices)
         endpoint = true[TARGETS[0]]
@@ -152,6 +160,8 @@ def main():
             folds.append((permutation[::2], permutation[1::2]))
         for variant in VARIANTS:
             subset_sum = scores[variant][query_slot] @ incidence.T
+            # Original-f uses the negative accumulated gradient product.
+            linear_subset_prediction = -linear_scores[variant][query_slot] @ incidence.T
             for sign_name, multiplier in (("m1", -1.0), ("p1", 1.0)):
                 endpoint_values, trajectory_values, joint_values = lds(
                     multiplier * subset_sum, endpoint, trajectory
@@ -229,9 +239,65 @@ def main():
                 }
             )
 
+            guided_repeat_values = []
+            guided_selected_p1 = []
+            guided_linear_values = []
+            for repeat, pair in enumerate(folds):
+                fold_values = []
+                for train_fold in range(2):
+                    train_ids = pair[train_fold]
+                    heldout_ids = pair[1 - train_fold]
+                    _, _, train_linear_joint = lds(
+                        linear_subset_prediction[train_ids],
+                        endpoint[train_ids],
+                        trajectory[train_ids],
+                    )
+                    # Prespecified hypothesis: square has the opposite orientation
+                    # from the signed linear original-f signal.
+                    multiplier = -1.0 if float(train_linear_joint[0]) >= 0.0 else 1.0
+                    sign_name = "p1" if multiplier > 0 else "m1"
+                    heldout_end, heldout_traj, heldout_joint = lds(
+                        multiplier * subset_sum[heldout_ids],
+                        endpoint[heldout_ids],
+                        trajectory[heldout_ids],
+                    )
+                    fold_values.append(float(heldout_joint[0]))
+                    guided_selected_p1.append(multiplier > 0)
+                    guided_linear_values.append(float(train_linear_joint[0]))
+                    linear_guided_rows.append(
+                        {
+                            "query": query_id,
+                            "variant": variant,
+                            "repeat": repeat,
+                            "train_fold": train_fold,
+                            "train_linear_cf_joint_percent": float(train_linear_joint[0]),
+                            "selected_square_sign": sign_name,
+                            "heldout_endpoint_percent": float(heldout_end[0]),
+                            "heldout_trajectory_percent": float(heldout_traj[0]),
+                            "heldout_cf_joint_percent": float(heldout_joint[0]),
+                        }
+                    )
+                guided_repeat_values.append(float(np.mean(fold_values)))
+            guided_repeat_values = np.asarray(guided_repeat_values, dtype=np.float64)
+            linear_guided_summary.append(
+                {
+                    "query": query_id,
+                    "variant": variant,
+                    "train_linear_cf_joint_mean_percent": float(np.mean(guided_linear_values)),
+                    "selected_square_p1_split_fraction": float(np.mean(guided_selected_p1)),
+                    "crossfit_cf_joint_mean_percent": float(guided_repeat_values.mean()),
+                    "crossfit_cf_joint_std_percent": float(guided_repeat_values.std(ddof=1)),
+                    "crossfit_positive_repeat_fraction": float(
+                        np.mean(guided_repeat_values > 0.0)
+                    ),
+                }
+            )
+
     write_csv(args.out_dir / "results.csv", rows)
     write_csv(args.out_dir / "crossfit_per_split.csv", crossfit_rows)
     write_csv(args.out_dir / "crossfit_summary.csv", crossfit_summary)
+    write_csv(args.out_dir / "linear_guided_crossfit_per_split.csv", linear_guided_rows)
+    write_csv(args.out_dir / "linear_guided_crossfit_summary.csv", linear_guided_summary)
     np.savez_compressed(
         args.out_dir / "product_square_scores.npz",
         query_ids=np.asarray(query_ids, dtype=np.int32),
@@ -291,6 +357,29 @@ def main():
     print("-" * 34)
     for variant in VARIANTS:
         selected = [row for row in crossfit_summary if row["variant"] == variant]
+        print(
+            f"{variant:<19s} "
+            f"{np.mean([row['crossfit_cf_joint_mean_percent'] for row in selected]):+9.3f}%"
+        )
+
+    print("\nLINEAR-SIGN-GUIDED SQUARE CROSSFIT — OPPOSITE ORIENTATION")
+    print("Q VARIANT             TRAIN LINEAR  SQ P1    CV MEAN      STD   CV>0")
+    print("-" * 78)
+    for row in linear_guided_summary:
+        print(
+            f"{int(row['query']):1d} {row['variant']:<19s} "
+            f"{row['train_linear_cf_joint_mean_percent']:+11.3f}% "
+            f"{row['selected_square_p1_split_fraction']:6.2f} "
+            f"{row['crossfit_cf_joint_mean_percent']:+9.3f}% "
+            f"{row['crossfit_cf_joint_std_percent']:8.3f}% "
+            f"{row['crossfit_positive_repeat_fraction']:6.2f}"
+        )
+
+    print(f"\n{len(query_ids)}-QUERY LINEAR-GUIDED CROSSFIT MEAN")
+    print("VARIANT               CV MEAN")
+    print("-" * 34)
+    for variant in VARIANTS:
+        selected = [row for row in linear_guided_summary if row["variant"] == variant]
         print(
             f"{variant:<19s} "
             f"{np.mean([row['crossfit_cf_joint_mean_percent'] for row in selected]):+9.3f}%"
