@@ -41,6 +41,8 @@ def main():
     parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--query-ids", default="1,3,4,8")
     parser.add_argument("--num-checkpoints", type=int, default=50)
+    parser.add_argument("--repeats", type=int, default=20)
+    parser.add_argument("--random-seed", type=int, default=20260916)
     parser.add_argument("--train-namespace", default="traj_tracin")
     parser.add_argument(
         "--original-query-namespace",
@@ -137,10 +139,17 @@ def main():
         raise ValueError(f"expected 490 terms, found {used_terms}")
 
     rows = []
+    crossfit_rows = []
+    crossfit_summary = []
     for query_slot, query_id in enumerate(query_ids):
         incidence, true = target_data(args, query_id, score_indices)
         endpoint = true[TARGETS[0]]
         trajectory = true[TARGETS[1]]
+        rng = np.random.default_rng(args.random_seed)
+        folds = []
+        for _ in range(args.repeats):
+            permutation = rng.permutation(len(endpoint))
+            folds.append((permutation[::2], permutation[1::2]))
         for variant in VARIANTS:
             subset_sum = scores[variant][query_slot] @ incidence.T
             for sign_name, multiplier in (("m1", -1.0), ("p1", 1.0)):
@@ -159,8 +168,76 @@ def main():
                         "score_std": float(np.std(scores[variant][query_slot])),
                     }
                 )
+            repeat_values = []
+            selected_p1 = []
+            for repeat, pair in enumerate(folds):
+                fold_values = []
+                for train_fold in range(2):
+                    train_ids = pair[train_fold]
+                    heldout_ids = pair[1 - train_fold]
+                    _, _, train_p1 = lds(
+                        subset_sum[train_ids],
+                        endpoint[train_ids],
+                        trajectory[train_ids],
+                    )
+                    multiplier = 1.0 if float(train_p1[0]) >= 0.0 else -1.0
+                    sign_name = "p1" if multiplier > 0 else "m1"
+                    heldout_end, heldout_traj, heldout_joint = lds(
+                        multiplier * subset_sum[heldout_ids],
+                        endpoint[heldout_ids],
+                        trajectory[heldout_ids],
+                    )
+                    fold_values.append(float(heldout_joint[0]))
+                    selected_p1.append(multiplier > 0)
+                    crossfit_rows.append(
+                        {
+                            "query": query_id,
+                            "variant": variant,
+                            "repeat": repeat,
+                            "train_fold": train_fold,
+                            "selected_sign": sign_name,
+                            "train_p1_cf_joint_percent": float(train_p1[0]),
+                            "heldout_endpoint_percent": float(heldout_end[0]),
+                            "heldout_trajectory_percent": float(heldout_traj[0]),
+                            "heldout_cf_joint_percent": float(heldout_joint[0]),
+                        }
+                    )
+                repeat_values.append(float(np.mean(fold_values)))
+            repeat_values = np.asarray(repeat_values, dtype=np.float64)
+            full_p1 = next(
+                row["cf_joint_percent"]
+                for row in rows
+                if row["query"] == query_id
+                and row["variant"] == variant
+                and row["prediction_sign"] == "p1"
+            )
+            crossfit_summary.append(
+                {
+                    "query": query_id,
+                    "variant": variant,
+                    "full_p1_cf_joint_percent": float(full_p1),
+                    "full_oracle_sign": "p1" if full_p1 >= 0.0 else "m1",
+                    "full_oracle_cf_joint_percent": float(abs(full_p1)),
+                    "crossfit_cf_joint_mean_percent": float(repeat_values.mean()),
+                    "crossfit_cf_joint_std_percent": float(
+                        repeat_values.std(ddof=1)
+                    ),
+                    "crossfit_positive_repeat_fraction": float(
+                        np.mean(repeat_values > 0.0)
+                    ),
+                    "selected_p1_split_fraction": float(np.mean(selected_p1)),
+                }
+            )
 
     write_csv(args.out_dir / "results.csv", rows)
+    write_csv(args.out_dir / "crossfit_per_split.csv", crossfit_rows)
+    write_csv(args.out_dir / "crossfit_summary.csv", crossfit_summary)
+    np.savez_compressed(
+        args.out_dir / "product_square_scores.npz",
+        query_ids=np.asarray(query_ids, dtype=np.int32),
+        score_indices=np.asarray(score_indices, dtype=np.int64),
+        **{variant: values.astype(np.float32) for variant, values in scores.items()},
+    )
     print("Q1,Q3,Q4,Q8 OWN-TRAJECTORY ORIGINAL-F — TERMWISE PRODUCT SQUARE")
     print("S_i = sum_(c,t) weight_(c,t) * product_(c,t,i)^2")
     print("Q VARIANT             SIGN   ENDPOINT      TRAJ  CF JOINT")
@@ -191,6 +268,30 @@ def main():
                 f"{np.mean([row['trajectory_percent'] for row in selected]):+9.3f}% "
                 f"{np.mean([row['cf_joint_percent'] for row in selected]):+9.3f}%"
             )
+
+    print("\nOVERALL-SIGN CROSSFIT — NO CHECKPOINT/TIMESTAMP FLIPS")
+    print("Q VARIANT             FULL BEST SIGN    CV MEAN      STD   CV>0  P1 SELECT")
+    print("-" * 82)
+    for row in crossfit_summary:
+        print(
+            f"{int(row['query']):1d} {row['variant']:<19s} "
+            f"{row['full_oracle_cf_joint_percent']:+9.3f}% "
+            f"{row['full_oracle_sign']:>4s} "
+            f"{row['crossfit_cf_joint_mean_percent']:+9.3f}% "
+            f"{row['crossfit_cf_joint_std_percent']:8.3f}% "
+            f"{row['crossfit_positive_repeat_fraction']:6.2f} "
+            f"{row['selected_p1_split_fraction']:9.2f}"
+        )
+
+    print("\nFOUR-QUERY CROSSFIT MEAN")
+    print("VARIANT               CV MEAN")
+    print("-" * 34)
+    for variant in VARIANTS:
+        selected = [row for row in crossfit_summary if row["variant"] == variant]
+        print(
+            f"{variant:<19s} "
+            f"{np.mean([row['crossfit_cf_joint_mean_percent'] for row in selected]):+9.3f}%"
+        )
     print(f"[saved] {args.out_dir}")
 
 
