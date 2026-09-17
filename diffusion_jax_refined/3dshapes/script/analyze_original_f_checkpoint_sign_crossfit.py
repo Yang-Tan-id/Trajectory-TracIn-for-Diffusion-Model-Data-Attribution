@@ -40,9 +40,11 @@ def build_checkpoint_components(args, query_ids: list[int]):
     import jax.numpy as jnp
 
     query_bank, metadata = load_query_bank(
-        args, args.original_query_namespace, "trajectory_next_checkpoint_noise_mse"
+        args,
+        args.original_query_namespace,
+        "trajectory_next_checkpoint_noise_mse",
+        query_ids=query_ids,
     )
-    query_bank = query_bank[query_ids]
     term_ckpts = np.asarray(metadata["ckpt_indices"], dtype=np.int32)
     term_timesteps = np.asarray(metadata["timesteps"], dtype=np.int32)
     checkpoints = np.asarray(sorted(set(int(x) for x in term_ckpts)), dtype=np.int32)

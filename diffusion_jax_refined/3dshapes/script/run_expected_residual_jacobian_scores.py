@@ -117,10 +117,16 @@ def atomic_save(path: Path, values: np.ndarray) -> None:
     tmp.replace(path)
 
 
-def load_query_bank(args: argparse.Namespace, namespace: str, objective: str):
+def load_query_bank(
+    args: argparse.Namespace,
+    namespace: str,
+    objective: str,
+    query_ids=None,
+):
     features = []
     reference = None
-    for query_id in range(10):
+    selected_query_ids = range(10) if query_ids is None else query_ids
+    for query_id in selected_query_ids:
         path = query_artifact_path(
             args.experiment, args.train_seed, args.epochs, query_id, namespace
         )
