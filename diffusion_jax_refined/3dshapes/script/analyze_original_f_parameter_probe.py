@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-"""Evaluate original-f after a rank-one parameter-space random projection.
+"""Evaluate 24-probe next-delta original-f with a parameter-space probe.
 
-For every checkpoint/timestep term and probe v, replace the usual product
+The unique next-checkpoint predicted-noise difference is reconstructed from
+24 output-space probes.  For every checkpoint/timestep term, replace the
+usual parameter-gradient product
 
     <g_train, g_query>
 
@@ -9,9 +11,10 @@ with
 
     <g_train, v> <g_query, v>.
 
-Rademacher probes are used, so the latter is an unbiased estimator of the
-former.  The same probe is shared by all train examples and queries for a
-term, while different terms and Monte Carlo probes receive independent v's.
+with a rank-one parameter-space estimate.  Rademacher parameter probes are
+used, so the latter is an unbiased estimator of the former.  The same
+parameter probe is shared by all train examples, queries, and 24 output
+probes for a term; different terms receive independent parameter probes.
 """
 
 from __future__ import annotations
@@ -28,8 +31,18 @@ SHAPES_ROOT = Path(__file__).resolve().parents[1]
 if str(SHAPES_ROOT) not in sys.path:
     sys.path.insert(0, str(SHAPES_ROOT))
 
-from analyze_original_f_timestamp_sign_crossfit import TARGETS, lds, target_data
-from run_expected_residual_jacobian_scores import load_query_bank, train_part_dir
+from analyze_original_f_timestamp_sign_crossfit import TARGETS, lds
+from analyze_nearest_train_probe_predicted_noise_relation import (
+    probe_alignment_matrix,
+)
+from analyze_predicted_noise_probe24_output_alignment import load_bank
+from analyze_predicted_noise_probe24_term_winners import (
+    FRESH_PATTERN,
+    ORIGINAL_PATTERN,
+    load_features,
+    target_data,
+)
+from run_predicted_noise_jvp_l2_squared import train_part_dir
 
 
 VARIANTS = ("raw", "query_l2", "train_l2", "query_train_l2")
@@ -64,42 +77,48 @@ def main() -> None:
     parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--query-ids", default="0,1,2,3,4,5,6,7,8,9")
     parser.add_argument("--num-checkpoints", type=int, default=50)
-    parser.add_argument("--num-probes", type=int, default=1)
+    parser.add_argument("--num-parameter-probes", type=int, default=1)
     parser.add_argument("--probe-seed", type=int, default=20260917)
     parser.add_argument("--repeats", type=int, default=20)
     parser.add_argument("--random-seed", type=int, default=20260916)
-    parser.add_argument("--train-namespace", default="traj_tracin")
     parser.add_argument(
-        "--original-query-namespace",
-        default="loss_direction_original_f_checkpoint_own_trajectory",
+        "--original-namespace", default="predicted_noise_output_next_original12"
     )
     parser.add_argument(
-        "--train-feature-semantics",
-        default="raw_projected_expected_loss_gradient",
+        "--fresh-namespace", default="predicted_noise_output_next_fresh12"
     )
+    parser.add_argument("--checkpoint-direction", default="next")
     parser.add_argument("--out-dir", type=Path, required=True)
     args = parser.parse_args()
-    if args.num_probes <= 0:
-        raise ValueError("--num-probes must be positive")
+    if args.num_parameter_probes <= 0:
+        raise ValueError("--num-parameter-probes must be positive")
 
     query_ids = parse_ints(args.query_ids)
-    args.skip_predicted = True
-    args.shard_index = 0
-    args.shard_count = 1
-    args.run_id = "original_f_parameter_probe"
+    args.query_ids = query_ids
 
-    query_bank, metadata = load_query_bank(
-        args,
-        args.original_query_namespace,
-        "trajectory_next_checkpoint_noise_mse",
-        query_ids=query_ids,
-    )
+    original, metadata = load_features(args, ORIGINAL_PATTERN, range(12))
+    fresh, fresh_metadata = load_features(args, FRESH_PATTERN, range(12))
+    for key, value in metadata.items():
+        if not np.array_equal(value, fresh_metadata[key]):
+            raise ValueError(f"original/fresh metadata mismatch for {key}")
+    output_probe_bank = np.concatenate((original, fresh), axis=0)
+    if output_probe_bank.shape[0] != 24:
+        raise ValueError(f"expected 24 output probes, got {output_probe_bank.shape[0]}")
+    alignment_banks = {
+        (query_id, bank): load_bank(args, query_id, bank)
+        for query_id in query_ids
+        for bank in ("original", "fresh")
+    }
     checkpoints = np.asarray(metadata["ckpt_indices"], dtype=np.int32)
     timesteps = np.asarray(metadata["timesteps"], dtype=np.int32)
-    term_weights = np.asarray(metadata["term_weights"], dtype=np.float64)
+    # Probe banks include the reference/final checkpoint, but next-delta has no
+    # target there.  Keep only the 49 checkpoints that have a successor.
+    valid_terms = checkpoints < int(np.max(checkpoints))
+    term_weights = np.full(len(checkpoints), np.nan, dtype=np.float64)
     lookup = {
         (int(checkpoint), int(timestep)): term
         for term, (checkpoint, timestep) in enumerate(zip(checkpoints, timesteps))
+        if valid_terms[term]
     }
 
     banks = {
@@ -111,27 +130,18 @@ def main() -> None:
     }
     score_indices = None
     used_terms = 0
-    feature_dimension = int(query_bank.shape[-1])
+    feature_dimension = int(output_probe_bank.shape[-1])
 
     for checkpoint in range(args.num_checkpoints):
-        path = train_part_dir(args) / f"ckpt_{checkpoint:04d}.npz"
+        path = train_part_dir(args.experiment, args.train_seed) / f"ckpt_{checkpoint:04d}.npz"
         if not path.is_file():
             raise FileNotFoundError(path)
         with np.load(path, allow_pickle=False) as payload:
             train_terms = np.asarray(payload["train_features"], dtype=np.float32)
             part_checkpoints = np.asarray(payload["ckpt_indices"], dtype=np.int32)
             part_timesteps = np.asarray(payload["timesteps"], dtype=np.int32)
+            part_weights = np.asarray(payload["term_weights"], dtype=np.float64)
             indices = np.asarray(payload["score_indices"], dtype=np.int64)
-            semantics = str(
-                np.asarray(
-                    payload.get(
-                        "train_feature_semantics",
-                        "raw_projected_expected_loss_gradient",
-                    )
-                ).item()
-            )
-        if semantics != args.train_feature_semantics:
-            raise ValueError(f"{path}: unexpected semantics {semantics!r}")
         if train_terms.shape[-1] != feature_dimension:
             raise ValueError(
                 f"{path}: feature dimension {train_terms.shape[-1]} != {feature_dimension}"
@@ -147,8 +157,35 @@ def main() -> None:
             term = lookup.get((int(term_checkpoint), int(timestep)))
             if term is None:
                 continue
+            if np.isnan(term_weights[term]):
+                term_weights[term] = float(part_weights[local])
+            elif not np.isclose(
+                term_weights[term], float(part_weights[local]), rtol=1e-6, atol=1e-12
+            ):
+                raise ValueError(f"term-weight mismatch for term {term}")
             train = np.asarray(train_terms[local], dtype=np.float64)
-            query = np.asarray(query_bank[:, term], dtype=np.float64)
+            probe_queries = np.asarray(
+                output_probe_bank[:, :, term, :], dtype=np.float64
+            )
+            delta_scalars = np.stack(
+                [
+                    probe_alignment_matrix(
+                        alignment_banks,
+                        query_id,
+                        int(term_checkpoint) + 1,
+                        int(timestep),
+                    )["projection_on_next_predicted_noise_delta"]
+                    for query_id in query_ids
+                ],
+                axis=0,
+            )
+            # (Q, 24, D) weighted by the one reference delta's 24 projections.
+            query = np.mean(
+                np.transpose(probe_queries, (1, 0, 2))
+                * delta_scalars[:, :, None],
+                axis=1,
+                dtype=np.float64,
+            )
             train_norm = np.linalg.norm(train, axis=1) + 1e-8
             query_norm = np.linalg.norm(query, axis=1) + 1e-8
 
@@ -160,7 +197,7 @@ def main() -> None:
             probes = rng.integers(
                 0,
                 2,
-                size=(args.num_probes, feature_dimension),
+                size=(args.num_parameter_probes, feature_dimension),
                 dtype=np.int8,
             ).astype(np.float64)
             probes = 2.0 * probes - 1.0
@@ -168,12 +205,12 @@ def main() -> None:
             query_projection = query @ probes.T
             rank_one = np.einsum(
                 "ir,qr->iq", train_projection, query_projection
-            ) / float(args.num_probes)
+            ) / float(args.num_parameter_probes)
             rank_one_square = np.einsum(
                 "ir,qr->iq",
                 np.square(train_projection),
                 np.square(query_projection),
-            ) / float(args.num_probes)
+            ) / float(args.num_parameter_probes)
             values = {
                 "raw": (rank_one, rank_one_square),
                 "query_l2": (
@@ -205,14 +242,18 @@ def main() -> None:
             flush=True,
         )
 
-    if score_indices is None or used_terms != len(checkpoints):
-        raise ValueError(f"expected {len(checkpoints)} terms, found {used_terms}")
+    expected_terms = int(np.sum(valid_terms))
+    if score_indices is None or used_terms != expected_terms:
+        raise ValueError(f"expected {expected_terms} terms, found {used_terms}")
+    if np.any(np.isnan(term_weights[valid_terms])):
+        raise ValueError("one or more valid next-delta terms are missing weights")
 
     full_rows = []
     split_rows = []
     summary_rows = []
+    all_targets = target_data(args, score_indices)
     for query_slot, query_id in enumerate(query_ids):
-        incidence, true = target_data(args, query_id, score_indices)
+        incidence, true = all_targets[query_id]
         endpoint = true[TARGETS[0]]
         trajectory = true[TARGETS[1]]
         folds = folds_for(len(endpoint), args.repeats, args.random_seed)
@@ -305,7 +346,8 @@ def main() -> None:
         checkpoints=checkpoints,
         timesteps=timesteps,
         term_weights=term_weights,
-        num_probes=np.asarray(args.num_probes, dtype=np.int32),
+        num_output_probes=np.asarray(24, dtype=np.int32),
+        num_parameter_probes=np.asarray(args.num_parameter_probes, dtype=np.int32),
         probe_seed=np.asarray(args.probe_seed, dtype=np.int64),
         **{
             f"{reduction}_{variant}": values.astype(np.float32)
@@ -315,11 +357,13 @@ def main() -> None:
     )
 
     print(
-        "ORIGINAL-F PARAMETER-PROBE: "
-        "z=(g_train^T v)(g_query^T v); square averages z_r^2"
+        "NEXT-DELTA ORIGINAL-F PARAMETER-PROBE: "
+        "g_query=mean_24[(delta_eps^T v_r) J^T v_r]; "
+        "z=(g_train^T u)(g_query^T u)"
     )
     print(
-        f"probes={args.num_probes} seed={args.probe_seed} "
+        f"output_probes=24 parameter_probes={args.num_parameter_probes} "
+        f"seed={args.probe_seed} "
         f"terms={used_terms} feature_dim={feature_dimension}"
     )
     print("REDUCTION Q VARIANT             FULL BEST   CV MEAN      STD   CV>0")

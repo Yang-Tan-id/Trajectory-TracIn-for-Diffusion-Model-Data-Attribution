@@ -23,20 +23,18 @@ conda activate /scratch/11447/yangtan7447/conda-envs/trajectory-tracin
 export PYTHONUNBUFFERED=1
 export EXPERIMENT_TAG="${EXPERIMENT_TAG:-experiment1}"
 export TRAIN_SEED="${TRAIN_SEED:-42}"
-export NUM_PROBES="${NUM_PROBES:-1}"
+export NUM_PARAMETER_PROBES="${NUM_PARAMETER_PROBES:-1}"
 export PROBE_SEED="${PROBE_SEED:-20260917}"
-export ORIGINAL_QUERY_NAMESPACE="${ORIGINAL_QUERY_NAMESPACE:-loss_direction_original_f_checkpoint_own_trajectory}"
 
-OUT_DIR="${SHAPES_ROOT}/result/${EXPERIMENT_TAG}/eval/original_f_parameter_probe${NUM_PROBES}/run_${SLURM_JOB_ID}"
+OUT_DIR="${SHAPES_ROOT}/result/${EXPERIMENT_TAG}/eval/next_delta_mc24_parameter_probe${NUM_PARAMETER_PROBES}/run_${SLURM_JOB_ID}"
 
 JAX_PLATFORMS=cpu python \
   "${SHAPES_ROOT}/script/analyze_original_f_parameter_probe.py" \
   --experiment "${EXPERIMENT_TAG}" \
   --train-seed "${TRAIN_SEED}" \
   --query-ids 0,1,2,3,4,5,6,7,8,9 \
-  --num-probes "${NUM_PROBES}" \
+  --num-parameter-probes "${NUM_PARAMETER_PROBES}" \
   --probe-seed "${PROBE_SEED}" \
-  --original-query-namespace "${ORIGINAL_QUERY_NAMESPACE}" \
   --repeats 20 \
   --random-seed 20260916 \
   --out-dir "${OUT_DIR}"
