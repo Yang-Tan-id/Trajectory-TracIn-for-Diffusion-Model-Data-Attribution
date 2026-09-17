@@ -112,12 +112,14 @@ run_contraction() {
     --expected-query-probe-seeds "${PROBE_SEEDS}"
 }
 
-echo "[phase 2/3] eight-probe term-root and timestamp-root scores"
+echo "[phase 2/3] eight-probe square-mean, root-mean, term-root, and timestamp-root scores"
+run_contraction squared square_mean
+run_contraction absolute root_mean
 run_contraction probe_l2 term_root
 run_contraction timestamp_probe_l2 timestamp_root
 
 echo "[phase 3/3] fixed p1 and m1 LDS"
-SCHEMES="predicted_noise_jvp_probe_l2_probe8_${SCORE_SUFFIX},predicted_noise_jvp_timestamp_probe_l2_probe8_${SCORE_SUFFIX}"
+SCHEMES="predicted_noise_jvp_l2_squared_probe8_${SCORE_SUFFIX},predicted_noise_jvp_absolute_probe8_${SCORE_SUFFIX},predicted_noise_jvp_probe_l2_probe8_${SCORE_SUFFIX},predicted_noise_jvp_timestamp_probe_l2_probe8_${SCORE_SUFFIX}"
 for sign in 1 -1; do
   JAX_PLATFORMS=cpu python "${SHAPES_ROOT}/script/run_traj_tracin_lds_cached.py" \
     --execute --experiment "${EXPERIMENT_TAG}" --train-seed "${TRAIN_SEED}" \
@@ -125,6 +127,14 @@ for sign in 1 -1; do
 done
 
 for sign in p1 m1; do
+  python "${SHAPES_ROOT}/script/print_predicted_noise_timestamp_checkpoint_square_lds.py" \
+    --experiment "${EXPERIMENT_TAG}" --num-probes 8 \
+    --namespace-suffix "${SCORE_SUFFIX}" --reduction termwise_square \
+    --prediction-sign "${sign}"
+  python "${SHAPES_ROOT}/script/print_predicted_noise_timestamp_checkpoint_square_lds.py" \
+    --experiment "${EXPERIMENT_TAG}" --num-probes 8 \
+    --namespace-suffix "${SCORE_SUFFIX}" --reduction absolute \
+    --prediction-sign "${sign}"
   python "${SHAPES_ROOT}/script/print_predicted_noise_timestamp_checkpoint_square_lds.py" \
     --experiment "${EXPERIMENT_TAG}" --num-probes 8 \
     --namespace-suffix "${SCORE_SUFFIX}" --reduction probe_l2 \
@@ -135,4 +145,4 @@ for sign in p1 m1; do
     --prediction-sign "${sign}"
 done
 
-echo "[done] eight timestamp-shared probes: two cached plus six fresh"
+echo "[done] eight timestamp-shared probes: square-mean, root-mean, term-root, timestamp-root"
