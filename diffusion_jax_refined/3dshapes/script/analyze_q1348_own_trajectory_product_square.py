@@ -64,7 +64,23 @@ def reweight_terms(
     timesteps = np.asarray(timesteps, dtype=np.int32)
     if mode == "uniform":
         return np.broadcast_to(weights[None, :], (len(query_ids), len(weights))).copy()
-    if mode == "own_endpoint_inverse_rmse":
+    if mode == "t0_only":
+        output = np.zeros_like(weights)
+        for checkpoint in np.unique(checkpoints):
+            indices = np.flatnonzero(checkpoints == checkpoint)
+            zero_indices = indices[timesteps[indices] == 0]
+            if len(zero_indices) != 1:
+                raise ValueError(
+                    f"checkpoint {int(checkpoint)} has {len(zero_indices)} t=0 terms"
+                )
+            output[zero_indices[0]] = float(weights[indices].sum())
+        return np.broadcast_to(
+            output[None, :], (len(query_ids), len(output))
+        ).copy()
+    if mode in (
+        "own_endpoint_inverse_rmse",
+        "own_endpoint_inverse_sqrt_rmse",
+    ):
         output = np.zeros((len(query_ids), len(weights)), dtype=np.float64)
         for query_position, query_id in enumerate(query_ids):
             path = artifact_path(
@@ -134,8 +150,12 @@ def reweight_terms(
                         )
                         distance = np.sqrt(np.mean(np.square(difference)))
                     distances.append(float(distance))
-                inverse_distance = 1.0 / np.maximum(
-                    np.asarray(distances, dtype=np.float64), 1e-8
+                distance_power = (
+                    1.0 if mode == "own_endpoint_inverse_rmse" else 0.5
+                )
+                inverse_distance = np.power(
+                    np.maximum(np.asarray(distances, dtype=np.float64), 1e-8),
+                    -distance_power,
                 )
                 output[query_position, indices] = (
                     float(weights[indices].sum())
@@ -199,6 +219,8 @@ def main():
             "local_ddim_step_squared",
             "snapshot_interval_ddim_step_squared",
             "own_endpoint_inverse_rmse",
+            "own_endpoint_inverse_sqrt_rmse",
+            "t0_only",
         ),
         default="uniform",
     )
