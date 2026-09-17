@@ -60,7 +60,8 @@ def main() -> None:
         "checkpoint_timestamp_square": "traj_tracin_predicted_noise_jvp_checkpoint_timestamp_sum_square",
     }
     namespace_base = namespace_bases[args.reduction]
-    namespace = f"{namespace_base}_probe{args.num_probes}"
+    probe_suffix = "" if args.num_probes == 1 else f"_probe{args.num_probes}"
+    namespace = f"{namespace_base}{probe_suffix}"
     suffix = args.namespace_suffix.strip().strip("_/")
     if suffix:
         namespace = f"{namespace}_{suffix}"

@@ -37,21 +37,25 @@ SCORE_SUFFIX="timestamp_shared_own_trajectory"
 LOG_ROOT="${SHAPES_ROOT}/result/${EXPERIMENT_TAG}/logs/predicted_noise_probe1_timestamp_shared_own_trajectory/${SLURM_JOB_ID}"
 mkdir -p "${LOG_ROOT}"
 
-echo "[phase 1/3] one Gaussian probe per timestamp, shared over all checkpoints and queries"
-export TRAJ_QUERY_USE_CHECKPOINT_OWN_TRAJECTORY=1
-python "${QUERY_RUNNER}" \
-  --execute --experiment "${EXPERIMENT_TAG}" --train-seed "${TRAIN_SEED}" \
-  --epochs "${JAX_EPOCHS}" --query-ids 0,1,2,3,4,5,6,7,8,9 \
-  --gpus 0 --skip-sampling --skip-score \
-  --artifact-namespace "${NAMESPACE_BASE}_r0" \
-  --query-objective trajectory_predicted_noise_probe \
-  --predicted-noise-probe-index 0 \
-  --predicted-noise-probe-count "${NUM_PROBES}" \
-  --predicted-noise-probe-mode timestamp_shared_gaussian \
-  --predicted-noise-probe-seed "${PROBE_SEED}" \
-  --num-snapshots 10 --log-prefix pn1_timestamp_shared_own \
-  >"${LOG_ROOT}/query_probe_0.log" 2>&1
-unset TRAJ_QUERY_USE_CHECKPOINT_OWN_TRAJECTORY
+if [[ "${EVAL_ONLY:-0}" != "1" ]]; then
+  echo "[phase 1/3] one Gaussian probe per timestamp, shared over all checkpoints and queries"
+  export TRAJ_QUERY_USE_CHECKPOINT_OWN_TRAJECTORY=1
+  python "${QUERY_RUNNER}" \
+    --execute --experiment "${EXPERIMENT_TAG}" --train-seed "${TRAIN_SEED}" \
+    --epochs "${JAX_EPOCHS}" --query-ids 0,1,2,3,4,5,6,7,8,9 \
+    --gpus 0 --skip-sampling --skip-score \
+    --artifact-namespace "${NAMESPACE_BASE}_r0" \
+    --query-objective trajectory_predicted_noise_probe \
+    --predicted-noise-probe-index 0 \
+    --predicted-noise-probe-count "${NUM_PROBES}" \
+    --predicted-noise-probe-mode timestamp_shared_gaussian \
+    --predicted-noise-probe-seed "${PROBE_SEED}" \
+    --num-snapshots 10 --log-prefix pn1_timestamp_shared_own \
+    >"${LOG_ROOT}/query_probe_0.log" 2>&1
+  unset TRAJ_QUERY_USE_CHECKPOINT_OWN_TRAJECTORY
+else
+  echo "[reuse] EVAL_ONLY=1; reusing completed query and score artifacts"
+fi
 
 run_contraction() {
   local contraction="$1"
@@ -79,13 +83,15 @@ run_contraction() {
     --expected-query-probe-seed "${PROBE_SEED}"
 }
 
-echo "[phase 2/3] linear, square, and component-root scores"
-run_contraction signed linear
-run_contraction squared square
-run_contraction probe_l2 component_root
+if [[ "${EVAL_ONLY:-0}" != "1" ]]; then
+  echo "[phase 2/3] linear, square, and component-root scores"
+  run_contraction signed linear
+  run_contraction squared square
+  run_contraction probe_l2 component_root
+fi
 
 echo "[phase 3/3] LDS for p1 and m1"
-SCHEMES="predicted_noise_jvp_signed_probe1_timestamp_shared_own_trajectory,predicted_noise_jvp_l2_squared_probe1_timestamp_shared_own_trajectory,predicted_noise_jvp_probe_l2_probe1_timestamp_shared_own_trajectory"
+SCHEMES="predicted_noise_jvp_signed_timestamp_shared_own_trajectory,predicted_noise_jvp_l2_squared_timestamp_shared_own_trajectory,predicted_noise_jvp_probe_l2_timestamp_shared_own_trajectory"
 for sign in 1 -1; do
   JAX_PLATFORMS=cpu python "${SHAPES_ROOT}/script/run_traj_tracin_lds_cached.py" \
     --execute --experiment "${EXPERIMENT_TAG}" --train-seed "${TRAIN_SEED}" \
