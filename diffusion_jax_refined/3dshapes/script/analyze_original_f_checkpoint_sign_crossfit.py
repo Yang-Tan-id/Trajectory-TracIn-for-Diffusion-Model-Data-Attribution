@@ -20,6 +20,7 @@ from analyze_original_f_timestamp_sign_crossfit import (
     VARIANTS,
     lds,
     parse_ints,
+    sign_label,
     target_data,
 )
 from analyze_predicted_noise_probe12_sign_flips import sign_matrix
@@ -349,6 +350,9 @@ def main() -> None:
                                 "heldout_cf_joint_percent": value,
                                 "heldout_global_sign_cf_joint_percent": heldout_global,
                                 "heldout_improvement_percent": value - heldout_global,
+                                "selected_signs": sign_label(
+                                    selected_signs, checkpoints
+                                ),
                                 "selected_positive_checkpoints": int(
                                     np.sum(selected_signs > 0)
                                 ),
@@ -367,6 +371,7 @@ def main() -> None:
                     "all_plus_cf_joint_percent": plus,
                     "all_minus_cf_joint_percent": minus,
                     "full_oracle_cf_joint_percent": full_value,
+                    "full_oracle_signs": sign_label(full_signs, checkpoints),
                     "full_positive_checkpoints": int(np.sum(full_signs > 0)),
                     "crossfit_cf_joint_mean_percent": float(values.mean()),
                     "crossfit_cf_joint_std_percent": float(values.std(ddof=1)),

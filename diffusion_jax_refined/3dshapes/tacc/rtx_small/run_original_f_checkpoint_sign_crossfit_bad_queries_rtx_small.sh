@@ -25,9 +25,14 @@ export PYTHONUNBUFFERED=1
 export EXPERIMENT_TAG="${EXPERIMENT_TAG:-experiment1}"
 export TRAIN_SEED="${TRAIN_SEED:-42}"
 export QUERY_IDS="${QUERY_IDS:-1,3,4,8}"
+export SOURCE_RUN_ID="${SOURCE_RUN_ID:-}"
 
-OUT_DIR="${SHAPES_ROOT}/result/${EXPERIMENT_TAG}/eval/original_f_checkpoint_sign_crossfit_bad_queries/run_${SLURM_JOB_ID}"
+RUN_ID="${SOURCE_RUN_ID:-${SLURM_JOB_ID}}"
+OUT_DIR="${SHAPES_ROOT}/result/${EXPERIMENT_TAG}/eval/original_f_checkpoint_sign_crossfit_bad_queries/run_${RUN_ID}"
 echo "[cached] Q=${QUERY_IDS}; build 49 checkpoint components, then structured and individual-sign crossfit"
+if [[ -n "${SOURCE_RUN_ID}" ]]; then
+  echo "[reuse] checkpoint components from run_${SOURCE_RUN_ID}"
+fi
 CUDA_VISIBLE_DEVICES=0 JAX_NUM_DEVICES=1 JAX_PLATFORMS=cuda python \
   "${SHAPES_ROOT}/script/analyze_original_f_checkpoint_sign_crossfit.py" \
   --experiment "${EXPERIMENT_TAG}" \

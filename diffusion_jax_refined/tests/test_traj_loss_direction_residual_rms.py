@@ -284,9 +284,13 @@ class LossDirectionResidualRmsTest(unittest.TestCase):
         self.assertIn('"individual_coordinate"', analyzer)
         self.assertIn("crossfit_global_baseline_mean_percent", analyzer)
         self.assertIn("crossfit_beat_global_fraction", analyzer)
+        self.assertIn('"selected_signs"', analyzer)
+        self.assertIn('"full_oracle_signs"', analyzer)
         self.assertIn("checkpoint_components.npz", analyzer)
         self.assertIn("[cached]", launcher)
         self.assertIn('QUERY_IDS="${QUERY_IDS:-1,3,4,8}"', launcher)
+        self.assertIn('SOURCE_RUN_ID="${SOURCE_RUN_ID:-}"', launcher)
+        self.assertIn('RUN_ID="${SOURCE_RUN_ID:-${SLURM_JOB_ID}}"', launcher)
         self.assertIn('--query-ids "${QUERY_IDS}"', launcher)
         self.assertNotIn("01_train_datapoint_gradient.py", launcher)
 
