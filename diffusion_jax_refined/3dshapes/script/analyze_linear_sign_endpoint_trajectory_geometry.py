@@ -23,6 +23,38 @@ def rmse(left: np.ndarray, right: np.ndarray, axis: tuple[int, ...]) -> np.ndarr
     return np.sqrt(np.mean(np.square(left - right, dtype=np.float64), axis=axis))
 
 
+def safe_correlation(left: np.ndarray, right: np.ndarray) -> float:
+    left = np.asarray(left, dtype=np.float64)
+    right = np.asarray(right, dtype=np.float64)
+    if np.std(left) == 0.0 or np.std(right) == 0.0:
+        return float("nan")
+    return float(np.corrcoef(left, right)[0, 1])
+
+
+def geometry_artifact(args: argparse.Namespace, query: int, required: tuple[str, ...]):
+    namespaces = (
+        args.namespace,
+        "loss_direction_original_f_checkpoint_own_trajectory_states",
+        "loss_direction_original_f_checkpoint_own_trajectory_endpoints_all10",
+    )
+    checked = []
+    for namespace in dict.fromkeys(namespaces):
+        path = artifact_path(
+            args.experiment, args.train_seed, args.epochs, query, namespace
+        )
+        checked.append(path)
+        if not path.is_file():
+            continue
+        with np.load(path, allow_pickle=False) as payload:
+            if all(key in payload for key in required):
+                return path
+    formatted = "\n".join(str(path) for path in checked)
+    raise FileNotFoundError(
+        f"Q{query}: no artifact contains complete endpoint/state geometry; checked:\n"
+        f"{formatted}"
+    )
+
+
 def load_oracle_signs(
     path: Path, reduction: str, variant: str
 ) -> dict[int, tuple[str, float]]:
@@ -63,23 +95,16 @@ def main() -> None:
     checkpoint_rows = []
     timestamp_rows = []
     query_rows = []
+    required = (
+        "checkpoint_own_trajectory_endpoints",
+        "checkpoint_own_trajectory_reference_endpoint",
+        "checkpoint_own_trajectory_states",
+        "checkpoint_own_trajectory_reference_states",
+        "checkpoint_own_trajectory_state_timesteps",
+    )
     for query in query_ids:
-        path = artifact_path(
-            args.experiment, args.train_seed, args.epochs, query, args.namespace
-        )
-        if not path.is_file():
-            raise FileNotFoundError(path)
+        path = geometry_artifact(args, query, required)
         with np.load(path, allow_pickle=False) as payload:
-            required = (
-                "checkpoint_own_trajectory_endpoints",
-                "checkpoint_own_trajectory_reference_endpoint",
-                "checkpoint_own_trajectory_states",
-                "checkpoint_own_trajectory_reference_states",
-                "checkpoint_own_trajectory_state_timesteps",
-            )
-            absent = [key for key in required if key not in payload]
-            if absent:
-                raise KeyError(f"{path}: missing {absent}")
             endpoints = np.asarray(
                 payload["checkpoint_own_trajectory_endpoints"], dtype=np.float64
             )
@@ -168,8 +193,8 @@ def main() -> None:
                     "state_closer_to_reference_than_endpoint_fraction": float(
                         np.mean(state_ref < endpoint_reference)
                     ),
-                    "state_reference_rmse_checkpoint_correlation": float(
-                        np.corrcoef(np.arange(len(state_ref)), state_ref)[0, 1]
+                    "state_reference_rmse_checkpoint_correlation": safe_correlation(
+                        np.arange(len(state_ref)), state_ref
                     ),
                 }
             )
@@ -189,10 +214,8 @@ def main() -> None:
                 "next_endpoint_rmse_improvement_mean": float(
                     np.mean(next_improvement)
                 ),
-                "endpoint_rmse_checkpoint_correlation": float(
-                    np.corrcoef(np.arange(len(endpoint_reference)), endpoint_reference)[
-                        0, 1
-                    ]
+                "endpoint_rmse_checkpoint_correlation": safe_correlation(
+                    np.arange(len(endpoint_reference)), endpoint_reference
                 ),
                 "trajectory_state_reference_rmse_mean": float(
                     np.mean(state_reference)
