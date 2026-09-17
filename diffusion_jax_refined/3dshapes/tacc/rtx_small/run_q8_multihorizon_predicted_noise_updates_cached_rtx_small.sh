@@ -22,10 +22,13 @@ source /scratch/11447/yangtan7447/miniforge3/etc/profile.d/conda.sh
 conda activate /scratch/11447/yangtan7447/conda-envs/trajectory-tracin
 export EXPERIMENT_TAG="${EXPERIMENT_TAG:-experiment1}"
 export TRAIN_SEED="${TRAIN_SEED:-42}"
+export SOURCE_CHECKPOINT_RUN_ID="${SOURCE_CHECKPOINT_RUN_ID:-3507876}"
 OUT_DIR="${SHAPES_ROOT}/result/${EXPERIMENT_TAG}/eval/q8_multihorizon_predicted_noise_updates/run_${SLURM_JOB_ID}"
+CHECKPOINT_DIR="${SHAPES_ROOT}/result/${EXPERIMENT_TAG}/eval/original_f_checkpoint_sign_crossfit_bad_queries/run_${SOURCE_CHECKPOINT_RUN_ID}"
 
 JAX_PLATFORMS=cpu python \
   "${SHAPES_ROOT}/script/analyze_q8_multihorizon_predicted_noise_updates.py" \
   --experiment "${EXPERIMENT_TAG}" --train-seed "${TRAIN_SEED}" \
   --query-id 8 --namespace predicted_noise_endpoint_x0_original12 \
-  --horizons 1,2,4 --out-dir "${OUT_DIR}"
+  --horizons 1,2,4 --variant query_train_l2 --method five_bins \
+  --checkpoint-crossfit-dir "${CHECKPOINT_DIR}" --out-dir "${OUT_DIR}"

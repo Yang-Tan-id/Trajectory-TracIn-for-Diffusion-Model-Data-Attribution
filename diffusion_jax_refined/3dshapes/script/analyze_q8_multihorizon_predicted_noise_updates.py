@@ -16,6 +16,7 @@ if str(SHAPES_ROOT) not in sys.path:
     sys.path.insert(0, str(SHAPES_ROOT))
 
 from analyze_predicted_noise_probe24_output_alignment import artifact_path, write_csv
+from analyze_q8_checkpoint_sign_predicted_noise_geometry import majority_signs
 
 
 def cosine_and_norm(left, right):
@@ -34,6 +35,9 @@ def summarize(rows, keys):
     output = []
     for values, group in sorted(groups.items()):
         cosines = np.asarray([row["successive_window_cosine"] for row in group])
+        oriented = np.asarray(
+            [row["flip_oriented_successive_window_cosine"] for row in group]
+        )
         first_norm = np.asarray([row["first_delta_norm"] for row in group])
         second_norm = np.asarray([row["second_delta_norm"] for row in group])
         result = {key: value for key, value in zip(keys, values)}
@@ -44,6 +48,10 @@ def summarize(rows, keys):
             positive_fraction=float(np.mean(cosines > 0.0)),
             opposite_fraction=float(np.mean(cosines < 0.0)),
             strongly_opposite_fraction=float(np.mean(cosines < -0.25)),
+            oriented_cosine_mean=float(np.mean(oriented)),
+            oriented_cosine_mean_abs=float(np.mean(np.abs(oriented))),
+            oriented_positive_fraction=float(np.mean(oriented > 0.0)),
+            oriented_opposite_fraction=float(np.mean(oriented < 0.0)),
             first_delta_norm_mean=float(np.mean(first_norm)),
             second_delta_norm_mean=float(np.mean(second_norm)),
             second_over_first_norm_mean=float(
@@ -62,8 +70,19 @@ def main():
     parser.add_argument("--query-id", type=int, default=8)
     parser.add_argument("--namespace", default="predicted_noise_endpoint_x0_original12")
     parser.add_argument("--horizons", default="1,2,4")
+    parser.add_argument("--variant", default="query_train_l2")
+    parser.add_argument("--method", default="five_bins")
+    parser.add_argument("--checkpoint-crossfit-dir", type=Path, required=True)
     parser.add_argument("--out-dir", type=Path, required=True)
     args = parser.parse_args()
+
+    signs, stability, split_count = majority_signs(
+        args.checkpoint_crossfit_dir / "per_split.csv",
+        args.query_id,
+        args.variant,
+        args.method,
+        "checkpoint",
+    )
 
     path = artifact_path(
         args.experiment, args.train_seed, args.epochs, args.query_id, args.namespace
@@ -84,6 +103,11 @@ def main():
         second = outputs[2 * horizon:] - outputs[horizon:-horizon]
         cosines, first_norm, second_norm = cosine_and_norm(first, second)
         for checkpoint in range(first.shape[0]):
+            first_sign = signs[checkpoint]
+            second_sign = signs[checkpoint + horizon]
+            sign_transition = ("+" if first_sign > 0 else "-") + (
+                "+" if second_sign > 0 else "-"
+            )
             for slot, timestep in enumerate(term_timesteps):
                 rows.append(
                     {
@@ -96,7 +120,15 @@ def main():
                         "middle_epoch": 4 * (checkpoint + horizon + 1),
                         "end_epoch": 4 * (checkpoint + 2 * horizon + 1),
                         "timestep": int(timestep),
+                        "first_flip_sign": first_sign,
+                        "second_flip_sign": second_sign,
+                        "flip_sign_transition": sign_transition,
+                        "first_flip_stability": stability[checkpoint],
+                        "second_flip_stability": stability[checkpoint + horizon],
                         "successive_window_cosine": float(cosines[checkpoint, slot]),
+                        "flip_oriented_successive_window_cosine": float(
+                            first_sign * second_sign * cosines[checkpoint, slot]
+                        ),
                         "first_delta_norm": float(first_norm[checkpoint, slot]),
                         "second_delta_norm": float(second_norm[checkpoint, slot]),
                     }
@@ -106,18 +138,44 @@ def main():
     write_csv(args.out_dir / "per_term.csv", rows)
     overall = summarize(rows, ["horizon"])
     by_timestep = summarize(rows, ["horizon", "timestep"])
+    by_first_sign = summarize(rows, ["horizon", "first_flip_sign"])
+    by_transition = summarize(rows, ["horizon", "flip_sign_transition"])
     write_csv(args.out_dir / "by_horizon.csv", overall)
     write_csv(args.out_dir / "by_horizon_and_timestep.csv", by_timestep)
+    write_csv(args.out_dir / "by_horizon_and_first_flip_sign.csv", by_first_sign)
+    write_csv(args.out_dir / "by_horizon_and_flip_transition.csv", by_transition)
 
-    print("Q8 MULTI-HORIZON PREDICTED-NOISE UPDATE STABILITY")
-    print("H TERMS  COS MEAN   |COS|   COS+  OPPOSITE COS<-0.25  NEXT/CURR NORM")
+    print(
+        "Q8 MULTI-HORIZON PREDICTED-NOISE UPDATE STABILITY; "
+        f"flip signs from {split_count} splits"
+    )
+    print("H TERMS  RAW COS  RAW+  ORIENT COS ORIENT+ OPPOSITE  NEXT/CURR NORM")
     for row in overall:
         print(
             f"{int(row['horizon']):1d} {int(row['terms']):5d} "
-            f"{row['cosine_mean']:+9.5f} {row['cosine_mean_abs']:8.5f} "
-            f"{row['positive_fraction']:6.3f} {row['opposite_fraction']:9.3f} "
-            f"{row['strongly_opposite_fraction']:9.3f} "
+            f"{row['cosine_mean']:+8.5f} {row['positive_fraction']:5.3f} "
+            f"{row['oriented_cosine_mean']:+10.5f} "
+            f"{row['oriented_positive_fraction']:7.3f} "
+            f"{row['oriented_opposite_fraction']:8.3f} "
             f"{row['second_over_first_norm_mean']:14.5f}"
+        )
+    print("\nBY HORIZON AND FIRST FLIP SIGN")
+    print("H SIGN TERMS RAW COS  ORIENT COS ORIENT+")
+    for row in by_first_sign:
+        print(
+            f"{int(row['horizon']):1d} {int(row['first_flip_sign']):+4d} "
+            f"{int(row['terms']):5d} {row['cosine_mean']:+8.5f} "
+            f"{row['oriented_cosine_mean']:+10.5f} "
+            f"{row['oriented_positive_fraction']:7.3f}"
+        )
+    print("\nBY HORIZON AND FLIP-SIGN TRANSITION")
+    print("H TRANS TERMS RAW COS  ORIENT COS ORIENT+")
+    for row in by_transition:
+        print(
+            f"{int(row['horizon']):1d} {row['flip_sign_transition']:>5s} "
+            f"{int(row['terms']):5d} {row['cosine_mean']:+8.5f} "
+            f"{row['oriented_cosine_mean']:+10.5f} "
+            f"{row['oriented_positive_fraction']:7.3f}"
         )
     print("\nBY TIMESTAMP")
     print("H    T TERMS  COS MEAN   |COS|   COS+  OPPOSITE")
