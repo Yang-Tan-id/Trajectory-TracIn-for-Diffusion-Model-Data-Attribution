@@ -118,12 +118,12 @@ def main():
                     "epoch": 4 * (int(checkpoints[checkpoint]) + 1),
                     "checkpoint_bin": min(checkpoint // 10 + 1, 5),
                     "flip_sign": int(signs[checkpoint]),
-                    "raw_endpoint_percent": 100.0 * float(raw[0][0]),
-                    "raw_trajectory_percent": 100.0 * float(raw[1][0]),
-                    "raw_joint_percent": 100.0 * float(raw[2][0]),
-                    "flipped_endpoint_percent": 100.0 * signs[checkpoint] * float(raw[0][0]),
-                    "flipped_trajectory_percent": 100.0 * signs[checkpoint] * float(raw[1][0]),
-                    "flipped_joint_percent": 100.0 * signs[checkpoint] * float(raw[2][0]),
+                    "raw_endpoint_percent": float(raw[0][0]),
+                    "raw_trajectory_percent": float(raw[1][0]),
+                    "raw_joint_percent": float(raw[2][0]),
+                    "flipped_endpoint_percent": signs[checkpoint] * float(raw[0][0]),
+                    "flipped_trajectory_percent": signs[checkpoint] * float(raw[1][0]),
+                    "flipped_joint_percent": signs[checkpoint] * float(raw[2][0]),
                 }
             )
 
@@ -164,7 +164,7 @@ def main():
             value = float(
                 lds(bin_prediction[heldout], endpoint[heldout], trajectory[heldout])[2][0]
             )
-            raw_values.append(100.0 * value)
+            raw_values.append(value)
         raw_values = np.asarray(raw_values)
         bin_rows.append(
             {
