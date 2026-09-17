@@ -3049,6 +3049,7 @@ def run_attribution(cfg: TrajAttributionConfig):
         probe_alignment_reference_direction_delta_norms = []
         probe_alignment_current_eps_outputs = []
         probe_alignment_final_eps_outputs = []
+        probe_alignment_next_delta_eps_outputs = []
         probe_alignment_current_reference_l2 = []
         probe_alignment_next_reference_l2 = []
         probe_alignment_current_reference_cosines = []
@@ -3661,6 +3662,16 @@ def run_attribution(cfg: TrajAttributionConfig):
                                     if probe_alignment_next_checkpoint
                                     else eps_chunk - adjacent_eps_chunk
                                 )
+                                if (
+                                    probe_alignment_collect_all_outputs
+                                    and probe_alignment_next_checkpoint
+                                ):
+                                    probe_alignment_next_delta_eps_outputs.append(
+                                        np.asarray(
+                                            jax.device_get(delta_eps_chunk),
+                                            dtype=np.float32,
+                                        )
+                                    )
 
                                 def alignment_values(output):
                                     output_dot = jnp.sum(
@@ -4844,6 +4855,9 @@ def run_attribution(cfg: TrajAttributionConfig):
                 current_outputs = np.concatenate(
                     probe_alignment_current_eps_outputs, axis=0
                 )
+                next_delta_outputs = np.concatenate(
+                    probe_alignment_next_delta_eps_outputs, axis=0
+                )
                 final_outputs = np.concatenate(
                     probe_alignment_final_eps_outputs, axis=0
                 )
@@ -4866,6 +4880,11 @@ def run_attribution(cfg: TrajAttributionConfig):
                     raise ValueError(
                         "future-mean current output shape mismatch: "
                         f"{current_outputs.shape} != {expected_current_shape}"
+                    )
+                if next_delta_outputs.shape != expected_current_shape:
+                    raise ValueError(
+                        "next-delta output shape mismatch: "
+                        f"{next_delta_outputs.shape} != {expected_current_shape}"
                     )
                 if final_outputs.shape[0] != snapshots_per_checkpoint:
                     raise ValueError(
@@ -4913,6 +4932,12 @@ def run_attribution(cfg: TrajAttributionConfig):
                     )
                 alignment_payload.update(
                     all_checkpoint_predicted_noise_outputs=all_outputs.astype(np.float32),
+                    checkpoint_next_predicted_noise_deltas=(
+                        next_delta_outputs.reshape(
+                            (len(ckpts) - 1, snapshots_per_checkpoint)
+                            + tuple(next_delta_outputs.shape[1:])
+                        ).astype(np.float32)
+                    ),
                     aligned_trajectory_xt=np.stack(
                         [trajectory_by_position[int(position)] for position in unique_positions],
                         axis=0,
