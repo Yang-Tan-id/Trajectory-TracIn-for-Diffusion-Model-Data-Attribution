@@ -5192,12 +5192,24 @@ def run_attribution(cfg: TrajAttributionConfig):
                     )
                 reference_states, reference_timesteps, _, own_trajectory_meta = precomputed_traj
                 reference_timesteps = np.asarray(reference_timesteps, dtype=np.int32)
-                if not np.array_equal(
-                    checkpoint_own_trajectory_timesteps, reference_timesteps
-                ):
+                reference_index_by_timestep = {
+                    int(timestep): index
+                    for index, timestep in enumerate(reference_timesteps)
+                }
+                missing_reference_timesteps = [
+                    int(timestep)
+                    for timestep in checkpoint_own_trajectory_timesteps
+                    if int(timestep) not in reference_index_by_timestep
+                ]
+                if missing_reference_timesteps:
                     raise ValueError(
-                        "checkpoint-own and reference trajectory timesteps differ"
+                        "reference trajectory is missing checkpoint-own timesteps: "
+                        f"{missing_reference_timesteps}"
                     )
+                matched_reference_states = [
+                    reference_states[reference_index_by_timestep[int(timestep)]]
+                    for timestep in checkpoint_own_trajectory_timesteps
+                ]
                 reference_endpoint_path = os.path.join(
                     str(own_trajectory_meta.get("seed_dir", "")), "final_state.npy"
                 )
@@ -5227,7 +5239,11 @@ def run_attribution(cfg: TrajAttributionConfig):
                         checkpoint_own_trajectory_states, axis=0
                     ).astype(np.float32),
                     checkpoint_own_trajectory_reference_states=np.stack(
-                        [np.asarray(x, dtype=np.float32) for x in reference_states], axis=0
+                        [
+                            np.asarray(x, dtype=np.float32)
+                            for x in matched_reference_states
+                        ],
+                        axis=0,
                     ),
                     checkpoint_own_trajectory_state_timesteps=np.asarray(
                         checkpoint_own_trajectory_timesteps, dtype=np.int32
