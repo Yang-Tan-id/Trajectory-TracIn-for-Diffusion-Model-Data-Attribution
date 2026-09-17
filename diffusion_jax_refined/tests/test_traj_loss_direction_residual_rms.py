@@ -237,6 +237,11 @@ class LossDirectionResidualRmsTest(unittest.TestCase):
 
         self.assertIn('payload.get(', analyzer)
         self.assertIn('"raw_projected_expected_loss_gradient"', analyzer)
+        self.assertIn("[components saved]", analyzer)
+        self.assertNotIn(
+            "load_target_data(cache_group(eval_root), score_indices, targets=TARGETS)",
+            analyzer,
+        )
         self.assertIn("--train-namespace traj_tracin", launcher)
         self.assertIn(
             "--train-feature-semantics raw_projected_expected_loss_gradient",

@@ -66,7 +66,41 @@ def target_data(args, query_id: int, score_indices: np.ndarray):
         / f"query_{_prompt_tag(str(record['prompt']))}"
         / f"initial_seed_{int(record['initial_seed'])}"
     )
-    return load_target_data(cache_group(eval_root), score_indices, targets=TARGETS)
+    incidence, true_values = load_target_data(cache_group(eval_root), score_indices)
+    return incidence, {target: true_values[target] for target in TARGETS}
+
+
+def save_components(
+    path: Path,
+    components: dict[str, np.ndarray],
+    query_ids: list[int],
+    timesteps: np.ndarray,
+    score_indices: np.ndarray,
+) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    np.savez_compressed(
+        path,
+        query_ids=np.asarray(query_ids, dtype=np.int32),
+        timesteps=timesteps,
+        score_indices=score_indices,
+        **components,
+    )
+
+
+def load_saved_components(path: Path, query_ids: list[int]):
+    with np.load(path, allow_pickle=False) as payload:
+        saved_query_ids = np.asarray(payload["query_ids"], dtype=np.int32)
+        if not np.array_equal(saved_query_ids, np.asarray(query_ids, dtype=np.int32)):
+            raise ValueError(
+                f"{path}: query IDs {saved_query_ids.tolist()} do not match {query_ids}"
+            )
+        timesteps = np.asarray(payload["timesteps"], dtype=np.int32)
+        score_indices = np.asarray(payload["score_indices"], dtype=np.int64)
+        components = {
+            variant: np.asarray(payload[variant], dtype=np.float64)
+            for variant in VARIANTS
+        }
+    return components, timesteps, score_indices
 
 
 def load_streamed_components(args, query_ids: list[int]):
@@ -214,10 +248,23 @@ def main() -> None:
     args.shard_index = 0
     args.run_id = "timestamp_crossfit"
 
-    if args.component_dir is not None:
+    component_cache = args.out_dir / "timestamp_components.npz"
+    if component_cache.is_file():
+        print(f"[reuse] timestamp components: {component_cache}", flush=True)
+        components, timesteps, score_indices = load_saved_components(
+            component_cache, query_ids
+        )
+    elif args.component_dir is not None:
         components, timesteps, score_indices = load_streamed_components(args, query_ids)
+        save_components(
+            component_cache, components, query_ids, timesteps, score_indices
+        )
     else:
         components, timesteps, score_indices = build_components(args, query_ids)
+        save_components(
+            component_cache, components, query_ids, timesteps, score_indices
+        )
+    print(f"[components saved] {component_cache}", flush=True)
     signs = sign_matrix(len(timesteps)).astype(np.int8)
     summary_rows = []
     split_rows = []
@@ -314,13 +361,6 @@ def main() -> None:
 
     write_csv(args.out_dir / "summary.csv", summary_rows)
     write_csv(args.out_dir / "per_split.csv", split_rows)
-    np.savez_compressed(
-        args.out_dir / "timestamp_components.npz",
-        query_ids=np.asarray(query_ids),
-        timesteps=timesteps,
-        score_indices=score_indices,
-        **components,
-    )
     print(f"[saved] {args.out_dir}")
 
 
