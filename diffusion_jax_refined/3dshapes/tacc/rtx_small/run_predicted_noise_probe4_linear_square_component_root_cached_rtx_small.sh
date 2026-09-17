@@ -65,12 +65,16 @@ run_contraction() {
     --expected-query-probe-mode independent_gaussian
 }
 
-echo "[phase 1/4] linear: mean_r(z_r) per checkpoint/timestamp"
-run_contraction signed linear
-echo "[phase 2/4] square: mean_r(z_r^2) per checkpoint/timestamp"
-run_contraction squared square
-echo "[phase 3/4] component root of square: mean_r(sqrt(z_r^2))=mean_r(abs(z_r))"
-run_contraction absolute component_root
+if [[ "${EVAL_ONLY:-0}" != "1" ]]; then
+  echo "[phase 1/4] linear: mean_r(z_r) per checkpoint/timestamp"
+  run_contraction signed linear
+  echo "[phase 2/4] square: mean_r(z_r^2) per checkpoint/timestamp"
+  run_contraction squared square
+  echo "[phase 3/4] component root of square: mean_r(sqrt(z_r^2))=mean_r(abs(z_r))"
+  run_contraction absolute component_root
+else
+  echo "[reuse] EVAL_ONLY=1; using the three already-merged cached scores"
+fi
 
 echo "[phase 4/4] cached LDS for both global orientations"
 SCHEMES="predicted_noise_jvp_signed_probe4,predicted_noise_jvp_l2_squared_probe4,predicted_noise_jvp_absolute_probe4"
