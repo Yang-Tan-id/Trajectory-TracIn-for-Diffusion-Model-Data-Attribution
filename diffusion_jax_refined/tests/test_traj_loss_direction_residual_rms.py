@@ -37,6 +37,13 @@ ORIGINAL_F_FOUR_NORM_PIPELINE = (
     / "rtx_small"
     / "run_loss_direction_residual_rms_original_f_four_norm_q0_rtx_small.sh"
 )
+ORIGINAL_F_TIMESTAMP_CROSSFIT = (
+    ROOT
+    / "3dshapes"
+    / "tacc"
+    / "rtx_small"
+    / "run_original_f_timestamp_sign_crossfit_bad_queries_rtx_small.sh"
+)
 F_NEXT_SQUARED_PIPELINE = (
     ROOT
     / "3dshapes"
@@ -218,6 +225,20 @@ class LossDirectionResidualRmsTest(unittest.TestCase):
         self.assertIn("--score-variants train_l2,query_train_l2", launcher)
         self.assertIn("--query-ids 0", launcher)
         self.assertIn("loss_direction_residual_rms_original_f", launcher)
+
+    def test_original_f_timestamp_crossfit_streams_without_train_parts(self) -> None:
+        algorithm = ALGORITHM.read_text()
+        launcher = ORIGINAL_F_TIMESTAMP_CROSSFIT.read_text()
+
+        self.assertIn("TRAJ_TRACIN_RESIDUAL_RMS_STREAM_QUERY_ARTIFACTS", algorithm)
+        self.assertIn("residual_rms_stream_components", algorithm)
+        self.assertIn("accumulated residual-RMS score components", algorithm)
+        self.assertIn("--component-dir", launcher)
+        self.assertIn("streamed_components", launcher)
+        self.assertNotIn(
+            "run_traj_tracin_loss_direction_residual_rms_train_rtx_small.sh",
+            launcher,
+        )
 
     def test_original_train_f_next_squared_score_is_score_only(self) -> None:
         scorer = SCORER.read_text()

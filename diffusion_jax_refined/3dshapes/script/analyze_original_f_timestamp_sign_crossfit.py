@@ -69,6 +69,47 @@ def target_data(args, query_id: int, score_indices: np.ndarray):
     return load_target_data(cache_group(eval_root), score_indices, targets=TARGETS)
 
 
+def load_streamed_components(args, query_ids: list[int]):
+    paths = sorted(args.component_dir.glob("components.shard_*.npz"))
+    if len(paths) != args.shard_count:
+        raise FileNotFoundError(
+            f"expected {args.shard_count} component shards under {args.component_dir}, "
+            f"found {len(paths)}"
+        )
+    components = None
+    timesteps = None
+    score_indices = None
+    terms = 0
+    for path in paths:
+        with np.load(path, allow_pickle=False) as payload:
+            part_timesteps = np.asarray(payload["timesteps"], dtype=np.int32)
+            part_indices = np.asarray(payload["score_indices"], dtype=np.int64)
+            part_components = {
+                variant: np.asarray(payload[variant], dtype=np.float64)
+                for variant in VARIANTS
+            }
+            terms += int(np.asarray(payload["terms"]).item())
+        if components is None:
+            components = part_components
+            timesteps = part_timesteps
+            score_indices = part_indices
+        else:
+            if not np.array_equal(timesteps, part_timesteps):
+                raise ValueError(f"timestep mismatch: {path}")
+            if not np.array_equal(score_indices, part_indices):
+                raise ValueError(f"score-index mismatch: {path}")
+            for variant in VARIANTS:
+                components[variant] += part_components[variant]
+    if terms != 490:
+        raise ValueError(f"expected 490 streamed original-f terms, found {terms}")
+    assert components is not None and timesteps is not None and score_indices is not None
+    expected = (len(query_ids), len(timesteps), len(score_indices))
+    for variant, values in components.items():
+        if values.shape != expected:
+            raise ValueError(f"{variant}: expected {expected}, got {values.shape}")
+    return components, timesteps, score_indices
+
+
 def build_components(args, query_ids: list[int]):
     import jax
     import jax.numpy as jnp
@@ -158,14 +199,18 @@ def main() -> None:
         default="unit_projected_expected_loss_gradient_times_matching_mc_residual_rms",
     )
     parser.add_argument("--out-dir", type=Path, required=True)
+    parser.add_argument("--component-dir", type=Path)
+    parser.add_argument("--shard-count", type=int, default=2)
     args = parser.parse_args()
     query_ids = parse_ints(args.query_ids)
     args.skip_predicted = True
     args.shard_index = 0
-    args.shard_count = 1
     args.run_id = "timestamp_crossfit"
 
-    components, timesteps, score_indices = build_components(args, query_ids)
+    if args.component_dir is not None:
+        components, timesteps, score_indices = load_streamed_components(args, query_ids)
+    else:
+        components, timesteps, score_indices = build_components(args, query_ids)
     signs = sign_matrix(len(timesteps)).astype(np.int8)
     summary_rows = []
     split_rows = []

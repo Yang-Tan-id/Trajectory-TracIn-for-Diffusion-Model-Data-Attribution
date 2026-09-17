@@ -3051,6 +3051,26 @@ def run_attribution(cfg: TrajAttributionConfig):
         reuse_gradient_residual_rms = os.environ.get(
             "TRAJ_TRACIN_TRAIN_REUSE_GRADIENT_RESIDUAL_RMS", "0"
         ).strip().lower() in ("1", "true", "yes", "on")
+        residual_rms_stream_query_artifacts = [
+            value
+            for value in os.environ.get(
+                "TRAJ_TRACIN_RESIDUAL_RMS_STREAM_QUERY_ARTIFACTS", ""
+            ).split(os.pathsep)
+            if value
+        ]
+        residual_rms_stream_output = os.environ.get(
+            "TRAJ_TRACIN_RESIDUAL_RMS_STREAM_OUTPUT", ""
+        )
+        residual_rms_stream = bool(residual_rms_stream_query_artifacts)
+        if residual_rms_stream and not reuse_gradient_residual_rms:
+            raise ValueError(
+                "TRAJ_TRACIN_RESIDUAL_RMS_STREAM_QUERY_ARTIFACTS requires "
+                "TRAJ_TRACIN_TRAIN_REUSE_GRADIENT_RESIDUAL_RMS=1."
+            )
+        if residual_rms_stream and not residual_rms_stream_output:
+            raise ValueError(
+                "TRAJ_TRACIN_RESIDUAL_RMS_STREAM_OUTPUT is required in streaming mode."
+            )
         if decompose_residual_jacobian and reuse_gradient_residual_rms:
             raise ValueError(
                 "TRAJ_TRACIN_TRAIN_DECOMPOSE_RESIDUAL_JACOBIAN and "
@@ -3080,7 +3100,112 @@ def run_attribution(cfg: TrajAttributionConfig):
         if exclude_final_train_checkpoint:
             stage_checkpoint_count -= 1
 
+        residual_rms_stream_queries = None
+        residual_rms_stream_query_norms = None
+        residual_rms_stream_lookup = None
+        residual_rms_stream_components = None
+        residual_rms_stream_timesteps = None
+        residual_rms_stream_score_indices = None
+        residual_rms_stream_terms = 0
+        residual_rms_stream_completed_ckpts = []
+        residual_rms_stream_shard_output = None
+        if residual_rms_stream:
+            query_features = []
+            reference_ckpts = None
+            reference_timesteps = None
+            for query_path in residual_rms_stream_query_artifacts:
+                with np.load(query_path, allow_pickle=False) as query_payload:
+                    features = np.asarray(query_payload["query_features"], dtype=np.float32)
+                    query_ckpts = np.asarray(query_payload["ckpt_indices"], dtype=np.int32)
+                    query_timesteps = np.asarray(query_payload["timesteps"], dtype=np.int32)
+                if features.ndim != 2 or features.shape[1] != proj_dim:
+                    raise ValueError(
+                        f"{query_path}: expected query_features (*,{proj_dim}), got {features.shape}"
+                    )
+                if reference_ckpts is None:
+                    reference_ckpts = query_ckpts
+                    reference_timesteps = query_timesteps
+                elif not (
+                    np.array_equal(reference_ckpts, query_ckpts)
+                    and np.array_equal(reference_timesteps, query_timesteps)
+                ):
+                    raise ValueError(f"streaming query metadata mismatch: {query_path}")
+                query_features.append(features)
+            residual_rms_stream_queries = np.stack(query_features, axis=0)
+            residual_rms_stream_query_norms = np.linalg.norm(
+                residual_rms_stream_queries, axis=2
+            )
+            residual_rms_stream_lookup = {
+                (int(ckpt), int(timestep)): term
+                for term, (ckpt, timestep) in enumerate(
+                    zip(reference_ckpts, reference_timesteps)
+                )
+            }
+            residual_rms_stream_timesteps = np.asarray(
+                list(dict.fromkeys(int(value) for value in reference_timesteps)),
+                dtype=np.int32,
+            )
+            residual_rms_stream_components = {
+                variant: np.zeros(
+                    (
+                        len(query_features),
+                        len(residual_rms_stream_timesteps),
+                        len(picked),
+                    ),
+                    dtype=np.float64,
+                )
+                for variant in ("raw", "query_l2", "train_l2", "query_train_l2")
+            }
+            residual_rms_stream_shard_output = (
+                f"{residual_rms_stream_output}.shard_{ckpt_shard_index:02d}.npz"
+            )
+            if os.path.isfile(residual_rms_stream_shard_output):
+                with np.load(residual_rms_stream_shard_output, allow_pickle=False) as saved:
+                    for variant in residual_rms_stream_components:
+                        restored = np.asarray(saved[variant], dtype=np.float64)
+                        if restored.shape != residual_rms_stream_components[variant].shape:
+                            raise ValueError(
+                                f"{residual_rms_stream_shard_output}: {variant} shape "
+                                f"{restored.shape} does not match "
+                                f"{residual_rms_stream_components[variant].shape}"
+                            )
+                        residual_rms_stream_components[variant][...] = restored
+                    residual_rms_stream_score_indices = np.asarray(
+                        saved["score_indices"], dtype=np.int64
+                    )
+                    residual_rms_stream_terms = int(np.asarray(saved["terms"]).item())
+                    residual_rms_stream_completed_ckpts = list(
+                        np.asarray(saved["completed_ckpts"], dtype=np.int32)
+                    )
+                print(
+                    "[stage:train] resumed residual-RMS streaming shard | "
+                    f"checkpoints={len(residual_rms_stream_completed_ckpts)} "
+                    f"terms={residual_rms_stream_terms}",
+                    flush=True,
+                )
+            print(
+                "[stage:train] residual-RMS streaming score mode | "
+                f"queries={len(query_features)} output={residual_rms_stream_output}",
+                flush=True,
+            )
+
         for ckpt_i, ckpt_path in enumerate(ckpts):
+            if residual_rms_stream:
+                assert residual_rms_stream_lookup is not None
+                if ckpt_i in residual_rms_stream_completed_ckpts:
+                    print(
+                        f"[stage:train] streaming skip completed checkpoint "
+                        f"{ckpt_i + 1}/{len(ckpts)}",
+                        flush=True,
+                    )
+                    continue
+                if not any(key[0] == ckpt_i for key in residual_rms_stream_lookup):
+                    print(
+                        f"[stage:train] streaming skip checkpoint {ckpt_i + 1}/{len(ckpts)} "
+                        "with no matching query terms",
+                        flush=True,
+                    )
+                    continue
             if exclude_final_train_checkpoint and ckpt_i + 1 >= len(ckpts):
                 print(
                     f"[stage:{stage_mode}] skipping final checkpoint "
@@ -3120,7 +3245,7 @@ def run_attribution(cfg: TrajAttributionConfig):
                 continue
             stage_part_path = (
                 os.path.join(stage_part_dir, f"ckpt_{ckpt_i:04d}.npz")
-                if stage_part_dir is not None
+                if stage_part_dir is not None and not residual_rms_stream
                 else None
             )
             if stage_part_path is not None and os.path.isfile(stage_part_path):
@@ -3874,36 +3999,105 @@ def run_attribution(cfg: TrajAttributionConfig):
                                     flush=True,
                                 )
 
-                    if stage_part_path is None:
-                        raise RuntimeError(
-                            "Residual-RMS gradient reuse mode requires checkpoint-part output."
+                    if residual_rms_stream:
+                        assert residual_rms_stream_queries is not None
+                        assert residual_rms_stream_query_norms is not None
+                        assert residual_rms_stream_lookup is not None
+                        assert residual_rms_stream_components is not None
+                        assert residual_rms_stream_timesteps is not None
+                        timestep_slots = {
+                            int(value): slot
+                            for slot, value in enumerate(residual_rms_stream_timesteps)
+                        }
+                        train_norms = np.linalg.norm(transformed_features, axis=2)
+                        for snap_id, timestep in enumerate(source_timesteps):
+                            query_term = residual_rms_stream_lookup.get(
+                                (int(ckpt_i), int(timestep))
+                            )
+                            if query_term is None:
+                                continue
+                            train_term = transformed_features[snap_id]
+                            query_term_features = residual_rms_stream_queries[:, query_term]
+                            dots = train_term @ query_term_features.T
+                            query_norms = residual_rms_stream_query_norms[:, query_term]
+                            train_term_norms = train_norms[snap_id]
+                            slot = timestep_slots[int(timestep)]
+                            weight = float(source_weights[snap_id])
+                            residual_rms_stream_components["raw"][:, slot] += weight * dots.T
+                            residual_rms_stream_components["query_l2"][:, slot] += (
+                                weight * (dots / np.maximum(query_norms[None, :], normalization_eps)).T
+                            )
+                            residual_rms_stream_components["train_l2"][:, slot] += (
+                                weight * (dots / np.maximum(train_term_norms[:, None], normalization_eps)).T
+                            )
+                            residual_rms_stream_components["query_train_l2"][:, slot] += (
+                                weight
+                                * (
+                                    dots
+                                    / (
+                                        np.maximum(train_term_norms[:, None], normalization_eps)
+                                        * np.maximum(query_norms[None, :], normalization_eps)
+                                    )
+                                ).T
+                            )
+                            residual_rms_stream_terms += 1
+                        if residual_rms_stream_score_indices is None:
+                            residual_rms_stream_score_indices = source_indices
+                        elif not np.array_equal(
+                            residual_rms_stream_score_indices, source_indices
+                        ):
+                            raise ValueError("streaming score_indices mismatch")
+                        print(
+                            f"[stage:train] accumulated residual-RMS score components "
+                            f"checkpoint={ckpt_i + 1}/{len(ckpts)} terms={residual_rms_stream_terms}",
+                            flush=True,
                         )
-                    save_npz_compressed_atomic(
-                        stage_part_path,
-                        train_features=transformed_features,
-                        residual_rms=residual_rms_terms,
-                        source_gradient_norms=np.linalg.norm(
-                            source_features, axis=2
-                        ).astype(np.float32),
-                        score_indices=source_indices,
-                        ckpt_indices=source_ckpt_indices,
-                        timesteps=source_timesteps,
-                        snapshot_positions=source_positions,
-                        term_weights=source_weights,
-                        ckpt_paths=source_paths,
-                        proj_dim=np.asarray(proj_dim, dtype=np.int32),
-                        train_mc_samples=np.asarray(cfg.train_mc_samples, dtype=np.int32),
-                        normalization_eps=np.asarray(normalization_eps, dtype=np.float32),
-                        train_feature_semantics=np.asarray(
-                            "unit_projected_expected_loss_gradient_times_matching_mc_residual_rms"
-                        ),
-                        source_train_artifact=np.asarray(str(source_artifact)),
-                    )
-                    print(
-                        f"[stage:train] saved residual-RMS normalized checkpoint part "
-                        f"{ckpt_i + 1}/{len(ckpts)}: {stage_part_path}",
-                        flush=True,
-                    )
+                        residual_rms_stream_completed_ckpts.append(ckpt_i)
+                        assert residual_rms_stream_shard_output is not None
+                        save_npz_compressed_atomic(
+                            residual_rms_stream_shard_output,
+                            **residual_rms_stream_components,
+                            query_artifacts=np.asarray(residual_rms_stream_query_artifacts),
+                            timesteps=residual_rms_stream_timesteps,
+                            score_indices=residual_rms_stream_score_indices,
+                            terms=np.asarray(residual_rms_stream_terms, dtype=np.int32),
+                            completed_ckpts=np.asarray(
+                                residual_rms_stream_completed_ckpts, dtype=np.int32
+                            ),
+                            shard_index=np.asarray(ckpt_shard_index, dtype=np.int32),
+                            shard_count=np.asarray(ckpt_shard_count, dtype=np.int32),
+                        )
+                    else:
+                        if stage_part_path is None:
+                            raise RuntimeError(
+                                "Residual-RMS gradient reuse mode requires checkpoint-part output."
+                            )
+                        save_npz_compressed_atomic(
+                            stage_part_path,
+                            train_features=transformed_features,
+                            residual_rms=residual_rms_terms,
+                            source_gradient_norms=np.linalg.norm(
+                                source_features, axis=2
+                            ).astype(np.float32),
+                            score_indices=source_indices,
+                            ckpt_indices=source_ckpt_indices,
+                            timesteps=source_timesteps,
+                            snapshot_positions=source_positions,
+                            term_weights=source_weights,
+                            ckpt_paths=source_paths,
+                            proj_dim=np.asarray(proj_dim, dtype=np.int32),
+                            train_mc_samples=np.asarray(cfg.train_mc_samples, dtype=np.int32),
+                            normalization_eps=np.asarray(normalization_eps, dtype=np.float32),
+                            train_feature_semantics=np.asarray(
+                                "unit_projected_expected_loss_gradient_times_matching_mc_residual_rms"
+                            ),
+                            source_train_artifact=np.asarray(str(source_artifact)),
+                        )
+                        print(
+                            f"[stage:train] saved residual-RMS normalized checkpoint part "
+                            f"{ckpt_i + 1}/{len(ckpts)}: {stage_part_path}",
+                            flush=True,
+                        )
                     used_ckpts_for_stage.append(ckpt_path)
                     print(
                         f"[stage:{stage_mode}] checkpoint {ckpt_i + 1}/{len(ckpts)} done | "
@@ -4440,6 +4634,17 @@ def run_attribution(cfg: TrajAttributionConfig):
                 f"total_elapsed={format_seconds(time.time() - stage_start_time)}",
                 flush=True,
             )
+
+        if residual_rms_stream:
+            if residual_rms_stream_score_indices is None:
+                raise RuntimeError("Residual-RMS streaming selected no checkpoints")
+            assert residual_rms_stream_shard_output is not None
+            print(
+                f"[stage:train] completed streaming component shard: "
+                f"{residual_rms_stream_shard_output}",
+                flush=True,
+            )
+            return
 
         if stage_mode == "train" and stage_part_dir is not None:
             if skip_stage_merge:
