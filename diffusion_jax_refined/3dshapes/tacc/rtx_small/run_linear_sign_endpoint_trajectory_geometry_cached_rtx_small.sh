@@ -23,10 +23,10 @@ conda activate /scratch/11447/yangtan7447/conda-envs/trajectory-tracin
 export PYTHONUNBUFFERED=1
 export EXPERIMENT_TAG="${EXPERIMENT_TAG:-experiment1}"
 export TRAIN_SEED="${TRAIN_SEED:-42}"
-export SOURCE_SQUARE_RUN_ID="${SOURCE_SQUARE_RUN_ID:-3509068}"
+export SOURCE_SCORE_RUN_ID="${SOURCE_SCORE_RUN_ID:-${SOURCE_SQUARE_RUN_ID:-3509662}}"
 export SCORE_VARIANT="${SCORE_VARIANT:-query_l2}"
 
-SCORE_RESULTS="${SHAPES_ROOT}/result/${EXPERIMENT_TAG}/eval/q_all_own_trajectory_linear_guided_square/run_${SOURCE_SQUARE_RUN_ID}/linear_square_root_results.csv"
+SCORE_RESULTS="${SHAPES_ROOT}/result/${EXPERIMENT_TAG}/eval/all_query_own_trajectory_linear_square_root/run_${SOURCE_SCORE_RUN_ID}/linear_square_root_results.csv"
 OUT_DIR="${SHAPES_ROOT}/result/${EXPERIMENT_TAG}/eval/linear_${SCORE_VARIANT}_sign_endpoint_trajectory_geometry/run_${SLURM_JOB_ID}"
 
 JAX_PLATFORMS=cpu python \
