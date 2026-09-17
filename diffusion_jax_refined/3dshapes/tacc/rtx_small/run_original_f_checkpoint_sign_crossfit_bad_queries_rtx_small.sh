@@ -24,14 +24,15 @@ conda activate /scratch/11447/yangtan7447/conda-envs/trajectory-tracin
 export PYTHONUNBUFFERED=1
 export EXPERIMENT_TAG="${EXPERIMENT_TAG:-experiment1}"
 export TRAIN_SEED="${TRAIN_SEED:-42}"
+export QUERY_IDS="${QUERY_IDS:-1,3,4,8}"
 
 OUT_DIR="${SHAPES_ROOT}/result/${EXPERIMENT_TAG}/eval/original_f_checkpoint_sign_crossfit_bad_queries/run_${SLURM_JOB_ID}"
-echo "[cached] build 49 checkpoint components, then structured and individual-sign crossfit"
+echo "[cached] Q=${QUERY_IDS}; build 49 checkpoint components, then structured and individual-sign crossfit"
 CUDA_VISIBLE_DEVICES=0 JAX_NUM_DEVICES=1 JAX_PLATFORMS=cuda python \
   "${SHAPES_ROOT}/script/analyze_original_f_checkpoint_sign_crossfit.py" \
   --experiment "${EXPERIMENT_TAG}" \
   --train-seed "${TRAIN_SEED}" \
-  --query-ids 1,3,4,8 \
+  --query-ids "${QUERY_IDS}" \
   --repeats 20 \
   --random-seed 20260916 \
   --out-dir "${OUT_DIR}"

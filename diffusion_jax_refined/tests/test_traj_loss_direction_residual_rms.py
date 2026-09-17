@@ -278,6 +278,8 @@ class LossDirectionResidualRmsTest(unittest.TestCase):
         self.assertIn("crossfit_beat_global_fraction", analyzer)
         self.assertIn("checkpoint_components.npz", analyzer)
         self.assertIn("[cached]", launcher)
+        self.assertIn('QUERY_IDS="${QUERY_IDS:-1,3,4,8}"', launcher)
+        self.assertIn('--query-ids "${QUERY_IDS}"', launcher)
         self.assertNotIn("01_train_datapoint_gradient.py", launcher)
 
     def test_original_train_f_next_squared_score_is_score_only(self) -> None:
