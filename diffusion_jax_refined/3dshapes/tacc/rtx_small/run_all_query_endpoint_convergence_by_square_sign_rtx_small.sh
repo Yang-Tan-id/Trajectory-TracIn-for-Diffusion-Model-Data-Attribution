@@ -28,18 +28,22 @@ export TRAIN_SEED="${TRAIN_SEED:-42}"
 export JAX_EPOCHS="${JAX_EPOCHS:-200}"
 export SOURCE_SQUARE_RUN_ID="${SOURCE_SQUARE_RUN_ID:?set SOURCE_SQUARE_RUN_ID}"
 export TRAJ_QUERY_USE_CHECKPOINT_OWN_TRAJECTORY=1
-NAMESPACE="loss_direction_original_f_checkpoint_own_trajectory_endpoints_all10"
+NAMESPACE="${NAMESPACE:-loss_direction_original_f_checkpoint_own_trajectory_endpoints_all10}"
 QUERY_IDS="0,1,2,3,4,5,6,7,8,9"
 OUT_DIR="${SHAPES_ROOT}/result/${EXPERIMENT_TAG}/eval/all_query_endpoint_convergence_by_square_sign/run_${SLURM_JOB_ID}"
 SQUARE_RESULTS="${SHAPES_ROOT}/result/${EXPERIMENT_TAG}/eval/q_all_own_trajectory_linear_guided_square/run_${SOURCE_SQUARE_RUN_ID}/results.csv"
 
-echo "[phase 1/2] regenerate all ten checkpoint-own trajectories and persist endpoints"
-python "${SHAPES_ROOT}/script/run_traj_tracin_queries_and_scores.py" \
-  --execute --experiment "${EXPERIMENT_TAG}" --train-seed "${TRAIN_SEED}" \
-  --epochs "${JAX_EPOCHS}" --query-ids "${QUERY_IDS}" --gpus 0 \
-  --skip-sampling --skip-score --artifact-namespace "${NAMESPACE}" \
-  --query-objective trajectory_next_checkpoint_noise_mse \
-  --num-snapshots 10 --log-prefix qall_ownend
+if [[ "${ANALYZE_ONLY:-0}" != "1" ]]; then
+  echo "[phase 1/2] regenerate all ten checkpoint-own trajectories and persist endpoints"
+  python "${SHAPES_ROOT}/script/run_traj_tracin_queries_and_scores.py" \
+    --execute --experiment "${EXPERIMENT_TAG}" --train-seed "${TRAIN_SEED}" \
+    --epochs "${JAX_EPOCHS}" --query-ids "${QUERY_IDS}" --gpus 0 \
+    --skip-sampling --skip-score --artifact-namespace "${NAMESPACE}" \
+    --query-objective trajectory_next_checkpoint_noise_mse \
+    --num-snapshots 10 --log-prefix qall_ownend
+else
+  echo "[reuse] ANALYZE_ONLY=1; using stored checkpoint-own endpoints from ${NAMESPACE}"
+fi
 
 unset TRAJ_QUERY_USE_CHECKPOINT_OWN_TRAJECTORY
 
