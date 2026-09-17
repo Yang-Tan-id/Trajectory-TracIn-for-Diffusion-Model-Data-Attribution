@@ -250,6 +250,8 @@ class LossDirectionResidualRmsTest(unittest.TestCase):
             analyzer,
         )
         self.assertIn("--train-namespace traj_tracin", launcher)
+        self.assertIn('QUERY_IDS="${QUERY_IDS:-1,3,4,8}"', launcher)
+        self.assertIn('--query-ids "${QUERY_IDS}"', launcher)
         self.assertIn(
             "--train-feature-semantics raw_projected_expected_loss_gradient",
             launcher,

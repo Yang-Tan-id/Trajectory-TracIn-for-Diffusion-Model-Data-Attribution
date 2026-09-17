@@ -25,6 +25,7 @@ export PYTHONUNBUFFERED=1
 export EXPERIMENT_TAG="${EXPERIMENT_TAG:-experiment1}"
 export TRAIN_SEED="${TRAIN_SEED:-42}"
 export JAX_EPOCHS="${JAX_EPOCHS:-200}"
+export QUERY_IDS="${QUERY_IDS:-1,3,4,8}"
 
 OUT_DIR="${SHAPES_ROOT}/result/${EXPERIMENT_TAG}/eval/original_f_timestamp_sign_crossfit_bad_queries/run_${SLURM_JOB_ID}"
 mkdir -p "${OUT_DIR}"
@@ -40,12 +41,12 @@ if [[ "${source_count}" != "50" ]]; then
   echo "Expected 50 source projected-gradient parts, found ${source_count}: ${SOURCE_PART_DIR}" >&2
   exit 1
 fi
-echo "[cached] direct-loss train gradients; no residual-RMS forward passes"
+echo "[cached] Q=${QUERY_IDS}; direct-loss train gradients; no residual-RMS forward passes"
 CUDA_VISIBLE_DEVICES=0 JAX_NUM_DEVICES=1 JAX_PLATFORMS=cuda python \
   "${SHAPES_ROOT}/script/analyze_original_f_timestamp_sign_crossfit.py" \
   --experiment "${EXPERIMENT_TAG}" \
   --train-seed "${TRAIN_SEED}" \
-  --query-ids 1,3,4,8 \
+  --query-ids "${QUERY_IDS}" \
   --train-namespace traj_tracin \
   --train-feature-semantics raw_projected_expected_loss_gradient \
   --repeats 20 \
