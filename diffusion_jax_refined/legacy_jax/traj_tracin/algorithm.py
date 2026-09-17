@@ -56,6 +56,20 @@ def predicted_noise_probe_key(
     return key
 
 
+def timestamp_shared_predicted_noise_probe_key(
+    seed: int,
+    timestep: int,
+    probe_index: int = 0,
+):
+    """One probe per timestep, shared across queries and checkpoints."""
+    key = jax.random.PRNGKey(seed)
+    for value in (0x54535042, timestep):
+        key = jax.random.fold_in(key, int(value))
+    if probe_index:
+        key = jax.random.fold_in(key, int(probe_index))
+    return key
+
+
 def shared_orthogonal_predicted_noise_probes(
     seed: int,
     output_shape: Sequence[int],
@@ -2126,11 +2140,13 @@ def run_attribution(cfg: TrajAttributionConfig):
     )
     if predicted_noise_probe_mode not in (
         "independent_gaussian",
+        "timestamp_shared_gaussian",
         "shared_orthogonal",
         "shared_orthogonal_extended",
     ):
         raise ValueError(
             "predicted_noise_probe_mode must be 'independent_gaussian', "
+            "'timestamp_shared_gaussian', "
             "'shared_orthogonal', or 'shared_orthogonal_extended', got "
             f"{cfg.predicted_noise_probe_mode!r}"
         )
@@ -3919,7 +3935,14 @@ def run_attribution(cfg: TrajAttributionConfig):
                             probe_keys = array_to_device(
                                 jnp.stack(
                                     [
-                                        predicted_noise_probe_key(
+                                        timestamp_shared_predicted_noise_probe_key(
+                                            predicted_noise_probe_seed,
+                                            int(t_seq[i]),
+                                            cfg.predicted_noise_probe_index,
+                                        )
+                                        if predicted_noise_probe_mode
+                                        == "timestamp_shared_gaussian"
+                                        else predicted_noise_probe_key(
                                             predicted_noise_probe_seed,
                                             ckpt_i,
                                             int(t_seq[i]),
@@ -5280,6 +5303,8 @@ def run_attribution(cfg: TrajAttributionConfig):
                         if predicted_noise_probe_mode == "shared_orthogonal_extended"
                         else "orthogonal_gaussian_qr"
                         if predicted_noise_probe_mode == "shared_orthogonal"
+                        else "standard_normal_timestamp_shared"
+                        if predicted_noise_probe_mode == "timestamp_shared_gaussian"
                         else "standard_normal"
                     ),
                     output_probes_per_term=np.asarray(1, dtype=np.int32),
@@ -5300,6 +5325,8 @@ def run_attribution(cfg: TrajAttributionConfig):
                         if predicted_noise_probe_mode == "shared_orthogonal_extended"
                         else "fold_in(PRNGKey(seed),ORTH), QR once, shared across all checkpoints/snapshots"
                         if predicted_noise_probe_mode == "shared_orthogonal"
+                        else "fold_in(PRNGKey(seed),timestamp_domain_tag,timestep); shared across queries/checkpoints"
+                        if predicted_noise_probe_mode == "timestamp_shared_gaussian"
                         else "historical fold_in(PRNGKey(seed),domain_tag,checkpoint_index,"
                         "timestep,snapshot_position), then fold_in(probe_index) when nonzero"
                     ),

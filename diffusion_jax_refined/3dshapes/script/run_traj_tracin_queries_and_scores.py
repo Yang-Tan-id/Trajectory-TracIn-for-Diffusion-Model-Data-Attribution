@@ -109,6 +109,7 @@ def main() -> None:
         "--predicted-noise-probe-mode",
         choices=(
             "independent_gaussian",
+            "timestamp_shared_gaussian",
             "shared_orthogonal",
             "shared_orthogonal_extended",
         ),
