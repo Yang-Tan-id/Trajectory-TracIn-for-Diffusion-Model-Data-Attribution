@@ -44,6 +44,13 @@ ORIGINAL_F_TIMESTAMP_CROSSFIT = (
     / "rtx_small"
     / "run_original_f_timestamp_sign_crossfit_bad_queries_rtx_small.sh"
 )
+ORIGINAL_F_CHECKPOINT_CROSSFIT = (
+    ROOT
+    / "3dshapes"
+    / "tacc"
+    / "rtx_small"
+    / "run_original_f_checkpoint_sign_crossfit_bad_queries_rtx_small.sh"
+)
 F_NEXT_SQUARED_PIPELINE = (
     ROOT
     / "3dshapes"
@@ -253,6 +260,25 @@ class LossDirectionResidualRmsTest(unittest.TestCase):
             "run_traj_tracin_loss_direction_residual_rms_train_rtx_small.sh",
             launcher,
         )
+
+    def test_original_f_checkpoint_crossfit_is_cached_and_structured(self) -> None:
+        analyzer = (
+            ROOT
+            / "3dshapes"
+            / "script"
+            / "analyze_original_f_checkpoint_sign_crossfit.py"
+        ).read_text()
+        launcher = ORIGINAL_F_CHECKPOINT_CROSSFIT.read_text()
+
+        self.assertIn('"single_change_point"', analyzer)
+        self.assertIn('"five_bins"', analyzer)
+        self.assertIn('"ten_bins"', analyzer)
+        self.assertIn('"individual_coordinate"', analyzer)
+        self.assertIn("crossfit_global_baseline_mean_percent", analyzer)
+        self.assertIn("crossfit_beat_global_fraction", analyzer)
+        self.assertIn("checkpoint_components.npz", analyzer)
+        self.assertIn("[cached]", launcher)
+        self.assertNotIn("01_train_datapoint_gradient.py", launcher)
 
     def test_original_train_f_next_squared_score_is_score_only(self) -> None:
         scorer = SCORER.read_text()
