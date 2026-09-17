@@ -3034,6 +3034,7 @@ def run_attribution(cfg: TrajAttributionConfig):
         probe_alignment_next_reference_l2 = []
         probe_alignment_current_reference_cosines = []
         probe_alignment_next_reference_cosines = []
+        checkpoint_own_trajectory_endpoints = []
         alignment_eps_chunk_fn = None
         if probe_alignment_only:
             def alignment_eps_one(p, xt_value, timestep_value, cond):
@@ -3375,6 +3376,13 @@ def run_attribution(cfg: TrajAttributionConfig):
             elif stage_mode == "query" and uses_checkpoint_own_trajectory:
                 current_trajectory = load_or_build_checkpoint_trajectory(
                     ckpt_i, params
+                )
+                if int(current_trajectory["prev_timesteps"][-1]) != -1:
+                    raise ValueError(
+                        "checkpoint-own trajectory snapshots must include the final DDIM step"
+                    )
+                checkpoint_own_trajectory_endpoints.append(
+                    np.asarray(current_trajectory["xprev"][-1], dtype=np.float32)
                 )
                 xt_refs = [
                     array_to_device(x, device) for x in current_trajectory["xt"]
@@ -5149,6 +5157,23 @@ def run_attribution(cfg: TrajAttributionConfig):
                         )
                     )
             if uses_checkpoint_own_trajectory:
+                if len(checkpoint_own_trajectory_endpoints) != len(ckpts) - 1:
+                    raise ValueError(
+                        "checkpoint-own endpoint count mismatch: "
+                        f"{len(checkpoint_own_trajectory_endpoints)} != {len(ckpts) - 1}"
+                    )
+                if precomputed_traj is None:
+                    raise RuntimeError(
+                        "checkpoint-own endpoint comparison requires the saved reference trajectory"
+                    )
+                _, _, _, own_trajectory_meta = precomputed_traj
+                reference_endpoint_path = os.path.join(
+                    str(own_trajectory_meta.get("seed_dir", "")), "final_state.npy"
+                )
+                reference_endpoint_all = np.load(reference_endpoint_path)
+                reference_endpoint_index = int(
+                    own_trajectory_meta.get("sample_index", 0)
+                )
                 query_payload.update(
                     checkpoint_own_trajectory=np.asarray(True),
                     checkpoint_own_trajectory_rule=np.asarray(
@@ -5157,6 +5182,15 @@ def run_attribution(cfg: TrajAttributionConfig):
                     ),
                     checkpoint_trajectory_cache_dir=np.asarray(
                         "" if checkpoint_trajectory_cache_dir is None else checkpoint_trajectory_cache_dir
+                    ),
+                    checkpoint_own_trajectory_endpoints=np.stack(
+                        checkpoint_own_trajectory_endpoints, axis=0
+                    ).astype(np.float32),
+                    checkpoint_own_trajectory_reference_endpoint=np.asarray(
+                        reference_endpoint_all[
+                            reference_endpoint_index : reference_endpoint_index + 1
+                        ],
+                        dtype=np.float32,
                     ),
                 )
             save_npz_compressed_atomic(stage_artifact_path, **query_payload)
