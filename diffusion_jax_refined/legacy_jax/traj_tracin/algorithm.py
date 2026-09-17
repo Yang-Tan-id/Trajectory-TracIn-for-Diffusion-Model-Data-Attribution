@@ -2161,6 +2161,13 @@ def run_attribution(cfg: TrajAttributionConfig):
         ).strip().lower()
         in ("1", "true", "yes", "on")
     )
+    collect_parameter_directional_derivatives = (
+        stage_mode == "query"
+        and os.environ.get(
+            "TRAJ_QUERY_COLLECT_PARAMETER_DIRECTIONAL_DERIVATIVES", "0"
+        ).strip().lower()
+        in ("1", "true", "yes", "on")
+    )
     subset_suffix = apply_score_subset_suffix_to_out_dir(cfg)
     os.makedirs(cfg.out_dir, exist_ok=True)
     t_start = time.time()
@@ -3037,6 +3044,10 @@ def run_attribution(cfg: TrajAttributionConfig):
         checkpoint_own_trajectory_endpoints = []
         checkpoint_own_trajectory_states = []
         checkpoint_own_trajectory_timesteps = None
+        parameter_directional_derivatives = []
+        parameter_directional_derivatives_per_update_norm = []
+        parameter_update_query_gradient_cosines = []
+        parameter_update_norms = []
         alignment_eps_chunk_fn = None
         if probe_alignment_only:
             def alignment_eps_one(p, xt_value, timestep_value, cond):
@@ -3472,6 +3483,20 @@ def run_attribution(cfg: TrajAttributionConfig):
                 else:
                     query_grad_chunk_fn = make_query_grad_chunk_fn(adapter, model, cfg.query_objective)
                     query_target_params = query_target_params_for_checkpoint(ckpt_i)
+                parameter_update_delta = None
+                parameter_update_norm = None
+                if collect_parameter_directional_derivatives:
+                    if not uses_next_checkpoint_target or uses_checkpoint_trajectory_target:
+                        raise ValueError(
+                            "parameter directional derivatives require the standard "
+                            "next-checkpoint query objective"
+                        )
+                    parameter_update_delta = jax.tree_util.tree_map(
+                        lambda next_value, current_value: next_value - current_value,
+                        query_target_params,
+                        params,
+                    )
+                    parameter_update_norm = tree_l2_norm(parameter_update_delta)
                 snapshot_chunk_size = max(1, int(cfg.snapshot_chunk_size))
                 for chunk_start in range(0, len(t_seq), snapshot_chunk_size):
                     chunk_end = min(chunk_start + snapshot_chunk_size, len(t_seq))
@@ -3896,6 +3921,36 @@ def run_attribution(cfg: TrajAttributionConfig):
                         )
                     for local_i, snap_id in enumerate(chunk_ids):
                         one_grad = jax.tree_util.tree_map(lambda x: x[local_i], query_grads)
+                        if collect_parameter_directional_derivatives:
+                            assert parameter_update_delta is not None
+                            assert parameter_update_norm is not None
+                            derivative = tree_vdot(one_grad, parameter_update_delta)
+                            gradient_norm = tree_l2_norm(one_grad)
+                            update_norm_safe = jnp.maximum(
+                                parameter_update_norm,
+                                jnp.asarray(1e-12, dtype=jnp.float32),
+                            )
+                            gradient_norm_safe = jnp.maximum(
+                                gradient_norm,
+                                jnp.asarray(1e-12, dtype=jnp.float32),
+                            )
+                            parameter_directional_derivatives.append(
+                                float(jax.device_get(derivative))
+                            )
+                            parameter_directional_derivatives_per_update_norm.append(
+                                float(jax.device_get(derivative / update_norm_safe))
+                            )
+                            parameter_update_query_gradient_cosines.append(
+                                float(
+                                    jax.device_get(
+                                        derivative
+                                        / (update_norm_safe * gradient_norm_safe)
+                                    )
+                                )
+                            )
+                            parameter_update_norms.append(
+                                float(jax.device_get(parameter_update_norm))
+                            )
                         stage_features.append(np.asarray(projector(one_grad), dtype=np.float32))
                         stage_ckpt_indices.append(int(ckpt_i))
                         stage_timesteps.append(int(t_seq[snap_id]))
@@ -5247,6 +5302,30 @@ def run_attribution(cfg: TrajAttributionConfig):
                     ),
                     checkpoint_own_trajectory_state_timesteps=np.asarray(
                         checkpoint_own_trajectory_timesteps, dtype=np.int32
+                    ),
+                )
+            if collect_parameter_directional_derivatives:
+                if len(parameter_directional_derivatives) != len(stage_features):
+                    raise ValueError(
+                        "parameter directional-derivative count mismatch: "
+                        f"{len(parameter_directional_derivatives)} != {len(stage_features)}"
+                    )
+                query_payload.update(
+                    parameter_directional_derivatives=np.asarray(
+                        parameter_directional_derivatives, dtype=np.float32
+                    ),
+                    parameter_directional_derivatives_per_update_norm=np.asarray(
+                        parameter_directional_derivatives_per_update_norm,
+                        dtype=np.float32,
+                    ),
+                    parameter_update_query_gradient_cosines=np.asarray(
+                        parameter_update_query_gradient_cosines, dtype=np.float32
+                    ),
+                    parameter_update_norms=np.asarray(
+                        parameter_update_norms, dtype=np.float32
+                    ),
+                    parameter_directional_derivative_definition=np.asarray(
+                        "dot(gradient_theta query_loss(theta_c), theta_c_plus_1 - theta_c)"
                     ),
                 )
             save_npz_compressed_atomic(stage_artifact_path, **query_payload)
