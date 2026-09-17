@@ -24,7 +24,8 @@ VARIANTS = ("raw", "query_l2", "train_l2", "query_train_l2")
 
 
 def checkpoint_flip_signs(args, query_ids, expected_timesteps):
-    signs = np.ones((len(query_ids), 49), dtype=np.float64)
+    direct_signs = np.ones((len(query_ids), 49), dtype=np.float64)
+    cumulative_signs = np.ones((len(query_ids), 49), dtype=np.float64)
     rows = []
     for query_position, query in enumerate(query_ids):
         path = artifact_path(
@@ -54,7 +55,9 @@ def checkpoint_flip_signs(args, query_ids, expected_timesteps):
         )
         cosines = np.clip(dot / denominator, -1.0, 1.0)
         mean_cosines = np.mean(cosines, axis=1)
-        signs[query_position, 1:] = np.where(mean_cosines < 0.0, -1.0, 1.0)
+        transition_signs = np.where(mean_cosines < 0.0, -1.0, 1.0)
+        direct_signs[query_position, 1:] = transition_signs
+        cumulative_signs[query_position, 1:] = np.cumprod(transition_signs)
         rows.append(
             {
                 "query": query,
@@ -62,7 +65,8 @@ def checkpoint_flip_signs(args, query_ids, expected_timesteps):
                 "epoch": 4,
                 "previous_update_cosine_mean": "",
                 "opposite_timestamp_fraction": "",
-                "checkpoint_multiplier": 1,
+                "direct_multiplier": 1,
+                "cumulative_multiplier": 1,
             }
         )
         for checkpoint, (mean_cosine, values) in enumerate(
@@ -75,12 +79,15 @@ def checkpoint_flip_signs(args, query_ids, expected_timesteps):
                     "epoch": 4 * checkpoint,
                     "previous_update_cosine_mean": float(mean_cosine),
                     "opposite_timestamp_fraction": float(np.mean(values < 0.0)),
-                    "checkpoint_multiplier": int(
-                        signs[query_position, checkpoint - 1]
+                    "direct_multiplier": int(
+                        direct_signs[query_position, checkpoint - 1]
+                    ),
+                    "cumulative_multiplier": int(
+                        cumulative_signs[query_position, checkpoint - 1]
                     ),
                 }
             )
-    return signs, rows
+    return direct_signs, cumulative_signs, rows
 
 
 def main():
@@ -123,7 +130,7 @@ def main():
     unique_checkpoints = np.unique(term_checkpoints)
     first_checkpoint = np.flatnonzero(term_checkpoints == unique_checkpoints[0])
     expected_timesteps = term_timesteps[first_checkpoint]
-    signs, sign_rows = checkpoint_flip_signs(
+    direct_signs, cumulative_signs, sign_rows = checkpoint_flip_signs(
         args, query_ids, expected_timesteps
     )
     lookup = {
@@ -141,6 +148,10 @@ def main():
         for variant in VARIANTS
     }
     flipped = {
+        variant: np.zeros((len(query_ids), 5000), dtype=np.float64)
+        for variant in VARIANTS
+    }
+    cumulative_flipped = {
         variant: np.zeros((len(query_ids), 5000), dtype=np.float64)
         for variant in VARIANTS
     }
@@ -199,7 +210,10 @@ def main():
                 )
                 # Original-f orientation is the negative accumulated product.
                 baseline[variant] -= component
-                flipped[variant] -= signs[:, position, None] * component
+                flipped[variant] -= direct_signs[:, position, None] * component
+                cumulative_flipped[variant] -= (
+                    cumulative_signs[:, position, None] * component
+                )
             used_terms += 1
         print(
             f"[linear delta flip] checkpoint={checkpoint + 1}/"
@@ -214,9 +228,22 @@ def main():
         incidence, true = target_data(args, query, score_indices)
         endpoint = true[TARGETS[0]]
         trajectory = true[TARGETS[1]]
-        flipped_count = int(np.sum(signs[query_position] < 0.0))
+        direct_flipped_count = int(
+            np.sum(direct_signs[query_position] < 0.0)
+        )
+        cumulative_flipped_count = int(
+            np.sum(cumulative_signs[query_position] < 0.0)
+        )
         for variant in VARIANTS:
-            for method, bank in (("baseline", baseline), ("delta_flip", flipped)):
+            for method, bank, flipped_count in (
+                ("baseline", baseline, 0),
+                ("delta_flip", flipped, direct_flipped_count),
+                (
+                    "cumulative_flip",
+                    cumulative_flipped,
+                    cumulative_flipped_count,
+                ),
+            ):
                 prediction = bank[variant][query_position] @ incidence.T
                 endpoint_lds, trajectory_lds, joint_lds = lds(
                     prediction, endpoint, trajectory
@@ -226,9 +253,7 @@ def main():
                         "query": query,
                         "variant": variant,
                         "method": method,
-                        "flipped_checkpoints": 0
-                        if method == "baseline"
-                        else flipped_count,
+                        "flipped_checkpoints": flipped_count,
                         "endpoint_percent": float(endpoint_lds[0]),
                         "trajectory_percent": float(trajectory_lds[0]),
                         "cf_joint_percent": float(joint_lds[0]),
@@ -237,7 +262,7 @@ def main():
 
     mean_rows = []
     for variant in VARIANTS:
-        for method in ("baseline", "delta_flip"):
+        for method in ("baseline", "delta_flip", "cumulative_flip"):
             selected = [
                 row
                 for row in rows
@@ -268,22 +293,22 @@ def main():
     write_csv(args.out_dir / "per_query_results.csv", rows)
     write_csv(args.out_dir / "mean_results.csv", mean_rows)
     print("LINEAR ORIGINAL-F — CONSECUTIVE PREDICTED-NOISE-DELTA CHECKPOINT FLIP")
-    print("Q VARIANT             METHOD      FLIPS ENDPOINT    TRAJ   JOINT")
-    print("-" * 76)
+    print("Q VARIANT             METHOD           FLIPS ENDPOINT    TRAJ   JOINT")
+    print("-" * 81)
     for row in rows:
         print(
             f"{int(row['query']):1d} {row['variant']:<19s} "
-            f"{row['method']:<10s} {int(row['flipped_checkpoints']):5d} "
+            f"{row['method']:<16s} {int(row['flipped_checkpoints']):5d} "
             f"{row['endpoint_percent']:+8.3f}% "
             f"{row['trajectory_percent']:+7.3f}% "
             f"{row['cf_joint_percent']:+7.3f}%"
         )
     print("\nTEN-QUERY MEAN")
-    print("VARIANT             METHOD      ENDPOINT    TRAJ   JOINT  Q>0")
-    print("-" * 70)
+    print("VARIANT             METHOD           ENDPOINT    TRAJ   JOINT  Q>0")
+    print("-" * 75)
     for row in mean_rows:
         print(
-            f"{row['variant']:<19s} {row['method']:<10s} "
+            f"{row['variant']:<19s} {row['method']:<16s} "
             f"{row['endpoint_percent_mean']:+8.3f}% "
             f"{row['trajectory_percent_mean']:+7.3f}% "
             f"{row['cf_joint_percent_mean']:+7.3f}% "
