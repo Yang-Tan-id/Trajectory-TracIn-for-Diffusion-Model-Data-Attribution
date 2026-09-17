@@ -40,18 +40,22 @@ def parse_signs(text: str) -> dict[int, int]:
     return result
 
 
-def majority_checkpoint_signs(path: Path, query: int, variant: str, method: str):
+def majority_signs(
+    path: Path, query: int, variant: str, method: str, sign_axis: str
+):
     counts: dict[int, list[int]] = defaultdict(list)
     with path.open(newline="") as handle:
-        rows = [
-            row
-            for row in csv.DictReader(handle)
-            if int(row["query"]) == query
-            and row["variant"] == variant
-            and row["method"] == method
-        ]
+        rows = []
+        for row in csv.DictReader(handle):
+            if int(row["query"]) != query or row["variant"] != variant:
+                continue
+            if sign_axis == "checkpoint" and row["method"] != method:
+                continue
+            rows.append(row)
     if not rows:
-        raise ValueError(f"no Q{query} {variant} {method} rows in {path}")
+        raise ValueError(
+            f"no Q{query} {variant} {sign_axis} {method} rows in {path}"
+        )
     if "selected_signs" not in rows[0]:
         raise ValueError(f"{path} does not contain selected_signs")
     for row in rows:
@@ -87,9 +91,10 @@ def summarize(rows, group_key):
         output = {group_key: group, "terms": len(values)}
         for metric in METRICS:
             array = np.asarray([row[metric] for row in values], dtype=np.float64)
-            output[f"{metric}_mean"] = float(array.mean())
-            output[f"{metric}_mean_abs"] = float(np.abs(array).mean())
-            output[f"{metric}_positive_fraction"] = float(np.mean(array > 0.0))
+            finite = np.isfinite(array)
+            output[f"{metric}_mean"] = float(np.mean(array[finite])) if finite.any() else float("nan")
+            output[f"{metric}_mean_abs"] = float(np.mean(np.abs(array[finite]))) if finite.any() else float("nan")
+            output[f"{metric}_positive_fraction"] = float(np.mean(array[finite] > 0.0)) if finite.any() else float("nan")
         result.append(output)
     return result
 
@@ -103,17 +108,21 @@ def main():
     parser.add_argument("--variant", default="query_train_l2")
     parser.add_argument("--method", default="five_bins")
     parser.add_argument(
+        "--sign-axis", choices=("checkpoint", "timestamp"), default="checkpoint"
+    )
+    parser.add_argument(
         "--namespace", default="predicted_noise_output_reference_delta_original12"
     )
     parser.add_argument("--checkpoint-crossfit-dir", type=Path, required=True)
     parser.add_argument("--out-dir", type=Path, required=True)
     args = parser.parse_args()
 
-    signs, stability, split_count = majority_checkpoint_signs(
+    signs, stability, split_count = majority_signs(
         args.checkpoint_crossfit_dir / "per_split.csv",
         args.query_id,
         args.variant,
         args.method,
+        args.sign_axis,
     )
     path = artifact_path(
         args.experiment,
@@ -150,6 +159,9 @@ def main():
             payload["next_to_reference_predicted_noise_l2"], dtype=np.float64
         )
 
+    current_reference_cosine = np.clip(current_reference_cosine, -1.0, 1.0)
+    next_reference_cosine = np.clip(next_reference_cosine, -1.0, 1.0)
+
     cosine_current_next = safe_cosine_from_lengths(
         current_norm, next_norm, next_delta_norm
     )
@@ -171,11 +183,17 @@ def main():
     ) / np.maximum(step_norm * endpoint_norm, 1e-12)
     cosine_next_endpoint = np.clip(cosine_next_endpoint, -1.0, 1.0)
     cosine_step_endpoint = np.clip(cosine_step_endpoint, -1.0, 1.0)
+    invalid_endpoint = endpoint_norm < 1e-6
+    invalid_step = step_norm < 1e-6
+    cosine_current_endpoint[invalid_endpoint] = np.nan
+    cosine_next_endpoint[invalid_endpoint] = np.nan
+    cosine_step_endpoint[invalid_endpoint | invalid_step] = np.nan
 
     rows = []
     for term, (checkpoint, timestep) in enumerate(zip(checkpoints, timesteps)):
         checkpoint = int(checkpoint)
-        if checkpoint not in signs:
+        sign_coordinate = checkpoint if args.sign_axis == "checkpoint" else int(timestep)
+        if sign_coordinate not in signs:
             continue
         display_checkpoint = checkpoint + 1
         rows.append(
@@ -186,8 +204,8 @@ def main():
                 "epoch": 4 * display_checkpoint,
                 "checkpoint_bin": min(checkpoint // 10 + 1, 5),
                 "timestep": int(timestep),
-                "majority_flip_sign": signs[checkpoint],
-                "flip_sign_stability": stability[checkpoint],
+                "majority_flip_sign": signs[sign_coordinate],
+                "flip_sign_stability": stability[sign_coordinate],
                 "cosine_current_next": float(cosine_current_next[term]),
                 "cosine_current_reference": float(
                     current_reference_cosine[term]
@@ -238,19 +256,20 @@ def main():
             f"{row['cosine_step_endpoint_direction_mean']:+9.5f} "
             f"{row['next_minus_current_reference_l2_mean']:+12.6f}"
         )
-    print("\nBY FIVE CHECKPOINT BINS")
-    print("BIN SIGN TERMS CURR~NEXT NEXT~END STEP~END DELTA_REF_L2")
-    for row in by_bin:
-        checkpoint_bin = int(row["checkpoint_bin"])
-        bin_sign = signs[min((checkpoint_bin - 1) * 10, 48)]
-        print(
-            f"{checkpoint_bin:3d} {bin_sign:+4d} "
-            f"{int(row['terms']):5d} "
-            f"{row['cosine_current_next_mean']:+9.5f} "
-            f"{row['cosine_next_endpoint_direction_mean']:+9.5f} "
-            f"{row['cosine_step_endpoint_direction_mean']:+9.5f} "
-            f"{row['next_minus_current_reference_l2_mean']:+12.6f}"
-        )
+    if args.sign_axis == "checkpoint":
+        print("\nBY FIVE CHECKPOINT BINS")
+        print("BIN SIGN TERMS CURR~NEXT NEXT~END STEP~END DELTA_REF_L2")
+        for row in by_bin:
+            checkpoint_bin = int(row["checkpoint_bin"])
+            bin_sign = signs[min((checkpoint_bin - 1) * 10, 48)]
+            print(
+                f"{checkpoint_bin:3d} {bin_sign:+4d} "
+                f"{int(row['terms']):5d} "
+                f"{row['cosine_current_next_mean']:+9.5f} "
+                f"{row['cosine_next_endpoint_direction_mean']:+9.5f} "
+                f"{row['cosine_step_endpoint_direction_mean']:+9.5f} "
+                f"{row['next_minus_current_reference_l2_mean']:+12.6f}"
+            )
     print("\nBY TIMESTAMP AND CHECKPOINT FLIP SIGN")
     print("T SIGN TERMS CURR~REF NEXT~REF STEP~END DELTA_REF_L2")
     for row in by_timestep_and_sign:
