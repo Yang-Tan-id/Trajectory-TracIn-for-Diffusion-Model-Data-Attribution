@@ -33,6 +33,10 @@ def checkpoint_flip_signs(args, query_ids, expected_timesteps):
     first_timestamp_signs = np.ones(
         (len(query_ids), 49, len(expected_timesteps)), dtype=np.float64
     )
+    q0_first_timestamp_signs = np.ones(
+        (len(query_ids), 49, len(expected_timesteps)), dtype=np.float64
+    )
+    flattened_updates = []
     rows = []
     timestamp_rows = []
     for query_position, query in enumerate(query_ids):
@@ -54,6 +58,7 @@ def checkpoint_flip_signs(args, query_ids, expected_timesteps):
         if not np.array_equal(timesteps, expected_timesteps):
             raise ValueError(f"Q{query}: timestep mismatch")
         flattened = updates.reshape(updates.shape[0], updates.shape[1], -1)
+        flattened_updates.append(flattened)
         previous = flattened[:-1]
         current = flattened[1:]
         dot = np.sum(previous * current, axis=2)
@@ -157,12 +162,38 @@ def checkpoint_flip_signs(args, query_ids, expected_timesteps):
                     ),
                 }
             )
+    if 0 not in query_ids:
+        raise ValueError("Q0 must be included for Q0-anchored timestamp signs")
+    q0_anchor = flattened_updates[query_ids.index(0)][0:1]
+    q0_anchor_norm = np.linalg.norm(q0_anchor, axis=2)
+    for query_position, flattened in enumerate(flattened_updates):
+        q0_dot = np.sum(flattened * q0_anchor, axis=2)
+        q0_denominator = np.maximum(
+            np.linalg.norm(flattened, axis=2) * q0_anchor_norm,
+            1e-12,
+        )
+        q0_cosines = np.clip(q0_dot / q0_denominator, -1.0, 1.0)
+        q0_first_timestamp_signs[query_position] = np.where(
+            q0_cosines < 0.0, -1.0, 1.0
+        )
+        for row in timestamp_rows:
+            if int(row["query"]) != int(query_ids[query_position]):
+                continue
+            slot = int(np.flatnonzero(expected_timesteps == row["timestep"])[0])
+            row["q0_first_negative_checkpoints"] = int(
+                np.sum(q0_cosines[:, slot] < 0.0)
+            )
+            row["q0_first_positive_checkpoints"] = int(
+                np.sum(q0_cosines[:, slot] >= 0.0)
+            )
+            row["q0_first_cosine_mean"] = float(np.mean(q0_cosines[:, slot]))
     return (
         direct_signs,
         cumulative_signs,
         timestamp_cumulative_signs,
         first_checkpoint_signs,
         first_timestamp_signs,
+        q0_first_timestamp_signs,
         rows,
         timestamp_rows,
     )
@@ -214,6 +245,7 @@ def main():
         timestamp_cumulative_signs,
         first_checkpoint_signs,
         first_timestamp_signs,
+        q0_first_timestamp_signs,
         sign_rows,
         timestamp_sign_rows,
     ) = checkpoint_flip_signs(args, query_ids, expected_timesteps)
@@ -252,6 +284,10 @@ def main():
         for variant in VARIANTS
     }
     first_timestamp_flipped = {
+        variant: np.zeros((len(query_ids), 5000), dtype=np.float64)
+        for variant in VARIANTS
+    }
+    q0_first_timestamp_flipped = {
         variant: np.zeros((len(query_ids), 5000), dtype=np.float64)
         for variant in VARIANTS
     }
@@ -328,6 +364,12 @@ def main():
                     first_timestamp_signs[:, position, timestamp_slot, None]
                     * component
                 )
+                q0_first_timestamp_flipped[variant] -= (
+                    q0_first_timestamp_signs[
+                        :, position, timestamp_slot, None
+                    ]
+                    * component
+                )
             used_terms += 1
         print(
             f"[linear delta flip] checkpoint={checkpoint + 1}/"
@@ -357,6 +399,9 @@ def main():
         first_timestamp_flipped_count = int(
             np.sum(first_timestamp_signs[query_position] < 0.0)
         )
+        q0_first_timestamp_flipped_count = int(
+            np.sum(q0_first_timestamp_signs[query_position] < 0.0)
+        )
         for variant in VARIANTS:
             for method, bank, flipped_count in (
                 ("baseline", baseline, 0),
@@ -380,6 +425,11 @@ def main():
                     "first_timestamp_flip",
                     first_timestamp_flipped,
                     first_timestamp_flipped_count,
+                ),
+                (
+                    "q0_first_timestamp_flip",
+                    q0_first_timestamp_flipped,
+                    q0_first_timestamp_flipped_count,
                 ),
             ):
                 prediction = bank[variant][query_position] @ incidence.T
@@ -407,6 +457,7 @@ def main():
             "cumulative_timestamp_flip",
             "first_checkpoint_flip",
             "first_timestamp_flip",
+            "q0_first_timestamp_flip",
         ):
             selected = [
                 row
@@ -463,7 +514,7 @@ def main():
     print("\nPER-TIMESTAMP CUMULATIVE SIGN COUNTS")
     print(
         "Q    T NEG-TRANS POS-TRANS CUM-FLIP/49 TRANS-COS "
-        "FIRST-NEG FIRST-POS FIRST-COS"
+        "FIRST-NEG FIRST-POS FIRST-COS Q0-NEG Q0-POS Q0-COS"
     )
     print("-" * 96)
     for row in timestamp_sign_rows:
@@ -475,7 +526,10 @@ def main():
             f"{row['transition_cosine_mean']:+8.4f} "
             f"{int(row['first_checkpoint_negative_checkpoints']):9d} "
             f"{int(row['first_checkpoint_positive_checkpoints']):9d} "
-            f"{row['first_checkpoint_cosine_mean']:+9.4f}"
+            f"{row['first_checkpoint_cosine_mean']:+9.4f} "
+            f"{int(row['q0_first_negative_checkpoints']):6d} "
+            f"{int(row['q0_first_positive_checkpoints']):6d} "
+            f"{row['q0_first_cosine_mean']:+8.4f}"
         )
     print(f"[saved] {args.out_dir}")
 
