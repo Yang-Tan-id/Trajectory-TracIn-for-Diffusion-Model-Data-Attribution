@@ -199,6 +199,21 @@ def main():
                 f"{len(unique_checkpoints)}"
             )
         improvement = distances[:-1] - distances[1:]
+        flattened = endpoints.reshape(len(endpoints), -1)
+        reference_flat = reference.reshape(-1)
+        endpoint_update = flattened[1:] - flattened[:-1]
+        direction_to_reference = reference_flat[None, :] - flattened[:-1]
+        update_norm = np.linalg.norm(endpoint_update, axis=1)
+        reference_direction_norm = np.linalg.norm(direction_to_reference, axis=1)
+        direction_denominator = np.maximum(
+            update_norm * reference_direction_norm, 1e-12
+        )
+        approach_cosine = np.sum(
+            endpoint_update * direction_to_reference, axis=1
+        ) / direction_denominator
+        approach_projection = np.sum(
+            endpoint_update * direction_to_reference, axis=1
+        ) / np.maximum(reference_direction_norm, 1e-12)
         sign = signs[query]
         sign_name = "p1" if sign > 0 else "m1"
         for variant in VARIANTS:
@@ -220,6 +235,16 @@ def main():
             amplitude_correlation = correlation(
                 np.abs(centered), np.abs(improvement)
             )
+            approach_cosine_correlation = correlation(current, approach_cosine)
+            approach_projection_correlation = correlation(
+                current, approach_projection
+            )
+            oriented_approach_cosine_correlation = correlation(
+                oriented, approach_cosine
+            )
+            oriented_approach_projection_correlation = correlation(
+                oriented, approach_projection
+            )
             summary_rows.append(
                 {
                     "query": query,
@@ -233,6 +258,16 @@ def main():
                     "oracle_oriented_spearman": oriented_spearman,
                     "oracle_oriented_centered_sign_agreement": oriented_agreement,
                     "amplitude_correlation": amplitude_correlation,
+                    "endpoint_update_toward_reference_cosine_mean": float(
+                        np.mean(approach_cosine)
+                    ),
+                    "endpoint_update_toward_reference_fraction": float(
+                        np.mean(approach_cosine > 0.0)
+                    ),
+                    "score_vs_approach_cosine_correlation": approach_cosine_correlation,
+                    "score_vs_approach_projection_correlation": approach_projection_correlation,
+                    "oracle_oriented_score_vs_approach_cosine_correlation": oriented_approach_cosine_correlation,
+                    "oracle_oriented_score_vs_approach_projection_correlation": oriented_approach_projection_correlation,
                 }
             )
             if variant == args.sign_variant:
@@ -251,6 +286,13 @@ def main():
                             "endpoint_rmse_current": float(distances[position]),
                             "endpoint_rmse_next": float(distances[position + 1]),
                             "next_endpoint_improvement": float(improvement[position]),
+                            "endpoint_update_toward_reference_cosine": float(
+                                approach_cosine[position]
+                            ),
+                            "endpoint_update_toward_reference_projection": float(
+                                approach_projection[position]
+                            ),
+                            "endpoint_update_norm": float(update_norm[position]),
                             "centered_sign_match": int(
                                 np.sign(centered[position])
                                 == np.sign(improvement[position])
@@ -270,8 +312,11 @@ def main():
         f"LINEAR {args.sign_variant.upper()} CHECKPOINT SCORE vs "
         "NEXT ENDPOINT IMPROVEMENT"
     )
-    print("Q SIGN |LDS| PEARSON SPEARMAN MATCH ORIENT-P ORIENT-S ORIENT-M AMP-R")
-    print("-" * 84)
+    print(
+        "Q SIGN |LDS| PEARSON SPEARMAN MATCH ORIENT-P ORIENT-S ORIENT-M "
+        "AMP-R DIR-COS DIR+ SCORE~DIR ORIENT~DIR"
+    )
+    print("-" * 122)
     for row in selected:
         print(
             f"{int(row['query']):1d} {row['oracle_sign']:>4s} "
@@ -282,7 +327,11 @@ def main():
             f"{row['oracle_oriented_pearson']:+8.3f} "
             f"{row['oracle_oriented_spearman']:+8.3f} "
             f"{row['oracle_oriented_centered_sign_agreement']:8.2f} "
-            f"{row['amplitude_correlation']:+6.3f}"
+            f"{row['amplitude_correlation']:+6.3f} "
+            f"{row['endpoint_update_toward_reference_cosine_mean']:+7.3f} "
+            f"{row['endpoint_update_toward_reference_fraction']:4.2f} "
+            f"{row['score_vs_approach_cosine_correlation']:+9.3f} "
+            f"{row['oracle_oriented_score_vs_approach_cosine_correlation']:+10.3f}"
         )
     print(f"[saved] {args.out_dir}")
 
