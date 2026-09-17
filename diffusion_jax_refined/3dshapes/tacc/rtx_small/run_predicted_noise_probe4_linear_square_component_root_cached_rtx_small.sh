@@ -65,19 +65,23 @@ run_contraction() {
     --expected-query-probe-mode independent_gaussian
 }
 
-if [[ "${EVAL_ONLY:-0}" != "1" ]]; then
-  echo "[phase 1/4] linear: mean_r(z_r) per checkpoint/timestamp"
+if [[ "${EVAL_ONLY:-0}" != "1" && "${ROOT_ONLY:-0}" != "1" ]]; then
+  echo "[phase 1/3] linear: mean_r(z_r) per checkpoint/timestamp"
   run_contraction signed linear
-  echo "[phase 2/4] square: mean_r(z_r^2) per checkpoint/timestamp"
+  echo "[phase 2/3] square A_i=sum_(c,t) w_(c,t) * mean_r(z_r^2)"
   run_contraction squared square
-  echo "[phase 3/4] component root of square: mean_r(sqrt(z_r^2))=mean_r(abs(z_r))"
-  run_contraction absolute component_root
 else
-  echo "[reuse] EVAL_ONLY=1; using the three already-merged cached scores"
+  echo "[reuse] using the already-merged linear and square scores"
 fi
 
-echo "[phase 4/4] cached LDS for both global orientations"
-SCHEMES="predicted_noise_jvp_signed_probe4,predicted_noise_jvp_l2_squared_probe4,predicted_noise_jvp_absolute_probe4"
+if [[ "${EVAL_ONLY:-0}" != "1" ]]; then
+  echo "[phase 3/3] component root: sqrt(sum_r(z_r^2)) per checkpoint/timestamp"
+  run_contraction probe_l2 component_root
+else
+  echo "[reuse] EVAL_ONLY=1; using the already-merged component-root score"
+fi
+
+SCHEMES="predicted_noise_jvp_signed_probe4,predicted_noise_jvp_l2_squared_probe4,predicted_noise_jvp_probe_l2_probe4"
 for sign in 1 -1; do
   JAX_PLATFORMS=cpu python \
     "${SHAPES_ROOT}/script/run_traj_tracin_lds_cached.py" \
@@ -94,7 +98,7 @@ for sign in p1 m1; do
     --reduction termwise_square --prediction-sign "${sign}"
   python "${SHAPES_ROOT}/script/print_predicted_noise_timestamp_checkpoint_square_lds.py" \
     --experiment "${EXPERIMENT_TAG}" --num-probes 4 \
-    --reduction absolute --prediction-sign "${sign}"
+    --reduction probe_l2 --prediction-sign "${sign}"
 done
 
-echo "[done] P1-P4 random directions: linear, square, and component-root scores"
+echo "[done] P1-P4 random directions: linear, square, and per-term probe-L2 scores"

@@ -73,6 +73,8 @@ def score_namespace(
         namespace = "predicted_noise_jvp_absolute"
     elif contraction == "rms":
         namespace = "predicted_noise_jvp_rms"
+    elif contraction == "probe_l2":
+        namespace = "predicted_noise_jvp_probe_l2"
     elif contraction == "median_absolute":
         namespace = "predicted_noise_jvp_median_absolute"
     elif contraction == "coordinatewise_squared":
@@ -118,6 +120,8 @@ def weighting_semantics(contraction: str) -> str:
         return "learning_rate_weighted_sum_of_absolute_gradient_contractions"
     if contraction == "rms":
         return "learning_rate_weighted_sum_of_probe_rms_gradient_contractions"
+    if contraction == "probe_l2":
+        return "learning_rate_weighted_sum_of_probe_l2_gradient_contractions"
     if contraction == "median_absolute":
         return "learning_rate_weighted_sum_of_probe_median_absolute_gradient_contractions"
     if contraction == "coordinatewise_squared":
@@ -455,7 +459,12 @@ def score_shard(args: argparse.Namespace) -> None:
                     }
                 else:
                     directional = train_device @ query_device.T
-                    if args.contraction in ("squared", "termwise_squared_per_probe", "rms"):
+                    if args.contraction in (
+                        "squared",
+                        "termwise_squared_per_probe",
+                        "rms",
+                        "probe_l2",
+                    ):
                         transform = jnp.square
                     elif args.contraction == "signed_squared":
                         transform = lambda value: value * jnp.abs(value)
@@ -500,14 +509,19 @@ def score_shard(args: argparse.Namespace) -> None:
                         )
                     else:
                         assert term_scores is not None
-                        term_scores[component] += host_values / float(args.num_probes)
+                        divisor = (
+                            1.0
+                            if args.contraction == "probe_l2"
+                            else float(args.num_probes)
+                        )
+                        term_scores[component] += host_values / divisor
             # The requested transform applies only to the gradient-produced
             # directional derivative. The learning-rate weight remains linear, and the
             # stored per-snapshot weight already averages the 10 snapshots.
             if term_scores is not None:
                 term_weight = float(weight)
                 for component, values in term_scores.items():
-                    if args.contraction == "rms":
+                    if args.contraction in ("rms", "probe_l2"):
                         values = reduce_probe_rms(values)
                     sums[component] += term_weight * values
                     if (
@@ -740,6 +754,8 @@ def merge(args: argparse.Namespace) -> None:
                         if args.contraction == "absolute"
                         else "learning_rate_weighted_sum_terms(sqrt(mean_probe(square(normalized_dot_product))))"
                         if args.contraction == "rms"
+                        else "learning_rate_weighted_sum_terms(sqrt(sum_probe(square(normalized_dot_product))))"
+                        if args.contraction == "probe_l2"
                         else "learning_rate_weighted_sum_terms(median_probe(abs(normalized_dot_product)))"
                         if args.contraction == "median_absolute"
                         else "learning_rate_weighted_sum_terms(sum_coordinate_squared_products_after_normalization)"
@@ -809,6 +825,7 @@ def main() -> None:
             "signed_squared",
             "absolute",
             "rms",
+            "probe_l2",
             "median_absolute",
             "coordinatewise_squared",
             "checkpoint_timestamp_sum_square",
@@ -824,6 +841,7 @@ def main() -> None:
             "through the trajectory sum for subgroup analysis; signed_squared: z*abs(z); "
             "absolute: abs(z); "
             "rms: sqrt(mean_probe(z^2)) for every checkpoint/timestamp term; "
+            "probe_l2: sqrt(sum_probe(z^2)) for every checkpoint/timestamp term; "
             "median_absolute: median_probe(abs(z)) for every checkpoint/timestamp term; "
             "coordinatewise_squared: sum_k (train_k*query_k)^2."
             " checkpoint_timestamp_sum_square: within each checkpoint and probe, "
