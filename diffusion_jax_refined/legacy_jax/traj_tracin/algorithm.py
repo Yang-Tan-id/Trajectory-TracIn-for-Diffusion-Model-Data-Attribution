@@ -3035,6 +3035,8 @@ def run_attribution(cfg: TrajAttributionConfig):
         probe_alignment_current_reference_cosines = []
         probe_alignment_next_reference_cosines = []
         checkpoint_own_trajectory_endpoints = []
+        checkpoint_own_trajectory_states = []
+        checkpoint_own_trajectory_timesteps = None
         alignment_eps_chunk_fn = None
         if probe_alignment_only:
             def alignment_eps_one(p, xt_value, timestep_value, cond):
@@ -3383,6 +3385,23 @@ def run_attribution(cfg: TrajAttributionConfig):
                     )
                 checkpoint_own_trajectory_endpoints.append(
                     np.asarray(current_trajectory["xprev"][-1], dtype=np.float32)
+                )
+                current_timesteps = np.asarray(
+                    current_trajectory["timesteps"], dtype=np.int32
+                )
+                if checkpoint_own_trajectory_timesteps is None:
+                    checkpoint_own_trajectory_timesteps = current_timesteps.copy()
+                elif not np.array_equal(
+                    checkpoint_own_trajectory_timesteps, current_timesteps
+                ):
+                    raise ValueError(
+                        "checkpoint-own trajectory timesteps differ across checkpoints"
+                    )
+                checkpoint_own_trajectory_states.append(
+                    np.stack(
+                        [np.asarray(x, dtype=np.float32) for x in current_trajectory["xt"]],
+                        axis=0,
+                    )
                 )
                 xt_refs = [
                     array_to_device(x, device) for x in current_trajectory["xt"]
@@ -5162,11 +5181,23 @@ def run_attribution(cfg: TrajAttributionConfig):
                         "checkpoint-own endpoint count mismatch: "
                         f"{len(checkpoint_own_trajectory_endpoints)} != {len(ckpts) - 1}"
                     )
+                if len(checkpoint_own_trajectory_states) != len(ckpts) - 1:
+                    raise ValueError(
+                        "checkpoint-own trajectory-state count mismatch: "
+                        f"{len(checkpoint_own_trajectory_states)} != {len(ckpts) - 1}"
+                    )
                 if precomputed_traj is None:
                     raise RuntimeError(
                         "checkpoint-own endpoint comparison requires the saved reference trajectory"
                     )
-                _, _, _, own_trajectory_meta = precomputed_traj
+                reference_states, reference_timesteps, _, own_trajectory_meta = precomputed_traj
+                reference_timesteps = np.asarray(reference_timesteps, dtype=np.int32)
+                if not np.array_equal(
+                    checkpoint_own_trajectory_timesteps, reference_timesteps
+                ):
+                    raise ValueError(
+                        "checkpoint-own and reference trajectory timesteps differ"
+                    )
                 reference_endpoint_path = os.path.join(
                     str(own_trajectory_meta.get("seed_dir", "")), "final_state.npy"
                 )
@@ -5191,6 +5222,15 @@ def run_attribution(cfg: TrajAttributionConfig):
                             reference_endpoint_index : reference_endpoint_index + 1
                         ],
                         dtype=np.float32,
+                    ),
+                    checkpoint_own_trajectory_states=np.stack(
+                        checkpoint_own_trajectory_states, axis=0
+                    ).astype(np.float32),
+                    checkpoint_own_trajectory_reference_states=np.stack(
+                        [np.asarray(x, dtype=np.float32) for x in reference_states], axis=0
+                    ),
+                    checkpoint_own_trajectory_state_timesteps=np.asarray(
+                        checkpoint_own_trajectory_timesteps, dtype=np.int32
                     ),
                 )
             save_npz_compressed_atomic(stage_artifact_path, **query_payload)
