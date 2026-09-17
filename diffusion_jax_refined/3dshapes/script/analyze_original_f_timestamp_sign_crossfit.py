@@ -143,7 +143,14 @@ def build_components(args, query_ids: list[int]):
             part_timesteps = np.asarray(payload["timesteps"], dtype=np.int32)
             weights = np.asarray(payload["term_weights"], dtype=np.float64)
             indices = np.asarray(payload["score_indices"], dtype=np.int64)
-            semantics = str(np.asarray(payload["train_feature_semantics"]).item())
+            semantics = str(
+                np.asarray(
+                    payload.get(
+                        "train_feature_semantics",
+                        "raw_projected_expected_loss_gradient",
+                    )
+                ).item()
+            )
         if semantics != args.train_feature_semantics:
             raise ValueError(f"{path}: unexpected semantics {semantics!r}")
         if score_indices is None:

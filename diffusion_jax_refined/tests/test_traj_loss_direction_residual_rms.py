@@ -227,8 +227,16 @@ class LossDirectionResidualRmsTest(unittest.TestCase):
         self.assertIn("loss_direction_residual_rms_original_f", launcher)
 
     def test_original_f_timestamp_crossfit_reuses_direct_loss_train_parts(self) -> None:
+        analyzer = (
+            ROOT
+            / "3dshapes"
+            / "script"
+            / "analyze_original_f_timestamp_sign_crossfit.py"
+        ).read_text()
         launcher = ORIGINAL_F_TIMESTAMP_CROSSFIT.read_text()
 
+        self.assertIn('payload.get(', analyzer)
+        self.assertIn('"raw_projected_expected_loss_gradient"', analyzer)
         self.assertIn("--train-namespace traj_tracin", launcher)
         self.assertIn(
             "--train-feature-semantics raw_projected_expected_loss_gradient",
