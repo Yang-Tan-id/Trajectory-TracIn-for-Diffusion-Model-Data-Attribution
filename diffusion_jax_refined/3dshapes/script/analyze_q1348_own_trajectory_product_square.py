@@ -276,6 +276,10 @@ def main():
         variant: np.zeros((len(query_ids), 5000), dtype=np.float64)
         for variant in VARIANTS
     }
+    root_scores = {
+        variant: np.zeros((len(query_ids), 5000), dtype=np.float64)
+        for variant in VARIANTS
+    }
     score_indices = None
     used_terms = 0
 
@@ -334,6 +338,7 @@ def main():
                 squared = np.square(linear)
                 linear_scores[variant] += score_weight * linear.T
                 scores[variant] += score_weight * squared.T
+                root_scores[variant] += score_weight * np.abs(linear).T
             used_terms += 1
         print(
             f"[product square] checkpoint={checkpoint + 1}/50 terms={used_terms}",
@@ -497,6 +502,40 @@ def main():
     write_csv(args.out_dir / "crossfit_summary.csv", crossfit_summary)
     write_csv(args.out_dir / "linear_guided_crossfit_per_split.csv", linear_guided_rows)
     write_csv(args.out_dir / "linear_guided_crossfit_summary.csv", linear_guided_summary)
+    reduction_rows = []
+    reduction_banks = {
+        # Preserve the historical original-f orientation.
+        "linear": {variant: -values for variant, values in linear_scores.items()},
+        "square": scores,
+        # A single predicted-noise-difference direction has one scalar z per term,
+        # so its component root is sqrt(z^2) = abs(z).
+        "root": root_scores,
+    }
+    for reduction, bank in reduction_banks.items():
+        for query_slot, query_id in enumerate(query_ids):
+            incidence, true = target_data(args, query_id, score_indices)
+            endpoint = true[TARGETS[0]]
+            trajectory = true[TARGETS[1]]
+            for variant in VARIANTS:
+                subset_prediction = bank[variant][query_slot] @ incidence.T
+                for sign_name, multiplier in (("p1", 1.0), ("m1", -1.0)):
+                    endpoint_values, trajectory_values, joint_values = lds(
+                        multiplier * subset_prediction,
+                        endpoint,
+                        trajectory,
+                    )
+                    reduction_rows.append(
+                        {
+                            "reduction": reduction,
+                            "query": query_id,
+                            "variant": variant,
+                            "prediction_sign": sign_name,
+                            "endpoint_percent": float(endpoint_values[0]),
+                            "trajectory_percent": float(trajectory_values[0]),
+                            "cf_joint_percent": float(joint_values[0]),
+                        }
+                    )
+    write_csv(args.out_dir / "linear_square_root_results.csv", reduction_rows)
     np.savez_compressed(
         args.out_dir / "product_square_scores.npz",
         query_ids=np.asarray(query_ids, dtype=np.int32),
@@ -598,6 +637,29 @@ def main():
             f"{variant:<19s} "
             f"{np.mean([row['crossfit_cf_joint_mean_percent'] for row in selected]):+9.3f}%"
         )
+
+    print("\nOWN-TRAJECTORY PREDICTED-NOISE-DIFFERENCE — LINEAR / SQUARE / ROOT")
+    print("Q VARIANT             REDUCTION BEST SIGN   ENDPOINT      TRAJ  CF JOINT")
+    print("-" * 82)
+    for query_id in query_ids:
+        for variant in VARIANTS:
+            for reduction in ("linear", "square", "root"):
+                p1 = next(
+                    row
+                    for row in reduction_rows
+                    if row["query"] == query_id
+                    and row["variant"] == variant
+                    and row["reduction"] == reduction
+                    and row["prediction_sign"] == "p1"
+                )
+                multiplier = 1.0 if p1["cf_joint_percent"] >= 0.0 else -1.0
+                sign_name = "p1" if multiplier > 0.0 else "m1"
+                print(
+                    f"{query_id:1d} {variant:<19s} {reduction:<9s} {sign_name:>4s} "
+                    f"{multiplier * p1['endpoint_percent']:+9.3f}% "
+                    f"{multiplier * p1['trajectory_percent']:+9.3f}% "
+                    f"{multiplier * p1['cf_joint_percent']:+9.3f}%"
+                )
     print(f"[saved] {args.out_dir}")
 
 
