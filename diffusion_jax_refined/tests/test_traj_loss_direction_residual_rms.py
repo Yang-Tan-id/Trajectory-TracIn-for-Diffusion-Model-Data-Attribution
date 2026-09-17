@@ -226,15 +226,16 @@ class LossDirectionResidualRmsTest(unittest.TestCase):
         self.assertIn("--query-ids 0", launcher)
         self.assertIn("loss_direction_residual_rms_original_f", launcher)
 
-    def test_original_f_timestamp_crossfit_streams_without_train_parts(self) -> None:
-        algorithm = ALGORITHM.read_text()
+    def test_original_f_timestamp_crossfit_reuses_direct_loss_train_parts(self) -> None:
         launcher = ORIGINAL_F_TIMESTAMP_CROSSFIT.read_text()
 
-        self.assertIn("TRAJ_TRACIN_RESIDUAL_RMS_STREAM_QUERY_ARTIFACTS", algorithm)
-        self.assertIn("residual_rms_stream_components", algorithm)
-        self.assertIn("accumulated residual-RMS score components", algorithm)
-        self.assertIn("--component-dir", launcher)
-        self.assertIn("streamed_components", launcher)
+        self.assertIn("--train-namespace traj_tracin", launcher)
+        self.assertIn(
+            "--train-feature-semantics raw_projected_expected_loss_gradient",
+            launcher,
+        )
+        self.assertNotIn("TRAJ_TRACIN_TRAIN_REUSE_GRADIENT_RESIDUAL_RMS", launcher)
+        self.assertNotIn("--component-dir", launcher)
         self.assertNotIn(
             "run_traj_tracin_loss_direction_residual_rms_train_rtx_small.sh",
             launcher,
