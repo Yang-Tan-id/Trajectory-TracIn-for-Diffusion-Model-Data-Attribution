@@ -2154,6 +2154,13 @@ def run_attribution(cfg: TrajAttributionConfig):
     uses_checkpoint_trajectory_target = (
         uses_implied_noise_trajectory_target or uses_next_trajectory_reference_target
     )
+    uses_checkpoint_own_trajectory = (
+        stage_mode == "query"
+        and os.environ.get(
+            "TRAJ_QUERY_USE_CHECKPOINT_OWN_TRAJECTORY", "0"
+        ).strip().lower()
+        in ("1", "true", "yes", "on")
+    )
     subset_suffix = apply_score_subset_suffix_to_out_dir(cfg)
     os.makedirs(cfg.out_dir, exist_ok=True)
     t_start = time.time()
@@ -2336,7 +2343,9 @@ def run_attribution(cfg: TrajAttributionConfig):
     checkpoint_trajectory_cache_dir = None
     checkpoint_trajectory_cache_paths = []
     checkpoint_trajectory_fn = None
-    if stage_mode == "query" and uses_checkpoint_trajectory_target:
+    if stage_mode == "query" and (
+        uses_checkpoint_trajectory_target or uses_checkpoint_own_trajectory
+    ):
         configured_cache_dir = os.environ.get(
             "TRAJ_TRACIN_CHECKPOINT_TRAJECTORY_CACHE_DIR", ""
         ).strip()
@@ -2429,7 +2438,9 @@ def run_attribution(cfg: TrajAttributionConfig):
         }
 
     def load_or_build_checkpoint_trajectory(cache_ckpt_i: int, known_params=None):
-        if not uses_checkpoint_trajectory_target or checkpoint_trajectory_cache_dir is None:
+        if not (
+            uses_checkpoint_trajectory_target or uses_checkpoint_own_trajectory
+        ) or checkpoint_trajectory_cache_dir is None:
             raise RuntimeError("checkpoint trajectory cache requested for an incompatible objective")
         cache_path = checkpoint_trajectory_cache_paths[cache_ckpt_i]
         expected_ckpt = str(ckpts[cache_ckpt_i])
@@ -3361,6 +3372,24 @@ def run_attribution(cfg: TrajAttributionConfig):
                         f"transition={ckpt_i + 1}->{ckpt_i + 2} snapshots={len(t_seq)}",
                         flush=True,
                     )
+            elif stage_mode == "query" and uses_checkpoint_own_trajectory:
+                current_trajectory = load_or_build_checkpoint_trajectory(
+                    ckpt_i, params
+                )
+                xt_refs = [
+                    array_to_device(x, device) for x in current_trajectory["xt"]
+                ]
+                t_seq = np.asarray(
+                    current_trajectory["timesteps"], dtype=np.int32
+                )
+                pos_seq = np.asarray(
+                    current_trajectory["snapshot_positions"], dtype=np.int32
+                )
+                print(
+                    "[stage:query] current-checkpoint own trajectory states ready | "
+                    f"checkpoint={ckpt_i + 1} snapshots={len(t_seq)}",
+                    flush=True,
+                )
             elif precomputed_traj is not None:
                 xt_refs_raw, t_seq, pos_seq, _ = precomputed_traj
                 if (
@@ -5119,6 +5148,17 @@ def run_attribution(cfg: TrajAttributionConfig):
                             "invert deterministic DDIM step from fixed x_c[t] to fixed x_c_plus_1[t_prev]"
                         )
                     )
+            if uses_checkpoint_own_trajectory:
+                query_payload.update(
+                    checkpoint_own_trajectory=np.asarray(True),
+                    checkpoint_own_trajectory_rule=np.asarray(
+                        "query checkpoint c is differentiated on x_t sampled by checkpoint c; "
+                        "the configured query objective and target checkpoint are otherwise unchanged"
+                    ),
+                    checkpoint_trajectory_cache_dir=np.asarray(
+                        "" if checkpoint_trajectory_cache_dir is None else checkpoint_trajectory_cache_dir
+                    ),
+                )
             save_npz_compressed_atomic(stage_artifact_path, **query_payload)
         else:
             save_npz_compressed_atomic(
@@ -5139,7 +5179,7 @@ def run_attribution(cfg: TrajAttributionConfig):
         print(f"[saved] TrajTracIn {stage_mode} artifact: {stage_artifact_path}")
         if (
             stage_mode == "query"
-            and uses_checkpoint_trajectory_target
+            and (uses_checkpoint_trajectory_target or uses_checkpoint_own_trajectory)
             and checkpoint_trajectory_cache_dir
             and os.environ.get(
                 "TRAJ_TRACIN_DELETE_CHECKPOINT_TRAJECTORY_CACHE", "1"
