@@ -5299,15 +5299,22 @@ def run_attribution(cfg: TrajAttributionConfig):
                         )
                     )
             if uses_checkpoint_own_trajectory:
-                if len(checkpoint_own_trajectory_endpoints) != len(ckpts) - 1:
+                expected_own_checkpoints = (
+                    len(ckpts) - 1
+                    if uses_next_checkpoint_target or probe_alignment_next_checkpoint
+                    else len(ckpts)
+                )
+                if len(checkpoint_own_trajectory_endpoints) != expected_own_checkpoints:
                     raise ValueError(
                         "checkpoint-own endpoint count mismatch: "
-                        f"{len(checkpoint_own_trajectory_endpoints)} != {len(ckpts) - 1}"
+                        f"{len(checkpoint_own_trajectory_endpoints)} != "
+                        f"{expected_own_checkpoints}"
                     )
-                if len(checkpoint_own_trajectory_states) != len(ckpts) - 1:
+                if len(checkpoint_own_trajectory_states) != expected_own_checkpoints:
                     raise ValueError(
                         "checkpoint-own trajectory-state count mismatch: "
-                        f"{len(checkpoint_own_trajectory_states)} != {len(ckpts) - 1}"
+                        f"{len(checkpoint_own_trajectory_states)} != "
+                        f"{expected_own_checkpoints}"
                     )
                 if precomputed_traj is None:
                     raise RuntimeError(
