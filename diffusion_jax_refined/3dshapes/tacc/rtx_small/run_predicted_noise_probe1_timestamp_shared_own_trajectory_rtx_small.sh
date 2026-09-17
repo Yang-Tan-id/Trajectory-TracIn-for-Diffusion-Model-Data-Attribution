@@ -29,12 +29,19 @@ export EXPERIMENT_TAG="${EXPERIMENT_TAG:-experiment1}"
 export TRAIN_SEED="${TRAIN_SEED:-42}"
 export JAX_EPOCHS="${JAX_EPOCHS:-200}"
 export PROBE_SEED="${PROBE_SEED:-20260917}"
+export PROBE_TAG="${PROBE_TAG:-}"
+
+if [[ -n "${PROBE_TAG}" && ! "${PROBE_TAG}" =~ ^[A-Za-z0-9_]+$ ]]; then
+  echo "PROBE_TAG must contain only letters, digits, and underscores" >&2
+  exit 2
+fi
 
 NUM_PROBES=1
-NAMESPACE_BASE="loss_direction_predicted_noise_probe1_timestamp_shared_checkpoint_own_trajectory"
+TAG_SUFFIX="${PROBE_TAG:+_${PROBE_TAG}}"
+NAMESPACE_BASE="loss_direction_predicted_noise_probe1_timestamp_shared${TAG_SUFFIX}_checkpoint_own_trajectory"
 QUERY_PATTERN="${NAMESPACE_BASE}_r{probe_index}"
-SCORE_SUFFIX="timestamp_shared_own_trajectory"
-LOG_ROOT="${SHAPES_ROOT}/result/${EXPERIMENT_TAG}/logs/predicted_noise_probe1_timestamp_shared_own_trajectory/${SLURM_JOB_ID}"
+SCORE_SUFFIX="timestamp_shared${TAG_SUFFIX}_own_trajectory"
+LOG_ROOT="${SHAPES_ROOT}/result/${EXPERIMENT_TAG}/logs/predicted_noise_probe1_timestamp_shared${TAG_SUFFIX}_own_trajectory/${SLURM_JOB_ID}"
 mkdir -p "${LOG_ROOT}"
 
 if [[ "${EVAL_ONLY:-0}" != "1" ]]; then
@@ -91,7 +98,7 @@ if [[ "${EVAL_ONLY:-0}" != "1" ]]; then
 fi
 
 echo "[phase 3/3] LDS for p1 and m1"
-SCHEMES="predicted_noise_jvp_signed_timestamp_shared_own_trajectory,predicted_noise_jvp_l2_squared_timestamp_shared_own_trajectory,predicted_noise_jvp_probe_l2_timestamp_shared_own_trajectory"
+SCHEMES="predicted_noise_jvp_signed_${SCORE_SUFFIX},predicted_noise_jvp_l2_squared_${SCORE_SUFFIX},predicted_noise_jvp_probe_l2_${SCORE_SUFFIX}"
 for sign in 1 -1; do
   JAX_PLATFORMS=cpu python "${SHAPES_ROOT}/script/run_traj_tracin_lds_cached.py" \
     --execute --experiment "${EXPERIMENT_TAG}" --train-seed "${TRAIN_SEED}" \
