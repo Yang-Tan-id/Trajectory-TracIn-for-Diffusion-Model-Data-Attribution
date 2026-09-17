@@ -4748,6 +4748,52 @@ def run_attribution(cfg: TrajAttributionConfig):
                     ),
                     axis=0,
                 ).astype(np.float64)
+                # Keep the compact output-space tensors needed by cached geometry
+                # diagnostics.  This is roughly 25 MB for 3D Shapes (50 x 10
+                # outputs), and avoids restoring all 50 checkpoints again merely
+                # to compare predicted noise with the saved sampling endpoint.
+                if precomputed_traj is None:
+                    raise RuntimeError(
+                        "collect-all probe alignment requires a saved query trajectory"
+                    )
+                trajectory_xt_all, _, trajectory_pos_all, trajectory_meta = precomputed_traj
+                trajectory_by_position = {
+                    int(position): np.asarray(trajectory_xt_all[index], dtype=np.float32)
+                    for index, position in enumerate(
+                        np.asarray(trajectory_pos_all).reshape(-1)
+                    )
+                }
+                unique_positions = term_positions[:snapshots_per_checkpoint]
+                if any(int(position) not in trajectory_by_position for position in unique_positions):
+                    raise ValueError("saved trajectory is missing an aligned snapshot position")
+                endpoint_path = os.path.join(
+                    str(trajectory_meta.get("seed_dir", "")), "final_state.npy"
+                )
+                if not os.path.isfile(endpoint_path):
+                    raise FileNotFoundError(endpoint_path)
+                endpoint_all = np.load(endpoint_path)
+                endpoint_index = int(trajectory_meta.get("sample_index", 0))
+                if endpoint_all.ndim != 4 or endpoint_index >= endpoint_all.shape[0]:
+                    raise ValueError(
+                        f"invalid final_state shape/index: {endpoint_all.shape}, {endpoint_index}"
+                    )
+                alignment_payload.update(
+                    all_checkpoint_predicted_noise_outputs=all_outputs.astype(np.float32),
+                    aligned_trajectory_xt=np.stack(
+                        [trajectory_by_position[int(position)] for position in unique_positions],
+                        axis=0,
+                    ).astype(np.float32),
+                    aligned_trajectory_endpoint_x0=endpoint_all[
+                        endpoint_index : endpoint_index + 1
+                    ].astype(np.float32),
+                    diffusion_alphas_cumprod=np.asarray(
+                        jax.device_get(schedule.alphas_cumprod), dtype=np.float32
+                    ),
+                    cached_output_geometry_definition=np.asarray(
+                        "all_checkpoint_predicted_noise_outputs[c,t]=eps(params[c],x_t); "
+                        "aligned_trajectory_endpoint_x0 is final_state.npy"
+                    ),
+                )
                 def future_alignment_one(keys, delta_output):
                     probes = jax.vmap(
                         lambda key: jax.random.normal(
