@@ -294,8 +294,10 @@ def main() -> None:
             )
 
             repeat_values = []
+            repeat_global = []
             for repeat, pair in enumerate(folds):
                 fold_values = []
+                fold_global = []
                 for train_fold in range(2):
                     train_ids = pair[train_fold]
                     test_ids = pair[1 - train_fold]
@@ -314,7 +316,20 @@ def main() -> None:
                         float(heldout_traj[0]),
                         float(heldout_joint[0]),
                     )
+                    train_plus = lds(
+                        timestamp_predictions[:, train_ids].sum(axis=0),
+                        endpoint[train_ids],
+                        trajectory[train_ids],
+                    )[2][0]
+                    global_sign = 1 if train_plus >= 0.0 else -1
+                    heldout_global = lds(
+                        global_sign
+                        * timestamp_predictions[:, test_ids].sum(axis=0),
+                        endpoint[test_ids],
+                        trajectory[test_ids],
+                    )[2][0]
                     fold_values.append(value)
+                    fold_global.append(float(heldout_global))
                     split_rows.append(
                         {
                             "query": query_id,
@@ -327,11 +342,20 @@ def main() -> None:
                             "heldout_endpoint_percent": value[0],
                             "heldout_trajectory_percent": value[1],
                             "heldout_cf_joint_percent": value[2],
+                            "selected_global_sign": global_sign,
+                            "heldout_global_sign_cf_joint_percent": float(
+                                heldout_global
+                            ),
+                            "heldout_improvement_percent": value[2]
+                            - float(heldout_global),
                         }
                     )
                 repeat_values.append(tuple(np.mean(fold_values, axis=0)))
+                repeat_global.append(float(np.mean(fold_global)))
 
             repeat_values = np.asarray(repeat_values)
+            repeat_global = np.asarray(repeat_global)
+            improvements = repeat_values[:, 2] - repeat_global
             row = {
                 "query": query_id,
                 "variant": variant,
@@ -348,6 +372,11 @@ def main() -> None:
                 "crossfit_positive_repeat_fraction": float(
                     np.mean(repeat_values[:, 2] > 0)
                 ),
+                "crossfit_global_baseline_mean_percent": float(
+                    repeat_global.mean()
+                ),
+                "crossfit_improvement_mean_percent": float(improvements.mean()),
+                "crossfit_beat_global_fraction": float(np.mean(improvements > 0)),
             }
             summary_rows.append(row)
             print(
@@ -355,7 +384,9 @@ def main() -> None:
                 f"minus={minus_joint[0]:+7.3f}% full={full_joint[full_index]:7.3f}% "
                 f"CV={row['crossfit_cf_joint_mean_percent']:+7.3f}% "
                 f"±{row['crossfit_cf_joint_std_percent']:.3f}% "
-                f"CV>0={row['crossfit_positive_repeat_fraction']:.2f}",
+                f"global={row['crossfit_global_baseline_mean_percent']:+7.3f}% "
+                f"delta={row['crossfit_improvement_mean_percent']:+7.3f}% "
+                f"beat={row['crossfit_beat_global_fraction']:.2f}",
                 flush=True,
             )
 

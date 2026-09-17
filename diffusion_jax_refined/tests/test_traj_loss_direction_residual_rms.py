@@ -245,12 +245,18 @@ class LossDirectionResidualRmsTest(unittest.TestCase):
         self.assertIn('payload.get(', analyzer)
         self.assertIn('"raw_projected_expected_loss_gradient"', analyzer)
         self.assertIn("[components saved]", analyzer)
+        self.assertIn("crossfit_global_baseline_mean_percent", analyzer)
+        self.assertIn("crossfit_improvement_mean_percent", analyzer)
+        self.assertIn("crossfit_beat_global_fraction", analyzer)
+        self.assertIn("heldout_global_sign_cf_joint_percent", analyzer)
         self.assertNotIn(
             "load_target_data(cache_group(eval_root), score_indices, targets=TARGETS)",
             analyzer,
         )
         self.assertIn("--train-namespace traj_tracin", launcher)
         self.assertIn('QUERY_IDS="${QUERY_IDS:-1,3,4,8}"', launcher)
+        self.assertIn('SOURCE_RUN_ID="${SOURCE_RUN_ID:-}"', launcher)
+        self.assertIn('RUN_ID="${SOURCE_RUN_ID:-${SLURM_JOB_ID}}"', launcher)
         self.assertIn('--query-ids "${QUERY_IDS}"', launcher)
         self.assertIn(
             "--train-feature-semantics raw_projected_expected_loss_gradient",

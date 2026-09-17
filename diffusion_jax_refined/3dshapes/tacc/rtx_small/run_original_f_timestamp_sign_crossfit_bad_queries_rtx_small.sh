@@ -26,8 +26,10 @@ export EXPERIMENT_TAG="${EXPERIMENT_TAG:-experiment1}"
 export TRAIN_SEED="${TRAIN_SEED:-42}"
 export JAX_EPOCHS="${JAX_EPOCHS:-200}"
 export QUERY_IDS="${QUERY_IDS:-1,3,4,8}"
+export SOURCE_RUN_ID="${SOURCE_RUN_ID:-}"
 
-OUT_DIR="${SHAPES_ROOT}/result/${EXPERIMENT_TAG}/eval/original_f_timestamp_sign_crossfit_bad_queries/run_${SLURM_JOB_ID}"
+RUN_ID="${SOURCE_RUN_ID:-${SLURM_JOB_ID}}"
+OUT_DIR="${SHAPES_ROOT}/result/${EXPERIMENT_TAG}/eval/original_f_timestamp_sign_crossfit_bad_queries/run_${RUN_ID}"
 mkdir -p "${OUT_DIR}"
 
 SOURCE_ARTIFACT="${SHAPES_ROOT}/result/${EXPERIMENT_TAG}/model/prompted_solo/seed_${TRAIN_SEED}_train_gradient/traj_tracin/train_datapoint_gradient_artifact.npz"
@@ -42,6 +44,9 @@ if [[ "${source_count}" != "50" ]]; then
   exit 1
 fi
 echo "[cached] Q=${QUERY_IDS}; direct-loss train gradients; no residual-RMS forward passes"
+if [[ -n "${SOURCE_RUN_ID}" ]]; then
+  echo "[reuse] timestamp components from run_${SOURCE_RUN_ID}"
+fi
 CUDA_VISIBLE_DEVICES=0 JAX_NUM_DEVICES=1 JAX_PLATFORMS=cuda python \
   "${SHAPES_ROOT}/script/analyze_original_f_timestamp_sign_crossfit.py" \
   --experiment "${EXPERIMENT_TAG}" \
