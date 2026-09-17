@@ -75,6 +75,8 @@ def score_namespace(
         namespace = "predicted_noise_jvp_rms"
     elif contraction == "probe_l2":
         namespace = "predicted_noise_jvp_probe_l2"
+    elif contraction == "timestamp_probe_l2":
+        namespace = "predicted_noise_jvp_timestamp_probe_l2"
     elif contraction == "median_absolute":
         namespace = "predicted_noise_jvp_median_absolute"
     elif contraction == "coordinatewise_squared":
@@ -122,6 +124,8 @@ def weighting_semantics(contraction: str) -> str:
         return "learning_rate_weighted_sum_of_probe_rms_gradient_contractions"
     if contraction == "probe_l2":
         return "learning_rate_weighted_sum_of_probe_l2_gradient_contractions"
+    if contraction == "timestamp_probe_l2":
+        return "sum_timestamp_sqrt_sum_checkpoint_lr_times_sum_probe_squared_contractions"
     if contraction == "median_absolute":
         return "learning_rate_weighted_sum_of_probe_median_absolute_gradient_contractions"
     if contraction == "coordinatewise_squared":
@@ -245,6 +249,20 @@ def atomic_savez(path: Path, **arrays: np.ndarray) -> None:
 def load_query_bank(args: argparse.Namespace) -> tuple[np.ndarray, dict[str, np.ndarray]]:
     probe_banks = []
     reference = None
+    patterns = (
+        [value.strip() for value in args.query_namespace_patterns.split(",")]
+        if args.query_namespace_patterns
+        else []
+    )
+    seeds = (
+        [int(value.strip()) for value in args.expected_query_probe_seeds.split(",")]
+        if args.expected_query_probe_seeds
+        else []
+    )
+    if patterns and len(patterns) != args.num_probes:
+        raise ValueError("--query-namespace-patterns must contain one entry per probe")
+    if seeds and len(seeds) != args.num_probes:
+        raise ValueError("--expected-query-probe-seeds must contain one entry per probe")
     for probe_index in range(args.num_probes):
         features = []
         for query_id in range(10):
@@ -255,7 +273,9 @@ def load_query_bank(args: argparse.Namespace) -> tuple[np.ndarray, dict[str, np.
                 query_id,
                 num_probes=args.num_probes,
                 probe_index=probe_index,
-                query_namespace_pattern=args.query_namespace_pattern,
+                query_namespace_pattern=(
+                    patterns[probe_index] if patterns else args.query_namespace_pattern
+                ),
             )
             if not path.is_file():
                 raise FileNotFoundError(path)
@@ -280,17 +300,22 @@ def load_query_bank(args: argparse.Namespace) -> tuple[np.ndarray, dict[str, np.
                 }
             if objective != "trajectory_predicted_noise_probe":
                 raise ValueError(f"{path} contains query objective {objective!r}")
-            if stored_probe_index != probe_index:
+            expected_stored_probe_index = 0 if patterns else probe_index
+            if stored_probe_index != expected_stored_probe_index:
                 raise ValueError(
-                    f"{path} contains output probe {stored_probe_index}, expected {probe_index}"
+                    f"{path} contains output probe {stored_probe_index}, expected "
+                    f"{expected_stored_probe_index}"
                 )
+            expected_probe_seed = (
+                seeds[probe_index] if seeds else args.expected_query_probe_seed
+            )
             if (
-                args.expected_query_probe_seed is not None
-                and stored_probe_seed != args.expected_query_probe_seed
+                expected_probe_seed is not None
+                and stored_probe_seed != expected_probe_seed
             ):
                 raise ValueError(
                     f"{path} contains output probe seed {stored_probe_seed}, expected "
-                    f"{args.expected_query_probe_seed}"
+                    f"{expected_probe_seed}"
                 )
             expected_mode = args.expected_query_probe_mode
             mode_matches = stored_probe_mode == expected_mode
@@ -365,6 +390,8 @@ def score_shard(args: argparse.Namespace) -> None:
         score_shape = (args.num_probes, 10, 5000)
     elif args.contraction == "timestamp_checkpoint_square":
         score_shape = (len(timestep_values), args.num_probes, 10, 5000)
+    elif args.contraction == "timestamp_probe_l2":
+        score_shape = (len(timestep_values), 10, 5000)
     else:
         score_shape = (10, 5000)
     sums = {
@@ -434,6 +461,7 @@ def score_shard(args: argparse.Namespace) -> None:
                 "timestamp_checkpoint_square",
                 "termwise_squared_per_probe",
                 "checkpoint_timestamp_sum_square",
+                "timestamp_probe_l2",
             ):
                 term_scores = {
                     component: np.zeros((10, 5000), dtype=np.float64)
@@ -506,6 +534,10 @@ def score_shard(args: argparse.Namespace) -> None:
                         assert checkpoint_probe_sums is not None
                         checkpoint_probe_sums[component][probe_index] += (
                             host_values / float(len(timesteps))
+                        )
+                    elif args.contraction == "timestamp_probe_l2":
+                        sums[component][timestep_slots[int(timestep)]] += (
+                            float(weight) * host_values
                         )
                     else:
                         assert term_scores is not None
@@ -596,6 +628,8 @@ def merge(args: argparse.Namespace) -> None:
         score_shape = (args.num_probes, 10, 5000)
     elif args.contraction == "timestamp_checkpoint_square":
         score_shape = (10, args.num_probes, 10, 5000)
+    elif args.contraction == "timestamp_probe_l2":
+        score_shape = (10, 10, 5000)
     else:
         score_shape = (10, 5000)
     totals = {
@@ -710,6 +744,17 @@ def merge(args: argparse.Namespace) -> None:
                 for component, values in totals.items()
             }
         }
+    elif args.contraction == "timestamp_probe_l2":
+        score_sets = {
+            score_namespace(
+                args.num_probes,
+                args.contraction,
+                args.namespace_suffix,
+            ): {
+                component: np.sqrt(np.maximum(values, 0.0)).sum(axis=0)
+                for component, values in totals.items()
+            }
+        }
     else:
         score_sets = {
             score_namespace(
@@ -756,6 +801,8 @@ def merge(args: argparse.Namespace) -> None:
                         if args.contraction == "rms"
                         else "learning_rate_weighted_sum_terms(sqrt(sum_probe(square(normalized_dot_product))))"
                         if args.contraction == "probe_l2"
+                        else "sum_timestamp(sqrt(sum_checkpoint(learning_rate_times_sum_probe(square(normalized_dot_product))))))"
+                        if args.contraction == "timestamp_probe_l2"
                         else "learning_rate_weighted_sum_terms(median_probe(abs(normalized_dot_product)))"
                         if args.contraction == "median_absolute"
                         else "learning_rate_weighted_sum_terms(sum_coordinate_squared_products_after_normalization)"
@@ -826,6 +873,7 @@ def main() -> None:
             "absolute",
             "rms",
             "probe_l2",
+            "timestamp_probe_l2",
             "median_absolute",
             "coordinatewise_squared",
             "checkpoint_timestamp_sum_square",
@@ -852,6 +900,16 @@ def main() -> None:
         "--query-namespace-pattern",
         default="",
         help="Optional artifact namespace with {probe_index}; allows reuse of an existing probe bank.",
+    )
+    parser.add_argument(
+        "--query-namespace-patterns",
+        default="",
+        help="Comma-separated artifact namespace patterns, one independently generated bank per probe.",
+    )
+    parser.add_argument(
+        "--expected-query-probe-seeds",
+        default="",
+        help="Comma-separated probe seeds corresponding to --query-namespace-patterns.",
     )
     parser.add_argument(
         "--expected-query-probe-mode",
