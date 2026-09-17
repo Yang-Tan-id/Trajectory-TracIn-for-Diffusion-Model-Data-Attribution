@@ -77,25 +77,39 @@ def reweight_terms(
             if not path.is_file():
                 raise FileNotFoundError(path)
             with np.load(path, allow_pickle=False) as payload:
-                states = np.asarray(
-                    payload["checkpoint_own_trajectory_states"], dtype=np.float64
-                )
-                endpoints = np.asarray(
-                    payload["checkpoint_own_trajectory_endpoints"], dtype=np.float64
-                )
                 state_timesteps = np.asarray(
                     payload["checkpoint_own_trajectory_state_timesteps"], dtype=np.int32
                 )
+                if "checkpoint_own_trajectory_endpoint_rmse" in payload:
+                    endpoint_rmse = np.asarray(
+                        payload["checkpoint_own_trajectory_endpoint_rmse"],
+                        dtype=np.float64,
+                    )
+                    states = None
+                    endpoints = None
+                else:
+                    states = np.asarray(
+                        payload["checkpoint_own_trajectory_states"], dtype=np.float64
+                    )
+                    endpoints = np.asarray(
+                        payload["checkpoint_own_trajectory_endpoints"], dtype=np.float64
+                    )
+                    endpoint_rmse = None
             state_index = {
                 int(timestep): index for index, timestep in enumerate(state_timesteps)
             }
             unique_checkpoints = np.unique(checkpoints)
-            if states.shape[:2] != (len(unique_checkpoints), len(state_timesteps)):
+            geometry_shape = (
+                endpoint_rmse.shape
+                if endpoint_rmse is not None
+                else states.shape[:2]
+            )
+            if geometry_shape != (len(unique_checkpoints), len(state_timesteps)):
                 raise ValueError(
-                    f"Q{query_id} state shape mismatch: {states.shape[:2]} != "
+                    f"Q{query_id} geometry shape mismatch: {geometry_shape} != "
                     f"{(len(unique_checkpoints), len(state_timesteps))}"
                 )
-            if endpoints.shape[0] != len(unique_checkpoints):
+            if endpoints is not None and endpoints.shape[0] != len(unique_checkpoints):
                 raise ValueError(
                     f"Q{query_id} endpoint count mismatch: {endpoints.shape[0]} != "
                     f"{len(unique_checkpoints)}"
@@ -103,15 +117,23 @@ def reweight_terms(
             for checkpoint_position, checkpoint in enumerate(unique_checkpoints):
                 indices = np.flatnonzero(checkpoints == checkpoint)
                 distances = []
-                endpoint = endpoints[checkpoint_position]
                 for index in indices:
                     timestep = int(timesteps[index])
                     if timestep not in state_index:
                         raise ValueError(
                             f"Q{query_id} checkpoint {int(checkpoint)} missing timestep {timestep}"
                         )
-                    difference = states[checkpoint_position, state_index[timestep]] - endpoint
-                    distances.append(float(np.sqrt(np.mean(np.square(difference)))))
+                    if endpoint_rmse is not None:
+                        distance = endpoint_rmse[
+                            checkpoint_position, state_index[timestep]
+                        ]
+                    else:
+                        difference = (
+                            states[checkpoint_position, state_index[timestep]]
+                            - endpoints[checkpoint_position]
+                        )
+                        distance = np.sqrt(np.mean(np.square(difference)))
+                    distances.append(float(distance))
                 inverse_distance = 1.0 / np.maximum(
                     np.asarray(distances, dtype=np.float64), 1e-8
                 )

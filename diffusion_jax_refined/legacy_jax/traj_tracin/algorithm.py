@@ -2161,6 +2161,18 @@ def run_attribution(cfg: TrajAttributionConfig):
         ).strip().lower()
         in ("1", "true", "yes", "on")
     )
+    checkpoint_own_geometry_only = (
+        stage_mode == "query"
+        and os.environ.get(
+            "TRAJ_QUERY_CHECKPOINT_OWN_GEOMETRY_ONLY", "0"
+        ).strip().lower()
+        in ("1", "true", "yes", "on")
+    )
+    if checkpoint_own_geometry_only and not uses_checkpoint_own_trajectory:
+        raise ValueError(
+            "TRAJ_QUERY_CHECKPOINT_OWN_GEOMETRY_ONLY requires "
+            "TRAJ_QUERY_USE_CHECKPOINT_OWN_TRAJECTORY=1"
+        )
     collect_parameter_directional_derivatives = (
         stage_mode == "query"
         and os.environ.get(
@@ -3308,7 +3320,7 @@ def run_attribution(cfg: TrajAttributionConfig):
                 else None
             )
             projector = None
-            if not probe_alignment_only and not (
+            if not checkpoint_own_geometry_only and not probe_alignment_only and not (
                 stage_mode == "train" and reuse_gradient_residual_rms
             ):
                 projector = build_countsketch_projector_jax(
@@ -3461,6 +3473,17 @@ def run_attribution(cfg: TrajAttributionConfig):
                 f"snapshots={len(t_seq)}",
                 flush=True,
             )
+
+            if checkpoint_own_geometry_only:
+                used_ckpts_for_stage.append(ckpt_path)
+                print(
+                    f"[stage:{stage_mode}] checkpoint {ckpt_i + 1}/{len(ckpts)} "
+                    "geometry-only done | gradients skipped | "
+                    f"elapsed={format_seconds(time.time() - stage_ckpt_start)} | "
+                    f"total_elapsed={format_seconds(time.time() - stage_start_time)}",
+                    flush=True,
+                )
+                continue
 
             if stage_mode == "query":
                 use_future_residual_mixture = cfg.query_objective == "trajectory_future_residual_mixture"
@@ -5152,6 +5175,51 @@ def run_attribution(cfg: TrajAttributionConfig):
                 f"{stage_artifact_path}",
                 flush=True,
             )
+            return
+
+        if checkpoint_own_geometry_only:
+            expected_checkpoints = len(ckpts) - 1
+            if len(checkpoint_own_trajectory_states) != expected_checkpoints:
+                raise ValueError(
+                    "checkpoint-own geometry count mismatch: "
+                    f"{len(checkpoint_own_trajectory_states)} != {expected_checkpoints}"
+                )
+            states = np.stack(checkpoint_own_trajectory_states, axis=0).astype(
+                np.float32
+            )
+            endpoints = np.stack(checkpoint_own_trajectory_endpoints, axis=0).astype(
+                np.float32
+            )
+            difference = states - endpoints[:, None, ...]
+            reduce_axes = tuple(range(2, difference.ndim))
+            endpoint_rmse = np.sqrt(
+                np.mean(np.square(difference, dtype=np.float64), axis=reduce_axes)
+            ).astype(np.float32)
+            save_npz_compressed_atomic(
+                stage_artifact_path,
+                checkpoint_own_trajectory_endpoint_rmse=endpoint_rmse,
+                checkpoint_own_trajectory_state_timesteps=np.asarray(
+                    checkpoint_own_trajectory_timesteps, dtype=np.int32
+                ),
+                ckpt_indices=np.arange(expected_checkpoints, dtype=np.int32),
+                checkpoint_own_geometry_only=np.asarray(True),
+                endpoint_distance_definition=np.asarray(
+                    "RMSE(x_checkpoint_own_trajectory[c,t], endpoint[c])"
+                ),
+            )
+            print(
+                f"[saved] checkpoint-own endpoint distances: {stage_artifact_path}",
+                flush=True,
+            )
+            if checkpoint_trajectory_cache_dir and os.path.isdir(
+                checkpoint_trajectory_cache_dir
+            ):
+                shutil.rmtree(checkpoint_trajectory_cache_dir, ignore_errors=False)
+                print(
+                    "[checkpoint-trajectory] deleted disposable geometry-only cache: "
+                    f"{checkpoint_trajectory_cache_dir}",
+                    flush=True,
+                )
             return
 
         if not stage_features:

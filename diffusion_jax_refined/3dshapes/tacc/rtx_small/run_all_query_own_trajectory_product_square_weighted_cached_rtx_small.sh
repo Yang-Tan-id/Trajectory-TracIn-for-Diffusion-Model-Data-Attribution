@@ -25,7 +25,7 @@ export XLA_PYTHON_CLIENT_PREALLOCATE=false
 export EXPERIMENT_TAG="${EXPERIMENT_TAG:-experiment1}"
 export TRAIN_SEED="${TRAIN_SEED:-42}"
 export TIMESTEP_WEIGHTING="${TIMESTEP_WEIGHTING:-snapshot_interval_ddim_step_squared}"
-export TRAJECTORY_STATE_NAMESPACE="${TRAJECTORY_STATE_NAMESPACE:-loss_direction_original_f_checkpoint_own_trajectory_endpoints_all10}"
+export TRAJECTORY_STATE_NAMESPACE="${TRAJECTORY_STATE_NAMESPACE:-loss_direction_original_f_checkpoint_own_endpoint_distances_all10}"
 OUT_DIR="${SHAPES_ROOT}/result/${EXPERIMENT_TAG}/eval/q_all_own_trajectory_product_square_${TIMESTEP_WEIGHTING}/run_${SLURM_JOB_ID}"
 
 CUDA_VISIBLE_DEVICES=0 JAX_NUM_DEVICES=1 JAX_PLATFORMS=cuda python \
