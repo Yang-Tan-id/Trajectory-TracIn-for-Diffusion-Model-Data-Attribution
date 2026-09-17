@@ -16,6 +16,7 @@ if str(SHAPES_ROOT) not in sys.path:
     sys.path.insert(0, str(SHAPES_ROOT))
 
 from analyze_original_f_timestamp_sign_crossfit import TARGETS, lds, target_data
+from analyze_predicted_noise_probe24_output_alignment import artifact_path
 from run_expected_residual_jacobian_scores import load_query_bank, train_part_dir
 
 
@@ -34,6 +35,132 @@ def write_csv(path, rows):
         writer.writerows(rows)
 
 
+def ddim_coefficient_squared(timestep, previous_timestep, alpha_bars):
+    alpha_bar_t = float(alpha_bars[int(timestep)])
+    alpha_bar_previous = (
+        1.0
+        if int(previous_timestep) < 0
+        else float(alpha_bars[int(previous_timestep)])
+    )
+    coefficient = (
+        np.sqrt(1.0 - alpha_bar_previous)
+        - np.sqrt(alpha_bar_previous / alpha_bar_t)
+        * np.sqrt(1.0 - alpha_bar_t)
+    )
+    return coefficient * coefficient
+
+
+def reweight_terms(
+    weights,
+    checkpoints,
+    timesteps,
+    mode,
+    *,
+    query_ids,
+    args,
+):
+    weights = np.asarray(weights, dtype=np.float64)
+    checkpoints = np.asarray(checkpoints, dtype=np.int32)
+    timesteps = np.asarray(timesteps, dtype=np.int32)
+    if mode == "uniform":
+        return np.broadcast_to(weights[None, :], (len(query_ids), len(weights))).copy()
+    if mode == "own_endpoint_inverse_rmse":
+        output = np.zeros((len(query_ids), len(weights)), dtype=np.float64)
+        for query_position, query_id in enumerate(query_ids):
+            path = artifact_path(
+                args.experiment,
+                args.train_seed,
+                args.epochs,
+                query_id,
+                args.trajectory_state_namespace,
+            )
+            if not path.is_file():
+                raise FileNotFoundError(path)
+            with np.load(path, allow_pickle=False) as payload:
+                states = np.asarray(
+                    payload["checkpoint_own_trajectory_states"], dtype=np.float64
+                )
+                endpoints = np.asarray(
+                    payload["checkpoint_own_trajectory_endpoints"], dtype=np.float64
+                )
+                state_timesteps = np.asarray(
+                    payload["checkpoint_own_trajectory_state_timesteps"], dtype=np.int32
+                )
+            state_index = {
+                int(timestep): index for index, timestep in enumerate(state_timesteps)
+            }
+            unique_checkpoints = np.unique(checkpoints)
+            if states.shape[:2] != (len(unique_checkpoints), len(state_timesteps)):
+                raise ValueError(
+                    f"Q{query_id} state shape mismatch: {states.shape[:2]} != "
+                    f"{(len(unique_checkpoints), len(state_timesteps))}"
+                )
+            if endpoints.shape[0] != len(unique_checkpoints):
+                raise ValueError(
+                    f"Q{query_id} endpoint count mismatch: {endpoints.shape[0]} != "
+                    f"{len(unique_checkpoints)}"
+                )
+            for checkpoint_position, checkpoint in enumerate(unique_checkpoints):
+                indices = np.flatnonzero(checkpoints == checkpoint)
+                distances = []
+                endpoint = endpoints[checkpoint_position]
+                for index in indices:
+                    timestep = int(timesteps[index])
+                    if timestep not in state_index:
+                        raise ValueError(
+                            f"Q{query_id} checkpoint {int(checkpoint)} missing timestep {timestep}"
+                        )
+                    difference = states[checkpoint_position, state_index[timestep]] - endpoint
+                    distances.append(float(np.sqrt(np.mean(np.square(difference)))))
+                inverse_distance = 1.0 / np.maximum(
+                    np.asarray(distances, dtype=np.float64), 1e-8
+                )
+                output[query_position, indices] = (
+                    float(weights[indices].sum())
+                    * inverse_distance
+                    / float(inverse_distance.sum())
+                )
+        return output
+    betas = np.linspace(1e-4, 0.02, 1000, dtype=np.float64)
+    alpha_bars = np.cumprod(1.0 - betas)
+    output = np.zeros_like(weights)
+    for checkpoint in np.unique(checkpoints):
+        indices = np.flatnonzero(checkpoints == checkpoint)
+        checkpoint_timesteps = timesteps[indices]
+        if mode == "local_ddim_step_squared":
+            step_weights = np.asarray(
+                [
+                    ddim_coefficient_squared(timestep, int(timestep) - 1, alpha_bars)
+                    if int(timestep) > 0
+                    else ddim_coefficient_squared(timestep, -1, alpha_bars)
+                    for timestep in checkpoint_timesteps
+                ],
+                dtype=np.float64,
+            )
+        elif mode == "snapshot_interval_ddim_step_squared":
+            order = np.argsort(-checkpoint_timesteps)
+            ordered_timesteps = checkpoint_timesteps[order]
+            previous = np.concatenate(
+                [ordered_timesteps[1:], np.asarray([-1], dtype=np.int32)]
+            )
+            ordered_weights = np.asarray(
+                [
+                    ddim_coefficient_squared(timestep, prior, alpha_bars)
+                    for timestep, prior in zip(ordered_timesteps, previous)
+                ],
+                dtype=np.float64,
+            )
+            step_weights = np.empty_like(ordered_weights)
+            step_weights[order] = ordered_weights
+        else:
+            raise ValueError(f"unknown timestep weighting mode {mode!r}")
+        denominator = float(step_weights.sum())
+        if denominator <= 0.0:
+            raise ValueError(f"checkpoint {int(checkpoint)} has zero timestep weight")
+        output[indices] = float(weights[indices].sum()) * step_weights / denominator
+    return np.broadcast_to(output[None, :], (len(query_ids), len(output))).copy()
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--experiment", default="experiment1")
@@ -43,10 +170,24 @@ def main():
     parser.add_argument("--num-checkpoints", type=int, default=50)
     parser.add_argument("--repeats", type=int, default=20)
     parser.add_argument("--random-seed", type=int, default=20260916)
+    parser.add_argument(
+        "--timestep-weighting",
+        choices=(
+            "uniform",
+            "local_ddim_step_squared",
+            "snapshot_interval_ddim_step_squared",
+            "own_endpoint_inverse_rmse",
+        ),
+        default="uniform",
+    )
     parser.add_argument("--train-namespace", default="traj_tracin")
     parser.add_argument(
         "--original-query-namespace",
         default="loss_direction_original_f_checkpoint_own_trajectory",
+    )
+    parser.add_argument(
+        "--trajectory-state-namespace",
+        default="loss_direction_original_f_checkpoint_own_trajectory_endpoints_all10",
     )
     parser.add_argument(
         "--train-feature-semantics",
@@ -68,6 +209,15 @@ def main():
     )
     term_checkpoints = np.asarray(metadata["ckpt_indices"], dtype=np.int32)
     term_timesteps = np.asarray(metadata["timesteps"], dtype=np.int32)
+    original_term_weights = np.asarray(metadata["term_weights"], dtype=np.float64)
+    effective_term_weights = reweight_terms(
+        original_term_weights,
+        term_checkpoints,
+        term_timesteps,
+        args.timestep_weighting,
+        query_ids=query_ids,
+        args=args,
+    )
     lookup = {
         (int(checkpoint), int(timestep)): term
         for term, (checkpoint, timestep) in enumerate(
@@ -119,6 +269,11 @@ def main():
             term = lookup.get((int(term_checkpoint), int(timestep)))
             if term is None:
                 continue
+            if not np.isclose(
+                float(weight), original_term_weights[term], rtol=1e-6, atol=1e-12
+            ):
+                raise ValueError(f"term-weight mismatch for term {term}")
+            score_weight = effective_term_weights[:, term, None]
             train = jax.device_put(jnp.asarray(train_terms[local]))
             query = jax.device_put(jnp.asarray(query_bank[:, term, :]))
             dots = train @ query.T
@@ -133,8 +288,8 @@ def main():
             for variant, value in values.items():
                 linear = np.asarray(jax.device_get(value), dtype=np.float64)
                 squared = np.square(linear)
-                linear_scores[variant] += float(weight) * linear.T
-                scores[variant] += float(weight) * squared.T
+                linear_scores[variant] += score_weight * linear.T
+                scores[variant] += score_weight * squared.T
             used_terms += 1
         print(
             f"[product square] checkpoint={checkpoint + 1}/50 terms={used_terms}",
@@ -302,12 +457,27 @@ def main():
         args.out_dir / "product_square_scores.npz",
         query_ids=np.asarray(query_ids, dtype=np.int32),
         score_indices=np.asarray(score_indices, dtype=np.int64),
+        term_checkpoints=term_checkpoints,
+        term_timesteps=term_timesteps,
+        original_term_weights=original_term_weights,
+        effective_term_weights=effective_term_weights,
         **{variant: values.astype(np.float32) for variant, values in scores.items()},
     )
     query_label = ",".join(f"Q{query_id}" for query_id in query_ids)
     print(
         f"{query_label} OWN-TRAJECTORY ORIGINAL-F — TERMWISE PRODUCT SQUARE"
     )
+    print(f"timestep_weighting={args.timestep_weighting}")
+    first_checkpoint = np.flatnonzero(term_checkpoints == np.min(term_checkpoints))
+    for query_position, query_id in enumerate(query_ids):
+        print(
+            f"Q{query_id}_first_checkpoint_timestamp_weights="
+            + ",".join(
+                f"{int(term_timesteps[index])}:"
+                f"{effective_term_weights[query_position, index] / effective_term_weights[query_position, first_checkpoint].sum():.6f}"
+                for index in first_checkpoint
+            )
+        )
     print("S_i = sum_(c,t) weight_(c,t) * product_(c,t,i)^2")
     print("Q VARIANT             SIGN   ENDPOINT      TRAJ  CF JOINT")
     print("-" * 70)
