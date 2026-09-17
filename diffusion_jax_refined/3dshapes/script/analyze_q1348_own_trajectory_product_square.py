@@ -238,7 +238,10 @@ def main():
         score_indices=np.asarray(score_indices, dtype=np.int64),
         **{variant: values.astype(np.float32) for variant, values in scores.items()},
     )
-    print("Q1,Q3,Q4,Q8 OWN-TRAJECTORY ORIGINAL-F — TERMWISE PRODUCT SQUARE")
+    query_label = ",".join(f"Q{query_id}" for query_id in query_ids)
+    print(
+        f"{query_label} OWN-TRAJECTORY ORIGINAL-F — TERMWISE PRODUCT SQUARE"
+    )
     print("S_i = sum_(c,t) weight_(c,t) * product_(c,t,i)^2")
     print("Q VARIANT             SIGN   ENDPOINT      TRAJ  CF JOINT")
     print("-" * 70)
@@ -251,7 +254,7 @@ def main():
             f"{row['cf_joint_percent']:+9.3f}%"
         )
 
-    print("\nFOUR-QUERY MEAN")
+    print(f"\n{len(query_ids)}-QUERY MEAN")
     print("VARIANT             SIGN   ENDPOINT      TRAJ  CF JOINT")
     print("-" * 68)
     for variant in VARIANTS:
@@ -283,7 +286,7 @@ def main():
             f"{row['selected_p1_split_fraction']:9.2f}"
         )
 
-    print("\nFOUR-QUERY CROSSFIT MEAN")
+    print(f"\n{len(query_ids)}-QUERY CROSSFIT MEAN")
     print("VARIANT               CV MEAN")
     print("-" * 34)
     for variant in VARIANTS:
