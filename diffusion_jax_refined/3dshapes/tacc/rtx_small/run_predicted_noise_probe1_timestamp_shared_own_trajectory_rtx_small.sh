@@ -4,7 +4,7 @@
 #SBATCH -e 3d-pn1-tsown-%j.err
 #SBATCH -p rtx-small
 #SBATCH -N 1
-#SBATCH -n 1
+#SBATCH -n 2
 #SBATCH --cpus-per-task=8
 #SBATCH -t 04:00:00
 
@@ -47,18 +47,34 @@ mkdir -p "${LOG_ROOT}"
 if [[ "${EVAL_ONLY:-0}" != "1" ]]; then
   echo "[phase 1/3] one Gaussian probe per timestamp, shared over all checkpoints and queries"
   export TRAJ_QUERY_USE_CHECKPOINT_OWN_TRAJECTORY=1
-  python "${QUERY_RUNNER}" \
-    --execute --experiment "${EXPERIMENT_TAG}" --train-seed "${TRAIN_SEED}" \
-    --epochs "${JAX_EPOCHS}" --query-ids 0,1,2,3,4,5,6,7,8,9 \
-    --gpus 0 --skip-sampling --skip-score \
-    --artifact-namespace "${NAMESPACE_BASE}_r0" \
-    --query-objective trajectory_predicted_noise_probe \
-    --predicted-noise-probe-index 0 \
-    --predicted-noise-probe-count "${NUM_PROBES}" \
-    --predicted-noise-probe-mode timestamp_shared_gaussian \
-    --predicted-noise-probe-seed "${PROBE_SEED}" \
-    --num-snapshots 10 --log-prefix pn1_timestamp_shared_own \
-    >"${LOG_ROOT}/query_probe_0.log" 2>&1
+  pids=()
+  for gpu in 0 1; do
+    if [[ "${gpu}" == "0" ]]; then
+      query_ids="0,1,2,3,4"
+    else
+      query_ids="5,6,7,8,9"
+    fi
+    (
+      python "${QUERY_RUNNER}" \
+        --execute --experiment "${EXPERIMENT_TAG}" --train-seed "${TRAIN_SEED}" \
+        --epochs "${JAX_EPOCHS}" --query-ids "${query_ids}" \
+        --gpus "${gpu}" --skip-sampling --skip-score \
+        --artifact-namespace "${NAMESPACE_BASE}_r0" \
+        --query-objective trajectory_predicted_noise_probe \
+        --predicted-noise-probe-index 0 \
+        --predicted-noise-probe-count "${NUM_PROBES}" \
+        --predicted-noise-probe-mode timestamp_shared_gaussian \
+        --predicted-noise-probe-seed "${PROBE_SEED}" \
+        --num-snapshots 10 --log-prefix "pn1_timestamp_shared_own_gpu${gpu}"
+    ) >"${LOG_ROOT}/query_gpu_${gpu}.log" 2>&1 &
+    pids+=("$!")
+  done
+  failed=0
+  for pid in "${pids[@]}"; do wait "${pid}" || failed=1; done
+  (( failed == 0 )) || {
+    echo "query probe generation failed; inspect ${LOG_ROOT}" >&2
+    exit 1
+  }
   unset TRAJ_QUERY_USE_CHECKPOINT_OWN_TRAJECTORY
 else
   echo "[reuse] EVAL_ONLY=1; reusing completed query and score artifacts"
@@ -69,20 +85,30 @@ run_contraction() {
   local label="$2"
   local run_id="${SLURM_JOB_ID}_${label}"
   echo "[score] ${label}: contraction=${contraction}"
-  CUDA_VISIBLE_DEVICES=0 JAX_NUM_DEVICES=1 JAX_PLATFORMS=cuda \
-    python "${SCORE_DRIVER}" score-shard \
-      --experiment "${EXPERIMENT_TAG}" --train-seed "${TRAIN_SEED}" \
-      --epochs "${JAX_EPOCHS}" --run-id "${run_id}" \
-      --shard-index 0 --shard-count 1 \
-      --num-probes "${NUM_PROBES}" --contraction "${contraction}" \
-      --namespace-suffix "${SCORE_SUFFIX}" \
-      --query-namespace-pattern "${QUERY_PATTERN}" \
-      --expected-query-probe-mode timestamp_shared_gaussian \
-      --expected-query-probe-seed "${PROBE_SEED}" \
-      >"${LOG_ROOT}/${label}_score.log" 2>&1
+  local pids=() failed=0
+  for shard in 0 1; do
+    (
+      CUDA_VISIBLE_DEVICES="${shard}" JAX_NUM_DEVICES=1 JAX_PLATFORMS=cuda \
+        python "${SCORE_DRIVER}" score-shard \
+          --experiment "${EXPERIMENT_TAG}" --train-seed "${TRAIN_SEED}" \
+          --epochs "${JAX_EPOCHS}" --run-id "${run_id}" \
+          --shard-index "${shard}" --shard-count 2 \
+          --num-probes "${NUM_PROBES}" --contraction "${contraction}" \
+          --namespace-suffix "${SCORE_SUFFIX}" \
+          --query-namespace-pattern "${QUERY_PATTERN}" \
+          --expected-query-probe-mode timestamp_shared_gaussian \
+          --expected-query-probe-seed "${PROBE_SEED}"
+    ) >"${LOG_ROOT}/${label}_score_shard_${shard}.log" 2>&1 &
+    pids+=("$!")
+  done
+  for pid in "${pids[@]}"; do wait "${pid}" || failed=1; done
+  (( failed == 0 )) || {
+    echo "${label} score generation failed; inspect ${LOG_ROOT}" >&2
+    exit 1
+  }
   python "${SCORE_DRIVER}" merge \
     --experiment "${EXPERIMENT_TAG}" --train-seed "${TRAIN_SEED}" \
-    --epochs "${JAX_EPOCHS}" --run-id "${run_id}" --shard-count 1 \
+    --epochs "${JAX_EPOCHS}" --run-id "${run_id}" --shard-count 2 \
     --num-probes "${NUM_PROBES}" --contraction "${contraction}" \
     --namespace-suffix "${SCORE_SUFFIX}" \
     --query-namespace-pattern "${QUERY_PATTERN}" \
