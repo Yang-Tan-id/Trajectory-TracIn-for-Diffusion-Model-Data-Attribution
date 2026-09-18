@@ -114,8 +114,12 @@ def main() -> None:
         for name, selection in BANKS.items()
     }
     bank_terms["1-12"] = np.mean(weighted, axis=0).reshape(50, 10, -1)
+    # A checkpoint's learning-rate multiplier is a common scalar across its
+    # timestamp terms.  Remove that scalar before cosine calculations so late
+    # cosine-schedule checkpoints do not collapse into the numerical epsilon.
+    direction_weights = weights / np.maximum(weights.sum(axis=1, keepdims=True), 1e-30)
     bank_checkpoints = {
-        name: np.einsum("ct,ctd->cd", weights, values, optimize=True)
+        name: np.einsum("ct,ctd->cd", direction_weights, values, optimize=True)
         for name, values in bank_terms.items()
     }
 
