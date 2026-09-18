@@ -11,6 +11,7 @@ import sys
 from pathlib import Path
 
 import numpy as np
+import jax
 
 
 SHAPES_ROOT = Path(__file__).resolve().parents[1]
@@ -30,6 +31,11 @@ from run_predicted_noise_jvp_l2_squared import (
     load_query_bank,
     query_artifact_path,
     train_part_dir,
+)
+from analyze_reference_probe_delta_alignment import (
+    PROBE_SEEDS as TIMESTAMP_SHARED_PROBE_SEEDS,
+    artifact_path as delta_geometry_artifact_path,
+    probe_key as timestamp_shared_probe_key,
 )
 
 
@@ -75,6 +81,8 @@ def aggregate_oriented_queries(
 
 
 def load_alignments(args: argparse.Namespace, reference: dict[str, np.ndarray]):
+    if args.alignment_source == "timestamp_shared_delta":
+        return load_timestamp_shared_delta_alignments(args, reference)
     scalars = []
     cosines = []
     for query_id in range(10):
@@ -103,6 +111,58 @@ def load_alignments(args: argparse.Namespace, reference: dict[str, np.ndarray]):
     return np.stack(scalars, axis=1), np.stack(cosines, axis=1)
 
 
+def load_timestamp_shared_delta_alignments(
+    args: argparse.Namespace,
+    reference: dict[str, np.ndarray],
+) -> tuple[np.ndarray, np.ndarray]:
+    """Orient each saved J^T v toward the current next-checkpoint delta-eps."""
+    seeds = [int(value) for value in args.expected_query_probe_seeds.split(",")]
+    if len(seeds) != args.num_probes:
+        raise ValueError("timestamp-shared delta orientation needs one seed per probe")
+    scalars = np.empty((args.num_probes, 10, len(reference["ckpt_indices"])), dtype=np.float32)
+    cosines = np.empty_like(scalars)
+    geometry_args = argparse.Namespace(
+        experiment=args.experiment,
+        train_seed=args.train_seed,
+        epochs=args.epochs,
+        geometry_namespace=args.geometry_namespace,
+    )
+    for query_id in range(10):
+        path = delta_geometry_artifact_path(geometry_args, query_id)
+        with np.load(path, allow_pickle=False) as payload:
+            deltas = np.asarray(
+                payload["checkpoint_next_predicted_noise_deltas"], dtype=np.float32
+            )
+        checkpoint_count, timestamp_count = deltas.shape[:2]
+        if checkpoint_count != 49 or timestamp_count != 10:
+            raise ValueError(f"unexpected delta shape in {path}: {deltas.shape}")
+        timesteps = np.asarray(reference["timesteps"][:timestamp_count], dtype=np.int32)
+        delta_norms = np.linalg.norm(deltas.reshape(49, 10, -1), axis=2)
+        for probe, seed in enumerate(seeds):
+            values = np.empty((50, 10), dtype=np.float32)
+            angles = np.empty_like(values)
+            for slot, timestep in enumerate(timesteps):
+                v = np.asarray(
+                    jax.random.normal(
+                        timestamp_shared_probe_key(seed, int(timestep)),
+                        deltas.shape[2:],
+                    ),
+                    dtype=np.float32,
+                )
+                dots = np.sum(deltas[:, slot] * v, axis=tuple(range(1, deltas[:, slot].ndim)))
+                values[:49, slot] = dots
+                angles[:49, slot] = dots / np.maximum(
+                    np.linalg.norm(v) * delta_norms[:, slot], 1e-12
+                )
+                # No c->c+1 update exists at checkpoint 50.  Orient its term by
+                # the update that arrived at checkpoint 50 (49->50).
+                values[49, slot] = values[48, slot]
+                angles[49, slot] = angles[48, slot]
+            scalars[probe, query_id] = values.reshape(-1)
+            cosines[probe, query_id] = angles.reshape(-1)
+    return scalars, cosines
+
+
 def query_args(args: argparse.Namespace) -> argparse.Namespace:
     return argparse.Namespace(
         experiment=args.experiment,
@@ -110,7 +170,10 @@ def query_args(args: argparse.Namespace) -> argparse.Namespace:
         epochs=args.epochs,
         num_probes=args.num_probes,
         query_namespace_pattern=args.query_namespace_pattern,
-        expected_query_probe_mode="independent_gaussian",
+        query_namespace_patterns=args.query_namespace_patterns,
+        expected_query_probe_mode=args.expected_query_probe_mode,
+        expected_query_probe_seed=None,
+        expected_query_probe_seeds=args.expected_query_probe_seeds,
     )
 
 
@@ -125,6 +188,18 @@ def main() -> None:
     parser.add_argument(
         "--query-namespace-pattern",
         default="loss_direction_residual_rms_predicted_noise_probe4_r{probe_index}",
+    )
+    parser.add_argument("--query-namespace-patterns", default="")
+    parser.add_argument("--expected-query-probe-mode", default="independent_gaussian")
+    parser.add_argument("--expected-query-probe-seeds", default="")
+    parser.add_argument(
+        "--alignment-source",
+        choices=("artifact", "timestamp_shared_delta"),
+        default="artifact",
+    )
+    parser.add_argument(
+        "--geometry-namespace",
+        default="reference_probe_delta_geometry_collect_all",
     )
     parser.add_argument(
         "--alignment-namespace",
