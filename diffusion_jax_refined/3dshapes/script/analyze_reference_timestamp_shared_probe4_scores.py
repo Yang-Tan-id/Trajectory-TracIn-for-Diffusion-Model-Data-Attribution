@@ -137,6 +137,10 @@ def main() -> None:
     parser.add_argument("--train-seed", type=int, default=42)
     parser.add_argument("--probe-seeds", required=True)
     parser.add_argument("--combined-suffix", required=True)
+    parser.add_argument(
+        "--individual-suffix-template",
+        default="timestamp_shared_reference_seed{seed}",
+    )
     parser.add_argument("--combined-only", action="store_true")
     parser.add_argument("--out-dir", type=Path, required=True)
     args = parser.parse_args()
@@ -162,7 +166,7 @@ def main() -> None:
         )
         if not args.combined_only:
             for probe, seed in enumerate(seeds, start=1):
-                suffix = f"timestamp_shared_reference_seed{seed}"
+                suffix = args.individual_suffix_template.format(seed=seed)
                 namespaces = {
                     reduction: f"{base}_{suffix}"
                     for reduction, base in INDIVIDUAL.items()

@@ -31,23 +31,38 @@ TRAIN_SEED="${TRAIN_SEED:-42}"
 JAX_EPOCHS="${JAX_EPOCHS:-200}"
 PROBE_SEEDS=(314159265 271828183 161803399 141421357)
 PROBE_SEEDS_CSV="314159265,271828183,161803399,141421357"
-COMBINED_SUFFIX="timestamp_shared_reference_probe4_fresh20260917"
+TRAJECTORY_MODE="${TRAJECTORY_MODE:-reference}"
+if [[ "${TRAJECTORY_MODE}" == "reference" ]]; then
+  QUERY_NAMESPACE_TEMPLATE='loss_direction_predicted_noise_probe1_timestamp_shared_reference_seed%s_r0'
+  INDIVIDUAL_SUFFIX_TEMPLATE='timestamp_shared_reference_seed{seed}'
+  COMBINED_SUFFIX="timestamp_shared_reference_probe4_fresh20260917"
+elif [[ "${TRAJECTORY_MODE}" == "own" ]]; then
+  QUERY_NAMESPACE_TEMPLATE='loss_direction_predicted_noise_probe1_timestamp_shared_own_compare_seed%s_checkpoint_own_trajectory_r0'
+  INDIVIDUAL_SUFFIX_TEMPLATE='timestamp_shared_own_compare_seed{seed}'
+  COMBINED_SUFFIX="timestamp_shared_own_compare_probe4_fresh20260917"
+else
+  echo "TRAJECTORY_MODE must be reference or own" >&2
+  exit 2
+fi
 RESULT_ROOT="${SHAPES_ROOT}/result/${EXPERIMENT_TAG}"
-LOG_ROOT="${RESULT_ROOT}/logs/reference_timestamp_shared_probe4/${SLURM_JOB_ID}"
-OUTDIR="${RESULT_ROOT}/eval/reference_timestamp_shared_probe4/run_${SLURM_JOB_ID}"
+LOG_ROOT="${RESULT_ROOT}/logs/${TRAJECTORY_MODE}_timestamp_shared_probe4/${SLURM_JOB_ID}"
+OUTDIR="${RESULT_ROOT}/eval/${TRAJECTORY_MODE}_timestamp_shared_probe4/run_${SLURM_JOB_ID}"
 mkdir -p "${LOG_ROOT}"
 
-# This experiment must use the one final/reference trajectory for every
-# checkpoint, regardless of variables inherited through sbatch --export=ALL.
-unset TRAJ_QUERY_USE_CHECKPOINT_OWN_TRAJECTORY
+if [[ "${TRAJECTORY_MODE}" == "own" ]]; then
+  export TRAJ_QUERY_USE_CHECKPOINT_OWN_TRAJECTORY=1
+else
+  unset TRAJ_QUERY_USE_CHECKPOINT_OWN_TRAJECTORY
+fi
 
 patterns=()
 for seed in "${PROBE_SEEDS[@]}"; do
-  patterns+=("loss_direction_predicted_noise_probe1_timestamp_shared_reference_seed${seed}_r0")
+  printf -v namespace "${QUERY_NAMESPACE_TEMPLATE}" "${seed}"
+  patterns+=("${namespace}")
 done
 QUERY_PATTERNS="$(IFS=,; echo "${patterns[*]}")"
 
-echo "[phase 1/3] four fresh timestamp-shared probes on one fixed reference trajectory"
+echo "[phase 1/3] four fresh timestamp-shared probes; trajectory_mode=${TRAJECTORY_MODE}"
 echo "[invariant] same probe/timestamp direction is shared across every checkpoint and query"
 pids=()
 for gpu in 0 1; do
@@ -78,7 +93,7 @@ for pid in "${pids[@]}"; do wait "${pid}" || failed=1; done
 score_one_probe() {
   local gpu="$1" probe="$2" contraction="$3" label="$4"
   local seed="${PROBE_SEEDS[$probe]}" pattern="${patterns[$probe]}"
-  local suffix="timestamp_shared_reference_seed${seed}"
+  local suffix="${INDIVIDUAL_SUFFIX_TEMPLATE/\{seed\}/${seed}}"
   local run_id="${SLURM_JOB_ID}_p$((probe + 1))_${label}"
   CUDA_VISIBLE_DEVICES="${gpu}" JAX_NUM_DEVICES=1 JAX_PLATFORMS=cuda \
     python "${SCORE_DRIVER}" score-shard \
@@ -155,6 +170,7 @@ JAX_PLATFORMS=cpu python \
   "${SHAPES_ROOT}/script/analyze_reference_timestamp_shared_probe4_scores.py" \
   --experiment "${EXPERIMENT_TAG}" --train-seed "${TRAIN_SEED}" \
   --probe-seeds "${PROBE_SEEDS_CSV}" --combined-suffix "${COMBINED_SUFFIX}" \
+  --individual-suffix-template "${INDIVIDUAL_SUFFIX_TEMPLATE}" \
   --out-dir "${OUTDIR}"
 
-echo "[done] fixed-reference four-probe individual and combined scores: ${OUTDIR}"
+echo "[done] ${TRAJECTORY_MODE} four-probe individual and combined scores: ${OUTDIR}"
