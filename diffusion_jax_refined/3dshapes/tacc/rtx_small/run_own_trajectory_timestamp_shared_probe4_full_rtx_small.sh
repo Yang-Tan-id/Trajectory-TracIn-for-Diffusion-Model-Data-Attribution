@@ -10,6 +10,12 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+candidate="${REPO_ROOT:-${SLURM_SUBMIT_DIR:-$PWD}}"
+while [[ "${candidate}" != "/" && ! -f "${candidate}/diffusion_jax_refined/3dshapes/tacc/rtx_small/run_reference_timestamp_shared_probe4_full_rtx_small.sh" ]]; do
+  candidate="$(dirname "${candidate}")"
+done
+REPO_ROOT="${candidate}"
+BASE_RUNNER="${REPO_ROOT}/diffusion_jax_refined/3dshapes/tacc/rtx_small/run_reference_timestamp_shared_probe4_full_rtx_small.sh"
+[[ -f "${BASE_RUNNER}" ]] || { echo "Could not locate repository runner" >&2; exit 1; }
 export TRAJECTORY_MODE=own
-exec bash "${SCRIPT_DIR}/run_reference_timestamp_shared_probe4_full_rtx_small.sh"
+exec bash "${BASE_RUNNER}"
