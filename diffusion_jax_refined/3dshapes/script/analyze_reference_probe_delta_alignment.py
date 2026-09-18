@@ -100,7 +100,10 @@ def main() -> None:
     parser.add_argument("--experiment", default="experiment1")
     parser.add_argument("--train-seed", type=int, default=42)
     parser.add_argument("--epochs", type=int, default=200)
-    parser.add_argument("--geometry-namespace", default="predicted_noise_output_next_original12")
+    parser.add_argument(
+        "--geometry-namespace",
+        default="reference_probe_delta_geometry_collect_all",
+    )
     parser.add_argument("--lds-csv", type=Path, action="append", required=True)
     parser.add_argument("--threshold", type=float, default=5.0)
     parser.add_argument("--out-dir", type=Path, required=True)
@@ -117,6 +120,11 @@ def main() -> None:
                 f"{path}\nRun a collect-all next-checkpoint probe-alignment artifact first."
             )
         with np.load(path, allow_pickle=False) as payload:
+            if "checkpoint_next_predicted_noise_deltas" not in payload:
+                raise KeyError(
+                    f"{path}: missing checkpoint_next_predicted_noise_deltas; "
+                    f"available keys={sorted(payload.files)}"
+                )
             deltas = np.asarray(payload["checkpoint_next_predicted_noise_deltas"], dtype=np.float64)
             flat_timesteps = np.asarray(payload["timesteps"], dtype=np.int32)
             term_weights = np.asarray(payload["term_weights"], dtype=np.float64)
