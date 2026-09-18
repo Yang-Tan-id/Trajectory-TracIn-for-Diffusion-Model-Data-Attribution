@@ -24,15 +24,16 @@ export TF_GPU_ALLOCATOR="${TF_GPU_ALLOCATOR:-cuda_malloc_async}"
 EXPERIMENT_TAG="${EXPERIMENT_TAG:-experiment1}"
 TRAIN_SEED="${TRAIN_SEED:-42}"
 PROJ_DIM="${PROJ_DIM:-4096}"
+ATTRIBUTION_POINTS="${ATTRIBUTION_POINTS:-5000}"
 FIRST_INTERVAL="${FIRST_INTERVAL:-0}"
 LAST_INTERVAL="${LAST_INTERVAL:-48}"
-LOGROOT="${SHAPES_ROOT}/result/${EXPERIMENT_TAG}/logs/fixed_checkpoint_adamw_four_events/${SLURM_JOB_ID}"
+LOGROOT="${SHAPES_ROOT}/result/${EXPERIMENT_TAG}/logs/fixed_checkpoint_adamw_four_events_n${ATTRIBUTION_POINTS}/${SLURM_JOB_ID}"
 mkdir -p "${LOGROOT}"
 
 for interval in $(seq "${FIRST_INTERVAL}" "${LAST_INTERVAL}"); do
   start_epoch=$((4 * (interval + 1)))
   end_epoch=$((start_epoch + 4))
-  outdir="${SHAPES_ROOT}/result/${EXPERIMENT_TAG}/fixed_checkpoint_adamw_four_events/epoch_${start_epoch}_${end_epoch}"
+  outdir="${SHAPES_ROOT}/result/${EXPERIMENT_TAG}/fixed_checkpoint_adamw_four_events_n${ATTRIBUTION_POINTS}/epoch_${start_epoch}_${end_epoch}"
   logdir="${LOGROOT}/interval_${interval}_epoch_${start_epoch}_${end_epoch}"
   mkdir -p "${outdir}" "${logdir}"
   echo "[interval $((interval + 1))/49] checkpoint epoch ${start_epoch} -> ${end_epoch}"
@@ -44,6 +45,7 @@ for interval in $(seq "${FIRST_INTERVAL}" "${LAST_INTERVAL}"); do
         --start-epoch "${start_epoch}" --end-epoch "${end_epoch}" \
         --fixed-checkpoint --extract-gradient-sketches \
         --event-feature adamw_hypothetical_update --proj-dim "${PROJ_DIM}" \
+        --attribution-points "${ATTRIBUTION_POINTS}" \
         --shard-id "${gpu}" --num-shards 2 --out-dir "${outdir}" \
         >"${logdir}/gpu_${gpu}.log" 2>&1 &
   done

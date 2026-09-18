@@ -80,6 +80,10 @@ def main():
     )
     parser.add_argument("--shard-id", type=int, default=0)
     parser.add_argument("--num-shards", type=int, default=1)
+    parser.add_argument(
+        "--attribution-points", type=int, default=0,
+        help="Use the same seed-based random attribution subset; 0 means the full dataset.",
+    )
     args = parser.parse_args()
     if args.end_epoch <= args.start_epoch:
         raise ValueError("--end-epoch must be greater than --start-epoch")
@@ -134,7 +138,17 @@ def main():
 
     if not 0 <= args.shard_id < args.num_shards:
         raise ValueError("--shard-id must be in [0, --num-shards)")
-    owned_indices = np.arange(args.shard_id, len(ds), args.num_shards, dtype=np.int64)
+    if args.attribution_points > 0:
+        count = min(int(args.attribution_points), len(ds))
+        candidate_indices = np.asarray(
+            np.random.default_rng(cfg.seed).choice(len(ds), size=count, replace=False),
+            dtype=np.int64,
+        )
+    else:
+        candidate_indices = np.arange(len(ds), dtype=np.int64)
+    shard_start = len(candidate_indices) * args.shard_id // args.num_shards
+    shard_end = len(candidate_indices) * (args.shard_id + 1) // args.num_shards
+    owned_indices = candidate_indices[shard_start:shard_end]
     owned_row = np.full((len(ds),), -1, dtype=np.int64)
     owned_row[owned_indices] = np.arange(len(owned_indices), dtype=np.int64)
     projector = None
@@ -320,6 +334,7 @@ def main():
         "event_feature": args.event_feature,
         "fixed_checkpoint": bool(args.fixed_checkpoint),
         "gradient_shard": [args.shard_id, args.num_shards],
+        "attribution_points": int(len(candidate_indices)),
         "params": flat_metrics(state.params, target.params),
         "ema_params": flat_metrics(state.ema_params, target.ema_params),
         "parameter_displacement": displacement_metrics(
