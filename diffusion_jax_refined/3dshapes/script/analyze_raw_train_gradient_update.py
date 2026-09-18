@@ -25,7 +25,7 @@ def main() -> None:
     parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--query-ids", default="0")
     parser.add_argument(
-        "--geometry-namespace", default="raw_train_gradient_update_sanity_reference"
+        "--geometry-namespace", default="raw_train_gradient_update_sanity_reference_v2"
     )
     parser.add_argument("--out-dir", type=Path, required=True)
     args = parser.parse_args()
@@ -37,6 +37,12 @@ def main() -> None:
         timesteps = np.asarray(payload["timesteps"], dtype=np.int32)
         cosines = np.asarray(payload["raw_train_update_cosines"], dtype=np.float64)
         ratios = np.asarray(payload["raw_train_update_norm_ratios"], dtype=np.float64)
+        timestamp_mean_cosines = np.asarray(
+            payload["raw_train_update_timestamp_mean_cosines"], dtype=np.float64
+        )
+        timestamp_mean_ratios = np.asarray(
+            payload["raw_train_update_timestamp_mean_norm_ratios"], dtype=np.float64
+        )
 
     if not (len(ckpts) == len(timesteps) == len(cosines) == len(ratios) == 490):
         raise ValueError(
@@ -65,6 +71,37 @@ def main() -> None:
     print("cosine(-mean_i P[g_i,c,t], P[theta[c+1]-theta[c]])")
     print(f"overall: mean={np.mean(cosines):+.4f} median={np.median(cosines):+.4f} "
           f">0={np.mean(cosines > 0):.3f}")
+    print("\nCHECKPOINT-WISE MEAN OVER THE 10 TIMESTAMPS")
+    print(
+        f"mean={np.mean(timestamp_mean_cosines):+.4f} "
+        f"median={np.median(timestamp_mean_cosines):+.4f} "
+        f">0={np.mean(timestamp_mean_cosines > 0):.3f} "
+        f"median-ratio={np.median(timestamp_mean_ratios):.6g}"
+    )
+    checkpoint_rows = [
+        {
+            "checkpoint": checkpoint + 1,
+            "epoch": 4 * (checkpoint + 1),
+            "timestamp_mean_cosine": float(timestamp_mean_cosines[checkpoint]),
+            "timestamp_mean_norm_ratio": float(timestamp_mean_ratios[checkpoint]),
+        }
+        for checkpoint in range(len(timestamp_mean_cosines))
+    ]
+    with (args.out_dir / "per_checkpoint_timestamp_mean.csv").open(
+        "w", newline=""
+    ) as f:
+        writer = csv.DictWriter(f, fieldnames=list(checkpoint_rows[0]))
+        writer.writeheader()
+        writer.writerows(checkpoint_rows)
+    print(f"{'CKPT':>4s} {'EPOCH':>5s} {'COS':>9s} {'RATIO':>10s}")
+    print("-" * 34)
+    for row in checkpoint_rows:
+        print(
+            f"{row['checkpoint']:4d} {row['epoch']:5d} "
+            f"{row['timestamp_mean_cosine']:+9.4f} "
+            f"{row['timestamp_mean_norm_ratio']:10.4g}"
+        )
+    print("\nPER-TIMESTAMP COMPARISON")
     print(f"{'T':>4s} {'N':>3s} {'MEAN':>9s} {'MEDIAN':>9s} {'>0':>7s} {'RATIO':>10s}")
     print("-" * 52)
     for timestep in sorted(set(timesteps.tolist()), reverse=True):

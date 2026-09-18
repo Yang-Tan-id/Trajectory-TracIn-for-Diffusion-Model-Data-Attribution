@@ -3085,6 +3085,8 @@ def run_attribution(cfg: TrajAttributionConfig):
         parameter_delta_jvp_true_norms = []
         raw_train_update_cosines = []
         raw_train_update_norm_ratios = []
+        raw_train_update_timestamp_mean_cosines = []
+        raw_train_update_timestamp_mean_norm_ratios = []
         probe_alignment_current_reference_l2 = []
         probe_alignment_next_reference_l2 = []
         probe_alignment_current_reference_cosines = []
@@ -3438,10 +3440,32 @@ def run_attribution(cfg: TrajAttributionConfig):
                         dtype=np.float32,
                     )
                 )
+                timestamp_mean = jnp.mean(aggregate_device, axis=0)
+                timestamp_mean_norm = jnp.linalg.norm(timestamp_mean)
+                timestamp_mean_dot = jnp.vdot(timestamp_mean, projected_delta)
+                timestamp_mean_denominator = jnp.maximum(
+                    timestamp_mean_norm * projected_delta_norm,
+                    jnp.asarray(1e-12, dtype=jnp.float32),
+                )
+                raw_train_update_timestamp_mean_cosines.append(
+                    float(np.asarray(jax.device_get(
+                        timestamp_mean_dot / timestamp_mean_denominator
+                    )))
+                )
+                raw_train_update_timestamp_mean_norm_ratios.append(
+                    float(np.asarray(jax.device_get(
+                        timestamp_mean_norm
+                        / jnp.maximum(
+                            projected_delta_norm,
+                            jnp.asarray(1e-12, dtype=jnp.float32),
+                        )
+                    )))
+                )
                 print(
                     "[raw-gradient update] "
                     f"checkpoint={ckpt_i + 1}/{len(ckpts)} "
                     f"mean_cos={float(np.mean(raw_train_update_cosines[-1])):+.4f} "
+                    f"timestamp_mean_cos={raw_train_update_timestamp_mean_cosines[-1]:+.4f} "
                     f"timesteps={train_timesteps.tolist()}",
                     flush=True,
                 )
@@ -5097,6 +5121,14 @@ def run_attribution(cfg: TrajAttributionConfig):
                         ),
                         raw_train_update_norm_ratios=np.concatenate(
                             raw_train_update_norm_ratios
+                        ),
+                        raw_train_update_timestamp_mean_cosines=np.asarray(
+                            raw_train_update_timestamp_mean_cosines,
+                            dtype=np.float32,
+                        ),
+                        raw_train_update_timestamp_mean_norm_ratios=np.asarray(
+                            raw_train_update_timestamp_mean_norm_ratios,
+                            dtype=np.float32,
                         ),
                         raw_train_update_definition=np.asarray(
                             "cosine(-mean_i CountSketch(g_train_i,c,t), "

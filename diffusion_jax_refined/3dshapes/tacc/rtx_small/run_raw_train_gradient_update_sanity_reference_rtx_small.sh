@@ -21,7 +21,7 @@ conda activate /scratch/11447/yangtan7447/conda-envs/trajectory-tracin
 
 EXPERIMENT_TAG="${EXPERIMENT_TAG:-experiment1}"
 TRAIN_SEED="${TRAIN_SEED:-42}"
-NAMESPACE="${NAMESPACE:-raw_train_gradient_update_sanity_reference}"
+NAMESPACE="${NAMESPACE:-raw_train_gradient_update_sanity_reference_v2}"
 RESULT_ROOT="${SHAPES_ROOT}/result/${EXPERIMENT_TAG}"
 TRAIN_ARTIFACT="${RESULT_ROOT}/model/prompted_solo/seed_${TRAIN_SEED}_train_gradient/traj_tracin/train_datapoint_gradient_artifact.npz"
 OUTDIR="${RESULT_ROOT}/eval/raw_train_gradient_update_sanity_reference/run_${SLURM_JOB_ID}"
