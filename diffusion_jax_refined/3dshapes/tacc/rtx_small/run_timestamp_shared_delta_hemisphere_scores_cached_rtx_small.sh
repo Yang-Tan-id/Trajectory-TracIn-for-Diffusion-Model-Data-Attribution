@@ -37,7 +37,7 @@ for seed in "${SEEDS[@]}"; do
 done
 PATTERNS_CSV="$(IFS=,; echo "${patterns[*]}")"
 
-echo "[score] orient every cached J^T v into the current delta-eps hemisphere"
+echo "[score] original angle-sign/weighted plus post-normalization delta-norm-weighted versions"
 CUDA_VISIBLE_DEVICES=0 JAX_NUM_DEVICES=1 JAX_PLATFORMS=cuda \
 python "${SHAPES_ROOT}/script/analyze_predicted_noise_angle_oriented_scores.py" \
   --experiment "${EXPERIMENT_TAG}" --train-seed "${TRAIN_SEED}" \

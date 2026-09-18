@@ -47,7 +47,12 @@ BANKS = {
     "1-8": tuple(range(8)),
     "1-12": tuple(range(12)),
 }
-SCHEMES = ("angle_sign", "angle_weighted")
+SCHEMES = (
+    "angle_sign",
+    "angle_weighted",
+    "angle_sign_delta_norm",
+    "angle_weighted_delta_norm",
+)
 VARIANTS = ("raw", "query_l2", "train_l2", "both_l2")
 
 
@@ -66,6 +71,12 @@ def aggregate_oriented_queries(
     if scheme == "angle_sign":
         alpha = np.where(scalar_term[selected] >= 0.0, 1.0, -1.0)
     elif scheme == "angle_weighted":
+        alpha = scalar_term[selected]
+    elif scheme == "angle_sign_delta_norm":
+        # Apply delta_norm after query normalization at the score stage.  Doing
+        # it here would cancel identically in query_l2 and both_l2.
+        alpha = np.where(scalar_term[selected] >= 0.0, 1.0, -1.0)
+    elif scheme == "angle_weighted_delta_norm":
         alpha = scalar_term[selected]
     else:
         raise ValueError(f"unknown angle-orientation scheme {scheme!r}")
@@ -108,19 +119,25 @@ def load_alignments(args: argparse.Namespace, reference: dict[str, np.ndarray]):
         scalars.append(scalar)
         cosines.append(cosine)
     # probe, query, term
-    return np.stack(scalars, axis=1), np.stack(cosines, axis=1)
+    scalar_array = np.stack(scalars, axis=1)
+    cosine_array = np.stack(cosines, axis=1)
+    # Legacy alignment artifacts do not carry delta norms.  Unit norms preserve
+    # the two original schemes; norm-weighted schemes require timestamp_shared_delta.
+    delta_norms = np.ones(scalar_array.shape[1:], dtype=np.float32)
+    return scalar_array, cosine_array, delta_norms
 
 
 def load_timestamp_shared_delta_alignments(
     args: argparse.Namespace,
     reference: dict[str, np.ndarray],
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Orient each saved J^T v toward the current next-checkpoint delta-eps."""
     seeds = [int(value) for value in args.expected_query_probe_seeds.split(",")]
     if len(seeds) != args.num_probes:
         raise ValueError("timestamp-shared delta orientation needs one seed per probe")
     scalars = np.empty((args.num_probes, 10, len(reference["ckpt_indices"])), dtype=np.float32)
     cosines = np.empty_like(scalars)
+    all_delta_norms = np.empty((10, len(reference["ckpt_indices"])), dtype=np.float32)
     geometry_args = argparse.Namespace(
         experiment=args.experiment,
         train_seed=args.train_seed,
@@ -138,6 +155,10 @@ def load_timestamp_shared_delta_alignments(
             raise ValueError(f"unexpected delta shape in {path}: {deltas.shape}")
         timesteps = np.asarray(reference["timesteps"][:timestamp_count], dtype=np.int32)
         delta_norms = np.linalg.norm(deltas.reshape(49, 10, -1), axis=2)
+        expanded_delta_norms = np.empty((50, 10), dtype=np.float32)
+        expanded_delta_norms[:49] = delta_norms
+        expanded_delta_norms[49] = delta_norms[48]
+        all_delta_norms[query_id] = expanded_delta_norms.reshape(-1)
         for probe, seed in enumerate(seeds):
             values = np.empty((50, 10), dtype=np.float32)
             angles = np.empty_like(values)
@@ -160,7 +181,7 @@ def load_timestamp_shared_delta_alignments(
                 angles[49, slot] = angles[48, slot]
             scalars[probe, query_id] = values.reshape(-1)
             cosines[probe, query_id] = angles.reshape(-1)
-    return scalars, cosines
+    return scalars, cosines, all_delta_norms
 
 
 def query_args(args: argparse.Namespace) -> argparse.Namespace:
@@ -213,7 +234,7 @@ def main() -> None:
     import jax.numpy as jnp
 
     query, meta = load_query_bank(query_args(args))
-    scalars, cosines = load_alignments(args, meta)
+    scalars, cosines, delta_norms = load_alignments(args, meta)
     term_lookup = {
         (int(ckpt), int(timestep)): index
         for index, (ckpt, timestep) in enumerate(
@@ -274,7 +295,17 @@ def main() -> None:
                 / train_norm[:, None, None]
                 / query_norm[None, :, :],
             }
+            post_normalization_scale = np.stack(
+                [
+                    delta_norms[:, term]
+                    if scheme.endswith("_delta_norm")
+                    else np.ones(10, dtype=np.float32)
+                    for scheme, _ in method_keys
+                ],
+                axis=0,
+            )
             for variant, values in term_values.items():
+                values = values * jnp.asarray(post_normalization_scale)[None, :, :]
                 # method, query, datapoint
                 host = np.asarray(jax.device_get(values), dtype=np.float64).transpose(1, 2, 0)
                 sums[variant] += float(term_weight) * host
