@@ -2995,6 +2995,14 @@ def run_attribution(cfg: TrajAttributionConfig):
             ).strip().lower()
             in ("1", "true", "yes", "on")
         )
+        parameter_delta_jvp_diagnostic = (
+            probe_alignment_only
+            and probe_alignment_next_checkpoint
+            and os.environ.get(
+                "TRAJ_TRACIN_PARAMETER_DELTA_JVP_DIAGNOSTIC", "0"
+            ).strip().lower()
+            in ("1", "true", "yes", "on")
+        )
         probe_alignment_collect_all_outputs = (
             probe_alignment_future_mean
             or probe_alignment_future_lr_weighted_delta
@@ -3066,6 +3074,11 @@ def run_attribution(cfg: TrajAttributionConfig):
         probe_alignment_current_eps_outputs = []
         probe_alignment_final_eps_outputs = []
         probe_alignment_next_delta_eps_outputs = []
+        parameter_delta_jvp_cosines = []
+        parameter_delta_jvp_norm_ratios = []
+        parameter_delta_jvp_relative_errors = []
+        parameter_delta_jvp_predicted_norms = []
+        parameter_delta_jvp_true_norms = []
         probe_alignment_current_reference_l2 = []
         probe_alignment_next_reference_l2 = []
         probe_alignment_current_reference_cosines = []
@@ -3078,6 +3091,7 @@ def run_attribution(cfg: TrajAttributionConfig):
         parameter_update_query_gradient_cosines = []
         parameter_update_norms = []
         alignment_eps_chunk_fn = None
+        parameter_delta_jvp_chunk_fn = None
         if probe_alignment_only:
             def alignment_eps_one(p, xt_value, timestep_value, cond):
                 t_value = jnp.full(
@@ -3093,6 +3107,18 @@ def run_attribution(cfg: TrajAttributionConfig):
                     in_axes=(None, 0, 0, None),
                 )
             )
+
+            @jax.jit
+            def parameter_delta_jvp_chunk(p, delta_p, xt_values, timestep_values, cond):
+                return jax.jvp(
+                    lambda values: alignment_eps_chunk_fn(
+                        values, xt_values, timestep_values, cond
+                    ),
+                    (p,),
+                    (delta_p,),
+                )
+
+            parameter_delta_jvp_chunk_fn = parameter_delta_jvp_chunk
         shared_orthogonal_probe_bank = None
         ckpt_shard_count = max(1, int(os.environ.get("TRAJ_TRACIN_CKPT_SHARD_COUNT", "1")))
         ckpt_shard_index = int(os.environ.get("TRAJ_TRACIN_CKPT_SHARD_INDEX", "0"))
@@ -3678,6 +3704,95 @@ def run_attribution(cfg: TrajAttributionConfig):
                                     if probe_alignment_next_checkpoint
                                     else eps_chunk - adjacent_eps_chunk
                                 )
+                                if parameter_delta_jvp_diagnostic:
+                                    assert alignment_next_params is not None
+                                    assert parameter_delta_jvp_chunk_fn is not None
+                                    delta_params = jax.tree_util.tree_map(
+                                        lambda next_value, current_value: (
+                                            next_value - current_value
+                                        ),
+                                        alignment_next_params,
+                                        params,
+                                    )
+                                    _, predicted_delta_chunk = (
+                                        parameter_delta_jvp_chunk_fn(
+                                            params,
+                                            delta_params,
+                                            xt_chunk,
+                                            t_chunk,
+                                            query_cond,
+                                        )
+                                    )
+                                    metric_axes = tuple(
+                                        range(1, predicted_delta_chunk.ndim)
+                                    )
+                                    predicted_norm = jnp.sqrt(
+                                        jnp.sum(
+                                            jnp.square(predicted_delta_chunk),
+                                            axis=metric_axes,
+                                        )
+                                    )
+                                    true_norm = jnp.sqrt(
+                                        jnp.sum(
+                                            jnp.square(delta_eps_chunk),
+                                            axis=metric_axes,
+                                        )
+                                    )
+                                    dot = jnp.sum(
+                                        predicted_delta_chunk * delta_eps_chunk,
+                                        axis=metric_axes,
+                                    )
+                                    error_norm = jnp.sqrt(
+                                        jnp.sum(
+                                            jnp.square(
+                                                predicted_delta_chunk
+                                                - delta_eps_chunk
+                                            ),
+                                            axis=metric_axes,
+                                        )
+                                    )
+                                    denominator = jnp.maximum(
+                                        predicted_norm * true_norm,
+                                        jnp.asarray(1e-12, dtype=jnp.float32),
+                                    )
+                                    safe_true_norm = jnp.maximum(
+                                        true_norm,
+                                        jnp.asarray(1e-12, dtype=jnp.float32),
+                                    )
+                                    parameter_delta_jvp_cosines.append(
+                                        np.asarray(
+                                            jax.device_get(dot / denominator),
+                                            dtype=np.float32,
+                                        )
+                                    )
+                                    parameter_delta_jvp_norm_ratios.append(
+                                        np.asarray(
+                                            jax.device_get(
+                                                predicted_norm / safe_true_norm
+                                            ),
+                                            dtype=np.float32,
+                                        )
+                                    )
+                                    parameter_delta_jvp_relative_errors.append(
+                                        np.asarray(
+                                            jax.device_get(
+                                                error_norm / safe_true_norm
+                                            ),
+                                            dtype=np.float32,
+                                        )
+                                    )
+                                    parameter_delta_jvp_predicted_norms.append(
+                                        np.asarray(
+                                            jax.device_get(predicted_norm),
+                                            dtype=np.float32,
+                                        )
+                                    )
+                                    parameter_delta_jvp_true_norms.append(
+                                        np.asarray(
+                                            jax.device_get(true_norm),
+                                            dtype=np.float32,
+                                        )
+                                    )
                                 if (
                                     probe_alignment_collect_all_outputs
                                     and probe_alignment_next_checkpoint
@@ -4874,6 +4989,34 @@ def run_attribution(cfg: TrajAttributionConfig):
                     "scalar=dot(v,eps)/sqrt(D); cosine=dot(v,eps)/(norm(v)*norm(eps))"
                 ),
             )
+            if parameter_delta_jvp_diagnostic:
+                if not parameter_delta_jvp_cosines:
+                    raise RuntimeError(
+                        "parameter-delta JVP diagnostic produced no terms"
+                    )
+                alignment_payload.update(
+                    parameter_delta_jvp_cosines=np.concatenate(
+                        parameter_delta_jvp_cosines
+                    ),
+                    parameter_delta_jvp_norm_ratios=np.concatenate(
+                        parameter_delta_jvp_norm_ratios
+                    ),
+                    parameter_delta_jvp_relative_errors=np.concatenate(
+                        parameter_delta_jvp_relative_errors
+                    ),
+                    parameter_delta_jvp_predicted_norms=np.concatenate(
+                        parameter_delta_jvp_predicted_norms
+                    ),
+                    parameter_delta_jvp_true_norms=np.concatenate(
+                        parameter_delta_jvp_true_norms
+                    ),
+                    parameter_delta_jvp_definition=np.asarray(
+                        "predicted=J_params eps(params[c],x_ref_t,t,cond_q) "
+                        "@(params[c+1]-params[c]); true=eps(params[c+1],x_ref_t,"
+                        "t,cond_q)-eps(params[c],x_ref_t,t,cond_q); x_ref_t and "
+                        "query conditioning are held fixed"
+                    ),
+                )
             if probe_alignment_collect_all_outputs:
                 current_outputs = np.concatenate(
                     probe_alignment_current_eps_outputs, axis=0
