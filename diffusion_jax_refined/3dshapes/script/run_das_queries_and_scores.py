@@ -48,7 +48,21 @@ def main() -> None:
     parser.add_argument(
         "--artifact-namespace",
         default="",
-        help="Optional isolated artifact/score namespace, for example aligned10x10.",
+        help="Optional isolated query/score namespace, for example trajectory_query100x1.",
+    )
+    parser.add_argument(
+        "--train-artifact-namespace",
+        default=None,
+        help=(
+            "Train artifact namespace to reuse. By default it matches --artifact-namespace; "
+            "pass an empty value to reuse the standard das train artifact."
+        ),
+    )
+    parser.add_argument(
+        "--query-input-mode",
+        choices=("endpoint_renoise", "generation_trajectory"),
+        default="endpoint_renoise",
+        help="Build each query term from a re-noised endpoint or the saved generation x_t.",
     )
     parser.add_argument(
         "--score-output-namespace",
@@ -82,6 +96,14 @@ def main() -> None:
 
     namespace = args.artifact_namespace.strip().strip("_/")
     das_name = "das" if not namespace else f"das_{namespace}"
+    # Query/score variants need isolated output paths, but may still reuse the
+    # expensive train/Gram artifact produced by the standard DAS 100x1 run.
+    train_namespace = (
+        namespace
+        if args.train_artifact_namespace is None
+        else args.train_artifact_namespace.strip().strip("_/")
+    )
+    train_das_name = "das" if not train_namespace else f"das_{train_namespace}"
     score_output_namespace = args.score_output_namespace.strip().strip("_/")
     score_das_name = (
         das_name if not score_output_namespace else f"das_{score_output_namespace}"
@@ -112,7 +134,7 @@ def main() -> None:
         / "model"
         / "prompted_solo"
         / f"seed_{args.train_seed}_train_gradient"
-        / das_name
+        / train_das_name
         / "train_datapoint_gradient_artifact.npz"
     )
     selected = []
@@ -145,6 +167,7 @@ def main() -> None:
         DAS_SCORE_DENOMINATOR_CACHE="1",
         DAS_SHERMAN_MORRISON_DENOMINATOR="1",
         DAS_SCORE_CONTRACTION=args.score_contraction,
+        DAS_QUERY_INPUT_MODE=args.query_input_mode,
         TF_GPU_ALLOCATOR=os.environ.get("TF_GPU_ALLOCATOR", "cuda_malloc_async"),
         JAX_NUM_DEVICES="1",
         JAX_PLATFORMS="cuda",
@@ -257,6 +280,7 @@ def main() -> None:
 
     print(
         f"DAS query gradients and all 16 lambda scores completed | "
+        f"query_input={args.query_input_mode} train={train_das_name} "
         f"contraction={args.score_contraction} output={score_das_name}.",
         flush=True,
     )

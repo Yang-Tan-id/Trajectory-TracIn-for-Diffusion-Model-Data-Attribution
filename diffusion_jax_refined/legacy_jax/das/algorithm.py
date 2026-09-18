@@ -776,6 +776,36 @@ def make_projected_eps_grad_fn(
     return jax.jit(phi_fn)
 
 
+def make_projected_trajectory_query_grad_fn(
+    adapter,
+    model,
+    projector,
+    *,
+    normalize_projected_grads: bool,
+    normalize_eps: float,
+):
+    """Project the prediction Jacobian at a saved reverse-trajectory state.
+
+    Unlike ``make_projected_eps_grad_fn``, this function receives an actual
+    generation state ``x_t`` and must not forward-noise it again. DAS scoring
+    consumes only the query feature; the per-example residual comes from the
+    train artifact, so no synthetic query residual is introduced here.
+    """
+
+    def phi_fn(params, x_t, cond, t, output_probe):
+        def scalar_eps_fn(p):
+            pred_p = adapter.eps_apply(model, p, x_t, t, cond)
+            return jnp.sum(pred_p * output_probe) / jnp.sqrt(
+                jnp.asarray(pred_p.size, dtype=jnp.float32)
+            )
+
+        grads = jax.grad(scalar_eps_fn)(params)
+        phi = projector(grads)
+        return maybe_normalize_phi(phi, normalize_projected_grads, normalize_eps)
+
+    return jax.jit(phi_fn)
+
+
 def make_projected_mc_average_loss_grad_fn(
     adapter,
     model,
@@ -996,6 +1026,50 @@ def load_attribution_endpoint(cfg: "EndpointProjectedDASJAXConfig") -> Tuple[jnp
         "loaded_x0_ref_shape": list(x0_ref_np.shape),
         "seed_info": seed_info,
         "manifest": manifest,
+    }
+
+
+def load_attribution_trajectory_by_timestep(
+    cfg: "EndpointProjectedDASJAXConfig",
+) -> Tuple[Dict[int, jnp.ndarray], Dict[str, Any]]:
+    """Load exact saved generation states keyed by diffusion timestep."""
+    seed_dir = _find_attribution_seed_dir(cfg.attribution_sample_dir, cfg.attribution_sample_seed)
+    trajectory_path = os.path.join(seed_dir, "trajectory_xt.npy")
+    t_path = os.path.join(seed_dir, "trajectory_t.npy")
+    if not os.path.isfile(trajectory_path):
+        raise FileNotFoundError(f"Missing saved generation trajectory: {trajectory_path}")
+    if not os.path.isfile(t_path):
+        raise FileNotFoundError(f"Missing saved trajectory timesteps: {t_path}")
+
+    trajectory = np.load(trajectory_path)
+    timesteps = np.load(t_path).astype(np.int32)
+    if trajectory.ndim != 5:
+        raise ValueError(f"Expected trajectory_xt.npy shape (K,B,H,W,C), got {trajectory.shape}")
+    if timesteps.ndim != 1 or timesteps.shape[0] != trajectory.shape[0]:
+        raise ValueError(
+            f"trajectory_t.npy shape {timesteps.shape} does not match trajectory {trajectory.shape}"
+        )
+    if len(np.unique(timesteps)) != len(timesteps):
+        raise ValueError(f"Saved trajectory contains duplicate timesteps: {t_path}")
+
+    sample_idx = int(cfg.attribution_sample_index)
+    if sample_idx < 0 or sample_idx >= trajectory.shape[1]:
+        raise IndexError(
+            f"attribution_sample_index={sample_idx} is out of range for batch size {trajectory.shape[1]}"
+        )
+    states = {
+        int(timestep): jnp.asarray(
+            trajectory[index, sample_idx:sample_idx + 1].astype(np.float32),
+            dtype=jnp.float32,
+        )
+        for index, timestep in enumerate(timesteps)
+    }
+    return states, {
+        "seed_dir": seed_dir,
+        "trajectory_xt_path": trajectory_path,
+        "trajectory_t_path": t_path,
+        "trajectory_timesteps": timesteps.tolist(),
+        "sample_index": sample_idx,
     }
 
 
@@ -1248,11 +1322,23 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
     if stage_mode and not stage_artifact_path:
         raise ValueError("DAS_STAGE_ARTIFACT_PATH is required when DAS_STAGE_MODE is set.")
 
+    # Keep the historical endpoint-re-noising behavior as the default.  The
+    # trajectory mode instead evaluates the query Jacobian at the exact x_t
+    # visited by the saved reverse-generation process.
+    query_input_mode = os.environ.get("DAS_QUERY_INPUT_MODE", "endpoint_renoise").strip().lower()
+    if query_input_mode not in ("endpoint_renoise", "generation_trajectory"):
+        raise ValueError(
+            "DAS_QUERY_INPUT_MODE must be 'endpoint_renoise' or 'generation_trajectory', "
+            f"got {query_input_mode!r}"
+        )
+
     out_suffix = apply_score_subset_suffix_to_out_dir(cfg)
     ensure_dir(cfg.out_dir)
     t0 = time.perf_counter()
 
     precomputed_sample_meta = None
+    trajectory_sample_meta = None
+    trajectory_states_by_timestep = None
     x0_ref = None
     resolved_manifest_ckpt = None
     manifest_ckpt = None
@@ -1280,6 +1366,34 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
             f"[setup] loaded x0_ref shape={tuple(x0_ref.shape)} "
             f"from {precomputed_sample_meta.get('source')}"
         )
+        if query_input_mode == "generation_trajectory":
+            # Index by the recorded diffusion timestep, not by snapshot
+            # position: saved trajectories may be descending or subsampled.
+            trajectory_states_by_timestep, trajectory_sample_meta = (
+                load_attribution_trajectory_by_timestep(cfg)
+            )
+            missing_timesteps = sorted(
+                set(int(value) for value in cfg.timesteps) - set(trajectory_states_by_timestep)
+            )
+            if missing_timesteps:
+                raise ValueError(
+                    "Saved generation trajectory does not contain all DAS timesteps; "
+                    f"missing={missing_timesteps}, available={sorted(trajectory_states_by_timestep)}"
+                )
+            print(
+                "[setup] direct generation-trajectory query enabled | "
+                f"saved_states={len(trajectory_states_by_timestep)} | "
+                f"source={trajectory_sample_meta['trajectory_xt_path']}"
+            )
+    if (
+        query_input_mode == "generation_trajectory"
+        and stage_mode != "train"
+        and trajectory_states_by_timestep is None
+    ):
+        raise ValueError(
+            "generation_trajectory query mode requires attribution_sample_dir with "
+            "trajectory_xt.npy and trajectory_t.npy"
+        )
 
     config_ckpt = cfg.reference_ckpt or resolved_manifest_ckpt
     if config_ckpt is None and cfg.baseline_dir:
@@ -1300,6 +1414,7 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
         print(f"sample_shape            : {precomputed_sample_meta.get('loaded_x0_ref_shape')}")
     print(f"seed                    : {cfg.seed}")
     print(f"query                   : {cfg.query}")
+    print(f"query_input_mode        : {query_input_mode}")
     print(f"parameter_source        : {cfg.parameter_source}")
     print(f"timesteps_total         : {cfg.timesteps_total}")
     print(f"ddim_steps              : {cfg.ddim_steps}")
@@ -1429,6 +1544,15 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
         raise ValueError(
             "DAS_AGGREGATE_MC_GRADIENT and DAS_AGGREGATE_MC_NORMALIZED are mutually exclusive"
         )
+    if (
+        query_input_mode == "generation_trajectory"
+        and stage_mode != "train"
+        and (aggregate_mc_gradient or aggregate_mc_normalized)
+    ):
+        raise ValueError(
+            "generation_trajectory query mode requires explicit DAS terms; disable "
+            "DAS_AGGREGATE_MC_GRADIENT and DAS_AGGREGATE_MC_NORMALIZED"
+        )
     mc_normalize_eps = float(os.environ.get("DAS_AGGREGATE_MC_NORMALIZE_EPS", "1e-8"))
     proj_dim = int(cfg.proj_dim)
     damping = float(cfg.damping)
@@ -1484,6 +1608,13 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
             )
 
             t_tensor = array_to_device(jnp.array([t_value], dtype=jnp.int32), device)
+            trajectory_query_x_t = None
+            if query_input_mode == "generation_trajectory" and stage_mode != "train":
+                # This is already x_t from generation.  It must bypass
+                # sample_xt_and_noise_jax/q_sample to avoid adding noise twice.
+                trajectory_query_x_t = array_to_device(
+                    trajectory_states_by_timestep[t_value], device
+                )
 
             # In MC-gradient aggregation mode all noise draws at one timestamp
             # must share a projection coordinate system.  The accumulators are
@@ -1640,7 +1771,7 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
 
                 rng_q = array_to_device(make_jax_key(cfg.seed, "pdas_q", ckpt_i, t_value, mc_i), device)
                 noise_q = None
-                if stage_mode != "train":
+                if stage_mode != "train" and query_input_mode == "endpoint_renoise":
                     _, noise_q = sample_xt_and_noise_jax(schedule, x0_ref, t=t_tensor, rng=rng_q)
                 projection_mc_key = (
                     "mc_normalized"
@@ -1653,7 +1784,13 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
                     make_jax_key(cfg.seed, "pdas_output_probe", ckpt_i, t_value, projection_mc_key),
                     device,
                 )
-                probe_shape = tuple(x0_ref.shape) if x0_ref is not None else tuple(example_x.shape)
+                probe_shape = (
+                    tuple(trajectory_query_x_t.shape)
+                    if trajectory_query_x_t is not None
+                    else tuple(x0_ref.shape)
+                    if x0_ref is not None
+                    else tuple(example_x.shape)
+                )
                 output_probe = array_to_device(sample_output_probe_jax(probe_shape, rng=rng_probe), device)
 
                 print("[mc] preparing shared projected-gradient projector...", flush=True)
@@ -1679,7 +1816,31 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
 
                 if stage_mode != "train":
                     print("[mc] compiling/running query phi...", flush=True)
-                    query_residual, phi_q = phi_fn(params_k, x0_ref, query_cond, t_tensor, noise_q, output_probe)
+                    if query_input_mode == "generation_trajectory":
+                        # Reuse the same projector and output probe seeds as
+                        # the train term so both features share coordinates.
+                        trajectory_phi_fn = make_projected_trajectory_query_grad_fn(
+                            adapter=adapter,
+                            model=model,
+                            projector=projector,
+                            normalize_projected_grads=bool(cfg.normalize_projected_grads),
+                            normalize_eps=float(cfg.normalize_eps),
+                        )
+                        phi_q = trajectory_phi_fn(
+                            params_k,
+                            trajectory_query_x_t,
+                            query_cond,
+                            t_tensor,
+                            output_probe,
+                        )
+                        # DAS score contraction reads residuals from the train
+                        # artifact.  A saved reverse x_t has no independent
+                        # forward-noise target, so do not invent one here.
+                        query_residual = jnp.asarray(0.0, dtype=jnp.float32)
+                    else:
+                        query_residual, phi_q = phi_fn(
+                            params_k, x0_ref, query_cond, t_tensor, noise_q, output_probe
+                        )
                     phi_q.block_until_ready()
                     print(
                         "[mc] query projected eps-gradient ready | "
@@ -2067,6 +2228,15 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
                 else "none"
             ),
             mc_normalize_eps=np.asarray(mc_normalize_eps, dtype=np.float32),
+            query_input_mode=np.asarray(query_input_mode),
+            trajectory_xt_path=np.asarray(
+                trajectory_sample_meta["trajectory_xt_path"]
+                if trajectory_sample_meta is not None else ""
+            ),
+            trajectory_t_path=np.asarray(
+                trajectory_sample_meta["trajectory_t_path"]
+                if trajectory_sample_meta is not None else ""
+            ),
         )
         print(f"[saved] DAS query artifact: {stage_artifact_path}")
         return
