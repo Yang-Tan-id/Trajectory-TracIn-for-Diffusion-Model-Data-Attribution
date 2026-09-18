@@ -25,7 +25,9 @@ from analyze_q8_p7_probe_direction import (  # noqa: E402
 )
 
 
-VARIANTS = ("raw", "query_l2", "train_l2", "both_l2")
+# The score artifacts and per-query CSV use ``query_train_l2`` as the canonical
+# key; presentation scripts may label the same variant as BOTH-L2.
+VARIANTS = ("raw", "query_l2", "train_l2", "query_train_l2")
 
 
 def unit_rows(values: np.ndarray) -> np.ndarray:
