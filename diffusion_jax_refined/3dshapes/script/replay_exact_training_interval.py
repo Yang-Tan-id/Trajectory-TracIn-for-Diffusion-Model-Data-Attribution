@@ -37,6 +37,19 @@ def flat_metrics(a, b):
     }
 
 
+def displacement_metrics(replayed, target, start):
+    replay_delta = jax.tree_util.tree_map(lambda x, x0: x - x0, replayed, start)
+    target_delta = jax.tree_util.tree_map(lambda x, x0: x - x0, target, start)
+    metrics = flat_metrics(replay_delta, target_delta)
+    replay_norm = np.sqrt(sum(
+        float(np.sum(np.square(np.asarray(x, dtype=np.float64))))
+        for x in jax.tree_util.tree_leaves(replay_delta)
+    ))
+    target_norm = metrics["reference_l2"]
+    metrics["norm_ratio"] = float(replay_norm / max(target_norm, 1e-30))
+    return metrics
+
+
 def key_words(key):
     return np.asarray(jax.random.key_data(key), dtype=np.uint32).reshape(-1).tolist()
 
@@ -97,6 +110,7 @@ def main():
     )
     state, restored_epoch = module._restore_checkpoint(str(start_path), template)
     target, target_epoch = module._restore_checkpoint(str(end_path), template)
+    initial_state = state
     if restored_epoch != args.start_epoch or target_epoch != args.end_epoch:
         raise RuntimeError(f"checkpoint epoch mismatch: {restored_epoch}, {target_epoch}")
     schedule = module.make_diffusion_schedule(cfg.timesteps, cfg.beta_start, cfg.beta_end)
@@ -159,6 +173,12 @@ def main():
         "events": (args.end_epoch - args.start_epoch) * steps_per_epoch,
         "params": flat_metrics(state.params, target.params),
         "ema_params": flat_metrics(state.ema_params, target.ema_params),
+        "parameter_displacement": displacement_metrics(
+            state.params, target.params, initial_state.params
+        ),
+        "ema_displacement": displacement_metrics(
+            state.ema_params, target.ema_params, initial_state.ema_params
+        ),
         "rng_equal": bool(np.array_equal(np.asarray(state.rng), np.asarray(target.rng))),
         "step_replayed": int(np.asarray(state.step)),
         "step_target": int(np.asarray(target.step)),
