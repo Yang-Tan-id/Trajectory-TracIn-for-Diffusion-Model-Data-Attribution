@@ -53,6 +53,25 @@ def corr(a: np.ndarray, b: np.ndarray) -> float:
     return float(np.corrcoef(a, b)[0, 1])
 
 
+def cosine_values(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+    an = np.linalg.norm(a, axis=1)
+    bn = np.linalg.norm(b, axis=1)
+    return np.sum(a * b, axis=1) / np.maximum(an * bn, 1e-30)
+
+
+def print_matrix(title: str, matrix: np.ndarray) -> None:
+    print(f"\n{title}")
+    print(f"{'':>5}" + "".join(f"{'P' + str(i + 1):>9}" for i in range(8)) + f"{'MEAN-OTHER':>12}")
+    print("-" * 89)
+    for i in range(8):
+        others = np.delete(matrix[i], i)
+        print(
+            f"{'P' + str(i + 1):>5}"
+            + "".join(f"{matrix[i, j]:+9.4f}" for j in range(8))
+            + f"{np.mean(others):+12.4f}"
+        )
+
+
 def artifact_path(result_root: Path, record: dict, namespace: str, train_seed: int) -> Path:
     checkpoint = result_root / "model" / "prompted_jax" / f"seed_{train_seed}_epoch_0200.ckpt"
     run_root = (
@@ -90,6 +109,16 @@ def main() -> None:
     bank = np.stack(banks)
     assert timesteps is not None
     ref = bank[6]
+
+    mean_cosine_matrix = np.eye(8, dtype=np.float64)
+    mean_abs_cosine_matrix = np.eye(8, dtype=np.float64)
+    for left in range(8):
+        for right in range(left):
+            values = cosine_values(bank[left], bank[right])
+            mean_cosine_matrix[left, right] = mean_cosine_matrix[right, left] = np.mean(values)
+            mean_abs_cosine_matrix[left, right] = mean_abs_cosine_matrix[right, left] = np.mean(np.abs(values))
+    print_matrix("ALL PROBES: MEAN QUERY-GRADIENT COSINE", mean_cosine_matrix)
+    print_matrix("ALL PROBES: MEAN |QUERY-GRADIENT COSINE|", mean_abs_cosine_matrix)
 
     print(f"Q{args.query} P7 PARAMETER-SPACE QUERY-DIRECTION GEOMETRY")
     print(f"{'PAIR':>6} {'COS':>9} {'|COS|':>9} {'COS<0':>8} {'NORM7/NORMR':>13}")
@@ -133,6 +162,27 @@ def main() -> None:
         / f"train_seed_{args.train_seed}" / f"query_{prompt_tag}"
         / f"initial_seed_{int(record['initial_seed'])}"
     )
+    all_scores: dict[str, list[np.ndarray]] = {name: [] for name in VARIANTS}
+    for probe_index, seed in enumerate(SEEDS):
+        namespace = (
+            f"traj_tracin_predicted_noise_jvp_probe_l2_"
+            f"timestamp_shared_individual_seed{seed}_own_trajectory"
+        )
+        for variant, directory in VARIANTS.items():
+            _, score_values = load_scores(score_root / namespace / directory)
+            all_scores[variant].append(score_values)
+
+    for variant in VARIANTS:
+        matrix = np.eye(8, dtype=np.float64)
+        ranked = [rankdata(values) for values in all_scores[variant]]
+        for left in range(8):
+            for right in range(left):
+                matrix[left, right] = matrix[right, left] = corr(ranked[left], ranked[right])
+        print_matrix(
+            f"ALL PROBES: ROOT-SCORE SPEARMAN — {variant.upper()}",
+            matrix,
+        )
+
     print("\nQ8 ROOT-SCORE RANK CORRELATION: P7 vs OTHER PROBES")
     print(f"{'PAIR':>6} " + " ".join(f"{name.upper():>10}" for name in VARIANTS))
     print("-" * 54)
@@ -141,15 +191,12 @@ def main() -> None:
             continue
         values = []
         for variant, directory in VARIANTS.items():
-            def score(probe_index: int) -> np.ndarray:
-                seed = SEEDS[probe_index]
-                namespace = (
-                    f"traj_tracin_predicted_noise_jvp_probe_l2_"
-                    f"timestamp_shared_individual_seed{seed}_own_trajectory"
+            values.append(
+                corr(
+                    rankdata(all_scores[variant][6]),
+                    rankdata(all_scores[variant][other]),
                 )
-                _, result = load_scores(score_root / namespace / directory)
-                return result
-            values.append(corr(rankdata(score(6)), rankdata(score(other))))
+            )
         print(f"P7/P{other + 1:1d} " + " ".join(f"{value:+10.4f}" for value in values))
 
 
