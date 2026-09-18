@@ -137,6 +137,7 @@ def main() -> None:
     parser.add_argument("--train-seed", type=int, default=42)
     parser.add_argument("--probe-seeds", required=True)
     parser.add_argument("--combined-suffix", required=True)
+    parser.add_argument("--combined-only", action="store_true")
     parser.add_argument("--out-dir", type=Path, required=True)
     args = parser.parse_args()
 
@@ -159,20 +160,21 @@ def main() -> None:
             result_root / "eval" / "prompted_solo" / f"query_{prompt_tag}"
             / f"initial_seed_{initial_seed}"
         )
-        for probe, seed in enumerate(seeds, start=1):
-            suffix = f"timestamp_shared_reference_seed{seed}"
-            namespaces = {
-                reduction: f"{base}_{suffix}"
-                for reduction, base in INDIVIDUAL.items()
-            }
-            rows.extend(
-                evaluate(
-                    score_root,
-                    eval_root,
-                    namespaces,
-                    {"kind": "individual", "probe": probe, "probe_seed": seed, "query": query},
+        if not args.combined_only:
+            for probe, seed in enumerate(seeds, start=1):
+                suffix = f"timestamp_shared_reference_seed{seed}"
+                namespaces = {
+                    reduction: f"{base}_{suffix}"
+                    for reduction, base in INDIVIDUAL.items()
+                }
+                rows.extend(
+                    evaluate(
+                        score_root,
+                        eval_root,
+                        namespaces,
+                        {"kind": "individual", "probe": probe, "probe_seed": seed, "query": query},
+                    )
                 )
-            )
         namespaces = {
             reduction: f"{base}_{args.combined_suffix}"
             for reduction, base in combined_namespaces(len(seeds)).items()
@@ -188,8 +190,9 @@ def main() -> None:
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
     write_csv(args.out_dir / "per_query.csv", rows)
-    for probe, seed in enumerate(seeds, start=1):
-        print_block(f"INDIVIDUAL P{probe} seed={seed}", rows, "individual", probe)
+    if not args.combined_only:
+        for probe, seed in enumerate(seeds, start=1):
+            print_block(f"INDIVIDUAL P{probe} seed={seed}", rows, "individual", probe)
     print_block(f"{len(seeds)}-PROBE COMBINATIONS", rows, "combined", None)
     print(f"\n[saved] {args.out_dir}")
 
