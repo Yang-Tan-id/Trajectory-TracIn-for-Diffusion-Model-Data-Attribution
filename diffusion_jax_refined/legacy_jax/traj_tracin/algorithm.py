@@ -3007,6 +3007,13 @@ def run_attribution(cfg: TrajAttributionConfig):
             parameter_delta_jvp_diagnostic
             and bool(os.environ.get("TRAJ_TRACIN_RAW_TRAIN_GRADIENT_ARTIFACT", "").strip())
         )
+        optimizer_history_update_diagnostic = (
+            parameter_delta_jvp_diagnostic
+            and os.environ.get(
+                "TRAJ_TRACIN_OPTIMIZER_HISTORY_UPDATE_DIAGNOSTIC", "0"
+            ).strip().lower()
+            in ("1", "true", "yes", "on")
+        )
         probe_alignment_collect_all_outputs = (
             probe_alignment_future_mean
             or probe_alignment_future_lr_weighted_delta
@@ -3087,6 +3094,8 @@ def run_attribution(cfg: TrajAttributionConfig):
         raw_train_update_norm_ratios = []
         raw_train_update_timestamp_mean_cosines = []
         raw_train_update_timestamp_mean_norm_ratios = []
+        optimizer_history_update_cosines = []
+        optimizer_history_update_norm_ratios = []
         probe_alignment_current_reference_l2 = []
         probe_alignment_next_reference_l2 = []
         probe_alignment_current_reference_cosines = []
@@ -3370,6 +3379,46 @@ def run_attribution(cfg: TrajAttributionConfig):
                 if probe_alignment_previous_checkpoint
                 else None
             )
+            if optimizer_history_update_diagnostic:
+                if alignment_next_params is None:
+                    raise RuntimeError(
+                        "optimizer-history diagnostic requires next checkpoint params"
+                    )
+                delta_params_for_optimizer = jax.tree_util.tree_map(
+                    lambda next_value, current_value: next_value - current_value,
+                    alignment_next_params,
+                    params,
+                )
+                zero_grads = jax.tree_util.tree_map(jnp.zeros_like, state.params)
+                history_update, _ = state.tx.update(
+                    zero_grads, state.opt_state, state.params
+                )
+                history_update = tree_to_device(history_update, device)
+                history_norm = tree_l2_norm(history_update)
+                delta_norm = tree_l2_norm(delta_params_for_optimizer)
+                history_dot = tree_vdot(
+                    history_update, delta_params_for_optimizer
+                )
+                history_cosine = history_dot / jnp.maximum(
+                    history_norm * delta_norm,
+                    jnp.asarray(1e-12, dtype=jnp.float32),
+                )
+                history_ratio = history_norm / jnp.maximum(
+                    delta_norm, jnp.asarray(1e-12, dtype=jnp.float32)
+                )
+                optimizer_history_update_cosines.append(
+                    float(np.asarray(jax.device_get(history_cosine)))
+                )
+                optimizer_history_update_norm_ratios.append(
+                    float(np.asarray(jax.device_get(history_ratio)))
+                )
+                print(
+                    "[optimizer-history update] "
+                    f"checkpoint={ckpt_i + 1}/{len(ckpts)} "
+                    f"cos={optimizer_history_update_cosines[-1]:+.4f} "
+                    f"ratio={optimizer_history_update_norm_ratios[-1]:.6g}",
+                    flush=True,
+                )
             projector = None
             if not checkpoint_own_geometry_only and not probe_alignment_only and not (
                 stage_mode == "train" and reuse_gradient_residual_rms
@@ -5134,6 +5183,21 @@ def run_attribution(cfg: TrajAttributionConfig):
                             "cosine(-mean_i CountSketch(g_train_i,c,t), "
                             "CountSketch(params[c+1]-params[c])); same checkpoint-specific "
                             "CountSketch on both sides"
+                        ),
+                    )
+                if optimizer_history_update_diagnostic:
+                    alignment_payload.update(
+                        optimizer_history_update_cosines=np.asarray(
+                            optimizer_history_update_cosines, dtype=np.float32
+                        ),
+                        optimizer_history_update_norm_ratios=np.asarray(
+                            optimizer_history_update_norm_ratios, dtype=np.float32
+                        ),
+                        optimizer_history_update_definition=np.asarray(
+                            "exact parameter-space cosine between the AdamW update "
+                            "produced from checkpoint opt_state with zero current gradient "
+                            "and params[c+1]-params[c]; includes stored moments, current "
+                            "schedule scale, and decoupled weight decay"
                         ),
                     )
             if probe_alignment_collect_all_outputs:
