@@ -36,12 +36,15 @@ INDIVIDUAL = {
     "square": "predicted_noise_jvp_l2_squared",
     "absolute": "predicted_noise_jvp_absolute",
 }
-COMBINED = {
-    "square_mean": "predicted_noise_jvp_l2_squared_probe4",
-    "absolute_mean": "predicted_noise_jvp_absolute_probe4",
-    "term_root": "predicted_noise_jvp_probe_l2_probe4",
-    "timestamp_root": "predicted_noise_jvp_timestamp_probe_l2_probe4",
-}
+
+
+def combined_namespaces(num_probes: int) -> dict[str, str]:
+    return {
+        "square_mean": f"predicted_noise_jvp_l2_squared_probe{num_probes}",
+        "absolute_mean": f"predicted_noise_jvp_absolute_probe{num_probes}",
+        "term_root": f"predicted_noise_jvp_probe_l2_probe{num_probes}",
+        "timestamp_root": f"predicted_noise_jvp_timestamp_probe_l2_probe{num_probes}",
+    }
 
 
 def evaluate(
@@ -138,8 +141,8 @@ def main() -> None:
     args = parser.parse_args()
 
     seeds = [int(value) for value in args.probe_seeds.split(",")]
-    if len(seeds) != 4:
-        raise ValueError(f"expected four probe seeds, got {seeds}")
+    if not seeds:
+        raise ValueError("--probe-seeds must contain at least one seed")
     result_root = SHAPES_ROOT / "result" / args.experiment
     records = json.loads((SHAPES_ROOT / "queries_seed_0_9.json").read_text())["queries"]
     rows: list[dict[str, object]] = []
@@ -172,7 +175,7 @@ def main() -> None:
             )
         namespaces = {
             reduction: f"{base}_{args.combined_suffix}"
-            for reduction, base in COMBINED.items()
+            for reduction, base in combined_namespaces(len(seeds)).items()
         }
         rows.extend(
             evaluate(
@@ -187,7 +190,7 @@ def main() -> None:
     write_csv(args.out_dir / "per_query.csv", rows)
     for probe, seed in enumerate(seeds, start=1):
         print_block(f"INDIVIDUAL P{probe} seed={seed}", rows, "individual", probe)
-    print_block("FOUR-PROBE COMBINATIONS", rows, "combined", None)
+    print_block(f"{len(seeds)}-PROBE COMBINATIONS", rows, "combined", None)
     print(f"\n[saved] {args.out_dir}")
 
 
