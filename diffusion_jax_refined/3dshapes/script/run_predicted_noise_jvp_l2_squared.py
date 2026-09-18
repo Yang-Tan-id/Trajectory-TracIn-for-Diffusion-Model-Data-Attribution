@@ -209,13 +209,13 @@ def query_artifact_path(
     )
 
 
-def train_part_dir(experiment: str, train_seed: int) -> Path:
+def train_part_dir(experiment: str, train_seed: int, namespace: str = "traj_tracin") -> Path:
     artifact = (
         result_root(experiment)
         / "model"
         / "prompted_solo"
         / f"seed_{train_seed}_train_gradient"
-        / "traj_tracin"
+        / namespace
         / "train_datapoint_gradient_artifact.npz"
     )
     return Path(str(artifact) + ".parts")
@@ -415,7 +415,9 @@ def score_shard(args: argparse.Namespace) -> None:
     used_terms = 0
 
     for ckpt_i in range(args.shard_index, 50, args.shard_count):
-        part_path = train_part_dir(args.experiment, args.train_seed) / f"ckpt_{ckpt_i:04d}.npz"
+        part_path = train_part_dir(
+            args.experiment, args.train_seed, args.train_namespace
+        ) / f"ckpt_{ckpt_i:04d}.npz"
         if not part_path.is_file():
             raise FileNotFoundError(part_path)
         with np.load(part_path, allow_pickle=False) as payload:
@@ -856,6 +858,7 @@ def main() -> None:
     parser.add_argument("command", choices=("score-shard", "merge"))
     parser.add_argument("--experiment", default="experiment1")
     parser.add_argument("--train-seed", type=int, default=42)
+    parser.add_argument("--train-namespace", default="traj_tracin")
     parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--shard-index", type=int, default=0)
     parser.add_argument("--shard-count", type=int, default=16)

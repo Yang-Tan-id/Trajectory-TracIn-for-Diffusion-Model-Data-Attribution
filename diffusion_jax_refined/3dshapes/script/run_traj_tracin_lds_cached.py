@@ -37,6 +37,14 @@ VARIANTS = (
 )
 PREDICTED_NOISE_JVP_VARIANTS = VARIANTS
 PREDICTED_NOISE_JVP_SCHEMES = {
+    "predicted_noise_jvp_l2_squared_probe8_adam_v_own8",
+    "predicted_noise_jvp_absolute_probe8_adam_v_own8",
+    "predicted_noise_jvp_probe_l2_probe8_adam_v_own8",
+    "predicted_noise_jvp_timestamp_probe_l2_probe8_adam_v_own8",
+    "predicted_noise_jvp_l2_squared_probe12_adam_v_reference12",
+    "predicted_noise_jvp_absolute_probe12_adam_v_reference12",
+    "predicted_noise_jvp_probe_l2_probe12_adam_v_reference12",
+    "predicted_noise_jvp_timestamp_probe_l2_probe12_adam_v_reference12",
     "predicted_noise_jvp_l2_squared",
     "predicted_noise_jvp_l2_squared_probe4",
     "predicted_noise_jvp_l2_squared_probe8",
@@ -98,6 +106,14 @@ PREDICTED_NOISE_JVP_SCHEMES = {
     "predicted_noise_shared_orthogonal_probe8_termwise_square",
 }
 SCORE_SCHEMES = {
+    "predicted_noise_jvp_l2_squared_probe8_adam_v_own8": "traj_tracin_predicted_noise_jvp_l2_squared_probe8_adam_v_own8",
+    "predicted_noise_jvp_absolute_probe8_adam_v_own8": "traj_tracin_predicted_noise_jvp_absolute_probe8_adam_v_own8",
+    "predicted_noise_jvp_probe_l2_probe8_adam_v_own8": "traj_tracin_predicted_noise_jvp_probe_l2_probe8_adam_v_own8",
+    "predicted_noise_jvp_timestamp_probe_l2_probe8_adam_v_own8": "traj_tracin_predicted_noise_jvp_timestamp_probe_l2_probe8_adam_v_own8",
+    "predicted_noise_jvp_l2_squared_probe12_adam_v_reference12": "traj_tracin_predicted_noise_jvp_l2_squared_probe12_adam_v_reference12",
+    "predicted_noise_jvp_absolute_probe12_adam_v_reference12": "traj_tracin_predicted_noise_jvp_absolute_probe12_adam_v_reference12",
+    "predicted_noise_jvp_probe_l2_probe12_adam_v_reference12": "traj_tracin_predicted_noise_jvp_probe_l2_probe12_adam_v_reference12",
+    "predicted_noise_jvp_timestamp_probe_l2_probe12_adam_v_reference12": "traj_tracin_predicted_noise_jvp_timestamp_probe_l2_probe12_adam_v_reference12",
     "original": "traj_tracin",
     "constant_lr_uniform": "traj_tracin_constant_lr_uniform",
     "cosine_lr_ddim_step_squared": "traj_tracin_cosine_lr_ddim_step_squared",

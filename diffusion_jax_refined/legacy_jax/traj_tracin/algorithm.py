@@ -457,6 +457,23 @@ def tree_l2_normalize(a, eps: float):
     return jax.tree_util.tree_map(lambda x: x / denom.astype(x.dtype), a)
 
 
+def find_adam_moment_state(opt_state):
+    """Find Optax's ScaleByAdamState inside a nested chained optimizer state."""
+    if hasattr(opt_state, "mu") and hasattr(opt_state, "nu") and hasattr(opt_state, "count"):
+        return opt_state
+    if isinstance(opt_state, (tuple, list)):
+        for child in opt_state:
+            found = find_adam_moment_state(child)
+            if found is not None:
+                return found
+    if isinstance(opt_state, dict):
+        for child in opt_state.values():
+            found = find_adam_moment_state(child)
+            if found is not None:
+                return found
+    return None
+
+
 def format_seconds(sec: float) -> str:
     sec = int(sec)
     h = sec // 3600
@@ -3142,6 +3159,14 @@ def run_attribution(cfg: TrajAttributionConfig):
         aggregate_train_timestamps = os.environ.get(
             "TRAJ_TRACIN_TRAIN_AGGREGATE_TIMESTAMPS", "0"
         ) in ("1", "true", "True", "yes")
+        optimizer_train_transform = os.environ.get(
+            "TRAJ_TRACIN_TRAIN_OPTIMIZER_TRANSFORM", "none"
+        ).strip().lower()
+        if optimizer_train_transform not in ("none", "adam_v_preconditioned"):
+            raise ValueError(
+                "TRAJ_TRACIN_TRAIN_OPTIMIZER_TRANSFORM must be none or "
+                "adam_v_preconditioned"
+            )
         decompose_residual_jacobian = os.environ.get(
             "TRAJ_TRACIN_TRAIN_DECOMPOSE_RESIDUAL_JACOBIAN", "0"
         ).strip().lower() in ("1", "true", "yes", "on")
@@ -3369,6 +3394,29 @@ def run_attribution(cfg: TrajAttributionConfig):
                 raise
             params = tree_to_device(select_state_params(state, cfg.parameter_source), device)
             print(f"[stage:{stage_mode}] checkpoint {ckpt_i + 1}/{len(ckpts)} restored", flush=True)
+            adam_inverse_rms = None
+            if stage_mode == "train" and optimizer_train_transform == "adam_v_preconditioned":
+                adam_state = find_adam_moment_state(state.opt_state)
+                if adam_state is None:
+                    raise RuntimeError("could not locate ScaleByAdamState in checkpoint opt_state")
+                adam_count = jnp.asarray(adam_state.count, dtype=jnp.float32)
+                adam_b2 = jnp.asarray(float(getattr(cfg, "adam_b2", 0.999)), dtype=jnp.float32)
+                adam_eps = jnp.asarray(float(getattr(cfg, "adam_eps", 1e-8)), dtype=jnp.float32)
+                nu_correction = jnp.maximum(
+                    1.0 - jnp.power(adam_b2, adam_count),
+                    jnp.asarray(1e-12, dtype=jnp.float32),
+                )
+                adam_inverse_rms = jax.tree_util.tree_map(
+                    lambda nu: 1.0
+                    / (jnp.sqrt(nu.astype(jnp.float32) / nu_correction) + adam_eps),
+                    adam_state.nu,
+                )
+                adam_inverse_rms = tree_to_device(adam_inverse_rms, device)
+                print(
+                    "[stage:train] optimizer-aware feature transform="
+                    "adam_v_preconditioned (negative update direction; LR excluded)",
+                    flush=True,
+                )
             alignment_next_params = (
                 next_checkpoint_params(ckpt_i)
                 if probe_alignment_next_checkpoint
@@ -4927,6 +4975,12 @@ def run_attribution(cfg: TrajAttributionConfig):
                         )[0]
 
                     _loss, grads = jax.value_and_grad(loss_fn)(p)
+                    if adam_inverse_rms is not None:
+                        grads = jax.tree_util.tree_map(
+                            lambda grad, inv_rms: -grad.astype(jnp.float32) * inv_rms,
+                            grads,
+                            adam_inverse_rms,
+                        )
                     return projector(grads)
 
                 bs_stage = max(1, int(cfg.score_batch_size))
@@ -5050,6 +5104,12 @@ def run_attribution(cfg: TrajAttributionConfig):
                         term_weights=np.asarray(train_term_weights, dtype=np.float32),
                         ckpt_paths=np.asarray(train_ckpt_paths),
                         proj_dim=np.asarray(proj_dim, dtype=np.int32),
+                        train_optimizer_transform=np.asarray(optimizer_train_transform),
+                        train_feature_semantics=np.asarray(
+                            "negative_bias_corrected_adam_second_moment_preconditioned_loss_gradient"
+                            if optimizer_train_transform == "adam_v_preconditioned"
+                            else "projected_expected_loss_gradient"
+                        ),
                     )
                     print(
                         f"[stage:train] saved checkpoint part "
