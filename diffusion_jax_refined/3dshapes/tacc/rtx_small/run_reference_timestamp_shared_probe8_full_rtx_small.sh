@@ -29,9 +29,26 @@ export TF_GPU_ALLOCATOR="${TF_GPU_ALLOCATOR:-cuda_malloc_async}"
 EXPERIMENT_TAG="${EXPERIMENT_TAG:-experiment1}"
 TRAIN_SEED="${TRAIN_SEED:-42}"
 JAX_EPOCHS="${JAX_EPOCHS:-200}"
-PROBE_SEEDS=(604938271 857302149 193746825 468025713 725914603 350681927 981374205 246805319)
-PROBE_SEEDS_CSV="604938271,857302149,193746825,468025713,725914603,350681927,981374205,246805319"
-COMBINED_SUFFIX="timestamp_shared_reference_probe8_fresh20260917b"
+PROBE_SET_TAG="${PROBE_SET_TAG:-fresh20260917b}"
+PROBE_SEEDS_CSV="${PROBE_SEEDS_CSV:-604938271,857302149,193746825,468025713,725914603,350681927,981374205,246805319}"
+IFS=',' read -r -a PROBE_SEEDS <<<"${PROBE_SEEDS_CSV}"
+if [[ "${#PROBE_SEEDS[@]}" -ne 8 ]]; then
+  echo "PROBE_SEEDS_CSV must contain exactly 8 comma-separated seeds" >&2
+  exit 2
+fi
+if [[ ! "${PROBE_SET_TAG}" =~ ^[A-Za-z0-9_]+$ ]]; then
+  echo "PROBE_SET_TAG must contain only letters, digits, and underscores" >&2
+  exit 2
+fi
+declare -A seen_seeds=()
+for seed in "${PROBE_SEEDS[@]}"; do
+  if [[ ! "${seed}" =~ ^[0-9]+$ ]] || [[ -n "${seen_seeds[$seed]:-}" ]]; then
+    echo "probe seeds must be distinct nonnegative integers: ${PROBE_SEEDS_CSV}" >&2
+    exit 2
+  fi
+  seen_seeds["${seed}"]=1
+done
+COMBINED_SUFFIX="timestamp_shared_reference_probe8_${PROBE_SET_TAG}"
 RESULT_ROOT="${SHAPES_ROOT}/result/${EXPERIMENT_TAG}"
 LOG_ROOT="${RESULT_ROOT}/logs/reference_timestamp_shared_probe8/${SLURM_JOB_ID}"
 OUTDIR="${RESULT_ROOT}/eval/reference_timestamp_shared_probe8/run_${SLURM_JOB_ID}"
