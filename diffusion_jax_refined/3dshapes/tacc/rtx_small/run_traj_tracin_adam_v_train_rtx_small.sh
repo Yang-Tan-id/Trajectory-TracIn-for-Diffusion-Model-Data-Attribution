@@ -34,7 +34,9 @@ ARTIFACT="${RESULT_ROOT}/model/prompted_solo/seed_${TRAIN_SEED}_train_gradient/t
 PART_DIR="${ARTIFACT}.parts"
 LOG_DIR="${RESULT_ROOT}/logs/traj_tracin_adam_v_train/${SLURM_JOB_ID}"
 mkdir -p "${PART_DIR}" "${LOG_DIR}"
-export TRAJ_TRACIN_STAGE_ARTIFACT_PATH="${ARTIFACT}"
+# The stage producer owns TRAJ_TRACIN_STAGE_ARTIFACT_PATH and derives it from
+# this public override. Setting only the internal variable is overwritten.
+export TRAIN_DATAPOINT_GRADIENT_ARTIFACT_PATH="${ARTIFACT}"
 
 cd "${STAGE_DIR}"
 pids=()
