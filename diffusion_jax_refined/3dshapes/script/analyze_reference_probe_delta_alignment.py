@@ -112,6 +112,8 @@ def main() -> None:
     labels = classifications(read_rows(args.lds_csv), args.threshold)
     pair_rows: list[dict[str, object]] = []
     timestamp_rows: list[dict[str, object]] = []
+    checkpoint_rows: list[dict[str, object]] = []
+    checkpoint_timestamp_rows: list[dict[str, object]] = []
 
     for query in range(10):
         path = artifact_path(args, query)
@@ -170,9 +172,44 @@ def main() -> None:
                         "sqrt_d_mean_abs_cosine": float(np.sqrt(dimension) * np.sum(tw * np.abs(cosines[:, slot]))),
                         "mean_standardized_abs_projection": float(np.sum(tw * standardized_projection[:, slot])),
                     })
+                for checkpoint in range(checkpoint_count):
+                    cw = weights[checkpoint] / np.maximum(weights[checkpoint].sum(), 1e-12)
+                    checkpoint_rows.append({
+                        "query": query, "probe": probe, "probe_seed": seed,
+                        "reduction": reduction, "group": label,
+                        "checkpoint": checkpoint + 1,
+                        "epoch": 4 * (checkpoint + 1),
+                        "next_checkpoint": checkpoint + 2,
+                        "next_epoch": 4 * (checkpoint + 2),
+                        "mean_cosine": float(np.sum(cw * cosines[checkpoint])),
+                        "mean_abs_cosine": float(np.sum(cw * np.abs(cosines[checkpoint]))),
+                        "rms_cosine": float(np.sqrt(np.sum(cw * np.square(cosines[checkpoint])))),
+                        "sqrt_d_mean_abs_cosine": float(np.sqrt(dimension) * np.sum(cw * np.abs(cosines[checkpoint]))),
+                        "mean_standardized_abs_projection": float(np.sum(cw * standardized_projection[checkpoint])),
+                    })
+                    for slot, timestep in enumerate(timesteps):
+                        checkpoint_timestamp_rows.append({
+                            "query": query, "probe": probe, "probe_seed": seed,
+                            "reduction": reduction, "group": label,
+                            "checkpoint": checkpoint + 1,
+                            "epoch": 4 * (checkpoint + 1),
+                            "next_checkpoint": checkpoint + 2,
+                            "next_epoch": 4 * (checkpoint + 2),
+                            "timestep": int(timestep),
+                            "cosine": float(cosines[checkpoint, slot]),
+                            "abs_cosine": float(abs(cosines[checkpoint, slot])),
+                            "squared_cosine": float(cosines[checkpoint, slot] ** 2),
+                            "sqrt_d_abs_cosine": float(np.sqrt(dimension) * abs(cosines[checkpoint, slot])),
+                            "standardized_abs_projection": float(standardized_projection[checkpoint, slot]),
+                        })
 
     write_csv(args.out_dir / "per_query_probe.csv", pair_rows)
     write_csv(args.out_dir / "per_query_probe_timestamp.csv", timestamp_rows)
+    write_csv(args.out_dir / "per_query_probe_checkpoint.csv", checkpoint_rows)
+    write_csv(
+        args.out_dir / "per_query_probe_checkpoint_timestamp.csv",
+        checkpoint_timestamp_rows,
+    )
 
     print("FIXED-REFERENCE v[t] ALIGNMENT WITH NEXT-CHECKPOINT DELTA-EPS")
     print(f"{'REDUCTION':9s} {'GROUP':16s} {'N':>3s} {'|COS|':>9s} {'RMS-COS':>9s} {'sqrt(D)|COS|':>13s} {'|DOT|/DELTA':>12s}")
@@ -202,6 +239,40 @@ def main() -> None:
                 print(f"{reduction:9s} {timestep:4d} {pos['mean_abs_cosine']-neg['mean_abs_cosine']:+13.6f} "
                       f"{pos['rms_cosine']-neg['rms_cosine']:+11.6f} "
                       f"{pos['sqrt_d_mean_abs_cosine']-neg['sqrt_d_mean_abs_cosine']:+12.6f}")
+
+    print("\nPOSITIVE MINUS NEGATIVE BY CHECKPOINT TRANSITION")
+    print(
+        f"{'REDUCTION':9s} {'CKPT':>4s} {'EPOCH':>5s} {'NEXT':>4s} "
+        f"{'DELTA |COS|':>13s} {'DELTA RMS':>11s} {'DELTA sqrtD':>12s}"
+    )
+    print("-" * 76)
+    for reduction in ("square", "absolute"):
+        for checkpoint in range(1, 50):
+            groups = {}
+            for group in ("strong_positive", "strong_negative"):
+                selected = [
+                    row for row in checkpoint_rows
+                    if row["reduction"] == reduction
+                    and row["group"] == group
+                    and row["checkpoint"] == checkpoint
+                ]
+                if selected:
+                    groups[group] = {
+                        key: np.mean([float(row[key]) for row in selected])
+                        for key in (
+                            "mean_abs_cosine", "rms_cosine",
+                            "sqrt_d_mean_abs_cosine",
+                        )
+                    }
+            if len(groups) == 2:
+                pos, neg = groups["strong_positive"], groups["strong_negative"]
+                print(
+                    f"{reduction:9s} {checkpoint:4d} {4*checkpoint:5d} "
+                    f"{checkpoint+1:4d} "
+                    f"{pos['mean_abs_cosine']-neg['mean_abs_cosine']:+13.6f} "
+                    f"{pos['rms_cosine']-neg['rms_cosine']:+11.6f} "
+                    f"{pos['sqrt_d_mean_abs_cosine']-neg['sqrt_d_mean_abs_cosine']:+12.6f}"
+                )
     print(f"\n[saved] {args.out_dir}")
 
 
