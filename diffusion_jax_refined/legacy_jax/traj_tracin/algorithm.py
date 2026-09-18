@@ -3003,6 +3003,10 @@ def run_attribution(cfg: TrajAttributionConfig):
             ).strip().lower()
             in ("1", "true", "yes", "on")
         )
+        raw_train_gradient_update_diagnostic = (
+            parameter_delta_jvp_diagnostic
+            and bool(os.environ.get("TRAJ_TRACIN_RAW_TRAIN_GRADIENT_ARTIFACT", "").strip())
+        )
         probe_alignment_collect_all_outputs = (
             probe_alignment_future_mean
             or probe_alignment_future_lr_weighted_delta
@@ -3079,6 +3083,8 @@ def run_attribution(cfg: TrajAttributionConfig):
         parameter_delta_jvp_relative_errors = []
         parameter_delta_jvp_predicted_norms = []
         parameter_delta_jvp_true_norms = []
+        raw_train_update_cosines = []
+        raw_train_update_norm_ratios = []
         probe_alignment_current_reference_l2 = []
         probe_alignment_next_reference_l2 = []
         probe_alignment_current_reference_cosines = []
@@ -3371,6 +3377,73 @@ def run_attribution(cfg: TrajAttributionConfig):
                     proj_dim,
                     seed_parts=(cfg.seed, "traj_tracin_projection", ckpt_i),
                     device=device,
+                )
+            if raw_train_gradient_update_diagnostic:
+                from dtrak.algorithm import build_countsketch_projector_jax
+
+                train_artifact = os.environ[
+                    "TRAJ_TRACIN_RAW_TRAIN_GRADIENT_ARTIFACT"
+                ].strip()
+                train_part = os.path.join(
+                    f"{train_artifact}.parts", f"ckpt_{ckpt_i:04d}.npz"
+                )
+                if not os.path.isfile(train_part):
+                    raise FileNotFoundError(train_part)
+                if alignment_next_params is None:
+                    raise RuntimeError(
+                        "raw train-gradient update diagnostic requires next checkpoint params"
+                    )
+                delta_params = jax.tree_util.tree_map(
+                    lambda next_value, current_value: next_value - current_value,
+                    alignment_next_params,
+                    params,
+                )
+                diagnostic_projector = build_countsketch_projector_jax(
+                    params,
+                    proj_dim,
+                    seed_parts=(cfg.seed, "traj_tracin_projection", ckpt_i),
+                    device=device,
+                )
+                projected_delta = diagnostic_projector(delta_params).astype(jnp.float32)
+                projected_delta_norm = jnp.linalg.norm(projected_delta)
+                with np.load(train_part, allow_pickle=False) as train_payload:
+                    train_features = np.asarray(
+                        train_payload["train_features"], dtype=np.float32
+                    )
+                    train_timesteps = np.asarray(
+                        train_payload["timesteps"], dtype=np.int32
+                    )
+                aggregate = -np.mean(train_features, axis=1, dtype=np.float64)
+                aggregate_device = array_to_device(
+                    jnp.asarray(aggregate, dtype=jnp.float32), device
+                )
+                aggregate_norms = jnp.linalg.norm(aggregate_device, axis=1)
+                dots = aggregate_device @ projected_delta
+                denominators = jnp.maximum(
+                    aggregate_norms * projected_delta_norm,
+                    jnp.asarray(1e-12, dtype=jnp.float32),
+                )
+                raw_train_update_cosines.append(
+                    np.asarray(jax.device_get(dots / denominators), dtype=np.float32)
+                )
+                raw_train_update_norm_ratios.append(
+                    np.asarray(
+                        jax.device_get(
+                            aggregate_norms
+                            / jnp.maximum(
+                                projected_delta_norm,
+                                jnp.asarray(1e-12, dtype=jnp.float32),
+                            )
+                        ),
+                        dtype=np.float32,
+                    )
+                )
+                print(
+                    "[raw-gradient update] "
+                    f"checkpoint={ckpt_i + 1}/{len(ckpts)} "
+                    f"mean_cos={float(np.mean(raw_train_update_cosines[-1])):+.4f} "
+                    f"timesteps={train_timesteps.tolist()}",
+                    flush=True,
                 )
             eps_fn = lambda p, x, t, c: adapter.eps_apply(model, p, x, t, c)
             implied_noise_targets = None
@@ -5017,6 +5090,20 @@ def run_attribution(cfg: TrajAttributionConfig):
                         "query conditioning are held fixed"
                     ),
                 )
+                if raw_train_gradient_update_diagnostic:
+                    alignment_payload.update(
+                        raw_train_update_cosines=np.concatenate(
+                            raw_train_update_cosines
+                        ),
+                        raw_train_update_norm_ratios=np.concatenate(
+                            raw_train_update_norm_ratios
+                        ),
+                        raw_train_update_definition=np.asarray(
+                            "cosine(-mean_i CountSketch(g_train_i,c,t), "
+                            "CountSketch(params[c+1]-params[c])); same checkpoint-specific "
+                            "CountSketch on both sides"
+                        ),
+                    )
             if probe_alignment_collect_all_outputs:
                 current_outputs = np.concatenate(
                     probe_alignment_current_eps_outputs, axis=0
