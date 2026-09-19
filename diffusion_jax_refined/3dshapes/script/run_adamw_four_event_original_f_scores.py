@@ -91,7 +91,12 @@ def main():
                     lds=100*float(rowwise_spearman(pred[None,:],true[target])[0])
                     rows.append({'method':m,'variant':v,'query':q,'target':target,'lds_percent':lds,'prediction_sign':'p1','checkpoint_weighting':a.checkpoint_weighting})
     write(a.out_dir/'per_query.csv',rows)
-    print(f'LINEAR ORIGINAL-F REFERENCE TRAJECTORY — FIXED P1 — CHECKPOINT WEIGHTING={a.checkpoint_weighting}')
+    trajectory_label = (
+        'OWN TRAJECTORY'
+        if 'checkpoint_own_trajectory' in a.query_namespace
+        else 'REFERENCE TRAJECTORY'
+    )
+    print(f'LINEAR ORIGINAL-F {trajectory_label} — FIXED P1 — CHECKPOINT WEIGHTING={a.checkpoint_weighting}')
     for m in METHODS:
         for variant in VARIANTS:
             vals=[]
