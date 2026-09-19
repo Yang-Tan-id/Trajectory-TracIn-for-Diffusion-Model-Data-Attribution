@@ -21,6 +21,13 @@ patterns=''; IFS=',' read -ra aa <<<"$seeds"; for x in "${aa[@]}"; do [[ -z "$pa
 
 score_event() {
   local method="$1" suffix="adamw4_${1}_reference12" run="${SLURM_JOB_ID}_${1}_l2_squared" pids=()
+  local storage_namespace="traj_tracin_predicted_noise_jvp_l2_squared_probe12_${suffix}"
+  local completed
+  completed="$(find "$shapes/result/$exp/attribution_score/prompted_solo/train_seed_${seed}" -path "*/${storage_namespace}/*/scores.npy" 2>/dev/null | wc -l | tr -d ' ')"
+  if [[ "$completed" -ge 40 ]]; then
+    echo "[skip] complete cached event score: method=$method files=$completed"
+    return
+  fi
   for shard in 0 1; do
     (CUDA_VISIBLE_DEVICES="$shard" JAX_NUM_DEVICES=1 JAX_PLATFORMS=cuda python "$driver" score-shard --experiment "$exp" --train-seed "$seed" --train-namespace "traj_tracin_adamw4_${method}" --train-feature-semantics fixed_checkpoint_adamw_event_no_timestamp_alignment --run-id "$run" --shard-index "$shard" --shard-count 2 --num-probes 12 --contraction squared --namespace-suffix "$suffix" --query-namespace-patterns "$patterns" --expected-query-probe-mode timestamp_shared_gaussian --expected-query-probe-seeds "$seeds") & pids+=("$!")
   done

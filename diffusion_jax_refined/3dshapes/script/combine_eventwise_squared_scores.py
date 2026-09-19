@@ -22,6 +22,10 @@ COMPONENTS = (
 )
 
 
+def storage_namespace(value: str) -> str:
+    return value if value.startswith("traj_tracin_") else f"traj_tracin_{value}"
+
+
 def atomic_save(path: Path, value: np.ndarray) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + ".tmp")
@@ -38,7 +42,12 @@ def main() -> None:
     parser.add_argument("--output-namespace", required=True)
     args = parser.parse_args()
 
-    inputs = [value.strip() for value in args.input_namespaces.split(",") if value.strip()]
+    inputs = [
+        storage_namespace(value.strip())
+        for value in args.input_namespaces.split(",")
+        if value.strip()
+    ]
+    output_namespace = storage_namespace(args.output_namespace.strip())
     if len(inputs) != 4:
         raise ValueError(f"expected exactly E1--E4 score namespaces, got {inputs}")
     records = json.loads((ROOT / "queries_seed_0_9.json").read_text())["queries"]
@@ -58,11 +67,11 @@ def main() -> None:
                 elif not np.array_equal(indices, current_indices):
                     raise ValueError(f"score index mismatch for query={query_id}, component={component}")
                 arrays.append(values)
-            destination = query_root / args.output_namespace / component
+            destination = query_root / output_namespace / component
             atomic_save(destination / "scores.npy", np.sum(arrays, axis=0))
             atomic_save(destination / "score_indices.npy", indices)
             manifest = {
-                "algorithm": args.output_namespace,
+                "algorithm": output_namespace,
                 "score_variant": component,
                 "definition": "sum_event_E1_to_E4(mean_probe(square(per_event_directional_contraction)))",
                 "event_cross_terms": False,
