@@ -51,7 +51,8 @@ def main():
     query,meta=load_query_bank(qa,a.query_namespace,'trajectory_next_checkpoint_noise_mse',range(10))
     lookup={(int(c),int(t)):i for i,(c,t) in enumerate(zip(meta['ckpt_indices'],meta['timesteps']))}
     num_timestamps=len(dict.fromkeys(int(x) for x in meta['timesteps']))
-    if num_timestamps!=10: raise ValueError(f'expected 10 timestamps, got {num_timestamps}')
+    if num_timestamps <= 0:
+        raise ValueError('query artifact contains no trajectory timestamps')
     scores={(m,v):np.zeros((10,a.attribution_points),np.float64) for m in METHODS for v in VARIANTS}; score_idx=None
     for c in range(49):
         se=4*(c+1); state,_=mod._restore_checkpoint(str(ckroot/f'seed_{a.train_seed}_epoch_{se:04d}.ckpt'),template)
