@@ -42,6 +42,6 @@ for trajectory in reference own; do
 done
 
 tar -C "$out" -czf "$out/lds_scatter_reference_vs_own.tar.gz" \
-  reference/lds_scatter_four_residual_query_train_l2_endpoint \
-  own/lds_scatter_four_residual_query_train_l2_endpoint
+  reference/lds_scatter_four_residual_query_train_l2 \
+  own/lds_scatter_four_residual_query_train_l2
 echo "[saved] $out/lds_scatter_reference_vs_own.tar.gz"
