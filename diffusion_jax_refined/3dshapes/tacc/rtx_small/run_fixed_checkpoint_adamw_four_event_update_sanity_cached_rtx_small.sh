@@ -21,13 +21,14 @@ conda activate /scratch/11447/yangtan7447/conda-envs/trajectory-tracin
 EXPERIMENT_TAG="${EXPERIMENT_TAG:-experiment1}"
 TRAIN_SEED="${TRAIN_SEED:-42}"
 ATTRIBUTION_POINTS="${ATTRIBUTION_POINTS:-5000}"
-OUTDIR="${SHAPES_ROOT}/result/${EXPERIMENT_TAG}/eval/fixed_checkpoint_adamw_four_event_update_sanity/run_${SLURM_JOB_ID}"
+OUTDIR="${SHAPES_ROOT}/result/${EXPERIMENT_TAG}/eval/fixed_checkpoint_adamw_four_event_update_residual_sanity/run_${SLURM_JOB_ID}"
 
 cd "${REPO_ROOT}"
 JAX_PLATFORMS=cpu python "${SHAPES_ROOT}/script/analyze_fixed_checkpoint_adamw_four_event_update.py" \
   --experiment "${EXPERIMENT_TAG}" \
   --train-seed "${TRAIN_SEED}" \
   --attribution-points "${ATTRIBUTION_POINTS}" \
+  --subtract-history-baseline \
   --out-dir "${OUTDIR}"
 
-echo "[done] fixed-checkpoint AdamW four-event update sanity: ${OUTDIR}"
+echo "[done] history-subtracted fixed-checkpoint AdamW four-event update sanity: ${OUTDIR}"

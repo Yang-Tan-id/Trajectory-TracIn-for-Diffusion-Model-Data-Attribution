@@ -12,6 +12,7 @@ from pathlib import Path
 import sys
 
 import jax
+import jax.numpy as jnp
 import numpy as np
 
 
@@ -53,6 +54,11 @@ def main() -> None:
     parser.add_argument("--num-shards", type=int, default=2)
     parser.add_argument("--first-interval", type=int, default=0)
     parser.add_argument("--last-interval", type=int, default=48)
+    parser.add_argument(
+        "--subtract-history-baseline",
+        action="store_true",
+        help="Subtract projected AdamWUpdate(0; checkpoint optimizer state) from every event mean.",
+    )
     parser.add_argument("--out-dir", type=Path, required=True)
     args = parser.parse_args()
 
@@ -117,11 +123,25 @@ def main() -> None:
             ),
             dtype=np.float64,
         )
+        zero_grads = jax.tree_util.tree_map(jnp.zeros_like, start_state.params)
+        history_update, _ = start_state.tx.update(
+            zero_grads, start_state.opt_state, start_state.params
+        )
+        projected_history = np.asarray(
+            _countsketch_project_grad_jax(
+                history_update,
+                args.proj_dim,
+                seed_parts=(args.train_seed, "traj_tracin_projection", interval),
+            ),
+            dtype=np.float64,
+        )
         interval_dir = artifact_root / f"epoch_{start_epoch}_{end_epoch}"
         event_vectors = [
             load_event_mean(interval_dir, epoch, args.num_shards)
             for epoch in range(start_epoch + 1, end_epoch + 1)
         ]
+        if args.subtract_history_baseline:
+            event_vectors = [vector - projected_history for vector in event_vectors]
         combined = np.sum(event_vectors, axis=0)
         event_cosines = [cosine(vector, projected_delta) for vector in event_vectors]
         row = {
@@ -135,6 +155,9 @@ def main() -> None:
                 for slot, vector in enumerate(event_vectors, 1)
             },
             "combined_norm_ratio": norm_ratio(combined, projected_delta),
+            "history_baseline_cosine": cosine(projected_history, projected_delta),
+            "history_baseline_norm_ratio": norm_ratio(projected_history, projected_delta),
+            "history_baseline_subtracted": bool(args.subtract_history_baseline),
         }
         rows.append(row)
         print(
@@ -155,7 +178,8 @@ def main() -> None:
         + [row["combined_cosine"]]
         for row in rows
     ])
-    print("\nFIXED-CHECKPOINT ADAMW FOUR EVENTS vs NEXT CHECKPOINT UPDATE")
+    label = "HISTORY-SUBTRACTED " if args.subtract_history_baseline else ""
+    print(f"\n{label}FIXED-CHECKPOINT ADAMW FOUR EVENTS vs NEXT CHECKPOINT UPDATE")
     print("columns: EVENT1 EVENT2 EVENT3 EVENT4 COMBINED")
     print("mean   " + " ".join(f"{value:+9.4f}" for value in matrix.mean(axis=0)))
     print("median " + " ".join(f"{value:+9.4f}" for value in np.median(matrix, axis=0)))
