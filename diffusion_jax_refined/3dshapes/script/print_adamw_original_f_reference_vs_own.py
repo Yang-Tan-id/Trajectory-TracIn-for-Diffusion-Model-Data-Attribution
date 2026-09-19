@@ -28,6 +28,11 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--reference", type=Path, required=True)
     parser.add_argument("--own", type=Path, required=True)
+    parser.add_argument(
+        "--compact-raw-residual",
+        action="store_true",
+        help="print full AdamW FOUR and history-subtracted FOUR_RESIDUAL for the three requested targets",
+    )
     args = parser.parse_args()
 
     reference = load(args.reference)
@@ -41,6 +46,15 @@ def main() -> None:
         )
 
     groups = sorted({key[:3] for key in reference})
+    if args.compact_raw_residual:
+        groups = [
+            group
+            for group in groups
+            if group[0] in ("four", "four_residual")
+            and group[1] == "query_train_l2"
+            and group[2]
+            in ("endpoint_contarfactual", "traj_contarfactual", "simple_loss")
+        ]
     for method, variant, target in groups:
         print(f"\n{method.upper()} — {variant.upper()} — {target}")
         print(f"{'Q':>4} {'REFERENCE':>12} {'OWN':>12}")
