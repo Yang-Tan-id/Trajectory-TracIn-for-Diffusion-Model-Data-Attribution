@@ -6,9 +6,6 @@ import argparse
 import csv
 from pathlib import Path
 
-import numpy as np
-
-
 KEYS = ("method", "variant", "target", "query")
 
 
@@ -58,8 +55,8 @@ def main() -> None:
             own_values.append(own_value)
             print(f"Q{query:<2d} {reference_value:+11.3f}% {own_value:+11.3f}%")
         print(
-            f"MEAN {np.mean(reference_values):+11.3f}% "
-            f"{np.mean(own_values):+11.3f}%"
+            f"MEAN {sum(reference_values) / len(reference_values):+11.3f}% "
+            f"{sum(own_values) / len(own_values):+11.3f}%"
         )
 
 
