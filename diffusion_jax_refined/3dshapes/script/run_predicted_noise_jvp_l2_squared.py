@@ -455,6 +455,11 @@ def score_shard(args: argparse.Namespace) -> None:
             }
 
         for local_term, (ckpt, timestep, weight) in enumerate(zip(ckpts, timesteps, weights)):
+            term_checkpoint_weight = (
+                1.0 / float(len(weights))
+                if args.checkpoint_weighting == "uniform"
+                else float(weight)
+            )
             query_term = lookup.get((int(ckpt), int(timestep)))
             if query_term is None:
                 raise ValueError(f"no query feature for checkpoint={ckpt} timestep={timestep}")
@@ -537,13 +542,13 @@ def score_shard(args: argparse.Namespace) -> None:
                     elif args.contraction == "final_post_square":
                         # Keep each probe separate through the complete trajectory sum.
                         # Squaring and cross-probe reduction happen only after shards merge.
-                        sums[component][probe_index] += float(weight) * host_values
+                        sums[component][probe_index] += term_checkpoint_weight * host_values
                     elif args.contraction == "termwise_squared_per_probe":
-                        sums[component][probe_index] += float(weight) * host_values
+                        sums[component][probe_index] += term_checkpoint_weight * host_values
                     elif args.contraction == "timestamp_checkpoint_square":
                         # Stored term weights are eta_c / num_timestamps. Restore eta_c
                         # here because timestamp averaging occurs after checkpoint sums.
-                        checkpoint_lr = float(weight) * float(len(timestep_values))
+                        checkpoint_lr = term_checkpoint_weight * float(len(timestep_values))
                         sums[component][timestep_slots[int(timestep)], probe_index] += (
                             checkpoint_lr * host_values
                         )
@@ -554,7 +559,7 @@ def score_shard(args: argparse.Namespace) -> None:
                         )
                     elif args.contraction == "timestamp_probe_l2":
                         sums[component][timestep_slots[int(timestep)]] += (
-                            float(weight) * host_values
+                            term_checkpoint_weight * host_values
                         )
                     else:
                         assert term_scores is not None
@@ -568,7 +573,7 @@ def score_shard(args: argparse.Namespace) -> None:
             # directional derivative. The learning-rate weight remains linear, and the
             # stored per-snapshot weight already averages the 10 snapshots.
             if term_scores is not None:
-                term_weight = float(weight)
+                term_weight = term_checkpoint_weight
                 for component, values in term_scores.items():
                     if args.contraction in ("rms", "probe_l2"):
                         values = reduce_probe_rms(values)
@@ -583,14 +588,18 @@ def score_shard(args: argparse.Namespace) -> None:
                             values / float(len(timesteps))
                         )
             if term_probe_values is not None:
-                term_weight = float(weight)
+                term_weight = term_checkpoint_weight
                 for component, values in term_probe_values.items():
                     sums[component] += term_weight * reduce_probe_median_absolute(values)
             used_terms += 1
 
         if args.contraction == "checkpoint_timestamp_sum_square":
             assert checkpoint_probe_sums is not None
-            checkpoint_lr_values = weights * float(len(timesteps))
+            checkpoint_lr_values = (
+                np.ones_like(weights)
+                if args.checkpoint_weighting == "uniform"
+                else weights * float(len(timesteps))
+            )
             if not np.allclose(
                 checkpoint_lr_values,
                 checkpoint_lr_values[0],
@@ -628,6 +637,7 @@ def score_shard(args: argparse.Namespace) -> None:
         score_indices=score_indices,
         used_terms=np.asarray(used_terms, dtype=np.int32),
         weighting_semantics=np.asarray(weighting_semantics(args.contraction)),
+        checkpoint_weighting=np.asarray(args.checkpoint_weighting),
     )
     print(f"[saved] {output}", flush=True)
 
@@ -699,6 +709,14 @@ def merge(args: argparse.Namespace) -> None:
                 raise ValueError(
                     f"{path} has incompatible weighting semantics {semantics!r}; "
                     f"expected {expected_semantics!r}"
+                )
+            checkpoint_weighting = str(
+                np.asarray(payload.get("checkpoint_weighting", "stored_lr")).item()
+            )
+            if checkpoint_weighting != args.checkpoint_weighting:
+                raise ValueError(
+                    f"{path} has checkpoint weighting {checkpoint_weighting!r}; "
+                    f"expected {args.checkpoint_weighting!r}"
                 )
             terms += int(payload["used_terms"])
             indices = np.asarray(payload["score_indices"], dtype=np.int64)
@@ -844,6 +862,7 @@ def merge(args: argparse.Namespace) -> None:
                     "projection_dim": 4096,
                     "query_gradient_retained": False,
                     "transient_run_id": args.run_id,
+                    "checkpoint_weighting": args.checkpoint_weighting,
                 }
                 (out_dir / "score_artifact_manifest.json").write_text(
                     json.dumps(manifest, indent=2, sort_keys=True)
@@ -882,6 +901,16 @@ def main() -> None:
         help="Optional exact semantic tag required in every train part.",
     )
     parser.add_argument("--epochs", type=int, default=200)
+    parser.add_argument(
+        "--checkpoint-weighting",
+        choices=("stored_lr", "uniform"),
+        default="stored_lr",
+        help=(
+            "stored_lr uses the term weights saved in each train part; uniform "
+            "removes the outer checkpoint learning-rate factor while preserving "
+            "the average over timestamps."
+        ),
+    )
     parser.add_argument(
         "--expected-terms",
         type=int,
