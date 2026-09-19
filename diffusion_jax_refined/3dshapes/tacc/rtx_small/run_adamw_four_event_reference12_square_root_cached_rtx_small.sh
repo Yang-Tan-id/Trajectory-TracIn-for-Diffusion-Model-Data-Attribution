@@ -23,7 +23,7 @@ for method in four e1 four_residual e1_residual; do
    (CUDA_VISIBLE_DEVICES="$shard" JAX_NUM_DEVICES=1 JAX_PLATFORMS=cuda python "$driver" score-shard --experiment "$exp" --train-seed "$seed" --train-namespace "traj_tracin_adamw4_${method}" --train-feature-semantics fixed_checkpoint_adamw_event_no_timestamp_alignment --run-id "$run" --shard-index "$shard" --shard-count 2 --num-probes 12 --contraction "$contraction" --namespace-suffix "$suffix" --query-namespace-patterns "$patterns" --expected-query-probe-mode timestamp_shared_gaussian --expected-query-probe-seeds "$seeds") & pids+=("$!")
   done
   for pid in "${pids[@]}"; do wait "$pid"; done
-  JAX_PLATFORMS=cpu python "$driver" merge --experiment "$exp" --train-seed "$seed" --train-namespace "traj_tracin_adamw4_${method}" --train-feature-semantics fixed_checkpoint_adamw_event_no_timestamp_alignment --run-id "$run" --shard-count 2 --num-probes 12 --contraction "$contraction" --namespace-suffix "$suffix" --query-namespace-patterns "$patterns" --expected-query-probe-mode timestamp_shared_gaussian --expected-query-probe-seeds "$seeds"
+  JAX_PLATFORMS=cpu python "$driver" merge --experiment "$exp" --train-seed "$seed" --train-namespace "traj_tracin_adamw4_${method}" --train-feature-semantics fixed_checkpoint_adamw_event_no_timestamp_alignment --run-id "$run" --shard-count 2 --num-probes 12 --contraction "$contraction" --namespace-suffix "$suffix" --query-namespace-patterns "$patterns" --expected-query-probe-mode timestamp_shared_gaussian --expected-query-probe-seeds "$seeds" --expected-terms 490
   name="predicted_noise_jvp_${reduction}_probe12_${suffix}"; [[ -z "$schemes" ]] || schemes+=','; schemes+="$name"
  done
 done

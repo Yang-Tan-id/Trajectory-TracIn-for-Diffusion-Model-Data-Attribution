@@ -706,8 +706,10 @@ def merge(args: argparse.Namespace) -> None:
             score_indices = indices
         elif not np.array_equal(score_indices, indices):
             raise ValueError(f"score indices differ in {path}")
-    if terms != 500:
-        raise ValueError(f"expected 500 terms, got terms={terms}")
+    if terms != args.expected_terms:
+        raise ValueError(
+            f"expected {args.expected_terms} terms, got terms={terms}"
+        )
     expected = np.asarray(np.load(ATTRIBUTION_INDICES_PATH), dtype=np.int64)
     if score_indices is None or not np.array_equal(np.sort(score_indices), np.sort(expected)):
         raise ValueError("score indices do not match attribution_5k_indices.npy")
@@ -880,6 +882,12 @@ def main() -> None:
         help="Optional exact semantic tag required in every train part.",
     )
     parser.add_argument("--epochs", type=int, default=200)
+    parser.add_argument(
+        "--expected-terms",
+        type=int,
+        default=500,
+        help="Expected total checkpoint/timestamp terms when merging shards.",
+    )
     parser.add_argument("--shard-index", type=int, default=0)
     parser.add_argument("--shard-count", type=int, default=16)
     parser.add_argument("--run-id", default=os.environ.get("PRED_NOISE_JVP_RUN_ID", "manual"))
@@ -967,6 +975,8 @@ def main() -> None:
         raise ValueError("invalid shard index/count")
     if args.num_probes <= 0:
         raise ValueError("--num-probes must be positive")
+    if args.expected_terms <= 0:
+        raise ValueError("--expected-terms must be positive")
     if not args.run_id or "/" in args.run_id:
         raise ValueError("--run-id must be a non-empty path component")
     if args.namespace_suffix and any(
