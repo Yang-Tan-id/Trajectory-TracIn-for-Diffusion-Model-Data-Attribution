@@ -42,6 +42,7 @@ for interval in $(seq "${FIRST_INTERVAL}" "${LAST_INTERVAL}"); do
   start_epoch=$((4 * (interval + 1)))
   end_epoch=$((start_epoch + 4))
   out_dir="${ARTIFACT_ROOT}/epoch_${start_epoch}_${end_epoch}"
+  saved_event_dir="${RESULT_ROOT}/fixed_checkpoint_adamw_four_events_n${ATTRIBUTION_POINTS}/epoch_${start_epoch}_${end_epoch}"
   log_dir="${LOG_ROOT}/interval_${interval}_epoch_${start_epoch}_${end_epoch}"
   mkdir -p "${out_dir}" "${log_dir}"
   echo "[interval $((interval + 1))/49] checkpoint epoch ${start_epoch} -> ${end_epoch}"
@@ -53,6 +54,7 @@ for interval in $(seq "${FIRST_INTERVAL}" "${LAST_INTERVAL}"); do
         python "${SHAPES_ROOT}/script/replay_exact_training_interval.py" \
           --experiment "${EXPERIMENT_TAG}" --train-seed "${TRAIN_SEED}" \
           --start-epoch "${start_epoch}" --end-epoch "${end_epoch}" \
+          --saved-event-dir "${saved_event_dir}" \
           --fixed-checkpoint --extract-gradient-sketches \
           --event-feature raw_gradient --proj-dim "${PROJ_DIM}" \
           --attribution-points "${ATTRIBUTION_POINTS}" \

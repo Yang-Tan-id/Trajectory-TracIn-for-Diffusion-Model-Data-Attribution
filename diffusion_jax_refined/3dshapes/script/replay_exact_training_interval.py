@@ -66,6 +66,15 @@ def main():
     parser.add_argument("--start-epoch", type=int, default=40)
     parser.add_argument("--end-epoch", type=int, default=44)
     parser.add_argument("--out-dir", type=Path, required=True)
+    parser.add_argument(
+        "--saved-event-dir",
+        type=Path,
+        default=None,
+        help=(
+            "Read saved batch indices, timesteps, and RNG keys from this earlier "
+            "event directory instead of advancing checkpoint RNG sequentially."
+        ),
+    )
     parser.add_argument("--extract-gradient-sketches", action="store_true")
     parser.add_argument("--proj-dim", type=int, default=4096)
     parser.add_argument(
@@ -87,6 +96,8 @@ def main():
     args = parser.parse_args()
     if args.end_epoch <= args.start_epoch:
         raise ValueError("--end-epoch must be greater than --start-epoch")
+    if args.saved_event_dir is not None and not args.fixed_checkpoint:
+        raise ValueError("--saved-event-dir requires --fixed-checkpoint")
 
     shapes_root = Path(__file__).resolve().parents[1]
     legacy = shapes_root.parent / "legacy_jax"
@@ -221,6 +232,31 @@ def main():
         "epoch", "batch", "global_step", "dataset_indices", "timesteps",
         "noise_key", "dropout_key", "next_state_key",
     ]
+    saved_events = None
+    if args.saved_event_dir is not None:
+        saved_name = (
+            "batch_events.csv" if args.num_shards == 1
+            else f"batch_events_shard_{args.shard_id:02d}_of_{args.num_shards:02d}.csv"
+        )
+        saved_path = args.saved_event_dir / saved_name
+        if not saved_path.is_file():
+            raise FileNotFoundError(saved_path)
+        with saved_path.open(newline="") as saved_handle:
+            saved_events = {
+                (int(row["epoch"]), int(row["batch"])): row
+                for row in csv.DictReader(saved_handle)
+            }
+        expected_saved = (args.end_epoch - args.start_epoch) * steps_per_epoch
+        if len(saved_events) != expected_saved:
+            raise ValueError(
+                f"{saved_path} expected {expected_saved} batch events, "
+                f"found {len(saved_events)}"
+            )
+        print(
+            f"[saved events] loaded {len(saved_events)} batches from {saved_path}; "
+            "no sequential RNG replay",
+            flush=True,
+        )
     with event_path.open("w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
@@ -236,16 +272,33 @@ def main():
                 epoch_timesteps = np.empty((len(owned_indices),), dtype=np.int32)
                 epoch_batches = np.empty((len(owned_indices),), dtype=np.int32)
                 epoch_positions = np.empty((len(owned_indices),), dtype=np.int16)
-            indices = np.arange(len(ds), dtype=np.int64)
-            np.random.default_rng(cfg.seed + epoch).shuffle(indices)
             for batch_no, start in enumerate(range(0, steps_per_epoch * cfg.batch_size, cfg.batch_size)):
-                selected = indices[start:start + cfg.batch_size]
+                if saved_events is None:
+                    if batch_no == 0:
+                        indices = np.arange(len(ds), dtype=np.int64)
+                        np.random.default_rng(cfg.seed + epoch).shuffle(indices)
+                    selected = indices[start:start + cfg.batch_size]
+                    next_rng, noise_rng, t_rng, dropout_rng = jax.random.split(state.rng, 4)
+                    timesteps = np.asarray(
+                        jax.random.randint(t_rng, (cfg.batch_size,), 0, cfg.timesteps),
+                        np.int32,
+                    )
+                    row_global_step = global_step + 1
+                else:
+                    saved_row = saved_events[(epoch, batch_no)]
+                    selected = np.asarray(json.loads(saved_row["dataset_indices"]), dtype=np.int64)
+                    timesteps = np.asarray(json.loads(saved_row["timesteps"]), dtype=np.int32)
+                    noise_rng = jnp.asarray(json.loads(saved_row["noise_key"]), dtype=jnp.uint32)
+                    dropout_rng = jnp.asarray(json.loads(saved_row["dropout_key"]), dtype=jnp.uint32)
+                    next_rng = jnp.asarray(json.loads(saved_row["next_state_key"]), dtype=jnp.uint32)
+                    row_global_step = int(saved_row["global_step"])
+                    if selected.shape != (cfg.batch_size,) or timesteps.shape != (cfg.batch_size,):
+                        raise ValueError(
+                            f"saved event epoch={epoch} batch={batch_no} has shapes "
+                            f"indices={selected.shape}, timesteps={timesteps.shape}"
+                        )
                 x = jax.device_put(module.maybe_to_dtype(jnp.asarray(ds.images[selected]), cfg.use_bfloat16), device)
                 y = jax.device_put(jnp.asarray(ds.labels[selected]), device)
-                next_rng, noise_rng, t_rng, dropout_rng = jax.random.split(state.rng, 4)
-                timesteps = np.asarray(
-                    jax.random.randint(t_rng, (cfg.batch_size,), 0, cfg.timesteps), np.int32
-                )
                 if compute_epoch_gradients:
                     noise = jax.random.normal(noise_rng, x.shape, dtype=x.dtype)
                     t_device = jax.device_put(jnp.asarray(timesteps), device)
@@ -273,21 +326,26 @@ def main():
                 writer.writerow({
                     "epoch": epoch,
                     "batch": batch_no,
-                    "global_step": global_step,
+                    "global_step": row_global_step,
                     "dataset_indices": json.dumps(selected.tolist(), separators=(",", ":")),
                     "timesteps": json.dumps(timesteps.tolist(), separators=(",", ":")),
                     "noise_key": json.dumps(key_words(noise_rng)),
                     "dropout_key": json.dumps(key_words(dropout_rng)),
                     "next_state_key": json.dumps(key_words(next_rng)),
                 })
-                if args.fixed_checkpoint:
+                if args.fixed_checkpoint and saved_events is None:
                     # Random-event recovery only. Parameters and AdamW history remain
                     # exactly those stored in the interval's starting checkpoint.
                     state = state.replace(rng=next_rng)
                 else:
                     state, _ = train_step(state, x, y)
                 if (batch_no + 1) % 100 == 0:
-                    print(f"[replay] epoch={epoch} batch={batch_no + 1}/{steps_per_epoch}", flush=True)
+                    mode = "saved-event extraction" if saved_events is not None else "replay"
+                    print(
+                        f"[{mode}] epoch={epoch} "
+                        f"batch={batch_no + 1}/{steps_per_epoch}",
+                        flush=True,
+                    )
 
             # Original training consumes exactly one deterministic eval batch/RNG step per epoch.
             eval_selected = np.arange(min(cfg.batch_size, len(ds)), dtype=np.int64)
@@ -295,10 +353,10 @@ def main():
                 module.maybe_to_dtype(jnp.asarray(ds.images[eval_selected]), cfg.use_bfloat16), device
             )
             eval_y = jax.device_put(jnp.asarray(ds.labels[eval_selected]), device)
-            if args.fixed_checkpoint:
+            if args.fixed_checkpoint and saved_events is None:
                 eval_next_rng, _, _ = jax.random.split(state.rng, 3)
                 state = state.replace(rng=eval_next_rng)
-            else:
+            elif not args.fixed_checkpoint:
                 state, _ = eval_step(state, eval_x, eval_y)
             if compute_epoch_gradients:
                 temporary_part = gradient_part.with_suffix(".tmp.npz")
@@ -319,7 +377,8 @@ def main():
                 )
                 os.replace(temporary_part, gradient_part)
                 print(f"[gradient saved] {gradient_part}", flush=True)
-            print(f"[replay] epoch={epoch} complete (including eval RNG advance)", flush=True)
+            mode = "saved-event extraction" if saved_events is not None else "replay"
+            print(f"[{mode}] epoch={epoch} complete", flush=True)
 
     report = {
         "start_checkpoint": str(start_path),
@@ -333,6 +392,7 @@ def main():
         "gradient_sketches": bool(args.extract_gradient_sketches),
         "event_feature": args.event_feature,
         "fixed_checkpoint": bool(args.fixed_checkpoint),
+        "saved_event_dir": str(args.saved_event_dir) if args.saved_event_dir else None,
         "gradient_shard": [args.shard_id, args.num_shards],
         "attribution_points": int(len(candidate_indices)),
         "params": flat_metrics(state.params, target.params),
@@ -353,7 +413,11 @@ def main():
     )
     with (args.out_dir / report_name).open("w") as handle:
         json.dump(report, handle, indent=2)
-    print("EXACT TRAINING-INTERVAL REPLAY VALIDATION")
+    print(
+        "SAVED-EVENT FIXED-CHECKPOINT GRADIENT EXTRACTION"
+        if saved_events is not None
+        else "EXACT TRAINING-INTERVAL REPLAY VALIDATION"
+    )
     print(json.dumps(report, indent=2))
     print(f"[saved] {args.out_dir}")
 
