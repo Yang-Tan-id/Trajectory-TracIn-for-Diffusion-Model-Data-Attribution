@@ -1,0 +1,123 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import json
+import math
+from pathlib import Path
+import statistics
+import sys
+
+
+SHAPES_ROOT = Path(__file__).resolve().parents[1]
+if str(SHAPES_ROOT) not in sys.path:
+    sys.path.insert(0, str(SHAPES_ROOT))
+
+from dataset_config import _prompt_tag
+
+
+TARGETS = (
+    "endpoint_contarfactual",
+    "traj_contarfactual",
+    "simple_loss",
+    "noise_trajectory",
+)
+DISPLAY_NAMES = {
+    "endpoint_contarfactual": "ENDPOINT-CF",
+    "traj_contarfactual": "TRAJ-CF",
+    "simple_loss": "SIMPLE-LOSS",
+    "noise_trajectory": "NOISE-TRAJ",
+}
+
+
+def parse_ints(text: str) -> list[int]:
+    return [int(value) for value in text.replace(",", " ").split() if value.strip()]
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Print the ten-query mean LDS for every DAS lambda and all four targets."
+    )
+    parser.add_argument("--experiment", default="experiment1")
+    parser.add_argument("--artifact-namespace", default="aligned10x10")
+    parser.add_argument("--query-ids", default="0,1,2,3,4,5,6,7,8,9")
+    parser.add_argument("--prediction-sign", choices=("p1", "m1"), default="m1")
+    args = parser.parse_args()
+
+    records = json.loads((SHAPES_ROOT / "queries_seed_0_9.json").read_text())["queries"]
+    query_ids = parse_ints(args.query_ids)
+    namespace = args.artifact_namespace.strip().strip("_/")
+    das_name = "das" if not namespace else f"das_{namespace}"
+    result_root = SHAPES_ROOT / "result" / args.experiment
+
+    # values[lambda][target][query_id] = LDS percent
+    values: dict[float, dict[str, dict[int, float]]] = {}
+    for query_id in query_ids:
+        if query_id < 0 or query_id >= len(records):
+            raise ValueError(f"query id {query_id} is outside [0, {len(records) - 1}]")
+        record = records[query_id]
+        lds_root = (
+            result_root
+            / "eval"
+            / "prompted_solo"
+            / f"query_{_prompt_tag(str(record['prompt']))}"
+            / f"initial_seed_{int(record['initial_seed'])}"
+            / "lds"
+        )
+        for target in TARGETS:
+            pattern = (
+                f"{das_name}_lambda_*/{target}/"
+                f"pred_kept_sign_{args.prediction_sign}/*/lds_summary.json"
+            )
+            matches = list(lds_root.glob(pattern))
+            for path in matches:
+                payload = json.loads(path.read_text())
+                damping = float(payload["damping"])
+                lds = float(payload["lds_percent"])
+                if math.isfinite(lds):
+                    values.setdefault(damping, {}).setdefault(target, {})[query_id] = lds
+
+    if not values:
+        raise RuntimeError(
+            f"No LDS summaries found for {das_name}, sign={args.prediction_sign}, "
+            f"experiment={args.experiment}."
+        )
+
+    expected_n = len(query_ids)
+    print(
+        f"DAS ALL LAMBDAS: {das_name}, sign={args.prediction_sign}, "
+        f"values are means over requested queries"
+    )
+    print(
+        f"{'LAMBDA':>10s} "
+        + " ".join(f"{DISPLAY_NAMES[target]:>14s}" for target in TARGETS)
+        + f" {'JOINT':>12s}  {'N PER TARGET':>14s}"
+    )
+    print("-" * 101)
+
+    for damping in sorted(values):
+        target_means: list[float] = []
+        counts: list[int] = []
+        cells: list[str] = []
+        for target in TARGETS:
+            query_values = values[damping].get(target, {})
+            present = [query_values[q] for q in query_ids if q in query_values]
+            counts.append(len(present))
+            if present:
+                mean = statistics.fmean(present)
+                target_means.append(mean)
+                cells.append(f"{mean:13.3f}%")
+            else:
+                cells.append(f"{'MISSING':>14s}")
+        joint = statistics.fmean(target_means) if len(target_means) == len(TARGETS) else math.nan
+        count_text = "/".join(str(count) for count in counts)
+        warning = "" if all(count == expected_n for count in counts) else "  INCOMPLETE"
+        print(
+            f"{damping:10g} "
+            + " ".join(cells)
+            + f" {joint:11.3f}%  {count_text:>14s}{warning}"
+        )
+
+
+if __name__ == "__main__":
+    main()
