@@ -37,6 +37,11 @@ VARIANTS = (
 )
 PREDICTED_NOISE_JVP_VARIANTS = VARIANTS
 PREDICTED_NOISE_JVP_SCHEMES = {
+    *{
+        f"predicted_noise_jvp_{reduction}_probe12_adamw4_{method}_reference12"
+        for method in ("four", "e1", "four_residual", "e1_residual")
+        for reduction in ("l2_squared", "probe_l2")
+    },
     "predicted_noise_jvp_l2_squared_probe8_adam_v_own8",
     "predicted_noise_jvp_absolute_probe8_adam_v_own8",
     "predicted_noise_jvp_probe_l2_probe8_adam_v_own8",
@@ -106,6 +111,12 @@ PREDICTED_NOISE_JVP_SCHEMES = {
     "predicted_noise_shared_orthogonal_probe8_termwise_square",
 }
 SCORE_SCHEMES = {
+    **{
+        f"predicted_noise_jvp_{reduction}_probe12_adamw4_{method}_reference12":
+        f"traj_tracin_predicted_noise_jvp_{reduction}_probe12_adamw4_{method}_reference12"
+        for method in ("four", "e1", "four_residual", "e1_residual")
+        for reduction in ("l2_squared", "probe_l2")
+    },
     "predicted_noise_jvp_l2_squared_probe8_adam_v_own8": "traj_tracin_predicted_noise_jvp_l2_squared_probe8_adam_v_own8",
     "predicted_noise_jvp_absolute_probe8_adam_v_own8": "traj_tracin_predicted_noise_jvp_absolute_probe8_adam_v_own8",
     "predicted_noise_jvp_probe_l2_probe8_adam_v_own8": "traj_tracin_predicted_noise_jvp_probe_l2_probe8_adam_v_own8",

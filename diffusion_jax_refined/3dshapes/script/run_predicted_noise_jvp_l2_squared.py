@@ -426,8 +426,22 @@ def score_shard(args: argparse.Namespace) -> None:
             ckpts = np.asarray(payload["ckpt_indices"], dtype=np.int32)
             timesteps = np.asarray(payload["timesteps"], dtype=np.int32)
             weights = np.asarray(payload["term_weights"], dtype=np.float64)
-        if train.shape != (10, 5000, 4096):
-            raise ValueError(f"{part_path} expected (10,5000,4096), got {train.shape}")
+            stored_semantics = (
+                str(np.asarray(payload["train_feature_semantics"]).item())
+                if "train_feature_semantics" in payload.files
+                else ""
+            )
+        timestamp_shared_train = train.shape == (1, 5000, 4096)
+        if train.shape != (10, 5000, 4096) and not timestamp_shared_train:
+            raise ValueError(
+                f"{part_path} expected (10,5000,4096) or timestamp-shared "
+                f"(1,5000,4096), got {train.shape}"
+            )
+        if args.train_feature_semantics and stored_semantics != args.train_feature_semantics:
+            raise ValueError(
+                f"{part_path} contains train feature semantics {stored_semantics!r}, "
+                f"expected {args.train_feature_semantics!r}"
+            )
         if score_indices is None:
             score_indices = indices
         elif not np.array_equal(score_indices, indices):
@@ -444,7 +458,8 @@ def score_shard(args: argparse.Namespace) -> None:
             query_term = lookup.get((int(ckpt), int(timestep)))
             if query_term is None:
                 raise ValueError(f"no query feature for checkpoint={ckpt} timestep={timestep}")
-            train_device = jax.device_put(jnp.asarray(train[local_term]))
+            train_slot = 0 if timestamp_shared_train else local_term
+            train_device = jax.device_put(jnp.asarray(train[train_slot]))
             train_norm = jnp.linalg.norm(train_device, axis=1) + 1e-8
             train_squared = (
                 jnp.square(train_device)
@@ -859,6 +874,11 @@ def main() -> None:
     parser.add_argument("--experiment", default="experiment1")
     parser.add_argument("--train-seed", type=int, default=42)
     parser.add_argument("--train-namespace", default="traj_tracin")
+    parser.add_argument(
+        "--train-feature-semantics",
+        default="",
+        help="Optional exact semantic tag required in every train part.",
+    )
     parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--shard-index", type=int, default=0)
     parser.add_argument("--shard-count", type=int, default=16)
