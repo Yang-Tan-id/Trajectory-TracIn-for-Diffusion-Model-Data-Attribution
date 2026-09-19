@@ -9,7 +9,10 @@ ROOT=Path(__file__).resolve().parents[1]; sys.path[:0]=[str(ROOT),str(ROOT.paren
 from run_adamw_four_event_original_f_scores import event
 from run_expected_residual_jacobian_scores import load_query_bank
 
-METHODS=('four','e1','four_residual','e1_residual'); SEM='fixed_checkpoint_adamw_event_no_timestamp_alignment'
+METHODS=(
+ 'four','e1','e2','e3','e4','four_residual',
+ 'e1_residual','e2_residual','e3_residual','e4_residual'
+); SEM='fixed_checkpoint_adamw_event_no_timestamp_alignment'
 def save(path,**kw):
  path.parent.mkdir(parents=True,exist_ok=True); tmp=path.with_suffix('.tmp.npz'); np.savez_compressed(tmp,**kw); tmp.replace(path)
 def main():
@@ -34,7 +37,12 @@ def main():
   for ep in range(se+1,se+5):
    value,part_idx=event(source/f'epoch_{se}_{se+4}',ep); ev.append(value); idx=part_idx if idx is None else idx
    if not np.array_equal(idx,part_idx): raise ValueError('score index mismatch')
-  banks={'four':sum(ev),'e1':ev[0],'four_residual':sum(v-hist for v in ev),'e1_residual':ev[0]-hist}
+  banks={
+   'four':sum(ev),
+   **{f'e{i+1}':v for i,v in enumerate(ev)},
+   'four_residual':sum(v-hist for v in ev),
+   **{f'e{i+1}_residual':v-hist for i,v in enumerate(ev)},
+  }
   for method,bank in banks.items():
    out=ROOT/'result'/a.experiment/'model'/'prompted_solo'/f'seed_{a.train_seed}_train_gradient'/f'traj_tracin_adamw4_{method}'/'train_datapoint_gradient_artifact.npz.parts'/f'ckpt_{c:04d}.npz'
    if not out.is_file(): save(out,train_features=bank[None,:,:],score_indices=idx,ckpt_indices=np.full(10,c,np.int32),timesteps=timesteps[c],term_weights=weights[c],train_feature_semantics=np.asarray(SEM),timestamp_shared_train_feature=np.asarray(1,np.int8))
