@@ -38,10 +38,10 @@ VARIANTS = (
 PREDICTED_NOISE_JVP_VARIANTS = VARIANTS
 PREDICTED_NOISE_JVP_SCHEMES = {
     *{
-        f"predicted_noise_jvp_{reduction}_probe12_adamw4_{method}_{trajectory}"
+        f"predicted_noise_jvp_{reduction}_probe{num_probes}_adamw4_{method}_{trajectory}"
         for method in ("four", "e1", "four_residual", "e1_residual")
         for reduction in ("l2_squared", "probe_l2")
-        for trajectory in ("reference12", "own12")
+        for trajectory, num_probes in (("reference12", 12), ("own12", 12), ("own8", 8))
     },
     "predicted_noise_jvp_l2_squared_probe8_adam_v_own8",
     "predicted_noise_jvp_absolute_probe8_adam_v_own8",
@@ -113,11 +113,11 @@ PREDICTED_NOISE_JVP_SCHEMES = {
 }
 SCORE_SCHEMES = {
     **{
-        f"predicted_noise_jvp_{reduction}_probe12_adamw4_{method}_{trajectory}":
-        f"traj_tracin_predicted_noise_jvp_{reduction}_probe12_adamw4_{method}_{trajectory}"
+        f"predicted_noise_jvp_{reduction}_probe{num_probes}_adamw4_{method}_{trajectory}":
+        f"traj_tracin_predicted_noise_jvp_{reduction}_probe{num_probes}_adamw4_{method}_{trajectory}"
         for method in ("four", "e1", "four_residual", "e1_residual")
         for reduction in ("l2_squared", "probe_l2")
-        for trajectory in ("reference12", "own12")
+        for trajectory, num_probes in (("reference12", 12), ("own12", 12), ("own8", 8))
     },
     "predicted_noise_jvp_l2_squared_probe8_adam_v_own8": "traj_tracin_predicted_noise_jvp_l2_squared_probe8_adam_v_own8",
     "predicted_noise_jvp_absolute_probe8_adam_v_own8": "traj_tracin_predicted_noise_jvp_absolute_probe8_adam_v_own8",
