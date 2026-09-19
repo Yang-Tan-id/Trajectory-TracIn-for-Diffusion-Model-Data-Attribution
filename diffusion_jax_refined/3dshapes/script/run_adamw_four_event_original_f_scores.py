@@ -37,6 +37,12 @@ def main():
     ap.add_argument('--epochs',type=int,default=200); ap.add_argument('--query-namespace',default='loss_direction_residual_rms_original_f')
     ap.add_argument('--attribution-points',type=int,default=5000); ap.add_argument('--out-dir',type=Path,required=True)
     ap.add_argument('--checkpoint-weighting',choices=('stored_lr','uniform'),default='stored_lr',help='uniform removes the outer checkpoint learning-rate factor while retaining equal averaging over timestamps')
+    ap.add_argument(
+        '--contraction',
+        choices=('linear', 'squared'),
+        default='linear',
+        help='linear sums signed dot products; squared squares each checkpoint/timestamp dot product before summing',
+    )
     ap.add_argument('--plot-selection',action='store_true',help='write endpoint and trajectory LDS scatter plots for four_residual/query_train_l2')
     a=ap.parse_args()
     mod=importlib.import_module('DM__training_CIFAR5_MULTI_pixel'); from dtrak.algorithm import _countsketch_project_grad_jax
@@ -79,7 +85,10 @@ def main():
                     'train_l2':dots/xn[:,None],
                     'query_train_l2':dots/(xn[:,None]*qn[None,:]),
                 }
-                for v,value in values.items(): scores[(m,v)]+=weight*value.T
+                for v,value in values.items():
+                    if a.contraction == 'squared':
+                        value = np.square(value)
+                    scores[(m,v)]+=weight*value.T
         print(f'[score] checkpoint={c+1}/49',flush=True)
     assert score_idx is not None
     records=json.loads((ROOT/'queries_seed_0_9.json').read_text())['queries']; rows=[]
@@ -91,7 +100,7 @@ def main():
                 pred=scores[(m,v)][q]@incidence.T
                 for target in TARGETS:
                     lds=100*float(rowwise_spearman(pred[None,:],true[target])[0])
-                    rows.append({'method':m,'variant':v,'query':q,'target':target,'lds_percent':lds,'prediction_sign':'p1','checkpoint_weighting':a.checkpoint_weighting})
+                    rows.append({'method':m,'variant':v,'query':q,'target':target,'lds_percent':lds,'prediction_sign':'p1','checkpoint_weighting':a.checkpoint_weighting,'contraction':a.contraction})
                     if (
                         a.plot_selection
                         and m == 'four_residual'
@@ -123,7 +132,7 @@ def main():
         if 'checkpoint_own_trajectory' in a.query_namespace
         else 'REFERENCE TRAJECTORY'
     )
-    print(f'LINEAR ORIGINAL-F {trajectory_label} — FIXED P1 — CHECKPOINT WEIGHTING={a.checkpoint_weighting}')
+    print(f'{a.contraction.upper()} ORIGINAL-F {trajectory_label} — FIXED P1 — CHECKPOINT WEIGHTING={a.checkpoint_weighting}')
     for m in METHODS:
         for variant in VARIANTS:
             vals=[]
