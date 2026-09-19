@@ -1540,18 +1540,23 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
     aggregate_mc_normalized = os.environ.get(
         "DAS_AGGREGATE_MC_NORMALIZED", "0"
     ).strip().lower() in ("1", "true", "yes", "on")
-    if aggregate_mc_gradient and aggregate_mc_normalized:
+    aggregate_mc_factorized = os.environ.get(
+        "DAS_AGGREGATE_MC_FACTORIZED", "0"
+    ).strip().lower() in ("1", "true", "yes", "on")
+    if sum((aggregate_mc_gradient, aggregate_mc_normalized, aggregate_mc_factorized)) > 1:
         raise ValueError(
-            "DAS_AGGREGATE_MC_GRADIENT and DAS_AGGREGATE_MC_NORMALIZED are mutually exclusive"
+            "DAS_AGGREGATE_MC_GRADIENT, DAS_AGGREGATE_MC_NORMALIZED, and "
+            "DAS_AGGREGATE_MC_FACTORIZED are mutually exclusive"
         )
     if (
         query_input_mode == "generation_trajectory"
         and stage_mode != "train"
-        and (aggregate_mc_gradient or aggregate_mc_normalized)
+        and (aggregate_mc_gradient or aggregate_mc_normalized or aggregate_mc_factorized)
     ):
         raise ValueError(
             "generation_trajectory query mode requires explicit DAS terms; disable "
-            "DAS_AGGREGATE_MC_GRADIENT and DAS_AGGREGATE_MC_NORMALIZED"
+            "DAS_AGGREGATE_MC_GRADIENT, DAS_AGGREGATE_MC_NORMALIZED, and "
+            "DAS_AGGREGATE_MC_FACTORIZED"
         )
     mc_normalize_eps = float(os.environ.get("DAS_AGGREGATE_MC_NORMALIZE_EPS", "1e-8"))
     proj_dim = int(cfg.proj_dim)
@@ -1776,6 +1781,8 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
                 projection_mc_key = (
                     "mc_normalized"
                     if aggregate_mc_normalized
+                    else 0
+                    if aggregate_mc_factorized
                     else "mc_average"
                     if aggregate_mc_gradient
                     else mc_i
@@ -1935,7 +1942,37 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
                                 H_proj += np.outer(phi_np, phi_np).astype(np.float32)
                         if hasattr(stage_iter, "set_postfix"):
                             stage_iter.set_postfix(samples=f"{min(start + len(batch), M)}/{M}")
-                    if aggregate_mc_normalized:
+                    if aggregate_mc_factorized:
+                        if train_gradient_sum is None:
+                            train_gradient_sum = np.zeros_like(phi_cache, dtype=np.float64)
+                            train_residual_sum = np.zeros((M,), dtype=np.float64)
+                        train_gradient_sum += phi_cache.astype(np.float64)
+                        train_residual_sum += residual_cache.astype(np.float64)
+                        if mc_i + 1 == num_mc_noise:
+                            averaged_gradients = (
+                                train_gradient_sum / float(num_mc_noise)
+                            ).astype(np.float32)
+                            averaged_residuals = (
+                                train_residual_sum / float(num_mc_noise)
+                            ).astype(np.float32)
+                            averaged_gram = (
+                                averaged_gradients.T @ averaged_gradients
+                            ).astype(np.float32)
+                            stage_train_features.append(averaged_gradients)
+                            stage_residuals.append(averaged_residuals)
+                            stage_grams_undamped.append(averaged_gram)
+                            stage_grams.append(
+                                averaged_gram
+                                + damping * np.eye(proj_dim, dtype=np.float32)
+                            )
+                            stage_ckpt_indices.append(int(ckpt_i))
+                            stage_timestep_values.append(int(t_value))
+                            stage_mc_indices.append(-1)
+                            print(
+                                "[mc-factorized] cached mean residual and mean projected "
+                                f"gradient separately for t={t_value} from {num_mc_noise} noises"
+                            )
+                    elif aggregate_mc_normalized:
                         if train_gradient_sum is None:
                             train_gradient_sum = np.zeros_like(phi_cache, dtype=np.float64)
                             train_gradient_sqnorm_sum = np.zeros((M,), dtype=np.float64)
@@ -2200,6 +2237,8 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
             proj_dim=np.asarray(int(proj_dim), dtype=np.int32),
             mc_samples_per_term=np.asarray(int(num_mc_noise), dtype=np.int32),
             mc_aggregation=np.asarray("loss_mean_single_backward" if aggregate_mc_gradient else (
+                "factorized_mean_residual_times_mean_gradient"
+                if aggregate_mc_factorized else
                 "noise_specific_trajectory_normalized_per_timestamp"
                 if aggregate_mc_normalized else "none"
             )),
