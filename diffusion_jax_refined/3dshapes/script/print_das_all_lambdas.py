@@ -47,6 +47,11 @@ def main() -> None:
         action="store_true",
         help="print the independently best endpoint and trajectory lambda for every query",
     )
+    parser.add_argument(
+        "--best-lambda-per-target",
+        action="store_true",
+        help="select one lambda by ten-query mean for each target, then print every query",
+    )
     args = parser.parse_args()
 
     records = json.loads((SHAPES_ROOT / "queries_seed_0_9.json").read_text())["queries"]
@@ -112,6 +117,35 @@ def main() -> None:
                 f"{query_id:2d} {endpoint_lambda:11g} {endpoint_lds:+9.3f}% "
                 f"{trajectory_lambda:12g} {trajectory_lds:+9.3f}%"
             )
+        return
+
+    if args.best_lambda_per_target:
+        selected = {}
+        for target in ("endpoint_contarfactual", "traj_contarfactual"):
+            candidates = []
+            for damping, target_values in values.items():
+                query_values = target_values.get(target, {})
+                if all(query_id in query_values for query_id in query_ids):
+                    mean = statistics.fmean(query_values[query_id] for query_id in query_ids)
+                    candidates.append((mean, damping))
+            if not candidates:
+                raise RuntimeError(f"No complete ten-query lambda candidate for {target}")
+            selected[target] = max(candidates, key=lambda item: (item[0], -item[1]))
+
+        endpoint_mean, endpoint_lambda = selected["endpoint_contarfactual"]
+        trajectory_mean, trajectory_lambda = selected["traj_contarfactual"]
+        print(f"DAS FIXED BEST LAMBDA BY TARGET: {das_name}, sign={args.prediction_sign}")
+        print(
+            f"endpoint lambda={endpoint_lambda:g}, 10-query mean={endpoint_mean:+.3f}% | "
+            f"trajectory lambda={trajectory_lambda:g}, 10-query mean={trajectory_mean:+.3f}%"
+        )
+        print(f"{'Q':>2s} {'END-LDS':>10s} {'TRAJ-LDS':>10s}")
+        print("-" * 27)
+        for query_id in query_ids:
+            endpoint_lds = values[endpoint_lambda]["endpoint_contarfactual"][query_id]
+            trajectory_lds = values[trajectory_lambda]["traj_contarfactual"][query_id]
+            print(f"{query_id:2d} {endpoint_lds:+9.3f}% {trajectory_lds:+9.3f}%")
+        print(f"MEAN {endpoint_mean:+7.3f}% {trajectory_mean:+9.3f}%")
         return
 
     expected_n = len(query_ids)
