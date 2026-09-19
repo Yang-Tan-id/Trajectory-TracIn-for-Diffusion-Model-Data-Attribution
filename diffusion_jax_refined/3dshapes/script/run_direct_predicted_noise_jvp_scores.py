@@ -83,11 +83,65 @@ def load_trajectory_bank(args, records):
     banks = []
     timesteps = None
     for query in range(10):
-        path = geometry_artifact(args, query, required)
-        with np.load(path, allow_pickle=False) as payload:
-            own = np.asarray(payload["checkpoint_own_trajectory_states"], np.float32)
-            reference = np.asarray(payload["checkpoint_own_trajectory_reference_states"], np.float32)
-            current_t = np.asarray(payload["checkpoint_own_trajectory_state_timesteps"], np.int32)
+        record = records[query]
+        prompt = str(record["prompt"]).replace(",", "_")
+        seed = int(record["initial_seed"])
+        sample_dir = (
+            ROOT / "result" / args.experiment / "sample_ddim_eta0_1000" / "cifar"
+            / f"prompt_{prompt}"
+            / f"model_prompted_solo__ckpt_seed_{args.train_seed}_epoch_{args.epochs:04d}"
+            / f"seed_{seed:06d}"
+        )
+        if args.trajectory == "reference":
+            trajectory_path = sample_dir / "trajectory_xt.npy"
+            timestep_path = sample_dir / "trajectory_t.npy"
+            if not trajectory_path.is_file() or not timestep_path.is_file():
+                raise FileNotFoundError(
+                    f"Q{query}: missing saved reference trajectory in {sample_dir}"
+                )
+            trajectory = np.load(trajectory_path)
+            saved_timesteps = np.asarray(np.load(timestep_path), np.int32)
+            if trajectory.ndim != 5 or trajectory.shape[0] != len(saved_timesteps):
+                raise ValueError(
+                    f"Q{query}: invalid saved trajectory shapes "
+                    f"xt={trajectory.shape}, t={saved_timesteps.shape}"
+                )
+            positions = np.linspace(
+                0, len(saved_timesteps) - 1, 10, dtype=np.int32
+            )
+            reference = np.asarray(trajectory[positions, 0], np.float32)
+            current_t = saved_timesteps[positions]
+            own = None
+        else:
+            try:
+                path = geometry_artifact(args, query, required)
+            except FileNotFoundError:
+                # Geometry collection was introduced after several own-trajectory
+                # probe runs. Search every completed query artifact before requiring
+                # regeneration, rather than assuming one historical namespace.
+                candidates = sorted(
+                    sample_dir.parent.glob(
+                        f"seed_{seed:06d}_query_gradient_*/traj_tracin/query_gradient_artifact.npz"
+                    )
+                )
+                path = None
+                for candidate in candidates:
+                    with np.load(candidate, allow_pickle=False) as payload:
+                        if all(name in payload.files for name in required):
+                            path = candidate
+                            break
+                if path is None:
+                    raise FileNotFoundError(
+                        f"Q{query}: no completed artifact contains own-trajectory states"
+                    )
+            with np.load(path, allow_pickle=False) as payload:
+                own = np.asarray(payload["checkpoint_own_trajectory_states"], np.float32)
+                reference = np.asarray(
+                    payload["checkpoint_own_trajectory_reference_states"], np.float32
+                )
+                current_t = np.asarray(
+                    payload["checkpoint_own_trajectory_state_timesteps"], np.int32
+                )
         if timesteps is None:
             timesteps = current_t
         elif not np.array_equal(timesteps, current_t):
@@ -95,6 +149,7 @@ def load_trajectory_bank(args, records):
         if args.trajectory == "reference":
             banks.append(np.broadcast_to(reference[None], (49,) + reference.shape).copy())
         else:
+            assert own is not None
             if own.shape[0] < 49:
                 raise ValueError(f"Q{query}: only {own.shape[0]} own trajectories")
             banks.append(own[:49])
