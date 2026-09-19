@@ -207,7 +207,8 @@ def score_shard(args):
     scores = np.zeros(shape, np.float64)
     start_checkpoint = 0
     partial_dir = args.out_dir / "partials"
-    completed = sorted(partial_dir.glob(f"checkpoint_*_shard_{args.shard_id:02d}.npz"))
+    shard_tag = f"shard_{args.shard_id:02d}_of_{args.num_shards:02d}"
+    completed = sorted(partial_dir.glob(f"checkpoint_*_{shard_tag}.npz"))
     if completed:
         with np.load(completed[-1], allow_pickle=False) as payload:
             if not np.array_equal(np.asarray(payload["score_indices"]), owned):
@@ -325,18 +326,18 @@ def score_shard(args):
                     flush=True,
                 )
         atomic_npz(
-            args.out_dir / "partials" / f"checkpoint_{checkpoint:04d}_shard_{args.shard_id:02d}.npz",
+            args.out_dir / "partials" / f"checkpoint_{checkpoint:04d}_{shard_tag}.npz",
             scores=scores, score_indices=owned,
             completed_checkpoint=np.asarray(checkpoint, np.int32),
         )
-    atomic_npz(args.out_dir / f"shard_{args.shard_id:02d}.npz", scores=scores, score_indices=owned)
+    atomic_npz(args.out_dir / f"{shard_tag}.npz", scores=scores, score_indices=owned)
 
 
 def merge(args):
     records = json.loads((ROOT / "queries_seed_0_9.json").read_text())["queries"]
     pieces = []
     for shard in range(args.num_shards):
-        path = args.out_dir / f"shard_{shard:02d}.npz"
+        path = args.out_dir / f"shard_{shard:02d}_of_{args.num_shards:02d}.npz"
         with np.load(path, allow_pickle=False) as payload:
             pieces.append((np.asarray(payload["score_indices"]), np.asarray(payload["scores"])))
     indices = np.concatenate([item[0] for item in pieces])
