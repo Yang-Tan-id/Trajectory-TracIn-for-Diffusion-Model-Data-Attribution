@@ -120,8 +120,13 @@ def main() -> None:
         return
 
     if args.best_lambda_per_target:
+        selected_targets = (
+            "endpoint_contarfactual",
+            "traj_contarfactual",
+            "simple_loss",
+        )
         selected = {}
-        for target in ("endpoint_contarfactual", "traj_contarfactual"):
+        for target in selected_targets:
             candidates = []
             for damping, target_values in values.items():
                 query_values = target_values.get(target, {})
@@ -134,18 +139,27 @@ def main() -> None:
 
         endpoint_mean, endpoint_lambda = selected["endpoint_contarfactual"]
         trajectory_mean, trajectory_lambda = selected["traj_contarfactual"]
+        simple_mean, simple_lambda = selected["simple_loss"]
         print(f"DAS FIXED BEST LAMBDA BY TARGET: {das_name}, sign={args.prediction_sign}")
         print(
             f"endpoint lambda={endpoint_lambda:g}, 10-query mean={endpoint_mean:+.3f}% | "
-            f"trajectory lambda={trajectory_lambda:g}, 10-query mean={trajectory_mean:+.3f}%"
+            f"trajectory lambda={trajectory_lambda:g}, 10-query mean={trajectory_mean:+.3f}% | "
+            f"simple lambda={simple_lambda:g}, 10-query mean={simple_mean:+.3f}%"
         )
-        print(f"{'Q':>2s} {'END-LDS':>10s} {'TRAJ-LDS':>10s}")
-        print("-" * 27)
+        print(f"{'Q':>2s} {'END-LDS':>10s} {'TRAJ-LDS':>10s} {'SIMPLE-LDS':>11s}")
+        print("-" * 39)
         for query_id in query_ids:
             endpoint_lds = values[endpoint_lambda]["endpoint_contarfactual"][query_id]
             trajectory_lds = values[trajectory_lambda]["traj_contarfactual"][query_id]
-            print(f"{query_id:2d} {endpoint_lds:+9.3f}% {trajectory_lds:+9.3f}%")
-        print(f"MEAN {endpoint_mean:+7.3f}% {trajectory_mean:+9.3f}%")
+            simple_lds = values[simple_lambda]["simple_loss"][query_id]
+            print(
+                f"{query_id:2d} {endpoint_lds:+9.3f}% {trajectory_lds:+9.3f}% "
+                f"{simple_lds:+10.3f}%"
+            )
+        print(
+            f"MEAN {endpoint_mean:+7.3f}% {trajectory_mean:+9.3f}% "
+            f"{simple_mean:+10.3f}%"
+        )
         return
 
     expected_n = len(query_ids)
