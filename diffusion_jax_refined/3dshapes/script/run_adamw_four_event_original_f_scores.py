@@ -13,6 +13,7 @@ from analyze_predicted_noise_probe8_choose4 import cache_group, load_target_data
 from analyze_predicted_noise_probe12_sign_flips import rowwise_spearman
 
 METHODS=('four','e1','four_residual','e1_residual')
+VARIANTS=('raw','query_l2','train_l2','query_train_l2')
 TARGETS=('endpoint_contarfactual','traj_contarfactual','simple_loss','noise_trajectory')
 
 def event(root,epoch,shards=2):
@@ -46,7 +47,7 @@ def main():
     qa=A(); qa.experiment=a.experiment; qa.train_seed=a.train_seed; qa.epochs=a.epochs
     query,meta=load_query_bank(qa,a.query_namespace,'trajectory_next_checkpoint_noise_mse',range(10))
     lookup={(int(c),int(t)):i for i,(c,t) in enumerate(zip(meta['ckpt_indices'],meta['timesteps']))}
-    scores={m:np.zeros((10,a.attribution_points),np.float64) for m in METHODS}; score_idx=None
+    scores={(m,v):np.zeros((10,a.attribution_points),np.float64) for m in METHODS for v in VARIANTS}; score_idx=None
     for c in range(49):
         se=4*(c+1); state,_=mod._restore_checkpoint(str(ckroot/f'seed_{a.train_seed}_epoch_{se:04d}.ckpt'),template)
         zero=jax.tree_util.tree_map(jnp.zeros_like,state.params); hu,_=state.tx.update(zero,state.opt_state,state.params)
@@ -61,8 +62,16 @@ def main():
         for t in dict.fromkeys(int(x) for x in meta['timesteps']):
             qi=lookup.get((c,t))
             if qi is None: continue
-            q=query[:,qi,:]; weight=float(meta['term_weights'][qi])
-            for m,x in banks.items(): scores[m]+=weight*(x@q.T).T
+            q=query[:,qi,:]; weight=float(meta['term_weights'][qi]); qn=np.linalg.norm(q,axis=1)+1e-8
+            for m,x in banks.items():
+                dots=x@q.T; xn=np.linalg.norm(x,axis=1)+1e-8
+                values={
+                    'raw':dots,
+                    'query_l2':dots/qn[None,:],
+                    'train_l2':dots/xn[:,None],
+                    'query_train_l2':dots/(xn[:,None]*qn[None,:]),
+                }
+                for v,value in values.items(): scores[(m,v)]+=weight*value.T
         print(f'[score] checkpoint={c+1}/49',flush=True)
     assert score_idx is not None
     records=json.loads((ROOT/'queries_seed_0_9.json').read_text())['queries']; rows=[]
@@ -70,18 +79,20 @@ def main():
         er=ROOT/'result'/a.experiment/'eval'/'prompted_solo'/f"query_{_prompt_tag(str(r['prompt']))}"/f"initial_seed_{int(r['initial_seed'])}"
         incidence,true=load_target_data(cache_group(er),score_idx)
         for m in METHODS:
-            pred=scores[m][q]@incidence.T
-            for target in TARGETS:
-                lds=100*float(rowwise_spearman(pred[None,:],true[target])[0])
-                rows.append({'method':m,'query':q,'target':target,'lds_percent':lds,'prediction_sign':'p1'})
+            for v in VARIANTS:
+                pred=scores[(m,v)][q]@incidence.T
+                for target in TARGETS:
+                    lds=100*float(rowwise_spearman(pred[None,:],true[target])[0])
+                    rows.append({'method':m,'variant':v,'query':q,'target':target,'lds_percent':lds,'prediction_sign':'p1'})
     write(a.out_dir/'per_query.csv',rows)
     print('LINEAR ORIGINAL-F REFERENCE TRAJECTORY — FIXED P1')
     for m in METHODS:
-        vals=[]
-        print(f'\n{m.upper()}')
-        for q in range(10):
-            v=[next(x['lds_percent'] for x in rows if x['method']==m and x['query']==q and x['target']==t) for t in TARGETS]; vals.append(v)
-            print(f"Q{q} "+' '.join(f'{x:+8.3f}%' for x in v))
-        print('MEAN '+' '.join(f'{x:+8.3f}%' for x in np.mean(vals,axis=0)))
+        for variant in VARIANTS:
+            vals=[]
+            print(f'\n{m.upper()} — {variant.upper()}')
+            for q in range(10):
+                value=[next(x['lds_percent'] for x in rows if x['method']==m and x['variant']==variant and x['query']==q and x['target']==t) for t in TARGETS]; vals.append(value)
+                print(f"Q{q} "+' '.join(f'{x:+8.3f}%' for x in value))
+            print('MEAN '+' '.join(f'{x:+8.3f}%' for x in np.mean(vals,axis=0)))
     print(f'[saved] {a.out_dir}')
 if __name__=='__main__': main()
