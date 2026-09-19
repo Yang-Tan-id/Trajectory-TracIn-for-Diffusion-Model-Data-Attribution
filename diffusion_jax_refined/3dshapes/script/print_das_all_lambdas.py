@@ -42,6 +42,11 @@ def main() -> None:
     parser.add_argument("--artifact-namespace", default="aligned10x10")
     parser.add_argument("--query-ids", default="0,1,2,3,4,5,6,7,8,9")
     parser.add_argument("--prediction-sign", choices=("p1", "m1"), default="m1")
+    parser.add_argument(
+        "--per-query-best",
+        action="store_true",
+        help="print the independently best endpoint and trajectory lambda for every query",
+    )
     args = parser.parse_args()
 
     records = json.loads((SHAPES_ROOT / "queries_seed_0_9.json").read_text())["queries"]
@@ -82,6 +87,32 @@ def main() -> None:
             f"No LDS summaries found for {das_name}, sign={args.prediction_sign}, "
             f"experiment={args.experiment}."
         )
+
+    if args.per_query_best:
+        print(f"DAS PER-QUERY BEST LAMBDA: {das_name}, sign={args.prediction_sign}")
+        print(
+            f"{'Q':>2s} {'END-LAMBDA':>11s} {'END-LDS':>10s} "
+            f"{'TRAJ-LAMBDA':>12s} {'TRAJ-LDS':>10s}"
+        )
+        print("-" * 54)
+        for query_id in query_ids:
+            best = {}
+            for target in ("endpoint_contarfactual", "traj_contarfactual"):
+                candidates = [
+                    (target_values[target][query_id], damping)
+                    for damping, target_values in values.items()
+                    if target in target_values and query_id in target_values[target]
+                ]
+                if not candidates:
+                    raise RuntimeError(f"No {target} LDS values found for query {query_id}")
+                best[target] = max(candidates, key=lambda item: (item[0], -item[1]))
+            endpoint_lds, endpoint_lambda = best["endpoint_contarfactual"]
+            trajectory_lds, trajectory_lambda = best["traj_contarfactual"]
+            print(
+                f"{query_id:2d} {endpoint_lambda:11g} {endpoint_lds:+9.3f}% "
+                f"{trajectory_lambda:12g} {trajectory_lds:+9.3f}%"
+            )
+        return
 
     expected_n = len(query_ids)
     print(
