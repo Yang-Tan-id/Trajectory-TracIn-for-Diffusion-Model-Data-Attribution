@@ -37,6 +37,7 @@ def main():
     ap.add_argument('--epochs',type=int,default=200); ap.add_argument('--query-namespace',default='loss_direction_residual_rms_original_f')
     ap.add_argument('--attribution-points',type=int,default=5000); ap.add_argument('--out-dir',type=Path,required=True)
     ap.add_argument('--checkpoint-weighting',choices=('stored_lr','uniform'),default='stored_lr',help='uniform removes the outer checkpoint learning-rate factor while retaining equal averaging over timestamps')
+    ap.add_argument('--plot-selection',action='store_true',help='write LDS scatter plots for four_residual/query_train_l2/endpoint_contarfactual')
     a=ap.parse_args()
     mod=importlib.import_module('DM__training_CIFAR5_MULTI_pixel'); from dtrak.algorithm import _countsketch_project_grad_jax
     ckroot=ROOT/'result'/a.experiment/'model'/'prompted_jax'; art=ROOT/'result'/a.experiment/f'fixed_checkpoint_adamw_four_events_n{a.attribution_points}'
@@ -90,6 +91,27 @@ def main():
                 for target in TARGETS:
                     lds=100*float(rowwise_spearman(pred[None,:],true[target])[0])
                     rows.append({'method':m,'variant':v,'query':q,'target':target,'lds_percent':lds,'prediction_sign':'p1','checkpoint_weighting':a.checkpoint_weighting})
+                    if (
+                        a.plot_selection
+                        and m == 'four_residual'
+                        and v == 'query_train_l2'
+                        and target == 'endpoint_contarfactual'
+                    ):
+                        import matplotlib
+                        matplotlib.use('Agg')
+                        import matplotlib.pyplot as plt
+
+                        plot_dir = a.out_dir / 'lds_scatter_four_residual_query_train_l2_endpoint'
+                        plot_dir.mkdir(parents=True, exist_ok=True)
+                        fig, axis = plt.subplots(figsize=(5.2, 4.4))
+                        axis.scatter(pred, true[target], s=18, alpha=0.7, edgecolors='none')
+                        axis.set_xlabel('Predicted subset score')
+                        axis.set_ylabel('True endpoint counterfactual')
+                        axis.set_title(f'Q{q} LDS={lds:+.3f}%')
+                        axis.grid(alpha=0.2)
+                        fig.tight_layout()
+                        fig.savefig(plot_dir / f'Q{q}.png', dpi=200)
+                        plt.close(fig)
     write(a.out_dir/'per_query.csv',rows)
     trajectory_label = (
         'OWN TRAJECTORY'
