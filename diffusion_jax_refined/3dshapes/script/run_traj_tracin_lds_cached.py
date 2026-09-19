@@ -51,6 +51,7 @@ PREDICTED_NOISE_JVP_SCHEMES = {
             ("reference12_no_outer_lr", 12),
             ("own12", 12),
             ("own8", 8),
+            ("own8_no_outer_lr", 8),
         )
     },
     "predicted_noise_jvp_l2_squared_probe8_adam_v_own8",
@@ -138,6 +139,7 @@ SCORE_SCHEMES = {
             ("reference12_no_outer_lr", 12),
             ("own12", 12),
             ("own8", 8),
+            ("own8_no_outer_lr", 8),
         )
     },
     "predicted_noise_jvp_l2_squared_probe8_adam_v_own8": "traj_tracin_predicted_noise_jvp_l2_squared_probe8_adam_v_own8",
