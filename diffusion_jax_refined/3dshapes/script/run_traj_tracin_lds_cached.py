@@ -38,6 +38,12 @@ VARIANTS = (
 PREDICTED_NOISE_JVP_VARIANTS = VARIANTS
 PREDICTED_NOISE_JVP_SCHEMES = {
     *{
+        f"direct_jvp_{reduction}_proj4096_adamw4_{method}_{trajectory}_constant_lr"
+        for reduction in ("square", "root")
+        for method in ("four", "e1", "four_residual", "e1_residual")
+        for trajectory in ("reference", "own")
+    },
+    *{
         f"predicted_noise_jvp_{reduction}_probe12_raw4_{method}_reference12"
         for method in ("four", "e1")
         for reduction in ("l2_squared", "probe_l2")
@@ -123,6 +129,13 @@ PREDICTED_NOISE_JVP_SCHEMES = {
     "predicted_noise_shared_orthogonal_probe8_termwise_square",
 }
 SCORE_SCHEMES = {
+    **{
+        f"direct_jvp_{reduction}_proj4096_adamw4_{method}_{trajectory}_constant_lr":
+        f"traj_tracin_direct_jvp_{reduction}_proj4096_adamw4_{method}_{trajectory}_constant_lr"
+        for reduction in ("square", "root")
+        for method in ("four", "e1", "four_residual", "e1_residual")
+        for trajectory in ("reference", "own")
+    },
     **{
         f"predicted_noise_jvp_{reduction}_probe12_raw4_{method}_reference12":
         f"traj_tracin_predicted_noise_jvp_{reduction}_probe12_raw4_{method}_reference12"
