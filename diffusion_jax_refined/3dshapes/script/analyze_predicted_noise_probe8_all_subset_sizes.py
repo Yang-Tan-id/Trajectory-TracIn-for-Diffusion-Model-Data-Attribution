@@ -91,6 +91,112 @@ def save_plot(
     plt.close(fig)
 
 
+def save_all_points_plot(
+    path: Path,
+    combination_rows: list[dict[str, object]],
+    num_probes: int,
+    score_label: str,
+) -> None:
+    """Plot every subset LDS and overlay Q1/median/mean/Q3 summaries."""
+    try:
+        import matplotlib.pyplot as plt
+        from matplotlib.lines import Line2D
+    except Exception as exc:
+        print(f"[warning] matplotlib unavailable; skipping all-points plot: {exc}")
+        return
+
+    target_labels = {
+        "endpoint_contarfactual": "Endpoint counterfactual",
+        "traj_contarfactual": "Trajectory counterfactual",
+        "simple_loss": "Simple loss",
+        "noise_trajectory": "Noise trajectory",
+    }
+    variant_labels = {
+        "raw": "Raw",
+        "query_l2": "Query-L2",
+        "train_l2": "Train-L2",
+        "query_train_l2": "Both-L2",
+    }
+    grouped: dict[tuple[str, str, int], list[float]] = defaultdict(list)
+    for row in combination_rows:
+        grouped[(str(row["target"]), str(row["variant"]), int(row["subset_size"]))].append(
+            float(row["mean_lds_percent"])
+        )
+
+    fig, axes = plt.subplots(
+        len(TARGETS), len(VARIANTS), figsize=(18.5, 13.5), sharex=True
+    )
+    point_color = "#3977b5"
+    quartile_color = "#111111"
+    mean_color = "#d62728"
+    for row_index, target in enumerate(TARGETS):
+        for column_index, variant in enumerate(VARIANTS):
+            ax = axes[row_index, column_index]
+            for subset_size in range(1, num_probes + 1):
+                values = np.asarray(grouped[(target, variant, subset_size)], dtype=np.float64)
+                # Deterministic spreading makes every combination visible and guarantees,
+                # for example, that k=11 visibly contains all twelve subsets.
+                if values.size == 1:
+                    x_values = np.asarray([float(subset_size)])
+                else:
+                    order = np.argsort(values, kind="stable")
+                    offsets = np.linspace(-0.32, 0.32, values.size)
+                    x_values = np.empty(values.size, dtype=np.float64)
+                    x_values[order] = subset_size + offsets
+                ax.scatter(
+                    x_values,
+                    values,
+                    s=8 if values.size > 300 else 13,
+                    color=point_color,
+                    alpha=0.28 if values.size > 300 else 0.48,
+                    linewidths=0,
+                    rasterized=True,
+                    zorder=1,
+                )
+                q1, median, q3 = np.percentile(values, [25.0, 50.0, 75.0])
+                mean = float(np.mean(values))
+                ax.vlines(subset_size, q1, q3, color=quartile_color, linewidth=2.0, zorder=3)
+                ax.hlines(
+                    [q1, q3], subset_size - 0.11, subset_size + 0.11,
+                    color=quartile_color, linewidth=1.5, zorder=3,
+                )
+                ax.scatter(
+                    [subset_size], [median], marker="_", s=95,
+                    color=quartile_color, linewidths=2.2, zorder=4,
+                )
+                ax.scatter(
+                    [subset_size], [mean], marker="D", s=29,
+                    color=mean_color, edgecolors="white", linewidths=0.45, zorder=5,
+                )
+            ax.axhline(0.0, color="#777777", linewidth=0.7, alpha=0.7, zorder=0)
+            ax.grid(axis="y", alpha=0.16)
+            ax.set_xticks(range(1, num_probes + 1))
+            if row_index == 0:
+                ax.set_title(variant_labels.get(variant, variant))
+            if column_index == 0:
+                ax.set_ylabel(f"{target_labels.get(target, target)}\n10-query mean LDS (%)")
+            if row_index == len(TARGETS) - 1:
+                ax.set_xlabel("Subset size k")
+
+    legend = (
+        Line2D([], [], marker="o", linestyle="none", markersize=5, color=point_color,
+               alpha=0.55, label="Every probe subset"),
+        Line2D([], [], marker="D", linestyle="none", markersize=6, color=mean_color,
+               label="Mean"),
+        Line2D([], [], color=quartile_color, linewidth=2, label="Q1–Q3; center tick = median"),
+    )
+    fig.legend(handles=legend, loc="upper center", ncol=3, frameon=False, bbox_to_anchor=(0.5, 0.985))
+    fig.suptitle(
+        f"All {2 ** num_probes - 1:,} nonempty subsets of {num_probes} probes — {score_label}",
+        y=0.999,
+    )
+    fig.tight_layout(rect=(0, 0, 1, 0.965))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path, dpi=220)
+    fig.savefig(path.with_suffix(".pdf"), dpi=220)
+    plt.close(fig)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--experiment", default="experiment1")
@@ -205,6 +311,9 @@ def main() -> None:
                 "variant": variant,
                 "mean_lds_percent": statistics.mean(values),
                 "std_lds_percent": standard_deviation(values),
+                "q1_lds_percent": float(np.percentile(values, 25.0)),
+                "median_lds_percent": float(np.percentile(values, 50.0)),
+                "q3_lds_percent": float(np.percentile(values, 75.0)),
                 "min_lds_percent": min(values),
                 "max_lds_percent": max(values),
                 "best_combination": best_subset,
@@ -227,6 +336,12 @@ def main() -> None:
     save_plot(
         output_dir / "both_l2_counterfactual_by_subset_size.png",
         distribution_rows,
+        args.num_probes,
+        args.score_label,
+    )
+    save_all_points_plot(
+        output_dir / "all_targets_variants_subset_scatter.png",
+        combination_rows,
         args.num_probes,
         args.score_label,
     )
@@ -281,6 +396,8 @@ def main() -> None:
         "subset_size_distribution.csv",
         "both_l2_counterfactual_by_subset_size.png",
         "both_l2_counterfactual_by_subset_size.svg",
+        "all_targets_variants_subset_scatter.png",
+        "all_targets_variants_subset_scatter.pdf",
     ):
         print(f"[saved] {output_dir / name}")
 
