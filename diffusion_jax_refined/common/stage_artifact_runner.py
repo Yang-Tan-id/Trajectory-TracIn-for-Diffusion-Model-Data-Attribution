@@ -63,9 +63,27 @@ def _das_term_ids(payload: dict[str, np.ndarray], *, path: Path, expected_terms:
 
 
 def _require_matching_das_terms(reference: np.ndarray, candidate: np.ndarray, *, path: Path) -> None:
-    if np.array_equal(reference, candidate):
+    reference = np.asarray(reference, dtype=np.int64)
+    candidate = np.asarray(candidate, dtype=np.int64)
+    if reference.shape != candidate.shape:
+        raise ValueError(
+            f"DAS term metadata shape mismatch: train={reference.shape} vs "
+            f"{path}={candidate.shape}"
+        )
+    # mc_index=-1 denotes a term already aggregated over its MC draws.  It is
+    # compatible with the corresponding single query-side MC term (normally 0),
+    # provided checkpoint and timestep still match exactly.  No wildcarding is
+    # allowed for checkpoint or timestep, so term ordering remains strict.
+    checkpoint_and_timestep_match = np.all(reference[:, :2] == candidate[:, :2], axis=1)
+    mc_match = (
+        (reference[:, 2] == candidate[:, 2])
+        | (reference[:, 2] == -1)
+        | (candidate[:, 2] == -1)
+    )
+    rows_match = checkpoint_and_timestep_match & mc_match
+    if np.all(rows_match):
         return
-    mismatch = np.flatnonzero(np.any(reference != candidate, axis=1))
+    mismatch = np.flatnonzero(~rows_match)
     first = int(mismatch[0]) if mismatch.size else -1
     raise ValueError(
         f"DAS term ordering mismatch at term {first}: train={reference[first].tolist()} "
