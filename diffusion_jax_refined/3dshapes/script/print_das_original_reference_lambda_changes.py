@@ -65,7 +65,11 @@ def main():
             f"{'TRAJ-ORIG':>11s} {'TRAJ-REF':>10s} {'TRAJ-DELTA':>12s}"
         )
         print("-" * 83)
+        end_original = []
+        end_reference = []
         end_delta = []
+        traj_original = []
+        traj_reference = []
         traj_delta = []
         for q in range(10):
             keys = [
@@ -77,15 +81,23 @@ def main():
             eo, to = (original[key] for key in keys)
             er, tr = (reference[key] for key in keys)
             de, dt = er - eo, tr - to
+            end_original.append(eo)
+            end_reference.append(er)
             end_delta.append(de)
+            traj_original.append(to)
+            traj_reference.append(tr)
             traj_delta.append(dt)
             print(
                 f"{q:2d} {eo:+9.3f}% {er:+9.3f}% {de:+10.3f}% "
                 f"{to:+10.3f}% {tr:+9.3f}% {dt:+11.3f}%"
             )
         print(
-            f"MEAN {'':>19s}{statistics.fmean(end_delta):+10.3f}% "
-            f"{'':>22s}{statistics.fmean(traj_delta):+11.3f}%"
+            f"MEAN {statistics.fmean(end_original):+9.3f}% "
+            f"{statistics.fmean(end_reference):+9.3f}% "
+            f"{statistics.fmean(end_delta):+10.3f}% "
+            f"{statistics.fmean(traj_original):+10.3f}% "
+            f"{statistics.fmean(traj_reference):+9.3f}% "
+            f"{statistics.fmean(traj_delta):+11.3f}%"
         )
 
 
