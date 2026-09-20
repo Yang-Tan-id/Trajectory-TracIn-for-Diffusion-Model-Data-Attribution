@@ -218,6 +218,12 @@ def main() -> None:
         help="Output directory label; defaults to probeN_all_subset_sizes_linear.",
     )
     parser.add_argument("--score-label", default="linear")
+    parser.add_argument(
+        "--expected-terms",
+        type=int,
+        default=500,
+        help="Expected accumulated checkpoint/timestamp terms across score shards.",
+    )
     args = parser.parse_args()
 
     result_root = SHAPES_ROOT / "result" / args.experiment
@@ -234,7 +240,11 @@ def main() -> None:
         / f"run_{args.run_id}"
         / "shards"
     )
-    probe_scores, score_indices = load_probe_scores(shard_dir, args.num_probes)
+    probe_scores, score_indices = load_probe_scores(
+        shard_dir,
+        args.num_probes,
+        expected_terms=args.expected_terms,
+    )
     records = json.loads((SHAPES_ROOT / "queries_seed_0_9.json").read_text())["queries"]
     subsets = all_probe_subsets(args.num_probes)
     per_query_rows: list[dict[str, object]] = []

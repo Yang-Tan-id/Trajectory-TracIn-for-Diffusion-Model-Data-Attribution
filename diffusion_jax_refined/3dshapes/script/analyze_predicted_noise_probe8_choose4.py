@@ -55,6 +55,7 @@ def spearman(x: np.ndarray, y: np.ndarray) -> float:
 def load_probe_scores(
     shard_dir: Path,
     num_probes: int = 8,
+    expected_terms: int = 500,
 ) -> tuple[dict[str, np.ndarray], np.ndarray]:
     shard_paths = sorted(shard_dir.glob("shard_*.npz"))
     if not shard_paths:
@@ -80,8 +81,10 @@ def load_probe_scores(
             score_indices = indices
         elif not np.array_equal(score_indices, indices):
             raise ValueError(f"score indices differ in {path}")
-    if terms != 500:
-        raise ValueError(f"expected 500 accumulated terms, found {terms}")
+    if terms != expected_terms:
+        raise ValueError(
+            f"expected {expected_terms} accumulated terms, found {terms}"
+        )
     assert score_indices is not None
     return totals, score_indices
 
@@ -97,8 +100,10 @@ def cache_group(eval_root: Path) -> Path:
 def load_target_data(
     group: Path,
     score_indices: np.ndarray,
+    *,
+    targets: tuple[str, ...] = TARGETS,
 ) -> tuple[np.ndarray, dict[str, np.ndarray]]:
-    reference_paths = sorted((group / TARGETS[0]).glob("target_*.json"))
+    reference_paths = sorted((group / targets[0]).glob("target_*.json"))
     if len(reference_paths) != 192:
         raise RuntimeError(f"expected 192 cached models under {group}; found {len(reference_paths)}")
     index_to_column = {int(index): column for column, index in enumerate(score_indices)}
@@ -113,7 +118,7 @@ def load_target_data(
         incidence[row, columns] = 1.0
 
     true_values = {}
-    for target in TARGETS:
+    for target in targets:
         paths = sorted((group / target).glob("target_*.json"))
         if len(paths) != len(reference_paths):
             raise RuntimeError(f"target {target} has {len(paths)} cached models")

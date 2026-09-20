@@ -64,6 +64,7 @@ echo '[phase 2/2] enumerate all 4095 subsets, compute LDS, and draw every point 
 JAX_PLATFORMS=cpu python "$analyzer" \
   --experiment "$exp" --train-seed "$train_seed" \
   --run-id "$SLURM_JOB_ID" --num-probes "$num_probes" \
+  --expected-terms 490 \
   --prediction-sign=1 \
   --score-namespace "$score_namespace" \
   --analysis-label adamw_reference12_four_termwise_square_all_subsets \
