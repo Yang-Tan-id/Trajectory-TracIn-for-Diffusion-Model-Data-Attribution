@@ -455,11 +455,26 @@ def score_shard(args: argparse.Namespace) -> None:
             }
 
         for local_term, (ckpt, timestep, weight) in enumerate(zip(ckpts, timesteps, weights)):
-            term_checkpoint_weight = (
-                1.0 / float(len(weights))
-                if args.checkpoint_weighting == "uniform"
-                else float(weight)
-            )
+            if args.checkpoint_weighting == "uniform":
+                term_checkpoint_weight = 1.0 / float(len(weights))
+            elif args.checkpoint_weighting == "inverse_stored_lr":
+                # The stored weight is eta_c / num_timestamps and the AdamW train
+                # feature already contains eta_c.  For a squared contraction z^2,
+                #
+                #   eta_c * (z / eta_c)^2 = z^2 / eta_c.
+                #
+                # Averaging timestamps therefore requires 1 / (N * eta_c), or
+                # equivalently 1 / (N^2 * stored_term_weight), per term.
+                if float(weight) <= 0.0:
+                    raise ValueError(
+                        f"checkpoint={ckpt} timestep={timestep} has nonpositive "
+                        f"stored LR term weight {float(weight):.9g}"
+                    )
+                term_checkpoint_weight = 1.0 / (
+                    float(len(weights)) ** 2 * float(weight)
+                )
+            else:
+                term_checkpoint_weight = float(weight)
             query_term = lookup.get((int(ckpt), int(timestep)))
             if query_term is None:
                 raise ValueError(f"no query feature for checkpoint={ckpt} timestep={timestep}")
@@ -536,15 +551,27 @@ def score_shard(args: argparse.Namespace) -> None:
                     }
                 for component, values in probe_scores.items():
                     host_values = np.asarray(jax.device_get(values), dtype=np.float64).T
+                    # Dividing an AdamW feature by eta has no effect after train-L2
+                    # normalization, because its norm is divided by eta as well.  In
+                    # those variants only the desired single outer eta remains.
+                    component_term_weight = (
+                        float(weight)
+                        if args.checkpoint_weighting == "inverse_stored_lr"
+                        and component in (
+                            "score_train_l2_normalized",
+                            "score_query_train_l2_normalized",
+                        )
+                        else term_checkpoint_weight
+                    )
                     if args.contraction == "median_absolute":
                         assert term_probe_values is not None
                         term_probe_values[component][probe_index] = host_values
                     elif args.contraction == "final_post_square":
                         # Keep each probe separate through the complete trajectory sum.
                         # Squaring and cross-probe reduction happen only after shards merge.
-                        sums[component][probe_index] += term_checkpoint_weight * host_values
+                        sums[component][probe_index] += component_term_weight * host_values
                     elif args.contraction == "termwise_squared_per_probe":
-                        sums[component][probe_index] += term_checkpoint_weight * host_values
+                        sums[component][probe_index] += component_term_weight * host_values
                     elif args.contraction == "timestamp_checkpoint_square":
                         # Stored term weights are eta_c / num_timestamps. Restore eta_c
                         # here because timestamp averaging occurs after checkpoint sums.
@@ -559,7 +586,7 @@ def score_shard(args: argparse.Namespace) -> None:
                         )
                     elif args.contraction == "timestamp_probe_l2":
                         sums[component][timestep_slots[int(timestep)]] += (
-                            term_checkpoint_weight * host_values
+                            component_term_weight * host_values
                         )
                     else:
                         assert term_scores is not None
@@ -573,8 +600,16 @@ def score_shard(args: argparse.Namespace) -> None:
             # directional derivative. The learning-rate weight remains linear, and the
             # stored per-snapshot weight already averages the 10 snapshots.
             if term_scores is not None:
-                term_weight = term_checkpoint_weight
                 for component, values in term_scores.items():
+                    term_weight = (
+                        float(weight)
+                        if args.checkpoint_weighting == "inverse_stored_lr"
+                        and component in (
+                            "score_train_l2_normalized",
+                            "score_query_train_l2_normalized",
+                        )
+                        else term_checkpoint_weight
+                    )
                     if args.contraction in ("rms", "probe_l2"):
                         values = reduce_probe_rms(values)
                     sums[component] += term_weight * values
@@ -903,12 +938,13 @@ def main() -> None:
     parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument(
         "--checkpoint-weighting",
-        choices=("stored_lr", "uniform"),
+        choices=("stored_lr", "uniform", "inverse_stored_lr"),
         default="stored_lr",
         help=(
             "stored_lr uses the term weights saved in each train part; uniform "
             "removes the outer checkpoint learning-rate factor while preserving "
-            "the average over timestamps."
+            "the average over timestamps. inverse_stored_lr is for squared AdamW "
+            "features that already contain eta: it computes eta*(z/eta)^2."
         ),
     )
     parser.add_argument(

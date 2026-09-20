@@ -61,6 +61,8 @@ PREDICTED_NOISE_JVP_SCHEMES = {
             ("own8", 8),
             ("own8_no_outer_lr", 8),
             ("own8_1000t_no_alignment", 8),
+            ("reference12_single_lr", 12),
+            ("own8_single_lr", 8),
         )
     },
     "predicted_noise_jvp_l2_squared_probe8_adam_v_own8",
