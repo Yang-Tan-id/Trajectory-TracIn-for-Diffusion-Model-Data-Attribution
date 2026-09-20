@@ -13,6 +13,10 @@ from analyze_predicted_noise_probe8_choose4 import cache_group, load_target_data
 from analyze_predicted_noise_probe12_sign_flips import rowwise_spearman
 
 METHODS=('four','e1','four_residual','e1_residual')
+ALL_EVENT_METHODS=(
+    'four','e1','e2','e3','e4',
+    'four_residual','e1_residual','e2_residual','e3_residual','e4_residual',
+)
 VARIANTS=('raw','query_l2','train_l2','query_train_l2')
 TARGETS=('endpoint_contarfactual','traj_contarfactual','simple_loss','noise_trajectory')
 
@@ -44,7 +48,9 @@ def main():
         help='linear sums signed dot products; squared squares each checkpoint/timestamp dot product before summing',
     )
     ap.add_argument('--plot-selection',action='store_true',help='write endpoint and trajectory LDS scatter plots for four_residual/query_train_l2')
+    ap.add_argument('--include-all-events',action='store_true',help='also score E2, E3, E4 and their history-subtracted residuals')
     a=ap.parse_args()
+    methods=ALL_EVENT_METHODS if a.include_all_events else METHODS
     mod=importlib.import_module('DM__training_CIFAR5_MULTI_pixel'); from dtrak.algorithm import _countsketch_project_grad_jax
     ckroot=ROOT/'result'/a.experiment/'model'/'prompted_jax'; art=ROOT/'result'/a.experiment/f'fixed_checkpoint_adamw_four_events_n{a.attribution_points}'
     with (ckroot/f'seed_{a.train_seed}_epoch_0004.ckpt').open('rb') as f: payload=pickle.load(f)
@@ -59,7 +65,7 @@ def main():
     num_timestamps=len(dict.fromkeys(int(x) for x in meta['timesteps']))
     if num_timestamps <= 0:
         raise ValueError('query artifact contains no trajectory timestamps')
-    scores={(m,v):np.zeros((10,a.attribution_points),np.float64) for m in METHODS for v in VARIANTS}; score_idx=None
+    scores={(m,v):np.zeros((10,a.attribution_points),np.float64) for m in methods for v in VARIANTS}; score_idx=None
     for c in range(49):
         se=4*(c+1); state,_=mod._restore_checkpoint(str(ckroot/f'seed_{a.train_seed}_epoch_{se:04d}.ckpt'),template)
         zero=jax.tree_util.tree_map(jnp.zeros_like,state.params); hu,_=state.tx.update(zero,state.opt_state,state.params)
@@ -70,7 +76,16 @@ def main():
             if score_idx is None: score_idx=idx
             elif not np.array_equal(score_idx,idx): raise ValueError(f'index mismatch checkpoint {c+1}')
             ev.append(x)
-        banks={'four':sum(ev),'e1':ev[0],'four_residual':sum(x-hist for x in ev),'e1_residual':ev[0]-hist}
+        banks={
+            'four':sum(ev),
+            'e1':ev[0],
+            'four_residual':sum(x-hist for x in ev),
+            'e1_residual':ev[0]-hist,
+        }
+        if a.include_all_events:
+            for event_index,event_feature in enumerate(ev,1):
+                banks[f'e{event_index}']=event_feature
+                banks[f'e{event_index}_residual']=event_feature-hist
         for t in dict.fromkeys(int(x) for x in meta['timesteps']):
             qi=lookup.get((c,t))
             if qi is None: continue
@@ -95,7 +110,7 @@ def main():
     for q,r in enumerate(records):
         er=ROOT/'result'/a.experiment/'eval'/'prompted_solo'/f"query_{_prompt_tag(str(r['prompt']))}"/f"initial_seed_{int(r['initial_seed'])}"
         incidence,true=load_target_data(cache_group(er),score_idx)
-        for m in METHODS:
+        for m in methods:
             for v in VARIANTS:
                 pred=scores[(m,v)][q]@incidence.T
                 for target in TARGETS:
@@ -133,7 +148,7 @@ def main():
         else 'REFERENCE TRAJECTORY'
     )
     print(f'{a.contraction.upper()} ORIGINAL-F {trajectory_label} — FIXED P1 — CHECKPOINT WEIGHTING={a.checkpoint_weighting}')
-    for m in METHODS:
+    for m in methods:
         for variant in VARIANTS:
             vals=[]
             print(f'\n{m.upper()} — {variant.upper()}')
