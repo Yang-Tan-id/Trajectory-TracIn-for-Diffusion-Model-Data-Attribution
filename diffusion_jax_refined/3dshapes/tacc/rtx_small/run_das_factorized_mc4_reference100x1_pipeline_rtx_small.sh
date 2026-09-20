@@ -40,6 +40,8 @@ export JAX_NUM_DEVICES=1
 train_namespace="factorized_mc4_reference100x1"
 original_namespace="factorized_mc4_original100x1"
 reference_namespace="factorized_mc4_generation_reference100x1"
+original_query_namespace=""
+reference_query_namespace="generation_trajectory100x1"
 artifact_dir="$shapes/result/$EXPERIMENT_TAG/model/prompted_solo/seed_${TRAIN_SEED}_train_gradient/das_${train_namespace}"
 export TRAIN_DATAPOINT_GRADIENT_ARTIFACT_PATH="$artifact_dir/train_datapoint_gradient_artifact.npz"
 export DAS_GLOBAL_GRAM_ARTIFACT_PATH="$TRAIN_DATAPOINT_GRADIENT_ARTIFACT_PATH"
@@ -91,7 +93,7 @@ unset DAS_AGGREGATE_MC_FACTORIZED
 unset DAS_AGGREGATE_MC_GRADIENT
 unset DAS_AGGREGATE_MC_NORMALIZED
 
-echo "[phase 2/3] original endpoint-renoise and saved-reference-trajectory 100x1 queries"
+echo "[phase 2/3] reuse existing original/reference 100x1 query gradients; score with factorized-MC4 train artifact"
 cd "$shapes"
 python script/run_das_queries_and_scores.py \
   --execute \
@@ -99,10 +101,12 @@ python script/run_das_queries_and_scores.py \
   --train-seed "$TRAIN_SEED" \
   --query-ids 0,1,2,3,4,5,6,7,8,9 \
   --gpus 0,1 \
-  --artifact-namespace "$original_namespace" \
+  --artifact-namespace "$original_query_namespace" \
   --train-artifact-namespace "$train_namespace" \
+  --score-output-namespace "$original_namespace" \
   --query-input-mode endpoint_renoise \
   --num-mc-noise 1 \
+  --skip-query-gradient \
   --python-bin python
 
 python script/run_das_queries_and_scores.py \
@@ -111,10 +115,12 @@ python script/run_das_queries_and_scores.py \
   --train-seed "$TRAIN_SEED" \
   --query-ids 0,1,2,3,4,5,6,7,8,9 \
   --gpus 0,1 \
-  --artifact-namespace "$reference_namespace" \
+  --artifact-namespace "$reference_query_namespace" \
   --train-artifact-namespace "$train_namespace" \
+  --score-output-namespace "$reference_namespace" \
   --query-input-mode generation_trajectory \
   --num-mc-noise 1 \
+  --skip-query-gradient \
   --python-bin python
 
 echo "[phase 3/3] cached LDS for four targets"
