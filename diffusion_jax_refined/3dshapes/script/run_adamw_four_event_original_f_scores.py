@@ -65,6 +65,12 @@ def main():
     ap.add_argument('--plot-selection',action='store_true',help='write endpoint and trajectory LDS scatter plots for four_residual/query_train_l2')
     ap.add_argument('--include-all-events',action='store_true',help='also score E2, E3, E4 and their history-subtracted residuals')
     ap.add_argument(
+        '--save-score-namespace',default='',
+        help='optionally save one selected 5000-point score vector per query under attribution_score',
+    )
+    ap.add_argument('--save-score-method',choices=ALL_EVENT_METHODS,default='four_residual')
+    ap.add_argument('--save-score-variant',choices=VARIANTS,default='query_train_l2')
+    ap.add_argument(
         '--event-original-lr',action='store_true',
         help=(
             'For eventwise FOUR/FOUR_RESIDUAL, divide each fixed-checkpoint AdamW '
@@ -163,6 +169,28 @@ def main():
         print(f'[score] checkpoint={c+1}/49',flush=True)
     assert score_idx is not None
     records=json.loads((ROOT/'queries_seed_0_9.json').read_text())['queries']; rows=[]
+    if a.save_score_namespace:
+        selected_key=(a.save_score_method,a.save_score_variant)
+        if selected_key not in scores:
+            raise ValueError(f'cannot save unavailable score {selected_key}; computed methods={methods}')
+        for q,r in enumerate(records):
+            score_dir=(
+                ROOT/'result'/a.experiment/'attribution_score'/'prompted_solo'
+                /f'train_seed_{a.train_seed}'/f"query_{_prompt_tag(str(r['prompt']))}"
+                /f"initial_seed_{int(r['initial_seed'])}"/a.save_score_namespace/'score'
+            )
+            score_dir.mkdir(parents=True,exist_ok=True)
+            np.save(score_dir/'scores.npy',np.asarray(scores[selected_key][q],np.float64))
+            np.save(score_dir/'score_indices.npy',np.asarray(score_idx,np.int64))
+            (score_dir/'score_metadata.json').write_text(json.dumps({
+                'method':a.save_score_method,
+                'variant':a.save_score_variant,
+                'query_namespace':a.query_namespace,
+                'checkpoint_weighting':('original_event_lr_once' if a.event_original_lr else a.checkpoint_weighting),
+                'contraction':a.contraction,
+                'num_timestamps':num_timestamps,
+            },indent=2,sort_keys=True)+'\n')
+            print(f'[score artifact] Q{q}: {score_dir}',flush=True)
     for q,r in enumerate(records):
         er=ROOT/'result'/a.experiment/'eval'/'prompted_solo'/f"query_{_prompt_tag(str(r['prompt']))}"/f"initial_seed_{int(r['initial_seed'])}"
         incidence,true=load_target_data(cache_group(er),score_idx)

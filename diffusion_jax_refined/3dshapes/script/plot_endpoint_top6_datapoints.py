@@ -3,7 +3,8 @@
 
 The default invocation produces two 10-row figures:
 
-* checkpoint-own trajectory, next-checkpoint objective, raw Traj-TracIn score;
+* checkpoint-own trajectory, 100-timestamp next-checkpoint objective,
+  AdamW FOUR_RESIDUAL query/train-L2 score;
 * factorized DAS MC4 endpoint score at lambda=100.
 
 Score indices are always read from the score artifact.  They are dataset row
@@ -262,7 +263,7 @@ def main() -> None:
     parser.add_argument("--sample-root", type=Path, default=None)
     parser.add_argument(
         "--traj-namespace",
-        default="loss_direction_original_f_checkpoint_own_trajectory",
+        default="loss_direction_original_f_checkpoint_own_trajectory_100t",
     )
     parser.add_argument(
         "--das-namespace",
@@ -308,7 +309,7 @@ def main() -> None:
         endpoint_paths=endpoints,
         score_dirs=traj_dirs,
         top_k=args.top_k,
-        title="Own trajectory · next checkpoint · raw Traj-TracIn",
+        title="Own trajectory 100t · next checkpoint · AdamW FOUR_RESIDUAL · query/train-L2",
         output=output_dir / "own_trajectory_next_raw_endpoint_top6.png",
         dpi=args.dpi,
     )
