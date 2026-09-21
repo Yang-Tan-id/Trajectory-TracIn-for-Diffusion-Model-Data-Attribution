@@ -107,7 +107,7 @@ def load_trajectory_bank(args, records):
                     f"xt={trajectory.shape}, t={saved_timesteps.shape}"
                 )
             positions = np.linspace(
-                0, len(saved_timesteps) - 1, 10, dtype=np.int32
+                0, len(saved_timesteps) - 1, args.num_timestamps, dtype=np.int32
             )
             reference = np.asarray(trajectory[positions, 0], np.float32)
             current_t = saved_timesteps[positions]
@@ -345,11 +345,16 @@ def merge(args):
     order = np.argsort(indices)
     indices, scores = indices[order], scores[..., order]
     schemes = []
+    trajectory_namespace = (
+        args.trajectory
+        if args.num_timestamps == 10
+        else f"{args.trajectory}{args.num_timestamps}t"
+    )
     for mi, method in enumerate(METHODS):
         for ri, reduction in enumerate(REDUCTIONS):
             namespace = (
                 f"traj_tracin_direct_jvp_{reduction}_proj{args.output_projection_dim}_"
-                f"adamw4_{method}_{args.trajectory}_constant_lr"
+                f"adamw4_{method}_{trajectory_namespace}_constant_lr"
             )
             schemes.append(namespace.removeprefix("traj_tracin_"))
             for vi, variant in enumerate(VARIANTS):
@@ -370,6 +375,7 @@ def merge(args):
                     np.save(out / "score_indices.npy", indices)
                     (out / "score_artifact_manifest.json").write_text(json.dumps({
                         "semantics": SEMANTICS, "trajectory": args.trajectory,
+                        "num_timestamps": args.num_timestamps,
                         "method": method, "reduction": reduction,
                         "checkpoint_weighting": "constant",
                         "output_projection": "fixed_countsketch",
@@ -390,9 +396,12 @@ def main():
     parser.add_argument("--num-shards", type=int, default=2)
     parser.add_argument("--output-projection-dim", type=int, default=4096)
     parser.add_argument("--output-projection-seed", type=int, default=20260919)
+    parser.add_argument("--num-timestamps", type=int, default=10)
     parser.add_argument("--progress-every", type=int, default=25)
     parser.add_argument("--namespace", default="loss_direction_original_f_checkpoint_own_trajectory_endpoints_all10")
     args = parser.parse_args()
+    if args.num_timestamps <= 0:
+        parser.error("--num-timestamps must be positive")
     args.epochs = 200
     if args.command == "score-shard":
         score_shard(args)

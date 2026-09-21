@@ -45,7 +45,7 @@ PREDICTED_NOISE_JVP_SCHEMES = {
         f"direct_jvp_{reduction}_proj4096_adamw4_{method}_{trajectory}_constant_lr"
         for reduction in ("square", "root")
         for method in ("four", "e1", "four_residual", "e1_residual")
-        for trajectory in ("reference", "own")
+        for trajectory in ("reference", "own", "reference100t")
     },
     *{
         f"predicted_noise_jvp_{reduction}_probe12_raw4_{method}_reference12"
@@ -149,7 +149,7 @@ SCORE_SCHEMES = {
         f"traj_tracin_direct_jvp_{reduction}_proj4096_adamw4_{method}_{trajectory}_constant_lr"
         for reduction in ("square", "root")
         for method in ("four", "e1", "four_residual", "e1_residual")
-        for trajectory in ("reference", "own")
+        for trajectory in ("reference", "own", "reference100t")
     },
     **{
         f"predicted_noise_jvp_{reduction}_probe12_raw4_{method}_reference12":
