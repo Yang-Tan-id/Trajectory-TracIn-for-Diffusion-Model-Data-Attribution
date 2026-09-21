@@ -15,7 +15,7 @@ if str(ROOT) not in sys.path:
 from dataset_config import _prompt_tag
 
 
-TARGETS = ("endpoint_contarfactual", "traj_contarfactual")
+TARGETS = ("endpoint_contarfactual", "traj_contarfactual", "simple_loss")
 
 
 def load_values(experiment: str, namespace: str, sign: str):
@@ -62,34 +62,43 @@ def main():
         print(f"\nLAMBDA={damping:g} — REFERENCE MINUS ORIGINAL")
         print(
             f"{'Q':>2s} {'END-ORIG':>10s} {'END-REF':>10s} {'END-DELTA':>11s} "
-            f"{'TRAJ-ORIG':>11s} {'TRAJ-REF':>10s} {'TRAJ-DELTA':>12s}"
+            f"{'TRAJ-ORIG':>11s} {'TRAJ-REF':>10s} {'TRAJ-DELTA':>12s} "
+            f"{'SIMPLE-ORIG':>12s} {'SIMPLE-REF':>11s} {'SIMPLE-DELTA':>13s}"
         )
-        print("-" * 83)
+        print("-" * 123)
         end_original = []
         end_reference = []
         end_delta = []
         traj_original = []
         traj_reference = []
         traj_delta = []
+        simple_original = []
+        simple_reference = []
+        simple_delta = []
         for q in range(10):
             keys = [
                 (damping, q, "endpoint_contarfactual"),
                 (damping, q, "traj_contarfactual"),
+                (damping, q, "simple_loss"),
             ]
             if not all(key in original and key in reference for key in keys):
                 raise RuntimeError(f"Incomplete LDS at lambda={damping:g}, query={q}")
-            eo, to = (original[key] for key in keys)
-            er, tr = (reference[key] for key in keys)
-            de, dt = er - eo, tr - to
+            eo, to, so = (original[key] for key in keys)
+            er, tr, sr = (reference[key] for key in keys)
+            de, dt, ds = er - eo, tr - to, sr - so
             end_original.append(eo)
             end_reference.append(er)
             end_delta.append(de)
             traj_original.append(to)
             traj_reference.append(tr)
             traj_delta.append(dt)
+            simple_original.append(so)
+            simple_reference.append(sr)
+            simple_delta.append(ds)
             print(
                 f"{q:2d} {eo:+9.3f}% {er:+9.3f}% {de:+10.3f}% "
-                f"{to:+10.3f}% {tr:+9.3f}% {dt:+11.3f}%"
+                f"{to:+10.3f}% {tr:+9.3f}% {dt:+11.3f}% "
+                f"{so:+11.3f}% {sr:+10.3f}% {ds:+12.3f}%"
             )
         print(
             f"MEAN {statistics.fmean(end_original):+9.3f}% "
@@ -97,7 +106,10 @@ def main():
             f"{statistics.fmean(end_delta):+10.3f}% "
             f"{statistics.fmean(traj_original):+10.3f}% "
             f"{statistics.fmean(traj_reference):+9.3f}% "
-            f"{statistics.fmean(traj_delta):+11.3f}%"
+            f"{statistics.fmean(traj_delta):+11.3f}% "
+            f"{statistics.fmean(simple_original):+11.3f}% "
+            f"{statistics.fmean(simple_reference):+10.3f}% "
+            f"{statistics.fmean(simple_delta):+12.3f}%"
         )
 
 
