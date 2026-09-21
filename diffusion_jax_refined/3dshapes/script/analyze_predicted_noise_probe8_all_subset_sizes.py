@@ -96,6 +96,11 @@ def save_all_points_plot(
     combination_rows: list[dict[str, object]],
     num_probes: int,
     score_label: str,
+    *,
+    value_key: str = "mean_lds_percent",
+    y_axis_label: str = "10-query mean LDS (%)",
+    title_prefix: str = "",
+    save_pdf: bool = True,
 ) -> None:
     """Plot every subset LDS and overlay Q1/median/mean/Q3 summaries."""
     try:
@@ -120,7 +125,7 @@ def save_all_points_plot(
     grouped: dict[tuple[str, str, int], list[float]] = defaultdict(list)
     for row in combination_rows:
         grouped[(str(row["target"]), str(row["variant"]), int(row["subset_size"]))].append(
-            float(row["mean_lds_percent"])
+            float(row[value_key])
         )
 
     fig, axes = plt.subplots(
@@ -174,7 +179,7 @@ def save_all_points_plot(
             if row_index == 0:
                 ax.set_title(variant_labels.get(variant, variant))
             if column_index == 0:
-                ax.set_ylabel(f"{target_labels.get(target, target)}\n10-query mean LDS (%)")
+                ax.set_ylabel(f"{target_labels.get(target, target)}\n{y_axis_label}")
             if row_index == len(TARGETS) - 1:
                 ax.set_xlabel("Subset size k")
 
@@ -187,14 +192,42 @@ def save_all_points_plot(
     )
     fig.legend(handles=legend, loc="upper center", ncol=3, frameon=False, bbox_to_anchor=(0.5, 0.985))
     fig.suptitle(
-        f"All {2 ** num_probes - 1:,} nonempty subsets of {num_probes} probes — {score_label}",
+        f"{title_prefix}All {2 ** num_probes - 1:,} nonempty subsets of "
+        f"{num_probes} probes — {score_label}",
         y=0.999,
     )
     fig.tight_layout(rect=(0, 0, 1, 0.965))
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(path, dpi=220)
-    fig.savefig(path.with_suffix(".pdf"), dpi=220)
+    if save_pdf:
+        fig.savefig(path.with_suffix(".pdf"), dpi=220)
     plt.close(fig)
+
+
+def save_per_query_all_points_plots(
+    output_dir: Path,
+    per_query_rows: list[dict[str, object]],
+    num_probes: int,
+    score_label: str,
+) -> None:
+    """Write one complete 4x4 all-subset scatter figure for each query."""
+    rows_by_query: dict[int, list[dict[str, object]]] = defaultdict(list)
+    for row in per_query_rows:
+        rows_by_query[int(row["query"])].append(row)
+    plot_dir = output_dir / "per_query_plots"
+    for query_id, rows in sorted(rows_by_query.items()):
+        prompt = str(rows[0]["prompt"]) if rows else ""
+        save_all_points_plot(
+            plot_dir / f"query_{query_id}.png",
+            rows,
+            num_probes,
+            score_label,
+            value_key="lds_percent",
+            y_axis_label=f"Q{query_id} LDS (%)",
+            title_prefix=f"Q{query_id} ({prompt}) — ",
+            save_pdf=False,
+        )
+        print(f"[saved] {plot_dir / f'query_{query_id}.png'}", flush=True)
 
 
 def main() -> None:
@@ -352,6 +385,12 @@ def main() -> None:
     save_all_points_plot(
         output_dir / "all_targets_variants_subset_scatter.png",
         combination_rows,
+        args.num_probes,
+        args.score_label,
+    )
+    save_per_query_all_points_plots(
+        output_dir,
+        per_query_rows,
         args.num_probes,
         args.score_label,
     )
