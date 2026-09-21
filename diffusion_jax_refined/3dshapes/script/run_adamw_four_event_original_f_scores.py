@@ -31,6 +31,21 @@ def event(root,epoch,shards=2):
     if len(np.unique(idx))!=len(idx): raise ValueError(f'duplicate indices: {root}')
     return np.concatenate(xs),idx
 
+def event_learning_rates(root,epoch,cfg,total_steps,steps_per_epoch,shards=2):
+    import DM__training_CIFAR5_MULTI_pixel as module
+    schedule=module.make_learning_rate_schedule(cfg,total_steps)
+    values=[]
+    for s in range(shards):
+        p=root/f'event_gradient_epoch_{epoch:04d}_shard_{s:02d}_of_{shards:02d}.npz'
+        if not p.is_file(): raise FileNotFoundError(p)
+        with np.load(p,allow_pickle=False) as z:
+            batches=np.asarray(z['batch_indices'],np.int64)
+            saved_epoch=int(np.asarray(z['epoch']).item())
+        if saved_epoch!=epoch: raise ValueError(f'epoch mismatch in {p}: {saved_epoch} != {epoch}')
+        steps=(epoch-1)*steps_per_epoch+batches
+        values.append(np.asarray(schedule(jnp.asarray(steps)),np.float64))
+    return np.concatenate(values)
+
 def write(path,rows):
     path.parent.mkdir(parents=True,exist_ok=True)
     with path.open('w',newline='') as f:
@@ -49,15 +64,27 @@ def main():
     )
     ap.add_argument('--plot-selection',action='store_true',help='write endpoint and trajectory LDS scatter plots for four_residual/query_train_l2')
     ap.add_argument('--include-all-events',action='store_true',help='also score E2, E3, E4 and their history-subtracted residuals')
+    ap.add_argument(
+        '--event-original-lr',action='store_true',
+        help=(
+            'For eventwise FOUR/FOUR_RESIDUAL, divide each fixed-checkpoint AdamW '
+            'event feature by the checkpoint LR, apply the selected contraction '
+            'separately, then weight it once by the original LR at that datapoint '
+            'event batch.'
+        ),
+    )
     a=ap.parse_args()
-    methods=ALL_EVENT_METHODS if a.include_all_events else METHODS
+    if a.event_original_lr and a.include_all_events:
+        ap.error('--event-original-lr cannot be combined with --include-all-events')
+    methods=('four','four_residual') if a.event_original_lr else (ALL_EVENT_METHODS if a.include_all_events else METHODS)
     mod=importlib.import_module('DM__training_CIFAR5_MULTI_pixel'); from dtrak.algorithm import _countsketch_project_grad_jax
     ckroot=ROOT/'result'/a.experiment/'model'/'prompted_jax'; art=ROOT/'result'/a.experiment/f'fixed_checkpoint_adamw_four_events_n{a.attribution_points}'
     with (ckroot/f'seed_{a.train_seed}_epoch_0004.ckpt').open('rb') as f: payload=pickle.load(f)
     cfg=mod.TrainConfig(**dict(payload['config'])); dev=mod.choose_devices('cpu')[0]
     ds=mod.CIFAR10Dataset(root=cfg.data_root,batch_names=cfg.batch_names,use_test=cfg.use_test,class_names=cfg.class_names,normalize='minus_one_to_one',channels_last=True,exclude_ranges=cfg.exclude_ranges,exclude_indices=cfg.exclude_indices,cond_mode=cfg.cond_mode)
     cfg=mod.TrainConfig(**{**asdict(cfg),'num_classes':len(ds.label_names)}); model=mod.build_model(cfg)
-    template=mod.create_train_state(cfg,model,jax.random.PRNGKey(cfg.seed),dev,(len(ds)//cfg.batch_size)*cfg.epochs)
+    steps_per_epoch=len(ds)//cfg.batch_size; total_steps=steps_per_epoch*cfg.epochs
+    template=mod.create_train_state(cfg,model,jax.random.PRNGKey(cfg.seed),dev,total_steps)
     class A: pass
     qa=A(); qa.experiment=a.experiment; qa.train_seed=a.train_seed; qa.epochs=a.epochs
     query,meta=load_query_bank(qa,a.query_namespace,'trajectory_next_checkpoint_noise_mse',range(10))
@@ -70,12 +97,16 @@ def main():
         se=4*(c+1); state,_=mod._restore_checkpoint(str(ckroot/f'seed_{a.train_seed}_epoch_{se:04d}.ckpt'),template)
         zero=jax.tree_util.tree_map(jnp.zeros_like,state.params); hu,_=state.tx.update(zero,state.opt_state,state.params)
         hist=np.asarray(_countsketch_project_grad_jax(hu,4096,seed_parts=(a.train_seed,'traj_tracin_projection',c)),np.float32)
-        ev=[]
+        ev=[]; event_lrs=[]
         for e in range(se+1,se+5):
             x,idx=event(art/f'epoch_{se}_{se+4}',e)
             if score_idx is None: score_idx=idx
             elif not np.array_equal(score_idx,idx): raise ValueError(f'index mismatch checkpoint {c+1}')
             ev.append(x)
+            if a.event_original_lr:
+                event_lrs.append(event_learning_rates(
+                    art/f'epoch_{se}_{se+4}',e,cfg,total_steps,steps_per_epoch
+                ))
         banks={
             'four':sum(ev),
             'e1':ev[0],
@@ -86,12 +117,37 @@ def main():
             for event_index,event_feature in enumerate(ev,1):
                 banks[f'e{event_index}']=event_feature
                 banks[f'e{event_index}_residual']=event_feature-hist
+        checkpoint_lr=mod.learning_rate_at_step(cfg,se*steps_per_epoch,total_steps)
+        if a.event_original_lr and checkpoint_lr<=0:
+            raise ValueError(f'checkpoint {c+1} has nonpositive LR {checkpoint_lr}')
         for t in dict.fromkeys(int(x) for x in meta['timesteps']):
             qi=lookup.get((c,t))
             if qi is None: continue
             q=query[:,qi,:]
             weight=(1.0/num_timestamps if a.checkpoint_weighting=='uniform' else float(meta['term_weights'][qi]))
             qn=np.linalg.norm(q,axis=1)+1e-8
+            if a.event_original_lr:
+                weighted_banks={
+                    'four':ev,
+                    'four_residual':[x-hist for x in ev],
+                }
+                for m,event_bank in weighted_banks.items():
+                    accumulated={v:np.zeros((len(idx),q.shape[0]),np.float64) for v in VARIANTS}
+                    for x,event_lr in zip(event_bank,event_lrs):
+                        direction=x/checkpoint_lr
+                        dots=direction@q.T; xn=np.linalg.norm(direction,axis=1)+1e-8
+                        values={
+                            'raw':dots,
+                            'query_l2':dots/qn[None,:],
+                            'train_l2':dots/xn[:,None],
+                            'query_train_l2':dots/(xn[:,None]*qn[None,:]),
+                        }
+                        for v,value in values.items():
+                            transformed=np.square(value) if a.contraction=='squared' else value
+                            accumulated[v]+=event_lr[:,None]*transformed
+                    for v,value in accumulated.items():
+                        scores[(m,v)]+=(value/num_timestamps).T
+                continue
             for m,x in banks.items():
                 dots=x@q.T; xn=np.linalg.norm(x,axis=1)+1e-8
                 values={
@@ -115,7 +171,7 @@ def main():
                 pred=scores[(m,v)][q]@incidence.T
                 for target in TARGETS:
                     lds=100*float(rowwise_spearman(pred[None,:],true[target])[0])
-                    rows.append({'method':m,'variant':v,'query':q,'target':target,'lds_percent':lds,'prediction_sign':'p1','checkpoint_weighting':a.checkpoint_weighting,'contraction':a.contraction})
+                    rows.append({'method':m,'variant':v,'query':q,'target':target,'lds_percent':lds,'prediction_sign':'p1','checkpoint_weighting':('original_event_lr_once' if a.event_original_lr else a.checkpoint_weighting),'contraction':a.contraction})
                     if (
                         a.plot_selection
                         and m == 'four_residual'
@@ -147,7 +203,8 @@ def main():
         if 'checkpoint_own_trajectory' in a.query_namespace
         else 'REFERENCE TRAJECTORY'
     )
-    print(f'{a.contraction.upper()} ORIGINAL-F {trajectory_label} — FIXED P1 — CHECKPOINT WEIGHTING={a.checkpoint_weighting}')
+    weighting_label = 'original_event_lr_once' if a.event_original_lr else a.checkpoint_weighting
+    print(f'{a.contraction.upper()} ORIGINAL-F {trajectory_label} — FIXED P1 — CHECKPOINT WEIGHTING={weighting_label}')
     for m in methods:
         for variant in VARIANTS:
             vals=[]
