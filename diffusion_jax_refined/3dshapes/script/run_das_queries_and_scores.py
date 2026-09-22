@@ -123,8 +123,8 @@ def main() -> None:
     gpu_ids = [str(value) for value in parse_ints(args.gpus)]
     if not query_ids:
         raise ValueError("--query-ids selected no queries")
-    if len(gpu_ids) != 2:
-        raise ValueError(f"DAS RTX runner requires exactly two GPUs, got {gpu_ids}")
+    if not gpu_ids:
+        raise ValueError("--gpus selected no GPUs")
 
     records = json.loads(args.query_file.read_text())["queries"]
     result_root = SHAPES_ROOT / "result" / args.experiment
@@ -181,7 +181,7 @@ def main() -> None:
     if args.aggregate_mc_normalized:
         base_env["DAS_AGGREGATE_MC_NORMALIZED"] = "1"
 
-    assignments = [selected[index::2] for index in range(2)]
+    assignments = [selected[index::len(gpu_ids)] for index in range(len(gpu_ids))]
 
     def query_worker(gpu: str, tasks: list[tuple[int, str, int]]) -> None:
         for query_id, prompt, seed in tasks:
@@ -216,7 +216,7 @@ def main() -> None:
                 execute=args.execute,
             )
 
-    with ThreadPoolExecutor(max_workers=2) as pool:
+    with ThreadPoolExecutor(max_workers=len(gpu_ids)) as pool:
         futures = [pool.submit(query_worker, gpu, tasks) for gpu, tasks in zip(gpu_ids, assignments)]
         for future in futures:
             future.result()
@@ -253,7 +253,7 @@ def main() -> None:
         )
 
     lambdas = [float(value) for value in DAS_DAMPING_SWEEP_VALUES]
-    lambda_shards = [lambdas[index::2] for index in range(2)]
+    lambda_shards = [lambdas[index::len(gpu_ids)] for index in range(len(gpu_ids))]
 
     def score_worker(gpu: str, damping_values: list[float]) -> None:
         env = base_env | {
@@ -271,7 +271,7 @@ def main() -> None:
             execute=args.execute,
         )
 
-    with ThreadPoolExecutor(max_workers=2) as pool:
+    with ThreadPoolExecutor(max_workers=len(gpu_ids)) as pool:
         futures = [
             pool.submit(score_worker, gpu, damping_values)
             for gpu, damping_values in zip(gpu_ids, lambda_shards)
