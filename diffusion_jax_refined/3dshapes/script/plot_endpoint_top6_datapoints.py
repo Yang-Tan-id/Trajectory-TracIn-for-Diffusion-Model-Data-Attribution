@@ -357,20 +357,8 @@ def main() -> None:
         endpoint_paths=endpoints,
         score_dirs=traj_dirs,
         top_k=args.top_k,
-        title="Own trajectory 100t · next checkpoint · p1 · AdamW FOUR_RESIDUAL",
+        title="Own trajectory 100t · next checkpoint · reversed raw score · AdamW FOUR_RESIDUAL",
         output=output_dir / f"own_trajectory_next_raw_endpoint_top{args.top_k}.png",
-        dpi=args.dpi,
-        ranking_sign=1,
-    )
-    plot_method(
-        queries=queries,
-        dataset_images=dataset_images,
-        dataset_labels=dataset_labels,
-        endpoint_paths=endpoints,
-        score_dirs=das_dirs,
-        top_k=args.top_k,
-        title=f"DAS factorized MC4 · endpoint · lambda={args.das_lambda:g} · m1",
-        output=output_dir / f"das_mc4_lambda_{damping_tag(args.das_lambda)}_endpoint_top{args.top_k}.png",
         dpi=args.dpi,
         ranking_sign=-1,
     )
@@ -379,12 +367,24 @@ def main() -> None:
         dataset_images=dataset_images,
         dataset_labels=dataset_labels,
         endpoint_paths=endpoints,
-        score_dirs=probe12_dirs,
+        score_dirs=das_dirs,
         top_k=args.top_k,
-        title="Reference 12-probe · p1 · AdamW FOUR · RAW · termwise square · non-residual",
-        output=output_dir / f"reference12_four_raw_termwise_square_nonresidual_top{args.top_k}.png",
+        title=f"DAS factorized MC4 · endpoint · lambda={args.das_lambda:g} · raw score",
+        output=output_dir / f"das_mc4_lambda_{damping_tag(args.das_lambda)}_endpoint_top{args.top_k}.png",
         dpi=args.dpi,
         ranking_sign=1,
+    )
+    plot_method(
+        queries=queries,
+        dataset_images=dataset_images,
+        dataset_labels=dataset_labels,
+        endpoint_paths=endpoints,
+        score_dirs=probe12_dirs,
+        top_k=args.top_k,
+        title="Reference 12-probe · reversed raw score · AdamW FOUR · RAW · termwise square · non-residual",
+        output=output_dir / f"reference12_four_raw_termwise_square_nonresidual_top{args.top_k}.png",
+        dpi=args.dpi,
+        ranking_sign=-1,
     )
 
 
