@@ -187,7 +187,10 @@ def main():
                         }
                         for v,value in values.items():
                             transformed=np.square(value) if a.contraction=='squared' else value
-                            accumulated[v]+=event_lr[:,None]*transformed
+                            if np.ndim(event_lr) == 0:
+                                accumulated[v]+=float(event_lr)*transformed
+                            else:
+                                accumulated[v]+=np.asarray(event_lr)[:,None]*transformed
                     for v,value in accumulated.items():
                         scores[(m,v)]+=(value/num_timestamps).T
                 continue
