@@ -96,6 +96,8 @@ def main():
         if invalid: ap.error(f'unsupported --methods: {invalid}')
         if not requested: ap.error('--methods selected no methods')
         methods=requested
+    if a.event_original_lr and any(m not in ('four','four_residual') for m in methods):
+        ap.error('--event-original-lr only supports four and four_residual')
     mod=importlib.import_module('DM__training_CIFAR5_MULTI_pixel'); from dtrak.algorithm import _countsketch_project_grad_jax
     ckroot=ROOT/'result'/a.experiment/'model'/'prompted_jax'; art=ROOT/'result'/a.experiment/f'fixed_checkpoint_adamw_four_events_n{a.attribution_points}'
     with (ckroot/f'seed_{a.train_seed}_epoch_0004.ckpt').open('rb') as f: payload=pickle.load(f)
@@ -153,7 +155,8 @@ def main():
                     'four':ev,
                     'four_residual':[x-hist for x in ev],
                 }
-                for m,event_bank in weighted_banks.items():
+                for m in methods:
+                    event_bank=weighted_banks[m]
                     accumulated={v:np.zeros((len(idx),q.shape[0]),np.float64) for v in VARIANTS}
                     for x,event_lr in zip(event_bank,event_lrs):
                         direction=x/checkpoint_lr
@@ -170,7 +173,8 @@ def main():
                     for v,value in accumulated.items():
                         scores[(m,v)]+=(value/num_timestamps).T
                 continue
-            for m,x in banks.items():
+            for m in methods:
+                x=banks[m]
                 dots=x@q.T; xn=np.linalg.norm(x,axis=1)+1e-8
                 values={
                     'raw':dots,
