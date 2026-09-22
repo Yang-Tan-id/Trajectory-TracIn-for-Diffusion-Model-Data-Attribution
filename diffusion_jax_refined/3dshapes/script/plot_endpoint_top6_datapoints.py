@@ -5,7 +5,8 @@ The default invocation produces two 10-row figures:
 
 * checkpoint-own trajectory, 100-timestamp next-checkpoint objective,
   AdamW FOUR_RESIDUAL query/train-L2 score;
-* factorized DAS MC4 endpoint score at lambda=100.
+* factorized DAS MC4 endpoint score at the requested lambda;
+* reference-trajectory 12-probe AdamW FOUR raw termwise-square score.
 
 Score indices are always read from the score artifact.  They are dataset row
 indices, not positions within ``scores.npy`` or within the attribution subset.
@@ -305,6 +306,10 @@ def main() -> None:
         "--das-namespace",
         default="factorized_mc4_original100x1",
     )
+    parser.add_argument(
+        "--probe12-namespace",
+        default="predicted_noise_jvp_l2_squared_probe12_adamw4_four_reference12_single_lr",
+    )
     parser.add_argument("--das-lambda", type=float, default=100.0)
     parser.add_argument("--top-k", type=int, default=6)
     parser.add_argument("--output-dir", type=Path, default=None)
@@ -338,6 +343,12 @@ def main() -> None:
         / das_lambda_dir
         for query in queries
     }
+    probe12_dirs = {
+        query.query_id: score_root(result_root, args.train_seed, query)
+        / f"traj_tracin_{args.probe12_namespace}"
+        / "score"
+        for query in queries
+    }
 
     plot_method(
         queries=queries,
@@ -360,6 +371,18 @@ def main() -> None:
         top_k=args.top_k,
         title=f"DAS factorized MC4 · endpoint · lambda={args.das_lambda:g}",
         output=output_dir / f"das_mc4_lambda_{damping_tag(args.das_lambda)}_endpoint_top6.png",
+        dpi=args.dpi,
+        ranking_sign=1,
+    )
+    plot_method(
+        queries=queries,
+        dataset_images=dataset_images,
+        dataset_labels=dataset_labels,
+        endpoint_paths=endpoints,
+        score_dirs=probe12_dirs,
+        top_k=args.top_k,
+        title="Reference 12-probe · AdamW FOUR · RAW · termwise square · non-residual",
+        output=output_dir / "reference12_four_raw_termwise_square_nonresidual_top6.png",
         dpi=args.dpi,
         ranking_sign=1,
     )
