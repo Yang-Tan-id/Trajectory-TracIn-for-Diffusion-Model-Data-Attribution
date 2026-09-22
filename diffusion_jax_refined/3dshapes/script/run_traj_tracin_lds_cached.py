@@ -141,6 +141,7 @@ PREDICTED_NOISE_JVP_SCHEMES = {
     "predicted_noise_shared_orthogonal_probe8_termwise_square",
 }
 SCORE_SCHEMES = {
+    "adamw_residual_aligned10x10": "traj_tracin_adamw_residual_aligned10x10",
     "loss_direction_original_f_checkpoint_own_trajectory":
         "traj_tracin_loss_direction_original_f_checkpoint_own_trajectory",
     "loss_direction_original_f_checkpoint_own_trajectory_100t":

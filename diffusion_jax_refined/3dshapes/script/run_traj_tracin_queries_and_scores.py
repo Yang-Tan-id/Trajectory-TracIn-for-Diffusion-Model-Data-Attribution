@@ -79,6 +79,14 @@ def main() -> None:
         help="Optional suffix for independent query-gradient, score, and log outputs.",
     )
     parser.add_argument(
+        "--score-output-namespace",
+        default="",
+        help=(
+            "Optional score-only namespace. This permits reuse of query artifacts "
+            "from --artifact-namespace while writing scores under a new method name."
+        ),
+    )
+    parser.add_argument(
         "--snapshot-positions",
         default="",
         help="Optional comma/space-separated positions in the saved 1000-step DDIM trajectory.",
@@ -181,7 +189,8 @@ def main() -> None:
         / "train_datapoint_gradient_artifact.npz"
     )
     sample_root = result_root / "sample_ddim_eta0_1000"
-    log_name = "traj_tracin_query_score" if not namespace else f"traj_tracin_query_score_{namespace}"
+    log_suffix = args.score_output_namespace.strip() or namespace
+    log_name = "traj_tracin_query_score" if not log_suffix else f"traj_tracin_query_score_{log_suffix}"
     log_root = result_root / "logs" / log_name
     if args.execute:
         required_paths = [checkpoint]
@@ -281,7 +290,8 @@ def main() -> None:
     for query_id, prompt, seed in selected:
         run_root = sample_run_root(sample_root, prompt, checkpoint)
         query_artifact = query_artifact_path(run_root, seed, namespace)
-        score_namespace = "traj_tracin" if not namespace else f"traj_tracin_{namespace}"
+        score_suffix = args.score_output_namespace.strip() or namespace
+        score_namespace = "traj_tracin" if not score_suffix else f"traj_tracin_{score_suffix}"
         score_dir = (
             result_root
             / "attribution_score"

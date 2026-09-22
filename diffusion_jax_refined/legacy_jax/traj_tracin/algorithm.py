@@ -3162,10 +3162,12 @@ def run_attribution(cfg: TrajAttributionConfig):
         optimizer_train_transform = os.environ.get(
             "TRAJ_TRACIN_TRAIN_OPTIMIZER_TRANSFORM", "none"
         ).strip().lower()
-        if optimizer_train_transform not in ("none", "adam_v_preconditioned"):
+        if optimizer_train_transform not in (
+            "none", "adam_v_preconditioned", "adamw_residual_update"
+        ):
             raise ValueError(
-                "TRAJ_TRACIN_TRAIN_OPTIMIZER_TRANSFORM must be none or "
-                "adam_v_preconditioned"
+                "TRAJ_TRACIN_TRAIN_OPTIMIZER_TRANSFORM must be none, "
+                "adam_v_preconditioned, or adamw_residual_update"
             )
         decompose_residual_jacobian = os.environ.get(
             "TRAJ_TRACIN_TRAIN_DECOMPOSE_RESIDUAL_JACOBIAN", "0"
@@ -3395,6 +3397,7 @@ def run_attribution(cfg: TrajAttributionConfig):
             params = tree_to_device(select_state_params(state, cfg.parameter_source), device)
             print(f"[stage:{stage_mode}] checkpoint {ckpt_i + 1}/{len(ckpts)} restored", flush=True)
             adam_inverse_rms = None
+            adamw_history_update = None
             if stage_mode == "train" and optimizer_train_transform == "adam_v_preconditioned":
                 adam_state = find_adam_moment_state(state.opt_state)
                 if adam_state is None:
@@ -3415,6 +3418,22 @@ def run_attribution(cfg: TrajAttributionConfig):
                 print(
                     "[stage:train] optimizer-aware feature transform="
                     "adam_v_preconditioned (negative update direction; LR excluded)",
+                    flush=True,
+                )
+            elif stage_mode == "train" and optimizer_train_transform == "adamw_residual_update":
+                if cfg.parameter_source != "raw":
+                    raise ValueError(
+                        "adamw_residual_update requires TRAJ_PARAMETER_SOURCE=raw"
+                    )
+                zero_grads = jax.tree_util.tree_map(jnp.zeros_like, params)
+                adamw_history_update, _ = state.tx.update(
+                    zero_grads, state.opt_state, params
+                )
+                adamw_history_update = tree_to_device(adamw_history_update, device)
+                print(
+                    "[stage:train] optimizer-aware feature transform="
+                    "adamw_residual_update (MC-mean gradient update minus zero-gradient "
+                    "history update; checkpoint LR included once)",
                     flush=True,
                 )
             alignment_next_params = (
@@ -4981,6 +5000,14 @@ def run_attribution(cfg: TrajAttributionConfig):
                             grads,
                             adam_inverse_rms,
                         )
+                    elif adamw_history_update is not None:
+                        adamw_update, _ = state.tx.update(grads, state.opt_state, p)
+                        grads = jax.tree_util.tree_map(
+                            lambda update, history: update.astype(jnp.float32)
+                            - history.astype(jnp.float32),
+                            adamw_update,
+                            adamw_history_update,
+                        )
                     return projector(grads)
 
                 bs_stage = max(1, int(cfg.score_batch_size))
@@ -5078,7 +5105,10 @@ def run_attribution(cfg: TrajAttributionConfig):
                     train_timesteps.append(int(t_value))
                     train_snapshot_positions.append(int(pos_seq[snap_id]))
                     train_ckpt_paths.append(str(ckpt_path))
-                    train_term_weights.append(ckpt_lr_weight / float(max(1, len(t_seq))))
+                    train_term_weights.append(
+                        (1.0 if optimizer_train_transform == "adamw_residual_update" else ckpt_lr_weight)
+                        / float(max(1, len(t_seq)))
+                    )
                     stage_terms_done += 1
                     print(
                         f"[stage:train] TrajTracIn ckpt={ckpt_i + 1} snapshot={snap_id + 1}/{len(t_seq)} | "
@@ -5108,7 +5138,11 @@ def run_attribution(cfg: TrajAttributionConfig):
                         train_feature_semantics=np.asarray(
                             "negative_bias_corrected_adam_second_moment_preconditioned_loss_gradient"
                             if optimizer_train_transform == "adam_v_preconditioned"
-                            else "projected_expected_loss_gradient"
+                            else (
+                                "projected_adamw_residual_update_of_mc_mean_loss_gradient"
+                                if optimizer_train_transform == "adamw_residual_update"
+                                else "projected_expected_loss_gradient"
+                            )
                         ),
                     )
                     print(
