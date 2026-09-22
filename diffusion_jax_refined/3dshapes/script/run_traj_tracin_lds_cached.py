@@ -48,6 +48,11 @@ PREDICTED_NOISE_JVP_SCHEMES = {
         for trajectory in ("reference", "own", "reference100t")
     },
     *{
+        f"direct_jvp_square_proj4096_adamw4_{method}_{trajectory}_single_lr"
+        for method in ("four", "e1", "four_residual", "e1_residual")
+        for trajectory in ("reference", "own", "reference100t")
+    },
+    *{
         f"predicted_noise_jvp_{reduction}_probe12_raw4_{method}_reference12"
         for method in ("four", "e1")
         for reduction in ("l2_squared", "probe_l2")
@@ -136,6 +141,8 @@ PREDICTED_NOISE_JVP_SCHEMES = {
     "predicted_noise_shared_orthogonal_probe8_termwise_square",
 }
 SCORE_SCHEMES = {
+    "loss_direction_original_f_checkpoint_own_trajectory":
+        "traj_tracin_loss_direction_original_f_checkpoint_own_trajectory",
     "loss_direction_original_f_checkpoint_own_trajectory_100t":
         "traj_tracin_loss_direction_original_f_checkpoint_own_trajectory_100t",
     "predicted_noise_jvp_l2_squared_probe12_adamw4_eventwise_square_sum_reference12":
@@ -150,6 +157,12 @@ SCORE_SCHEMES = {
         f"direct_jvp_{reduction}_proj4096_adamw4_{method}_{trajectory}_constant_lr":
         f"traj_tracin_direct_jvp_{reduction}_proj4096_adamw4_{method}_{trajectory}_constant_lr"
         for reduction in ("square", "root")
+        for method in ("four", "e1", "four_residual", "e1_residual")
+        for trajectory in ("reference", "own", "reference100t")
+    },
+    **{
+        f"direct_jvp_square_proj4096_adamw4_{method}_{trajectory}_single_lr":
+        f"traj_tracin_direct_jvp_square_proj4096_adamw4_{method}_{trajectory}_single_lr"
         for method in ("four", "e1", "four_residual", "e1_residual")
         for trajectory in ("reference", "own", "reference100t")
     },

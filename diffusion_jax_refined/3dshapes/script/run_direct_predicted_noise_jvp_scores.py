@@ -163,6 +163,30 @@ def atomic_npz(path: Path, **arrays):
     tmp.replace(path)
 
 
+def checkpoint_learning_rates(args):
+    module = importlib.import_module("DM__training_CIFAR5_MULTI_pixel")
+    ckpt_dir = ROOT / "result" / args.experiment / "model" / "prompted_jax"
+    payload = load_pickle(ckpt_dir / f"seed_{args.train_seed}_epoch_0004.ckpt")
+    cfg = module.TrainConfig(**dict(payload["config"]))
+    ds = module.CIFAR10Dataset(
+        root=cfg.data_root, batch_names=cfg.batch_names, use_test=cfg.use_test,
+        class_names=cfg.class_names, normalize="minus_one_to_one", channels_last=True,
+        exclude_ranges=cfg.exclude_ranges, exclude_indices=cfg.exclude_indices,
+        cond_mode=cfg.cond_mode,
+    )
+    steps_per_epoch = len(ds) // cfg.batch_size
+    total_steps = steps_per_epoch * cfg.epochs
+    values = np.asarray([
+        module.learning_rate_at_step(
+            cfg, 4 * (checkpoint + 1) * steps_per_epoch, total_steps
+        )
+        for checkpoint in range(49)
+    ], np.float64)
+    if np.any(values <= 0):
+        raise ValueError(f"nonpositive checkpoint learning rates: {values[values <= 0]}")
+    return values
+
+
 def setup(args):
     module = importlib.import_module("DM__training_CIFAR5_MULTI_pixel")
     ckpt_dir = ROOT / "result" / args.experiment / "model" / "prompted_jax"
@@ -336,10 +360,36 @@ def score_shard(args):
 def merge(args):
     records = json.loads((ROOT / "queries_seed_0_9.json").read_text())["queries"]
     pieces = []
-    for shard in range(args.num_shards):
-        path = args.out_dir / f"shard_{shard:02d}_of_{args.num_shards:02d}.npz"
-        with np.load(path, allow_pickle=False) as payload:
-            pieces.append((np.asarray(payload["score_indices"]), np.asarray(payload["scores"])))
+    if args.checkpoint_weighting == "single_lr":
+        checkpoint_lrs = checkpoint_learning_rates(args)
+        for shard in range(args.num_shards):
+            shard_tag = f"shard_{shard:02d}_of_{args.num_shards:02d}"
+            previous = None
+            reweighted = None
+            indices = None
+            for checkpoint, checkpoint_lr in enumerate(checkpoint_lrs):
+                path = args.out_dir / "partials" / f"checkpoint_{checkpoint:04d}_{shard_tag}.npz"
+                with np.load(path, allow_pickle=False) as payload:
+                    current = np.asarray(payload["scores"], np.float64)
+                    current_indices = np.asarray(payload["score_indices"], np.int64)
+                if indices is None:
+                    indices = current_indices
+                    reweighted = np.zeros_like(current[:, 0])
+                    previous = np.zeros_like(current)
+                elif not np.array_equal(indices, current_indices):
+                    raise ValueError(f"score indices changed in {path}")
+                # reduction index 0 is the direct-JVP square accumulated through
+                # this checkpoint. Difference adjacent partials to recover its
+                # checkpoint-local contribution, then remove one internal LR.
+                reweighted += (current[:, 0] - previous[:, 0]) / checkpoint_lr
+                previous = current
+            assert indices is not None and reweighted is not None
+            pieces.append((indices, reweighted))
+    else:
+        for shard in range(args.num_shards):
+            path = args.out_dir / f"shard_{shard:02d}_of_{args.num_shards:02d}.npz"
+            with np.load(path, allow_pickle=False) as payload:
+                pieces.append((np.asarray(payload["score_indices"]), np.asarray(payload["scores"])))
     indices = np.concatenate([item[0] for item in pieces])
     scores = np.concatenate([item[1] for item in pieces], axis=-1)
     order = np.argsort(indices)
@@ -350,11 +400,13 @@ def merge(args):
         if args.num_timestamps == 10
         else f"{args.trajectory}{args.num_timestamps}t"
     )
+    reductions = ("square",) if args.checkpoint_weighting == "single_lr" else REDUCTIONS
     for mi, method in enumerate(METHODS):
-        for ri, reduction in enumerate(REDUCTIONS):
+        for ri, reduction in enumerate(reductions):
+            weighting_suffix = "single_lr" if args.checkpoint_weighting == "single_lr" else "constant_lr"
             namespace = (
                 f"traj_tracin_direct_jvp_{reduction}_proj{args.output_projection_dim}_"
-                f"adamw4_{method}_{trajectory_namespace}_constant_lr"
+                f"adamw4_{method}_{trajectory_namespace}_{weighting_suffix}"
             )
             schemes.append(namespace.removeprefix("traj_tracin_"))
             for vi, variant in enumerate(VARIANTS):
@@ -371,13 +423,18 @@ def merge(args):
                         / f"initial_seed_{int(record['initial_seed'])}" / namespace / component
                     )
                     out.mkdir(parents=True, exist_ok=True)
-                    np.save(out / "scores.npy", scores[mi, ri, vi, query])
+                    score_values = (
+                        scores[mi, vi, query]
+                        if args.checkpoint_weighting == "single_lr"
+                        else scores[mi, ri, vi, query]
+                    )
+                    np.save(out / "scores.npy", score_values)
                     np.save(out / "score_indices.npy", indices)
                     (out / "score_artifact_manifest.json").write_text(json.dumps({
                         "semantics": SEMANTICS, "trajectory": args.trajectory,
                         "num_timestamps": args.num_timestamps,
                         "method": method, "reduction": reduction,
-                        "checkpoint_weighting": "constant",
+                        "checkpoint_weighting": args.checkpoint_weighting,
                         "output_projection": "fixed_countsketch",
                         "output_projection_dim": args.output_projection_dim,
                     }, indent=2, sort_keys=True))
@@ -397,6 +454,14 @@ def main():
     parser.add_argument("--output-projection-dim", type=int, default=4096)
     parser.add_argument("--output-projection-seed", type=int, default=20260919)
     parser.add_argument("--num-timestamps", type=int, default=10)
+    parser.add_argument(
+        "--checkpoint-weighting", choices=("constant", "single_lr"), default="constant",
+        help=(
+            "merge weighting: constant preserves the original cumulative scores; "
+            "single_lr reconstructs checkpoint-local square increments and divides "
+            "each by its checkpoint learning rate"
+        ),
+    )
     parser.add_argument("--progress-every", type=int, default=25)
     parser.add_argument("--namespace", default="loss_direction_original_f_checkpoint_own_trajectory_endpoints_all10")
     args = parser.parse_args()
