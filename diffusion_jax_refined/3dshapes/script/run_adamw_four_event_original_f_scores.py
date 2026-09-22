@@ -86,18 +86,35 @@ def main():
             'event batch.'
         ),
     )
+    ap.add_argument(
+        '--single-checkpoint-lr',action='store_true',
+        help=(
+            'For eventwise FOUR/FOUR_RESIDUAL, divide every event feature by '
+            'the checkpoint LR, apply the selected contraction separately, '
+            'then multiply once by that same checkpoint LR. With squared '
+            'contraction this is exactly square(q^T u) / checkpoint_lr.'
+        ),
+    )
     a=ap.parse_args()
-    if a.event_original_lr and a.include_all_events:
-        ap.error('--event-original-lr cannot be combined with --include-all-events')
-    methods=('four','four_residual') if a.event_original_lr else (ALL_EVENT_METHODS if a.include_all_events else METHODS)
+    if a.event_original_lr and a.single_checkpoint_lr:
+        ap.error('--event-original-lr and --single-checkpoint-lr are mutually exclusive')
+    eventwise_lr = a.event_original_lr or a.single_checkpoint_lr
+    if eventwise_lr and a.include_all_events:
+        ap.error('eventwise LR modes cannot be combined with --include-all-events')
+    methods=('four','four_residual') if eventwise_lr else (ALL_EVENT_METHODS if a.include_all_events else METHODS)
     if a.methods:
         requested=tuple(value for value in a.methods.replace(',', ' ').split() if value)
         invalid=sorted(set(requested)-set(METHODS))
         if invalid: ap.error(f'unsupported --methods: {invalid}')
         if not requested: ap.error('--methods selected no methods')
         methods=requested
-    if a.event_original_lr and any(m not in ('four','four_residual') for m in methods):
-        ap.error('--event-original-lr only supports four and four_residual')
+    if eventwise_lr and any(m not in ('four','four_residual') for m in methods):
+        ap.error('eventwise LR modes only support four and four_residual')
+    weighting_label = (
+        'single_checkpoint_lr'
+        if a.single_checkpoint_lr
+        else ('original_event_lr_once' if a.event_original_lr else a.checkpoint_weighting)
+    )
     mod=importlib.import_module('DM__training_CIFAR5_MULTI_pixel'); from dtrak.algorithm import _countsketch_project_grad_jax
     ckroot=ROOT/'result'/a.experiment/'model'/'prompted_jax'; art=ROOT/'result'/a.experiment/f'fixed_checkpoint_adamw_four_events_n{a.attribution_points}'
     with (ckroot/f'seed_{a.train_seed}_epoch_0004.ckpt').open('rb') as f: payload=pickle.load(f)
@@ -142,7 +159,7 @@ def main():
                 banks[f'e{event_index}']=event_feature
                 banks[f'e{event_index}_residual']=event_feature-hist
         checkpoint_lr=mod.learning_rate_at_step(cfg,se*steps_per_epoch,total_steps)
-        if a.event_original_lr and checkpoint_lr<=0:
+        if eventwise_lr and checkpoint_lr<=0:
             raise ValueError(f'checkpoint {c+1} has nonpositive LR {checkpoint_lr}')
         for t in dict.fromkeys(int(x) for x in meta['timesteps']):
             qi=lookup.get((c,t))
@@ -150,15 +167,16 @@ def main():
             q=query[:,qi,:]
             weight=(1.0/num_timestamps if a.checkpoint_weighting=='uniform' else float(meta['term_weights'][qi]))
             qn=np.linalg.norm(q,axis=1)+1e-8
-            if a.event_original_lr:
+            if eventwise_lr:
                 weighted_banks={
                     'four':ev,
                     'four_residual':[x-hist for x in ev],
                 }
+                lr_weights = event_lrs if a.event_original_lr else [checkpoint_lr] * len(ev)
                 for m in methods:
                     event_bank=weighted_banks[m]
                     accumulated={v:np.zeros((len(idx),q.shape[0]),np.float64) for v in VARIANTS}
-                    for x,event_lr in zip(event_bank,event_lrs):
+                    for x,event_lr in zip(event_bank,lr_weights):
                         direction=x/checkpoint_lr
                         dots=direction@q.T; xn=np.linalg.norm(direction,axis=1)+1e-8
                         values={
@@ -206,7 +224,7 @@ def main():
                 'method':a.save_score_method,
                 'variant':a.save_score_variant,
                 'query_namespace':a.query_namespace,
-                'checkpoint_weighting':('original_event_lr_once' if a.event_original_lr else a.checkpoint_weighting),
+                'checkpoint_weighting':weighting_label,
                 'contraction':a.contraction,
                 'num_timestamps':num_timestamps,
             },indent=2,sort_keys=True)+'\n')
@@ -219,7 +237,7 @@ def main():
                 pred=scores[(m,v)][local_q]@incidence.T
                 for target in TARGETS:
                     lds=100*float(rowwise_spearman(pred[None,:],true[target])[0])
-                    rows.append({'method':m,'variant':v,'query':query_id,'target':target,'lds_percent':lds,'prediction_sign':'p1','checkpoint_weighting':('original_event_lr_once' if a.event_original_lr else a.checkpoint_weighting),'contraction':a.contraction})
+                    rows.append({'method':m,'variant':v,'query':query_id,'target':target,'lds_percent':lds,'prediction_sign':'p1','checkpoint_weighting':weighting_label,'contraction':a.contraction})
                     if (
                         a.plot_selection
                         and m == 'four_residual'
@@ -251,7 +269,6 @@ def main():
         if 'checkpoint_own_trajectory' in a.query_namespace
         else 'REFERENCE TRAJECTORY'
     )
-    weighting_label = 'original_event_lr_once' if a.event_original_lr else a.checkpoint_weighting
     print(f'{a.contraction.upper()} ORIGINAL-F {trajectory_label} — FIXED P1 — CHECKPOINT WEIGHTING={weighting_label}')
     for m in methods:
         for variant in VARIANTS:
