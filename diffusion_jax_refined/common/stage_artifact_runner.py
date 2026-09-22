@@ -249,6 +249,21 @@ def _combine_multiterm_dot_scores(
     score_dtype = np.float64 if _env_flag("TRACIN_SCORE_FLOAT64", "0") else np.float32
     train = _first_array(train_payload, ("train_features", "features", "train_gradients", "gradients"), path=train_path)
     train = np.asarray(train, dtype=score_dtype)
+    history = None
+    if _env_flag("TRACIN_SCORE_ADD_OPTIMIZER_HISTORY", "0"):
+        if "optimizer_history_features" not in train_payload:
+            raise ValueError(
+                "TRACIN_SCORE_ADD_OPTIMIZER_HISTORY=1 requires "
+                "optimizer_history_features in the train artifact"
+            )
+        history = np.asarray(
+            train_payload["optimizer_history_features"], dtype=score_dtype
+        )
+        if history.shape != (train.shape[0], train.shape[-1]):
+            raise ValueError(
+                f"optimizer history shape mismatch: got {history.shape}, "
+                f"expected {(train.shape[0], train.shape[-1])}"
+            )
     if train.ndim == 2:
         return _combine_dot_scores(train_payload, query_payload, train_path=train_path, query_path=query_path)
     if train.ndim != 3:
@@ -265,15 +280,21 @@ def _combine_multiterm_dot_scores(
         if train_norms is None:
             train_norms = np.empty(train.shape[:2], dtype=score_dtype)
             for term_i in range(train.shape[0]):
+                train_term = train[term_i]
+                if history is not None:
+                    train_term = train_term + history[term_i][None, :]
                 train_norms[term_i] = np.sqrt(
-                    np.einsum("ij,ij->i", train[term_i], train[term_i], optimize=True)
+                    np.einsum("ij,ij->i", train_term, train_term, optimize=True)
                 )
         train_norms = np.asarray(train_norms, dtype=score_dtype)
         if train_norms.shape != train.shape[:2]:
             raise ValueError(f"train norm shape mismatch: expected {train.shape[:2]}, got {train_norms.shape}")
 
     def term_scores(train_i: int, query_i: int) -> np.ndarray:
-        values = train[train_i] @ query[query_i]
+        train_term = train[train_i]
+        if history is not None:
+            train_term = train_term + history[train_i][None, :]
+        values = train_term @ query[query_i]
         if normalize_train:
             values = values / np.maximum(train_norms[train_i], float(train_normalize_eps))
         return values
@@ -1037,6 +1058,19 @@ def _run_fused_traj_score_batch(
     train_scores = np.zeros_like(raw_scores) if normalize_train else None
     both_scores = np.zeros_like(raw_scores) if normalize_query and normalize_train else None
     train_eps = float(os.environ.get("TRACIN_SCORE_TRAIN_NORMALIZE_EPS", "1e-8"))
+    history = None
+    if _env_flag("TRACIN_SCORE_ADD_OPTIMIZER_HISTORY", "0"):
+        if "optimizer_history_features" not in train_payload:
+            raise ValueError(
+                "TRACIN_SCORE_ADD_OPTIMIZER_HISTORY=1 requires "
+                "optimizer_history_features in the train artifact"
+            )
+        history = np.asarray(train_payload["optimizer_history_features"], dtype=np.float32)
+        if history.shape != (train.shape[0], train.shape[2]):
+            raise ValueError(
+                f"optimizer history shape mismatch: got {history.shape}, "
+                f"expected {(train.shape[0], train.shape[2])}"
+            )
 
     print(
         f"[traj-score-fused] queries={num_queries} terms={num_terms} points={num_points} "
@@ -1069,6 +1103,8 @@ def _run_fused_traj_score_batch(
         train_eps = float(os.environ.get("TRACIN_SCORE_TRAIN_NORMALIZE_EPS", "1e-8"))
         for slot, train_i in enumerate(unique_train_indices):
             train_term = np.asarray(train[train_i], dtype=np.float32)
+            if history is not None:
+                train_term = train_term + history[train_i][None, :]
             raw_dot = train_term @ raw_query_aggregate[:, slot, :].T
             raw_scores += raw_dot.T
             train_denom = None
@@ -1098,6 +1134,8 @@ def _run_fused_traj_score_batch(
     for term_i in term_iter:
         train_i = int(train_term_indices[term_i])
         train_term = np.asarray(train[train_i], dtype=np.float32)
+        if history is not None:
+            train_term = train_term + history[train_i][None, :]
         raw_dot = train_term @ query_all[:, term_i, :].T
         weighted_raw = raw_dot * weights_all[:, term_i][None, :]
         raw_scores += weighted_raw.T

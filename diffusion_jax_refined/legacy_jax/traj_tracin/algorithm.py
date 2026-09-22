@@ -153,11 +153,13 @@ def merge_train_checkpoint_parts_atomic(
     total_terms = 0
     has_train_jacobian_norms = None
     has_train_v_l2_features = None
+    has_optimizer_history_features = None
     normalized_jacobian_train_mc_samples = None
     for part_path in part_paths:
         with np.load(part_path, allow_pickle=True) as part:
             part_has_train_jacobian_norms = "train_jacobian_norms" in part.files
             part_has_train_v_l2_features = "train_features_v_l2_normalized" in part.files
+            part_has_optimizer_history_features = "optimizer_history_features" in part.files
             if has_train_jacobian_norms is None:
                 has_train_jacobian_norms = part_has_train_jacobian_norms
             elif has_train_jacobian_norms != part_has_train_jacobian_norms:
@@ -170,6 +172,13 @@ def merge_train_checkpoint_parts_atomic(
             elif has_train_v_l2_features != part_has_train_v_l2_features:
                 raise ValueError(
                     "train_features_v_l2_normalized presence mismatch across checkpoint parts: "
+                    f"{part_path}"
+                )
+            if has_optimizer_history_features is None:
+                has_optimizer_history_features = part_has_optimizer_history_features
+            elif has_optimizer_history_features != part_has_optimizer_history_features:
+                raise ValueError(
+                    "optimizer_history_features presence mismatch across checkpoint parts: "
                     f"{part_path}"
                 )
             if part_has_train_jacobian_norms:
@@ -338,6 +347,42 @@ def merge_train_checkpoint_parts_atomic(
                             f"{part_i}/{len(part_paths)} | terms={v_l2_term_offset}/{total_terms}",
                             flush=True,
                         )
+
+            if has_optimizer_history_features:
+                history_shape = (total_terms, int(proj_dim))
+                with archive.open(
+                    "optimizer_history_features.npy", mode="w", force_zip64=True
+                ) as member:
+                    np.lib.format.write_array_header_2_0(
+                        member,
+                        {
+                            "descr": np.lib.format.dtype_to_descr(np.dtype(np.float32)),
+                            "fortran_order": False,
+                            "shape": history_shape,
+                        },
+                    )
+                    for part_i, part_path in enumerate(part_paths, start=1):
+                        with np.load(part_path, allow_pickle=False) as part:
+                            history = np.asarray(
+                                part["optimizer_history_features"],
+                                dtype=np.float32,
+                                order="C",
+                            )
+                        expected_shape = (
+                            metadata_parts["ckpt_indices"][part_i - 1].shape[0],
+                            proj_dim,
+                        )
+                        if history.shape != expected_shape:
+                            raise ValueError(
+                                f"optimizer_history_features shape mismatch in {part_path}: "
+                                f"got {history.shape}, expected {expected_shape}"
+                            )
+                        member.write(memoryview(history).cast("B"))
+                write_small_array(
+                    archive,
+                    "optimizer_history_feature_semantics",
+                    np.asarray("projected_adamw_zero_gradient_update"),
+                )
 
             write_small_array(archive, "score_indices", score_indices)
             for key in metadata_parts:
@@ -3398,6 +3443,7 @@ def run_attribution(cfg: TrajAttributionConfig):
             print(f"[stage:{stage_mode}] checkpoint {ckpt_i + 1}/{len(ckpts)} restored", flush=True)
             adam_inverse_rms = None
             adamw_history_update = None
+            adamw_history_feature = None
             if stage_mode == "train" and optimizer_train_transform == "adam_v_preconditioned":
                 adam_state = find_adam_moment_state(state.opt_state)
                 if adam_state is None:
@@ -3430,6 +3476,9 @@ def run_attribution(cfg: TrajAttributionConfig):
                     zero_grads, state.opt_state, params
                 )
                 adamw_history_update = tree_to_device(adamw_history_update, device)
+                adamw_history_feature = np.asarray(
+                    projector(adamw_history_update), dtype=np.float32
+                )
                 print(
                     "[stage:train] optimizer-aware feature transform="
                     "adamw_residual_update (MC-mean gradient update minus zero-gradient "
@@ -5135,6 +5184,17 @@ def run_attribution(cfg: TrajAttributionConfig):
                         ckpt_paths=np.asarray(train_ckpt_paths),
                         proj_dim=np.asarray(proj_dim, dtype=np.int32),
                         train_optimizer_transform=np.asarray(optimizer_train_transform),
+                        **(
+                            {
+                                "optimizer_history_features": np.repeat(
+                                    adamw_history_feature[None, :],
+                                    len(train_phi_terms),
+                                    axis=0,
+                                ).astype(np.float32)
+                            }
+                            if adamw_history_feature is not None
+                            else {}
+                        ),
                         train_feature_semantics=np.asarray(
                             "negative_bias_corrected_adam_second_moment_preconditioned_loss_gradient"
                             if optimizer_train_transform == "adam_v_preconditioned"

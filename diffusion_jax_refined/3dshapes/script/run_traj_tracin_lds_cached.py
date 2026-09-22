@@ -142,6 +142,7 @@ PREDICTED_NOISE_JVP_SCHEMES = {
 }
 SCORE_SCHEMES = {
     "adamw_residual_aligned10x10": "traj_tracin_adamw_residual_aligned10x10",
+    "adamw_full_aligned10x10": "traj_tracin_adamw_full_aligned10x10",
     "loss_direction_original_f_checkpoint_own_trajectory":
         "traj_tracin_loss_direction_original_f_checkpoint_own_trajectory",
     "loss_direction_original_f_checkpoint_own_trajectory_100t":

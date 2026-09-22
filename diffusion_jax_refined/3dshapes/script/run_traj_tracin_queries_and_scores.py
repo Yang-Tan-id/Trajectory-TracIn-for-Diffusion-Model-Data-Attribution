@@ -87,6 +87,14 @@ def main() -> None:
         ),
     )
     parser.add_argument(
+        "--add-optimizer-history",
+        action="store_true",
+        help=(
+            "At score time, add the stored projected zero-gradient AdamW update "
+            "to residual train features, yielding the full hypothetical AdamW update."
+        ),
+    )
+    parser.add_argument(
         "--snapshot-positions",
         default="",
         help="Optional comma/space-separated positions in the saved 1000-step DDIM trajectory.",
@@ -320,6 +328,9 @@ def main() -> None:
         "TRACIN_SCORE_TRAIN_NORMALIZE": "1",
         "TRACIN_SCORE_FUSED_BATCH": "1",
         "TRACIN_ALIGN_TERMS_BY_CKPT_TIMESTEP": "1",
+        "TRACIN_SCORE_ADD_OPTIMIZER_HISTORY": (
+            "1" if args.add_optimizer_history else "0"
+        ),
     }
     run_command(
         [args.python_bin, "data_attribution/traj_tracin/04_score_batch.py"],

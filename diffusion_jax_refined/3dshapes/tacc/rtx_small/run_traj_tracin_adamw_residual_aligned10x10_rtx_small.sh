@@ -36,13 +36,15 @@ export TRAJ_TRACIN_TRAIN_AGGREGATE_TIMESTAMPS=0
 export TRAJ_TRACIN_TRAIN_BATCH_DTYPE=float32
 export TRAJ_TRACIN_TRAIN_BATCH_MODE="${TRAJ_TRACIN_TRAIN_BATCH_MODE:-vmap}"
 export TRAJ_TRACIN_TRAIN_OPTIMIZER_TRANSFORM=adamw_residual_update
+export TRACIN_SCORE_CHECKPOINT_WEIGHTING=uniform_checkpoint
 export JAX_NUM_DEVICES=1
 
 result="$shapes/result/$EXPERIMENT_TAG"
-namespace="adamw_residual_aligned10x10"
-artifact="$result/model/prompted_solo/seed_${TRAIN_SEED}_train_gradient/traj_tracin_${namespace}/train_datapoint_gradient_artifact.npz"
+artifact_namespace="adamw_dual_aligned10x10"
+residual_namespace="adamw_residual_aligned10x10"
+artifact="$result/model/prompted_solo/seed_${TRAIN_SEED}_train_gradient/traj_tracin_${artifact_namespace}/train_datapoint_gradient_artifact.npz"
 parts="${artifact}.parts"
-logs="$result/logs/traj_tracin_${namespace}/${SLURM_JOB_ID}"
+logs="$result/logs/traj_tracin_${artifact_namespace}/${SLURM_JOB_ID}"
 mkdir -p "$parts" "$logs"
 export TRAIN_DATAPOINT_GRADIENT_ARTIFACT_PATH="$artifact"
 
@@ -69,22 +71,32 @@ for pid in "${pids[@]}"; do wait "$pid" || failed=1; done
 count="$(find "$parts" -maxdepth 1 -type f -name 'ckpt_*.npz' | wc -l | tr -d ' ')"
 [[ "$count" == 50 ]] || { echo "Expected 50 parts, found $count" >&2; exit 1; }
 
-echo '[phase 2/3] merge checkpoint parts'
+echo '[phase 2/4] merge checkpoint parts'
 export CUDA_VISIBLE_DEVICES=0 TRAJ_TRACIN_CKPT_SHARD_INDEX=0 TRAJ_TRACIN_CKPT_SHARD_COUNT=1
 export TRAJ_TRACIN_SKIP_STAGE_MERGE=0
 python 01_train_datapoint_gradient.py
 
-echo '[phase 3/3] reuse original aligned query gradients; score four normalization variants; LDS'
+echo '[phase 3/4] residual scores: reuse original aligned query gradients; four normalization variants'
 cd "$shapes"
 python script/run_traj_tracin_queries_and_scores.py \
   --execute --experiment "$EXPERIMENT_TAG" --train-seed "$TRAIN_SEED" \
   --query-ids 0,1,2,3,4,5,6,7,8,9 --gpus 0,1 \
   --skip-sampling --skip-query-gradient \
   --train-artifact "$artifact" \
-  --score-output-namespace "$namespace"
+  --score-output-namespace "$residual_namespace"
+
+full_namespace="adamw_full_aligned10x10"
+echo '[phase 4/4] full AdamW scores from residual + stored optimizer history; no gradient recomputation'
+python script/run_traj_tracin_queries_and_scores.py \
+  --execute --experiment "$EXPERIMENT_TAG" --train-seed "$TRAIN_SEED" \
+  --query-ids 0,1,2,3,4,5,6,7,8,9 --gpus 0,1 \
+  --skip-sampling --skip-query-gradient \
+  --train-artifact "$artifact" \
+  --score-output-namespace "$full_namespace" \
+  --add-optimizer-history
 
 JAX_PLATFORMS=cpu python script/run_traj_tracin_lds_cached.py \
   --execute --experiment "$EXPERIMENT_TAG" --train-seed "$TRAIN_SEED" \
-  --score-schemes "$namespace" --prediction-sign=1
+  --score-schemes "$residual_namespace,$full_namespace" --prediction-sign=1
 
-echo "[done] aligned MC10 AdamW-residual Traj TracIn: $artifact"
+echo "[done] aligned MC10 AdamW residual + full Traj TracIn: $artifact"
