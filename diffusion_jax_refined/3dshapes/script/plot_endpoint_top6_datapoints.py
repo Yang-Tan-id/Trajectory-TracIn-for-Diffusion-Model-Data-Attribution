@@ -172,7 +172,12 @@ def load_score_indices(directory: Path, score_count: int) -> np.ndarray:
     return indices
 
 
-def load_top_scores(directory: Path, top_k: int, dataset_size: int) -> tuple[np.ndarray, np.ndarray]:
+def load_top_scores(
+    directory: Path,
+    top_k: int,
+    dataset_size: int,
+    ranking_sign: int,
+) -> tuple[np.ndarray, np.ndarray]:
     score_path = directory / "scores.npy"
     if not score_path.is_file():
         raise FileNotFoundError(str(score_path))
@@ -183,7 +188,9 @@ def load_top_scores(directory: Path, top_k: int, dataset_size: int) -> tuple[np.
     if np.any(indices < 0) or np.any(indices >= dataset_size):
         bad = indices[(indices < 0) | (indices >= dataset_size)][:10]
         raise IndexError(f"dataset indices out of bounds in {directory}: {bad.tolist()}")
-    ranking_values = np.where(np.isfinite(scores), scores, -np.inf)
+    if ranking_sign not in (-1, 1):
+        raise ValueError(f"ranking_sign must be -1 or +1, got {ranking_sign}")
+    ranking_values = np.where(np.isfinite(scores), ranking_sign * scores, -np.inf)
     order = np.argsort(-ranking_values, kind="stable")[:top_k]
     if np.any(~np.isfinite(ranking_values[order])):
         raise ValueError(f"{score_path} does not contain {top_k} finite scores")
@@ -204,6 +211,7 @@ def plot_method(
     title: str,
     output: Path,
     dpi: int,
+    ranking_sign: int,
 ) -> None:
     figure, axes = plt.subplots(
         len(queries),
@@ -224,7 +232,7 @@ def plot_method(
             labelpad=7,
         )
         top_indices, top_scores = load_top_scores(
-            score_dirs[query.query_id], top_k, len(dataset_images)
+            score_dirs[query.query_id], top_k, len(dataset_images), ranking_sign
         )
         for rank, (index, score) in enumerate(zip(top_indices, top_scores), start=1):
             axis = axes[row, rank]
@@ -309,9 +317,10 @@ def main() -> None:
         endpoint_paths=endpoints,
         score_dirs=traj_dirs,
         top_k=args.top_k,
-        title="Own trajectory 100t · next checkpoint · AdamW FOUR_RESIDUAL · query/train-L2",
+        title="Own trajectory 100t · next checkpoint · reversed score · AdamW FOUR_RESIDUAL",
         output=output_dir / "own_trajectory_next_raw_endpoint_top6.png",
         dpi=args.dpi,
+        ranking_sign=-1,
     )
     plot_method(
         queries=queries,
@@ -322,6 +331,7 @@ def main() -> None:
         title=f"DAS factorized MC4 · endpoint · lambda={args.das_lambda:g}",
         output=output_dir / f"das_mc4_lambda_{damping_tag(args.das_lambda)}_endpoint_top6.png",
         dpi=args.dpi,
+        ranking_sign=1,
     )
 
 
