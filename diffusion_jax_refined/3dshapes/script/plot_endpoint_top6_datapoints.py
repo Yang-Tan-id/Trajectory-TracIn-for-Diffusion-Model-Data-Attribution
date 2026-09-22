@@ -381,10 +381,10 @@ def main() -> None:
         endpoint_paths=endpoints,
         score_dirs=probe12_dirs,
         top_k=args.top_k,
-        title="Reference 12-probe · AdamW FOUR · RAW · termwise square · non-residual",
+        title="Reference 12-probe · reversed score · AdamW FOUR · RAW · termwise square · non-residual",
         output=output_dir / "reference12_four_raw_termwise_square_nonresidual_top6.png",
         dpi=args.dpi,
-        ranking_sign=1,
+        ranking_sign=-1,
     )
 
 
