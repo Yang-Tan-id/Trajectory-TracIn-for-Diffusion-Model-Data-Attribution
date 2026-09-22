@@ -36,12 +36,19 @@ def parse_ints(text: str) -> list[int]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Print the ten-query mean LDS for every DAS lambda and all four targets."
+        description="Print requested-query LDS summaries for every DAS lambda and target."
     )
     parser.add_argument("--experiment", default="experiment1")
     parser.add_argument("--artifact-namespace", default="aligned10x10")
+    parser.add_argument(
+        "--query-file", type=Path, default=SHAPES_ROOT / "queries_seed_0_9.json",
+    )
     parser.add_argument("--query-ids", default="0,1,2,3,4,5,6,7,8,9")
     parser.add_argument("--prediction-sign", choices=("p1", "m1"), default="m1")
+    parser.add_argument(
+        "--show-std", action="store_true",
+        help="print population standard deviation across requested queries",
+    )
     parser.add_argument(
         "--per-query-best",
         action="store_true",
@@ -54,7 +61,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    records = json.loads((SHAPES_ROOT / "queries_seed_0_9.json").read_text())["queries"]
+    records = json.loads(args.query_file.read_text())["queries"]
     query_ids = parse_ints(args.query_ids)
     namespace = args.artifact_namespace.strip().strip("_/")
     das_name = "das" if not namespace else f"das_{namespace}"
@@ -165,7 +172,7 @@ def main() -> None:
     expected_n = len(query_ids)
     print(
         f"DAS ALL LAMBDAS: {das_name}, sign={args.prediction_sign}, "
-        f"values are means over requested queries"
+        f"values are mean{' ± population SD' if args.show_std else ''} over requested queries"
     )
     print(
         f"{'LAMBDA':>10s} "
@@ -185,7 +192,11 @@ def main() -> None:
             if present:
                 mean = statistics.fmean(present)
                 target_means.append(mean)
-                cells.append(f"{mean:13.3f}%")
+                if args.show_std:
+                    std = statistics.pstdev(present)
+                    cells.append(f"{mean:+6.3f}±{std:5.3f}%")
+                else:
+                    cells.append(f"{mean:13.3f}%")
             else:
                 cells.append(f"{'MISSING':>14s}")
         joint = statistics.fmean(target_means) if len(target_means) == len(TARGETS) else math.nan
