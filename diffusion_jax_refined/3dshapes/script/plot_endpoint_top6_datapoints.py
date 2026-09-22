@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Plot each query endpoint beside its six highest-scoring training images.
+"""Plot each query endpoint beside its highest-ranking training images.
 
-The default invocation produces two 10-row figures:
+The default invocation produces three 10-row figures:
 
 * checkpoint-own trajectory, 100-timestamp next-checkpoint objective,
   AdamW FOUR_RESIDUAL query/train-L2 score;
@@ -311,7 +311,7 @@ def main() -> None:
         default="predicted_noise_jvp_l2_squared_probe12_adamw4_four_reference12_single_lr",
     )
     parser.add_argument("--das-lambda", type=float, default=100.0)
-    parser.add_argument("--top-k", type=int, default=6)
+    parser.add_argument("--top-k", type=int, default=12)
     parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument("--dpi", type=int, default=180)
     args = parser.parse_args()
@@ -357,20 +357,8 @@ def main() -> None:
         endpoint_paths=endpoints,
         score_dirs=traj_dirs,
         top_k=args.top_k,
-        title="Own trajectory 100t · next checkpoint · reversed score · AdamW FOUR_RESIDUAL",
-        output=output_dir / "own_trajectory_next_raw_endpoint_top6.png",
-        dpi=args.dpi,
-        ranking_sign=-1,
-    )
-    plot_method(
-        queries=queries,
-        dataset_images=dataset_images,
-        dataset_labels=dataset_labels,
-        endpoint_paths=endpoints,
-        score_dirs=das_dirs,
-        top_k=args.top_k,
-        title=f"DAS factorized MC4 · endpoint · lambda={args.das_lambda:g}",
-        output=output_dir / f"das_mc4_lambda_{damping_tag(args.das_lambda)}_endpoint_top6.png",
+        title="Own trajectory 100t · next checkpoint · p1 · AdamW FOUR_RESIDUAL",
+        output=output_dir / f"own_trajectory_next_raw_endpoint_top{args.top_k}.png",
         dpi=args.dpi,
         ranking_sign=1,
     )
@@ -379,12 +367,24 @@ def main() -> None:
         dataset_images=dataset_images,
         dataset_labels=dataset_labels,
         endpoint_paths=endpoints,
-        score_dirs=probe12_dirs,
+        score_dirs=das_dirs,
         top_k=args.top_k,
-        title="Reference 12-probe · reversed score · AdamW FOUR · RAW · termwise square · non-residual",
-        output=output_dir / "reference12_four_raw_termwise_square_nonresidual_top6.png",
+        title=f"DAS factorized MC4 · endpoint · lambda={args.das_lambda:g} · m1",
+        output=output_dir / f"das_mc4_lambda_{damping_tag(args.das_lambda)}_endpoint_top{args.top_k}.png",
         dpi=args.dpi,
         ranking_sign=-1,
+    )
+    plot_method(
+        queries=queries,
+        dataset_images=dataset_images,
+        dataset_labels=dataset_labels,
+        endpoint_paths=endpoints,
+        score_dirs=probe12_dirs,
+        top_k=args.top_k,
+        title="Reference 12-probe · p1 · AdamW FOUR · RAW · termwise square · non-residual",
+        output=output_dir / f"reference12_four_raw_termwise_square_nonresidual_top{args.top_k}.png",
+        dpi=args.dpi,
+        ranking_sign=1,
     )
 
 
