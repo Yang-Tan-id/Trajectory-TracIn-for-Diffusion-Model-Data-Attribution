@@ -20,6 +20,8 @@ ALL_EVENT_METHODS=(
 VARIANTS=('raw','query_l2','train_l2','query_train_l2')
 TARGETS=('endpoint_contarfactual','traj_contarfactual','simple_loss','noise_trajectory')
 
+def parse_ints(text): return [int(x) for x in text.replace(',', ' ').split() if x]
+
 def event(root,epoch,shards=2):
     xs=[]; ids=[]
     for s in range(shards):
@@ -54,6 +56,7 @@ def write(path,rows):
 def main():
     ap=argparse.ArgumentParser(); ap.add_argument('--experiment',default='experiment1'); ap.add_argument('--train-seed',type=int,default=42)
     ap.add_argument('--epochs',type=int,default=200); ap.add_argument('--query-namespace',default='loss_direction_residual_rms_original_f')
+    ap.add_argument('--query-file',type=Path,default=ROOT/'queries_seed_0_9.json'); ap.add_argument('--query-ids',default='0,1,2,3,4,5,6,7,8,9')
     ap.add_argument('--attribution-points',type=int,default=5000); ap.add_argument('--out-dir',type=Path,required=True)
     ap.add_argument('--checkpoint-weighting',choices=('stored_lr','uniform'),default='stored_lr',help='uniform removes the outer checkpoint learning-rate factor while retaining equal averaging over timestamps')
     ap.add_argument(
@@ -64,6 +67,10 @@ def main():
     )
     ap.add_argument('--plot-selection',action='store_true',help='write endpoint and trajectory LDS scatter plots for four_residual/query_train_l2')
     ap.add_argument('--include-all-events',action='store_true',help='also score E2, E3, E4 and their history-subtracted residuals')
+    ap.add_argument(
+        '--methods',default='',
+        help='optional comma-separated subset of four,e1,four_residual,e1_residual',
+    )
     ap.add_argument(
         '--save-score-namespace',default='',
         help='optionally save one selected 5000-point score vector per query under attribution_score',
@@ -83,6 +90,12 @@ def main():
     if a.event_original_lr and a.include_all_events:
         ap.error('--event-original-lr cannot be combined with --include-all-events')
     methods=('four','four_residual') if a.event_original_lr else (ALL_EVENT_METHODS if a.include_all_events else METHODS)
+    if a.methods:
+        requested=tuple(value for value in a.methods.replace(',', ' ').split() if value)
+        invalid=sorted(set(requested)-set(METHODS))
+        if invalid: ap.error(f'unsupported --methods: {invalid}')
+        if not requested: ap.error('--methods selected no methods')
+        methods=requested
     mod=importlib.import_module('DM__training_CIFAR5_MULTI_pixel'); from dtrak.algorithm import _countsketch_project_grad_jax
     ckroot=ROOT/'result'/a.experiment/'model'/'prompted_jax'; art=ROOT/'result'/a.experiment/f'fixed_checkpoint_adamw_four_events_n{a.attribution_points}'
     with (ckroot/f'seed_{a.train_seed}_epoch_0004.ckpt').open('rb') as f: payload=pickle.load(f)
@@ -93,12 +106,15 @@ def main():
     template=mod.create_train_state(cfg,model,jax.random.PRNGKey(cfg.seed),dev,total_steps)
     class A: pass
     qa=A(); qa.experiment=a.experiment; qa.train_seed=a.train_seed; qa.epochs=a.epochs
-    query,meta=load_query_bank(qa,a.query_namespace,'trajectory_next_checkpoint_noise_mse',range(10))
+    qa.query_file=a.query_file; query_ids=parse_ints(a.query_ids)
+    records_all=json.loads(a.query_file.read_text())['queries']
+    if not query_ids or any(q < 0 or q >= len(records_all) for q in query_ids): raise ValueError('invalid --query-ids')
+    query,meta=load_query_bank(qa,a.query_namespace,'trajectory_next_checkpoint_noise_mse',query_ids)
     lookup={(int(c),int(t)):i for i,(c,t) in enumerate(zip(meta['ckpt_indices'],meta['timesteps']))}
     num_timestamps=len(dict.fromkeys(int(x) for x in meta['timesteps']))
     if num_timestamps <= 0:
         raise ValueError('query artifact contains no trajectory timestamps')
-    scores={(m,v):np.zeros((10,a.attribution_points),np.float64) for m in methods for v in VARIANTS}; score_idx=None
+    scores={(m,v):np.zeros((len(query_ids),a.attribution_points),np.float64) for m in methods for v in VARIANTS}; score_idx=None
     for c in range(49):
         se=4*(c+1); state,_=mod._restore_checkpoint(str(ckroot/f'seed_{a.train_seed}_epoch_{se:04d}.ckpt'),template)
         zero=jax.tree_util.tree_map(jnp.zeros_like,state.params); hu,_=state.tx.update(zero,state.opt_state,state.params)
@@ -168,19 +184,19 @@ def main():
                     scores[(m,v)]+=weight*value.T
         print(f'[score] checkpoint={c+1}/49',flush=True)
     assert score_idx is not None
-    records=json.loads((ROOT/'queries_seed_0_9.json').read_text())['queries']; rows=[]
+    records=[records_all[q] for q in query_ids]; rows=[]
     if a.save_score_namespace:
         selected_key=(a.save_score_method,a.save_score_variant)
         if selected_key not in scores:
             raise ValueError(f'cannot save unavailable score {selected_key}; computed methods={methods}')
-        for q,r in enumerate(records):
+        for local_q,(query_id,r) in enumerate(zip(query_ids,records)):
             score_dir=(
                 ROOT/'result'/a.experiment/'attribution_score'/'prompted_solo'
                 /f'train_seed_{a.train_seed}'/f"query_{_prompt_tag(str(r['prompt']))}"
                 /f"initial_seed_{int(r['initial_seed'])}"/a.save_score_namespace/'score'
             )
             score_dir.mkdir(parents=True,exist_ok=True)
-            np.save(score_dir/'scores.npy',np.asarray(scores[selected_key][q],np.float64))
+            np.save(score_dir/'scores.npy',np.asarray(scores[selected_key][local_q],np.float64))
             np.save(score_dir/'score_indices.npy',np.asarray(score_idx,np.int64))
             (score_dir/'score_metadata.json').write_text(json.dumps({
                 'method':a.save_score_method,
@@ -190,16 +206,16 @@ def main():
                 'contraction':a.contraction,
                 'num_timestamps':num_timestamps,
             },indent=2,sort_keys=True)+'\n')
-            print(f'[score artifact] Q{q}: {score_dir}',flush=True)
-    for q,r in enumerate(records):
+            print(f'[score artifact] Q{query_id}: {score_dir}',flush=True)
+    for local_q,(query_id,r) in enumerate(zip(query_ids,records)):
         er=ROOT/'result'/a.experiment/'eval'/'prompted_solo'/f"query_{_prompt_tag(str(r['prompt']))}"/f"initial_seed_{int(r['initial_seed'])}"
         incidence,true=load_target_data(cache_group(er),score_idx)
         for m in methods:
             for v in VARIANTS:
-                pred=scores[(m,v)][q]@incidence.T
+                pred=scores[(m,v)][local_q]@incidence.T
                 for target in TARGETS:
                     lds=100*float(rowwise_spearman(pred[None,:],true[target])[0])
-                    rows.append({'method':m,'variant':v,'query':q,'target':target,'lds_percent':lds,'prediction_sign':'p1','checkpoint_weighting':('original_event_lr_once' if a.event_original_lr else a.checkpoint_weighting),'contraction':a.contraction})
+                    rows.append({'method':m,'variant':v,'query':query_id,'target':target,'lds_percent':lds,'prediction_sign':'p1','checkpoint_weighting':('original_event_lr_once' if a.event_original_lr else a.checkpoint_weighting),'contraction':a.contraction})
                     if (
                         a.plot_selection
                         and m == 'four_residual'
@@ -220,10 +236,10 @@ def main():
                         axis.scatter(pred, true[target], s=18, alpha=0.7, edgecolors='none')
                         axis.set_xlabel('Predicted subset score')
                         axis.set_ylabel(f'True {target}')
-                        axis.set_title(f'Q{q} LDS={lds:+.3f}%')
+                        axis.set_title(f'Q{query_id} LDS={lds:+.3f}%')
                         axis.grid(alpha=0.2)
                         fig.tight_layout()
-                        fig.savefig(plot_dir / f'Q{q}.png', dpi=200)
+                        fig.savefig(plot_dir / f'Q{query_id}.png', dpi=200)
                         plt.close(fig)
     write(a.out_dir/'per_query.csv',rows)
     trajectory_label = (
@@ -237,9 +253,9 @@ def main():
         for variant in VARIANTS:
             vals=[]
             print(f'\n{m.upper()} — {variant.upper()}')
-            for q in range(10):
-                value=[next(x['lds_percent'] for x in rows if x['method']==m and x['variant']==variant and x['query']==q and x['target']==t) for t in TARGETS]; vals.append(value)
-                print(f"Q{q} "+' '.join(f'{x:+8.3f}%' for x in value))
+            for query_id in query_ids:
+                value=[next(x['lds_percent'] for x in rows if x['method']==m and x['variant']==variant and x['query']==query_id and x['target']==t) for t in TARGETS]; vals.append(value)
+                print(f"Q{query_id} "+' '.join(f'{x:+8.3f}%' for x in value))
             print('MEAN '+' '.join(f'{x:+8.3f}%' for x in np.mean(vals,axis=0)))
     print(f'[saved] {a.out_dir}')
 if __name__=='__main__': main()

@@ -32,8 +32,9 @@ def score_weighting_semantics(args: argparse.Namespace) -> str:
     return value + "_contractions"
 
 
-def records() -> list[dict]:
-    return json.loads((SHAPES_ROOT / "queries_seed_0_9.json").read_text())["queries"]
+def records(query_file: Path | None = None) -> list[dict]:
+    path = query_file or SHAPES_ROOT / "queries_seed_0_9.json"
+    return json.loads(path.read_text())["queries"]
 
 
 def result_root(experiment: str) -> Path:
@@ -55,8 +56,9 @@ def query_artifact_path(
     epochs: int,
     query_id: int,
     namespace: str,
+    query_file: Path | None = None,
 ) -> Path:
-    record = records()[query_id]
+    record = records(query_file)[query_id]
     checkpoint = checkpoint_path(experiment, train_seed, epochs)
     run_root = (
         result_root(experiment)
@@ -128,7 +130,8 @@ def load_query_bank(
     selected_query_ids = range(10) if query_ids is None else query_ids
     for query_id in selected_query_ids:
         path = query_artifact_path(
-            args.experiment, args.train_seed, args.epochs, query_id, namespace
+            args.experiment, args.train_seed, args.epochs, query_id, namespace,
+            getattr(args, "query_file", None),
         )
         if not path.is_file():
             raise FileNotFoundError(path)

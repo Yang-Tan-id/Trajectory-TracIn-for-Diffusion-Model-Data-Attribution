@@ -94,6 +94,7 @@ def main() -> None:
         help="Optional DAS score namespace, for example aligned10x10.",
     )
     parser.add_argument("--query-ids", default="0,1,2,3,4,5,6,7,8,9")
+    parser.add_argument("--query-file", type=Path, default=SHAPES_ROOT / "queries_seed_0_9.json")
     parser.add_argument(
         "--lambdas",
         default=",".join(f"{float(value):g}" for value in DAS_DAMPING_SWEEP_VALUES),
@@ -111,7 +112,7 @@ def main() -> None:
     das_name = "das" if not namespace else f"das_{namespace}"
     result_algorithm_prefix = "das" if not namespace else das_name
 
-    records = json.loads((SHAPES_ROOT / "queries_seed_0_9.json").read_text())["queries"]
+    records = json.loads(args.query_file.read_text())["queries"]
     query_ids = parse_ints(args.query_ids)
     lambdas = parse_floats(args.lambdas)
     expected_results = len(query_ids) * len(lambdas) * len(TARGETS)

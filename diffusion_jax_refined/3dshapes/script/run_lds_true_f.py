@@ -23,7 +23,11 @@ def parse_ints(text: str) -> list[int]:
     return [int(value) for value in text.replace(",", " ").split() if value.strip()]
 
 
-def lds_model_dirs(experiment: str, train_seed: int) -> list[Path]:
+def lds_model_dirs(
+    experiment: str,
+    train_seed: int,
+    subset_seeds: list[int],
+) -> list[Path]:
     root = (
         SHAPES_ROOT
         / "result"
@@ -32,7 +36,7 @@ def lds_model_dirs(experiment: str, train_seed: int) -> list[Path]:
         / "prompted_solo"
         / f"train_seed_{train_seed}"
     )
-    return [root / f"m_64_k_2500_subset_seed_{seed}" for seed in range(3)]
+    return [root / f"m_64_k_2500_subset_seed_{seed}" for seed in subset_seeds]
 
 
 def main() -> None:
@@ -43,18 +47,40 @@ def main() -> None:
     parser.add_argument("--experiment", default="experiment1")
     parser.add_argument("--train-seed", type=int, default=42)
     parser.add_argument("--query-ids", default="0,1,2,3,4,5,6,7,8,9")
+    parser.add_argument("--query-file", type=Path, default=SHAPES_ROOT / "queries_seed_0_9.json")
+    parser.add_argument("--subset-seeds", default="0,1,2")
+    parser.add_argument(
+        "--target-functions",
+        default=",".join(TARGET_FUNCTIONS),
+        help="Comma-separated true-f targets to cache.",
+    )
     parser.add_argument("--gpus", default="0,1")
     parser.add_argument("--python-bin", default=os.environ.get("PYTHON_BIN", sys.executable))
     args = parser.parse_args()
 
     query_ids = parse_ints(args.query_ids)
+    subset_seeds = parse_ints(args.subset_seeds)
+    target_functions = [
+        value
+        for value in args.target_functions.replace(",", " ").split()
+        if value.strip()
+    ]
     gpu_ids = [str(value) for value in parse_ints(args.gpus)]
     if not query_ids:
         raise ValueError("--query-ids selected no queries")
     if not gpu_ids:
         raise ValueError("--gpus selected no GPUs")
+    if not subset_seeds or len(set(subset_seeds)) != len(subset_seeds):
+        raise ValueError("--subset-seeds must contain distinct integer seeds")
+    if any(seed < 0 for seed in subset_seeds):
+        raise ValueError("--subset-seeds must be nonnegative")
+    if not target_functions:
+        raise ValueError("--target-functions selected no targets")
+    invalid_targets = sorted(set(target_functions) - set(TARGET_FUNCTIONS))
+    if invalid_targets:
+        raise ValueError(f"unsupported target functions: {invalid_targets}")
 
-    records = json.loads((SHAPES_ROOT / "queries_seed_0_9.json").read_text())["queries"]
+    records = json.loads(args.query_file.read_text())["queries"]
     selected: list[tuple[int, str, int]] = []
     for query_id in query_ids:
         if query_id < 0 or query_id >= len(records):
@@ -62,7 +88,7 @@ def main() -> None:
         record = records[query_id]
         selected.append((query_id, str(record["prompt"]), int(record["initial_seed"])))
 
-    model_dirs = lds_model_dirs(args.experiment, args.train_seed)
+    model_dirs = lds_model_dirs(args.experiment, args.train_seed, subset_seeds)
     if args.execute:
         for model_dir in model_dirs:
             if not (model_dir / "lds_model_config.json").is_file():
@@ -90,7 +116,7 @@ def main() -> None:
         PYTHONUNBUFFERED="1",
     )
     model_dirs_arg = ",".join(str(path) for path in model_dirs)
-    target_arg = ",".join(TARGET_FUNCTIONS)
+    target_arg = ",".join(target_functions)
 
     def worker(shard_index: int, gpu: str) -> None:
         worker_env = base_env | {"CUDA_VISIBLE_DEVICES": gpu}

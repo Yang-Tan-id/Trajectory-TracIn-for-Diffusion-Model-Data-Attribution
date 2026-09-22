@@ -68,6 +68,7 @@ def main() -> None:
     parser.add_argument("--train-seed", type=int, default=42)
     parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--query-ids", default="0,1,2,3,4,5,6,7,8,9")
+    parser.add_argument("--query-file", type=Path, default=SHAPES_ROOT / "queries_seed_0_9.json")
     parser.add_argument("--gpus", default="0,1")
     parser.add_argument("--skip-sampling", action="store_true")
     parser.add_argument("--skip-query-gradient", action="store_true")
@@ -139,8 +140,7 @@ def main() -> None:
     if not gpu_ids:
         raise ValueError("--gpus selected no GPUs")
 
-    query_file = SHAPES_ROOT / "queries_seed_0_9.json"
-    records = json.loads(query_file.read_text())["queries"]
+    records = json.loads(args.query_file.read_text())["queries"]
     selected = []
     for query_id in query_ids:
         if query_id < 0 or query_id >= len(records):

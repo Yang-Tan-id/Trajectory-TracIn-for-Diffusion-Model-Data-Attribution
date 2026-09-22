@@ -25,18 +25,21 @@ def queries(seeds: range = range(10), labels_per_query: int = 4) -> list[dict[st
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Create the ten deterministic unordered 3D Shapes queries.")
+    parser = argparse.ArgumentParser(description="Create deterministic unordered 3D Shapes queries.")
+    parser.add_argument("--num-queries", type=int, default=10)
     parser.add_argument(
         "--output",
         type=Path,
         default=Path(__file__).resolve().parents[1] / "queries_seed_0_9.json",
     )
     args = parser.parse_args()
+    if args.num_queries <= 0:
+        parser.error("--num-queries must be positive")
     payload = {
         "format_version": 1,
         "selection": "four unique tokens uniformly sampled from all 34 non-scale/non-orientation tokens",
         "order_semantics": "none; prompts are converted to multi-hot vectors",
-        "queries": queries(),
+        "queries": queries(range(args.num_queries)),
     }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(payload, indent=2))

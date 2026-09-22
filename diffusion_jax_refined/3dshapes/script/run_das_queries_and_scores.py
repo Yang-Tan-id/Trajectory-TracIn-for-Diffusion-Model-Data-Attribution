@@ -44,6 +44,7 @@ def main() -> None:
     parser.add_argument("--experiment", default="experiment1")
     parser.add_argument("--train-seed", type=int, default=42)
     parser.add_argument("--query-ids", default="0,1,2,3,4,5,6,7,8,9")
+    parser.add_argument("--query-file", type=Path, default=SHAPES_ROOT / "queries_seed_0_9.json")
     parser.add_argument("--gpus", default="0,1")
     parser.add_argument(
         "--artifact-namespace",
@@ -125,7 +126,7 @@ def main() -> None:
     if len(gpu_ids) != 2:
         raise ValueError(f"DAS RTX runner requires exactly two GPUs, got {gpu_ids}")
 
-    records = json.loads((SHAPES_ROOT / "queries_seed_0_9.json").read_text())["queries"]
+    records = json.loads(args.query_file.read_text())["queries"]
     result_root = SHAPES_ROOT / "result" / args.experiment
     sample_root = result_root / "sample_ddim_eta0_1000"
     checkpoint = result_root / "model" / "prompted_jax" / f"seed_{args.train_seed}_epoch_0200.ckpt"
