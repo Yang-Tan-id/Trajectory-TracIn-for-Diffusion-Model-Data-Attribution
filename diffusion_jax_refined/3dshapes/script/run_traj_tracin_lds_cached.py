@@ -136,6 +136,8 @@ PREDICTED_NOISE_JVP_SCHEMES = {
     "predicted_noise_shared_orthogonal_probe8_termwise_square",
 }
 SCORE_SCHEMES = {
+    "loss_direction_original_f_checkpoint_own_trajectory_100t":
+        "traj_tracin_loss_direction_original_f_checkpoint_own_trajectory_100t",
     "predicted_noise_jvp_l2_squared_probe12_adamw4_eventwise_square_sum_reference12":
         "traj_tracin_predicted_noise_jvp_l2_squared_probe12_adamw4_eventwise_square_sum_reference12",
     "predicted_noise_jvp_l2_squared_probe12_adamw4_eventwise_residual_square_sum_reference12":
