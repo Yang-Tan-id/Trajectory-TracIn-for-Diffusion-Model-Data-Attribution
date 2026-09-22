@@ -77,16 +77,39 @@ def load_queries(path: Path) -> list[Query]:
     ]
 
 
-def load_dataset_images(path: Path) -> np.ndarray:
+def _decode_label_name(value: object) -> str:
+    return value.decode("utf-8") if isinstance(value, bytes) else str(value)
+
+
+def load_dataset(path: Path) -> tuple[np.ndarray, list[tuple[str, ...]]]:
     if not path.is_file():
         raise FileNotFoundError(f"3D Shapes dataset not found: {path}")
     with np.load(path, allow_pickle=False) as payload:
-        if "images" not in payload:
-            raise KeyError(f"{path} does not contain an images array")
+        required = {"images", "labels", "label_names"}
+        missing = required - set(payload.files)
+        if missing:
+            raise KeyError(f"{path} is missing arrays: {sorted(missing)}")
         images = np.asarray(payload["images"])
+        labels = np.asarray(payload["labels"])
+        label_names = tuple(_decode_label_name(x) for x in payload["label_names"].tolist())
     if images.ndim != 4 or images.shape[-1] not in (1, 3, 4):
         raise ValueError(f"expected NHWC dataset images, got {images.shape} from {path}")
-    return images
+    if labels.ndim != 2 or labels.shape != (len(images), len(label_names)):
+        raise ValueError(
+            f"expected multi-hot labels [{len(images)}, {len(label_names)}], got {labels.shape}"
+        )
+    decoded = [
+        tuple(label_names[index] for index in np.flatnonzero(row))
+        for row in labels
+    ]
+    return images, decoded
+
+
+def format_datapoint_labels(labels: tuple[str, ...]) -> str:
+    if not labels:
+        return "(no label)"
+    midpoint = (len(labels) + 1) // 2
+    return ", ".join(labels[:midpoint]) + "\n" + ", ".join(labels[midpoint:])
 
 
 def display_image(image: np.ndarray) -> np.ndarray:
@@ -205,6 +228,7 @@ def plot_method(
     *,
     queries: list[Query],
     dataset_images: np.ndarray,
+    dataset_labels: list[tuple[str, ...]],
     endpoint_paths: dict[int, Path],
     score_dirs: dict[int, Path],
     top_k: int,
@@ -237,7 +261,11 @@ def plot_method(
         for rank, (index, score) in enumerate(zip(top_indices, top_scores), start=1):
             axis = axes[row, rank]
             axis.imshow(display_image(dataset_images[int(index)]))
-            axis.set_xlabel(f"#{rank}  idx {int(index)}\n{float(score):+.3e}", fontsize=7)
+            label_text = format_datapoint_labels(dataset_labels[int(index)])
+            axis.set_xlabel(
+                f"#{rank}  idx {int(index)}\n{float(score):+.3e}\n{label_text}",
+                fontsize=6.2,
+            )
         for axis in axes[row]:
             axis.set_xticks([])
             axis.set_yticks([])
@@ -248,7 +276,7 @@ def plot_method(
     for rank in range(1, top_k + 1):
         axes[0, rank].set_title(f"Top {rank}", fontsize=10, fontweight="bold")
     figure.suptitle(title, fontsize=14, fontweight="bold", y=0.997)
-    figure.subplots_adjust(left=0.19, right=0.995, top=0.973, bottom=0.02, wspace=0.08, hspace=0.30)
+    figure.subplots_adjust(left=0.19, right=0.995, top=0.973, bottom=0.02, wspace=0.08, hspace=0.48)
     output.parent.mkdir(parents=True, exist_ok=True)
     figure.savefig(output, dpi=dpi, bbox_inches="tight", facecolor="white")
     plt.close(figure)
@@ -286,7 +314,7 @@ def main() -> None:
     if args.top_k <= 0:
         parser.error("--top-k must be positive")
     queries = load_queries(args.query_file)
-    dataset_images = load_dataset_images(args.dataset)
+    dataset_images, dataset_labels = load_dataset(args.dataset)
     result_root = SHAPES_ROOT / "result" / args.experiment
     sample_root = args.sample_root or result_root / "sample_ddim_eta0_1000"
     output_dir = args.output_dir or result_root / "eval" / "endpoint_top6_panels"
@@ -314,6 +342,7 @@ def main() -> None:
     plot_method(
         queries=queries,
         dataset_images=dataset_images,
+        dataset_labels=dataset_labels,
         endpoint_paths=endpoints,
         score_dirs=traj_dirs,
         top_k=args.top_k,
@@ -325,6 +354,7 @@ def main() -> None:
     plot_method(
         queries=queries,
         dataset_images=dataset_images,
+        dataset_labels=dataset_labels,
         endpoint_paths=endpoints,
         score_dirs=das_dirs,
         top_k=args.top_k,
