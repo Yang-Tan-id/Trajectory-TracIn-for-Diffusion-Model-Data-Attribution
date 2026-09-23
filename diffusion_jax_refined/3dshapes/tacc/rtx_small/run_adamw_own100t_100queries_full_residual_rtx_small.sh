@@ -22,15 +22,17 @@ experiment="${EXPERIMENT_TAG:-experiment1}"
 seed="${TRAIN_SEED:-42}"
 query_file="$shapes/queries_seed_0_99.json"
 ids="$(seq -s, 0 99)"
-namespace="loss_direction_original_f_checkpoint_own_trajectory_100t_100q"
+namespace="loss_direction_original_f_checkpoint_own_trajectory_100t_100q_v2"
 python "$shapes/script/build_queries.py" --num-queries 100 --output "$query_file"
 
 echo '[1/2] store own-trajectory next-raw query gradients: 100 queries x 100 timestamps on two GPUs'
+export TRAJ_QUERY_USE_CHECKPOINT_OWN_TRAJECTORY=1
 python "$shapes/script/run_traj_tracin_queries_and_scores.py" \
   --execute --experiment "$experiment" --train-seed "$seed" \
   --query-file "$query_file" --query-ids "$ids" --gpus 0,1 \
   --skip-sampling --skip-score --artifact-namespace "$namespace" \
   --query-objective trajectory_next_checkpoint_noise_mse --num-snapshots 100
+unset TRAJ_QUERY_USE_CHECKPOINT_OWN_TRAJECTORY
 
 echo '[2/2] own FOUR full/residual x RAW/QUERY-L2/TRAIN-L2/BOTH-L2 LDS'
 out="$shapes/result/$experiment/eval/adamw_own100t_100queries_full_residual/run_${SLURM_JOB_ID}"
