@@ -3476,9 +3476,6 @@ def run_attribution(cfg: TrajAttributionConfig):
                     zero_grads, state.opt_state, params
                 )
                 adamw_history_update = tree_to_device(adamw_history_update, device)
-                adamw_history_feature = np.asarray(
-                    projector(adamw_history_update), dtype=np.float32
-                )
                 print(
                     "[stage:train] optimizer-aware feature transform="
                     "adamw_residual_update (MC-mean gradient update minus zero-gradient "
@@ -3544,6 +3541,14 @@ def run_attribution(cfg: TrajAttributionConfig):
                     proj_dim,
                     seed_parts=(cfg.seed, "traj_tracin_projection", ckpt_i),
                     device=device,
+                )
+            if adamw_history_update is not None:
+                if projector is None:
+                    raise RuntimeError(
+                        "AdamW history projection requires the train CountSketch projector"
+                    )
+                adamw_history_feature = np.asarray(
+                    projector(adamw_history_update), dtype=np.float32
                 )
             if raw_train_gradient_update_diagnostic:
                 from dtrak.algorithm import build_countsketch_projector_jax
