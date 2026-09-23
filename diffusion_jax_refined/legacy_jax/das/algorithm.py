@@ -220,6 +220,8 @@ def encode_cifar_query(
         return np.array(cid, dtype=np.int32)
 
     if cond_mode == "multi_hot":
+        if isinstance(query, str) and query.strip() == "__zero_condition__":
+            return np.zeros((len(label_names),), dtype=np.float32)
         if isinstance(query, str):
             tokens = [tok.strip() for tok in query.split(",") if tok.strip()]
         else:

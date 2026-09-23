@@ -480,6 +480,8 @@ class CIFARAdapter(ModelAdapter):
     def _parse_prompt_to_multi_hot(self, prompt: str) -> np.ndarray:
         labels = self._load_label_names()
         name_to_id = {name: i for i, name in enumerate(labels)}
+        if prompt.strip() == "__zero_condition__":
+            return np.zeros((len(labels),), dtype=np.float32)
         tokens = self._parse_prompt_tokens(prompt)
 
         bad = []

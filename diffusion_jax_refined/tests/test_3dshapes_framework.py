@@ -53,6 +53,43 @@ class Test3DShapesFramework(unittest.TestCase):
         categories = [[str(token).split("_hue_")[0] for token in x["labels"] if "_hue_" in str(token)] for x in first]
         self.assertTrue(any(len(group) != len(set(group)) for group in categories))
 
+    def test_in_distribution_queries_choose_exactly_one_label_per_category(self):
+        query_mod = load(
+            THREED / "script" / "build_queries.py",
+            "build_3dshapes_indist_queries_test",
+        )
+        records = query_mod.queries(
+            range(100, 200), selection="one_per_category"
+        )
+        self.assertEqual(len(records), 100)
+        self.assertEqual([record["initial_seed"] for record in records], list(range(100, 200)))
+        for record in records:
+            labels = record["labels"]
+            self.assertEqual(len(labels), 4)
+            self.assertTrue(str(labels[0]).startswith("shape_"))
+            self.assertTrue(str(labels[1]).startswith("object_hue_"))
+            self.assertTrue(str(labels[2]).startswith("wall_hue_"))
+            self.assertTrue(str(labels[3]).startswith("floor_hue_"))
+
+    def test_zero_condition_queries_use_distinct_seeds_and_explicit_sentinel(self):
+        query_mod = load(
+            THREED / "script" / "build_queries.py",
+            "build_3dshapes_zero_condition_queries_test",
+        )
+        records = query_mod.zero_condition_queries(range(200, 220))
+        self.assertEqual(len(records), 20)
+        self.assertEqual([record["initial_seed"] for record in records], list(range(200, 220)))
+        self.assertTrue(all(record["labels"] == [] for record in records))
+        self.assertTrue(
+            all(record["prompt"] == "__zero_condition__" for record in records)
+        )
+        sampler = (ROOT / "legacy_jax" / "DM___sampler.py").read_text()
+        traj = (ROOT / "legacy_jax" / "traj_tracin" / "algorithm.py").read_text()
+        das = (ROOT / "legacy_jax" / "das" / "algorithm.py").read_text()
+        self.assertIn('prompt.strip() == "__zero_condition__"', sampler)
+        self.assertIn('query.strip() == "__zero_condition__"', traj)
+        self.assertIn('query.strip() == "__zero_condition__"', das)
+
     def test_config_matches_requested_contract(self):
         cfg = load(THREED / "dataset_config.py", "three_d_shapes_config_test")
         self.assertEqual(cfg.NUM_CLASSES, 34)
