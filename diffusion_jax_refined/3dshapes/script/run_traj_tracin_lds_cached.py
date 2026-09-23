@@ -143,6 +143,10 @@ PREDICTED_NOISE_JVP_SCHEMES = {
 SCORE_SCHEMES = {
     "adamw_residual_aligned10x10": "traj_tracin_adamw_residual_aligned10x10",
     "adamw_full_aligned10x10": "traj_tracin_adamw_full_aligned10x10",
+    "adamw_residual_aligned10x10_own100q_from100t":
+        "traj_tracin_adamw_residual_aligned10x10_own100q_from100t",
+    "adamw_full_aligned10x10_own100q_from100t":
+        "traj_tracin_adamw_full_aligned10x10_own100q_from100t",
     "loss_direction_original_f_checkpoint_own_trajectory":
         "traj_tracin_loss_direction_original_f_checkpoint_own_trajectory",
     "loss_direction_original_f_checkpoint_own_trajectory_100t":
@@ -356,6 +360,11 @@ def main() -> None:
     parser.add_argument("--train-seed", type=int, default=42)
     parser.add_argument("--query-ids", default="0,1,2,3,4,5,6,7,8,9")
     parser.add_argument(
+        "--query-file",
+        type=Path,
+        default=SHAPES_ROOT / "queries_seed_0_9.json",
+    )
+    parser.add_argument(
         "--score-schemes",
         default="original",
         help=(
@@ -401,7 +410,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    records = json.loads((SHAPES_ROOT / "queries_seed_0_9.json").read_text())["queries"]
+    records = json.loads(args.query_file.read_text())["queries"]
     query_ids = parse_ints(args.query_ids)
     scheme_names = [
         value for value in args.score_schemes.replace(",", " ").split() if value.strip()
