@@ -7,7 +7,9 @@ import json
 import math
 import statistics
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+import sys
 
 
 SCHEMES = {
@@ -15,6 +17,12 @@ SCHEMES = {
     "traj_tracin_adamw_full_aligned10x10_own100q_from100t": "full",
 }
 VARIANTS = ("raw", "query_l2", "train_l2", "query_train_l2")
+TARGETS = (
+    "endpoint_contarfactual",
+    "traj_contarfactual",
+    "simple_loss",
+    "noise_trajectory",
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -24,42 +32,73 @@ def parse_args() -> argparse.Namespace:
         description="Summarize aligned 10x10 AdamW LDS across 100 own-trajectory queries."
     )
     parser.add_argument("--eval-root", type=Path, default=default_eval_root)
+    parser.add_argument(
+        "--query-file",
+        type=Path,
+        default=shapes_root / "queries_seed_0_99.json",
+    )
     parser.add_argument("--num-queries", type=int, default=100)
+    parser.add_argument("--workers", type=int, default=32)
     parser.add_argument("--print-per-query", action="store_true")
     return parser.parse_args()
 
 
-def load_rows(search_root: Path) -> list[dict[str, object]]:
-    rows: list[dict[str, object]] = []
-    for path in search_root.rglob("lds_summary.json"):
-        method_dir = path.parents[3].name
-        target = path.parents[2].name
-        matched: tuple[str, str] | None = None
+def load_rows(
+    eval_root: Path, query_file: Path, num_queries: int, workers: int
+) -> list[dict[str, object]]:
+    shapes_root = Path(__file__).resolve().parents[1]
+    if str(shapes_root) not in sys.path:
+        sys.path.insert(0, str(shapes_root))
+    from dataset_config import _prompt_tag
+
+    records = json.loads(query_file.read_text())["queries"]
+    if len(records) < num_queries:
+        raise ValueError(
+            f"Query manifest contains {len(records)} records, fewer than {num_queries}"
+        )
+    tasks: list[tuple[int, str, str, str, Path]] = []
+    for query_id, record in enumerate(records[:num_queries]):
+        prompt_tag = _prompt_tag(str(record["prompt"]))
+        seed = int(record["initial_seed"])
+        query_root = (
+            eval_root
+            / "prompted_solo"
+            / f"query_{prompt_tag}"
+            / f"initial_seed_{seed}"
+            / "lds"
+        )
         for base, short_name in SCHEMES.items():
             for variant in VARIANTS:
-                if method_dir == f"{base}_{variant}":
-                    matched = (short_name, variant)
-                    break
-            if matched is not None:
-                break
-        if matched is None:
-            continue
-        seed_part = next(
-            (part for part in path.parts if part.startswith("initial_seed_")), None
-        )
-        if seed_part is None:
-            continue
+                for target in TARGETS:
+                    target_root = (
+                        query_root
+                        / f"{base}_{variant}"
+                        / target
+                        / "pred_kept_sign_p1"
+                    )
+                    tasks.append((query_id, target, short_name, variant, target_root))
+
+    def load_one(task: tuple[int, str, str, str, Path]) -> dict[str, object]:
+        query_id, target, scheme, variant, target_root = task
+        matches = list(target_root.glob("*/lds_summary.json"))
+        if len(matches) != 1:
+            raise RuntimeError(
+                f"Expected one LDS summary for query={query_id}, target={target}, "
+                f"scheme={scheme}, variant={variant}; found {len(matches)} under {target_root}"
+            )
+        path = matches[0]
         payload = json.loads(path.read_text())
-        rows.append(
-            {
-                "query": int(seed_part.removeprefix("initial_seed_")),
-                "target": target,
-                "scheme": matched[0],
-                "variant": matched[1],
-                "lds_percent": float(payload["lds_percent"]),
-                "path": str(path),
-            }
-        )
+        return {
+            "query": query_id,
+            "target": target,
+            "scheme": scheme,
+            "variant": variant,
+            "lds_percent": float(payload["lds_percent"]),
+            "path": str(path),
+        }
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        rows = list(pool.map(load_one, tasks))
     rows.sort(
         key=lambda row: (
             int(row["query"]),
@@ -82,8 +121,15 @@ def main() -> None:
     args = parse_args()
     if args.num_queries <= 0:
         raise ValueError("--num-queries must be positive")
+    if args.workers <= 0:
+        raise ValueError("--workers must be positive")
     eval_root = args.eval_root.resolve()
-    rows = load_rows(eval_root / "prompted_solo")
+    rows = load_rows(
+        eval_root,
+        args.query_file.resolve(),
+        args.num_queries,
+        args.workers,
+    )
     expected = args.num_queries * 4 * len(SCHEMES) * len(VARIANTS)
     print(f"Loaded {len(rows)}/{expected} LDS results")
     if len(rows) != expected:
