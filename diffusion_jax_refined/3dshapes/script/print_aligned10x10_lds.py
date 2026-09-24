@@ -21,10 +21,20 @@ TARGETS = (
     "simple_loss",
     "noise_trajectory",
 )
-SCHEMES = (
-    ("residual", "traj_tracin_adamw_residual_aligned10x10"),
-    ("full", "traj_tracin_adamw_full_aligned10x10"),
-)
+SCHEME_GROUPS = {
+    "original": (
+        ("residual", "traj_tracin_adamw_residual_aligned10x10"),
+        ("full", "traj_tracin_adamw_full_aligned10x10"),
+    ),
+    "addon": (
+        ("addon_residual", "traj_tracin_adamw_residual_aligned10x10_addon10"),
+        ("addon_full", "traj_tracin_adamw_full_aligned10x10_addon10"),
+    ),
+    "combined": (
+        ("combined_residual", "traj_tracin_adamw_residual_aligned20x10_combined"),
+        ("combined_full", "traj_tracin_adamw_full_aligned20x10_combined"),
+    ),
+}
 VARIANTS = ("raw", "query_l2", "train_l2", "query_train_l2")
 
 
@@ -43,10 +53,25 @@ def main() -> None:
         default=SHAPES_ROOT / "queries_seed_0_9.json",
     )
     parser.add_argument("--query-ids", default="0,1,2,3,4,5,6,7,8,9")
+    parser.add_argument(
+        "--scheme-group",
+        choices=("original", "addon", "combined", "addon_combined", "all"),
+        default="original",
+    )
     args = parser.parse_args()
 
     records = json.loads(args.query_file.read_text())["queries"]
     query_ids = parse_ints(args.query_ids)
+    if args.scheme_group == "addon_combined":
+        schemes = SCHEME_GROUPS["addon"] + SCHEME_GROUPS["combined"]
+    elif args.scheme_group == "all":
+        schemes = (
+            SCHEME_GROUPS["original"]
+            + SCHEME_GROUPS["addon"]
+            + SCHEME_GROUPS["combined"]
+        )
+    else:
+        schemes = SCHEME_GROUPS[args.scheme_group]
     result_root = SHAPES_ROOT / "result" / args.experiment
     values: dict[tuple[str, str, int, str], float] = {}
 
@@ -62,7 +87,7 @@ def main() -> None:
             / f"initial_seed_{int(record['initial_seed'])}"
             / "lds"
         )
-        for scheme, base in SCHEMES:
+        for scheme, base in schemes:
             for variant in VARIANTS:
                 for target in TARGETS:
                     target_root = (
@@ -82,7 +107,7 @@ def main() -> None:
                         payload["lds_percent"]
                     )
 
-    for scheme, _ in SCHEMES:
+    for scheme, _ in schemes:
         for variant in VARIANTS:
             print()
             print(f"{scheme.upper()} — {variant.upper()}")
