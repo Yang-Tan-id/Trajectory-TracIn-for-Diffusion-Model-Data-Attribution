@@ -34,6 +34,12 @@ SCHEME_GROUPS = {
         ("combined_residual", "traj_tracin_adamw_residual_aligned20x10_combined"),
         ("combined_full", "traj_tracin_adamw_full_aligned20x10_combined"),
     ),
+    "halves": (
+        ("early_high_t_residual", "traj_tracin_adamw_residual_aligned10x10_early_high_t"),
+        ("early_high_t_full", "traj_tracin_adamw_full_aligned10x10_early_high_t"),
+        ("late_low_t_residual", "traj_tracin_adamw_residual_aligned10x10_late_low_t"),
+        ("late_low_t_full", "traj_tracin_adamw_full_aligned10x10_late_low_t"),
+    ),
 }
 VARIANTS = ("raw", "query_l2", "train_l2", "query_train_l2")
 
@@ -55,7 +61,7 @@ def main() -> None:
     parser.add_argument("--query-ids", default="0,1,2,3,4,5,6,7,8,9")
     parser.add_argument(
         "--scheme-group",
-        choices=("original", "addon", "combined", "addon_combined", "all"),
+        choices=("original", "addon", "combined", "addon_combined", "halves", "all"),
         default="original",
     )
     args = parser.parse_args()
@@ -69,6 +75,7 @@ def main() -> None:
             SCHEME_GROUPS["original"]
             + SCHEME_GROUPS["addon"]
             + SCHEME_GROUPS["combined"]
+            + SCHEME_GROUPS["halves"]
         )
     else:
         schemes = SCHEME_GROUPS[args.scheme_group]

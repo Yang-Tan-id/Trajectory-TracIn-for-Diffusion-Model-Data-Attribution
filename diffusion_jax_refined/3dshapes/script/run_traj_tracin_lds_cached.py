@@ -151,6 +151,14 @@ SCORE_SCHEMES = {
         "traj_tracin_adamw_residual_aligned20x10_combined",
     "adamw_full_aligned20x10_combined":
         "traj_tracin_adamw_full_aligned20x10_combined",
+    "adamw_residual_aligned10x10_early_high_t":
+        "traj_tracin_adamw_residual_aligned10x10_early_high_t",
+    "adamw_full_aligned10x10_early_high_t":
+        "traj_tracin_adamw_full_aligned10x10_early_high_t",
+    "adamw_residual_aligned10x10_late_low_t":
+        "traj_tracin_adamw_residual_aligned10x10_late_low_t",
+    "adamw_full_aligned10x10_late_low_t":
+        "traj_tracin_adamw_full_aligned10x10_late_low_t",
     "adamw_residual_aligned10x10_own100q_from100t":
         "traj_tracin_adamw_residual_aligned10x10_own100q_from100t",
     "adamw_full_aligned10x10_own100q_from100t":
