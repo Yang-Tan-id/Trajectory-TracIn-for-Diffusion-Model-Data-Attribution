@@ -59,7 +59,23 @@ def main() -> None:
         action="store_true",
         help="select one lambda by ten-query mean for each target, then print every query",
     )
+    parser.add_argument(
+        "--fixed-endpoint-lambda",
+        type=float,
+        default=None,
+        help="print per-query endpoint LDS at this fixed lambda",
+    )
+    parser.add_argument(
+        "--fixed-trajectory-lambda",
+        type=float,
+        default=None,
+        help="print per-query trajectory LDS at this fixed lambda",
+    )
     args = parser.parse_args()
+    if (args.fixed_endpoint_lambda is None) != (args.fixed_trajectory_lambda is None):
+        parser.error(
+            "--fixed-endpoint-lambda and --fixed-trajectory-lambda must be provided together"
+        )
 
     records = json.loads(args.query_file.read_text())["queries"]
     query_ids = parse_ints(args.query_ids)
@@ -99,6 +115,42 @@ def main() -> None:
             f"No LDS summaries found for {das_name}, sign={args.prediction_sign}, "
             f"experiment={args.experiment}."
         )
+
+    if args.fixed_endpoint_lambda is not None:
+        endpoint_lambda = float(args.fixed_endpoint_lambda)
+        trajectory_lambda = float(args.fixed_trajectory_lambda)
+        if endpoint_lambda not in values:
+            raise RuntimeError(f"No DAS results found for endpoint lambda={endpoint_lambda:g}")
+        if trajectory_lambda not in values:
+            raise RuntimeError(
+                f"No DAS results found for trajectory lambda={trajectory_lambda:g}"
+            )
+        endpoint_values = values[endpoint_lambda].get("endpoint_contarfactual", {})
+        trajectory_values = values[trajectory_lambda].get("traj_contarfactual", {})
+        missing_endpoint = [q for q in query_ids if q not in endpoint_values]
+        missing_trajectory = [q for q in query_ids if q not in trajectory_values]
+        if missing_endpoint or missing_trajectory:
+            raise RuntimeError(
+                f"Missing fixed-lambda results: endpoint={missing_endpoint}, "
+                f"trajectory={missing_trajectory}"
+            )
+        print(
+            f"DAS FIXED OVERALL LAMBDAS: {das_name}, sign={args.prediction_sign}"
+        )
+        print(
+            f"endpoint lambda={endpoint_lambda:g} | trajectory lambda={trajectory_lambda:g}"
+        )
+        print(f"{'Q':>2s} {'END-LDS':>10s} {'TRAJ-LDS':>10s}")
+        print("-" * 26)
+        for query_id in query_ids:
+            print(
+                f"{query_id:2d} {endpoint_values[query_id]:+9.3f}% "
+                f"{trajectory_values[query_id]:+9.3f}%"
+            )
+        endpoint_mean = statistics.fmean(endpoint_values[q] for q in query_ids)
+        trajectory_mean = statistics.fmean(trajectory_values[q] for q in query_ids)
+        print(f"MEAN {endpoint_mean:+7.3f}% {trajectory_mean:+9.3f}%")
+        return
 
     if args.per_query_best:
         print(f"DAS PER-QUERY BEST LAMBDA: {das_name}, sign={args.prediction_sign}")
