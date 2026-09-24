@@ -151,6 +151,10 @@ SCORE_SCHEMES = {
         "traj_tracin_adamw_residual_aligned20x10_combined",
     "adamw_full_aligned20x10_combined":
         "traj_tracin_adamw_full_aligned20x10_combined",
+    "adamw_residual_aligned20x10_endpoint_linear":
+        "traj_tracin_adamw_residual_aligned20x10_endpoint_linear",
+    "adamw_full_aligned20x10_endpoint_linear":
+        "traj_tracin_adamw_full_aligned20x10_endpoint_linear",
     "adamw_residual_aligned10x10_early_high_t":
         "traj_tracin_adamw_residual_aligned10x10_early_high_t",
     "adamw_full_aligned10x10_early_high_t":
@@ -297,6 +301,15 @@ SCORE_SCHEMES = {
     "f_next_dot_squared": "traj_tracin_f_next_dot_squared_original_f",
     "f_next_linear_square_z50": "traj_tracin_f_next_linear_square_z50",
     "f_next_final_score_squared": "traj_tracin_f_next_final_score_squared",
+    **{
+        f"adamw_{kind}_single_timestamp_t{timestep:03d}":
+        f"traj_tracin_adamw_{kind}_single_timestamp_t{timestep:03d}"
+        for kind in ("residual", "full")
+        for timestep in (
+            0, 49, 111, 149, 222, 249, 333, 349, 444, 449,
+            549, 555, 649, 666, 749, 777, 849, 888, 949, 999,
+        )
+    },
 }
 EXPECTED_RESIDUAL_JACOBIAN_SCHEMES = {
     "expected_residual_jacobian_fnorm_original_f",

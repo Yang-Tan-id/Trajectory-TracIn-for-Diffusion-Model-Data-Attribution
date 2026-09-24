@@ -128,7 +128,7 @@ def _apply_traj_timestep_weighting(
     weights = np.asarray(weights, dtype=np.float64).reshape(-1)
     if mode in ("", "uniform"):
         return weights
-    if mode != "ddim_step_squared":
+    if mode not in ("ddim_step_squared", "endpoint_linear"):
         raise ValueError(f"unknown TRACIN_SCORE_TIMESTEP_WEIGHTING={mode!r}")
     ckpt_indices = np.asarray(ckpt_indices, dtype=np.int64).reshape(-1)
     timesteps = np.asarray(timesteps, dtype=np.int64).reshape(-1)
@@ -136,7 +136,17 @@ def _apply_traj_timestep_weighting(
         raise ValueError(
             "DDIM timestep weighting requires one ckpt_index and timestep per score term"
         )
-    step_weights = _ddim_step_squared_weights(timesteps)
+    if mode == "ddim_step_squared":
+        step_weights = _ddim_step_squared_weights(timesteps)
+    else:
+        total = int(os.environ.get("TRACIN_SCORE_TIMESTEPS_TOTAL", "1000"))
+        step_weights = total - timesteps.astype(np.float64)
+        if np.any(step_weights <= 0.0):
+            bad = timesteps[step_weights <= 0.0]
+            raise ValueError(
+                "endpoint_linear requires every timestep to be below "
+                f"TRACIN_SCORE_TIMESTEPS_TOTAL={total}; got {bad.tolist()}"
+            )
     result = np.zeros_like(weights)
     for ckpt in np.unique(ckpt_indices):
         mask = ckpt_indices == ckpt
