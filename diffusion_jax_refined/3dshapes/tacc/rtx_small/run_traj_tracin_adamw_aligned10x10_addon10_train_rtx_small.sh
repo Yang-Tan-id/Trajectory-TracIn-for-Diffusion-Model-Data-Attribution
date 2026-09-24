@@ -17,9 +17,17 @@ done
 shapes="$repo/diffusion_jax_refined/3dshapes"
 stage="$shapes/data_attribution/traj_tracin"
 
-source /scratch/11447/yangtan7447/miniforge3/etc/profile.d/conda.sh
-conda activate /scratch/11447/yangtan7447/conda-envs/trajectory-tracin
+if [[ -n "${ENV_SETUP:-}" ]]; then
+  # shellcheck disable=SC1090
+  source "$ENV_SETUP"
+elif [[ -f /scratch/11447/yangtan7447/miniforge3/etc/profile.d/conda.sh ]]; then
+  source /scratch/11447/yangtan7447/miniforge3/etc/profile.d/conda.sh
+  conda activate /scratch/11447/yangtan7447/conda-envs/trajectory-tracin
+else
+  echo '[environment] using the currently active Python environment'
+fi
 
+export PYTHON_BIN="${PYTHON_BIN:-python}"
 export PYTHONUNBUFFERED=1
 export TF_GPU_ALLOCATOR="${TF_GPU_ALLOCATOR:-cuda_malloc_async}"
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
@@ -47,9 +55,14 @@ result="$shapes/result/$EXPERIMENT_TAG"
 namespace=adamw_dual_aligned10x10_addon10
 artifact="$result/model/prompted_solo/seed_${TRAIN_SEED}_train_gradient/traj_tracin_${namespace}/train_datapoint_gradient_artifact.npz"
 parts="${artifact}.parts"
-logs="$result/logs/traj_tracin_${namespace}/${SLURM_JOB_ID}"
+run_id="${SLURM_JOB_ID:-school_$(date +%Y%m%d_%H%M%S)}"
+logs="$result/logs/traj_tracin_${namespace}/${run_id}"
 export TRAIN_DATAPOINT_GRADIENT_ARTIFACT_PATH="$artifact"
 mkdir -p "$parts" "$logs"
+
+IFS=',' read -r -a train_gpus <<< "${TRAIN_GPUS:-0,1}"
+gpu_count="${#train_gpus[@]}"
+(( gpu_count > 0 )) || { echo 'TRAIN_GPUS selected no GPUs' >&2; exit 1; }
 
 if [[ -f "$artifact" ]]; then
   echo "[skip] complete add-on AdamW artifact already exists: $artifact"
@@ -61,17 +74,19 @@ echo '[positions] 50,150,250,350,450,550,650,750,850,950'
 echo '[timesteps] 949,849,749,649,549,449,349,249,149,49'
 echo '[definition] AdamW(mean_MC10 gradient) - AdamW(zero gradient); then CountSketch'
 echo '[combine] uniform linear 20t = 0.5 * original10 + 0.5 * addon10'
+echo "[gpus] ${TRAIN_GPUS:-0,1}"
 echo "[artifact] $artifact"
 
 cd "$stage"
 pids=()
-for shard in 0 1; do
+for shard in "${!train_gpus[@]}"; do
+  gpu="${train_gpus[$shard]}"
   (
-    export CUDA_VISIBLE_DEVICES="$shard"
+    export CUDA_VISIBLE_DEVICES="$gpu"
     export TRAJ_TRACIN_CKPT_SHARD_INDEX="$shard"
-    export TRAJ_TRACIN_CKPT_SHARD_COUNT=2
+    export TRAJ_TRACIN_CKPT_SHARD_COUNT="$gpu_count"
     export TRAJ_TRACIN_SKIP_STAGE_MERGE=1
-    python 01_train_datapoint_gradient.py
+    "$PYTHON_BIN" 01_train_datapoint_gradient.py
   ) >"$logs/gpu_${shard}.log" 2>&1 &
   pids+=("$!")
 done
@@ -92,11 +107,11 @@ part_count="$(find "$parts" -maxdepth 1 -type f -name 'ckpt_*.npz' | wc -l | tr 
 }
 
 echo '[merge] all 50 checkpoint parts are present'
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES="${train_gpus[0]}"
 export TRAJ_TRACIN_CKPT_SHARD_INDEX=0
 export TRAJ_TRACIN_CKPT_SHARD_COUNT=1
 export TRAJ_TRACIN_SKIP_STAGE_MERGE=0
-python 01_train_datapoint_gradient.py
+"$PYTHON_BIN" 01_train_datapoint_gradient.py
 
 [[ -f "$artifact" ]] || {
   echo "Merged add-on artifact was not created: $artifact" >&2
