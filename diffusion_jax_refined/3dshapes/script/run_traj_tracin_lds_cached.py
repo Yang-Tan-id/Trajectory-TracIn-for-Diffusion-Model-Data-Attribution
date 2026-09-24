@@ -143,6 +143,14 @@ PREDICTED_NOISE_JVP_SCHEMES = {
 SCORE_SCHEMES = {
     "adamw_residual_aligned10x10": "traj_tracin_adamw_residual_aligned10x10",
     "adamw_full_aligned10x10": "traj_tracin_adamw_full_aligned10x10",
+    "adamw_residual_aligned10x10_addon10":
+        "traj_tracin_adamw_residual_aligned10x10_addon10",
+    "adamw_full_aligned10x10_addon10":
+        "traj_tracin_adamw_full_aligned10x10_addon10",
+    "adamw_residual_aligned20x10_combined":
+        "traj_tracin_adamw_residual_aligned20x10_combined",
+    "adamw_full_aligned20x10_combined":
+        "traj_tracin_adamw_full_aligned20x10_combined",
     "adamw_residual_aligned10x10_own100q_from100t":
         "traj_tracin_adamw_residual_aligned10x10_own100q_from100t",
     "adamw_full_aligned10x10_own100q_from100t":
