@@ -25,20 +25,21 @@ export XLA_PYTHON_CLIENT_PREALLOCATE=false
 experiment="${EXPERIMENT_TAG:-experiment1}"
 seed="${TRAIN_SEED:-42}"
 query_file="$shapes/queries_in_distribution_plus_zero_seed_100_219.json"
-query_ids="$(seq -s, 0 119)"
+query_ids="${QUERY_IDS:-$(seq -s, 0 119)}"
+query_count="$(awk -F, '{print NF}' <<< "$query_ids")"
 
 python "$shapes/script/build_queries.py" \
   --num-queries 100 --num-zero-queries 20 \
   --seed-start 100 --selection one_per_category \
   --output "$query_file"
 
-echo '[1/2] sample 100 in-distribution queries plus 20 zero-condition queries with the prompted model'
+echo "[1/2] sample/cache ${query_count} selected queries with the prompted model: ${query_ids}"
 python "$shapes/script/run_traj_tracin_queries_and_scores.py" \
   --execute --experiment "$experiment" --train-seed "$seed" \
   --query-file "$query_file" --query-ids "$query_ids" --gpus 0,1 \
   --skip-query-gradient --skip-score
 
-echo '[2/2] cache the four LDS true-f targets for all 100 queries'
+echo "[2/2] cache the four LDS true-f targets for ${query_count} selected queries"
 python "$shapes/script/run_lds_true_f.py" \
   --execute --experiment "$experiment" --train-seed "$seed" \
   --query-file "$query_file" --query-ids "$query_ids" --gpus 0,1
