@@ -29,7 +29,18 @@ seed="${TRAIN_SEED:-42}"
 query_file="$shapes/queries_in_distribution_plus_zero_seed_100_219.json"
 query_ids="0,1,2,3,4,5,6,7,8,9"
 query_namespace="loss_direction_original_f_reference_trajectory_100t_indist_first10"
-score_stem="adamw_training_events_reference_next100t_indist_first10_linear_four_raw"
+score_variant="${SCORE_VARIANT:-raw}"
+ranking_sign="${RANKING_SIGN:-1}"
+case "$score_variant" in
+  raw|query_l2|train_l2|query_train_l2) ;;
+  *) echo "Unsupported SCORE_VARIANT: $score_variant" >&2; exit 1 ;;
+esac
+case "$ranking_sign" in
+  -1) direction_tag=negative; direction_title='most negative scores' ;;
+  1) direction_tag=positive; direction_title='top positive scores' ;;
+  *) echo "RANKING_SIGN must be -1 or 1, got: $ranking_sign" >&2; exit 1 ;;
+esac
+score_stem="adamw_training_events_reference_next100t_indist_first10_linear_four_${score_variant}"
 score_namespace="traj_tracin_${score_stem}"
 out_dir="$shapes/result/$experiment/eval/adamw_training_events_reference_next100t_indist_first10_top12/run_${SLURM_JOB_ID}"
 
@@ -39,24 +50,24 @@ count="$(find "$shapes/result/$experiment/sample_ddim_eta0_1000" -type f -path "
 mkdir -p "$out_dir/top12"
 
 cd "$shapes"
-echo '[1/2] save per-datapoint LINEAR FOUR-RAW scores from cached reference 100t queries'
+echo "[1/2] save per-datapoint LINEAR FOUR ${score_variant} scores from cached reference 100t queries"
 python script/run_adamw_four_event_original_f_scores.py \
   --experiment "$experiment" --train-seed "$seed" \
   --query-file "$query_file" --query-ids "$query_ids" \
   --query-namespace "$query_namespace" --attribution-points 5000 \
   --checkpoint-weighting uniform --contraction linear --methods four \
   --save-score-namespace "$score_namespace" \
-  --save-score-method four --save-score-variant raw \
+  --save-score-method four --save-score-variant "$score_variant" \
   --out-dir "$out_dir/score_summary"
 
-echo '[2/2] render endpoint plus top-12 highest-scoring training datapoints'
+echo "[2/2] render endpoint plus top-12 ${direction_title} training datapoints"
 python script/plot_endpoint_top6_datapoints.py \
   --experiment "$experiment" --train-seed "$seed" \
   --query-file "$query_file" \
   --traj-namespace "$score_stem" \
-  --traj-title 'ID first10 · reference-next 100t · training AdamW FOUR · LINEAR RAW · top positive scores' \
-  --traj-ranking-sign 1 \
-  --traj-output-stem reference_next100t_adamw_four_linear_raw \
+  --traj-title "ID first10 · reference-next 100t · training AdamW FOUR · LINEAR ${score_variant} · ${direction_title}" \
+  --traj-ranking-sign "$ranking_sign" \
+  --traj-output-stem "reference_next100t_adamw_four_linear_${score_variant}_${direction_tag}" \
   --only-traj --top-k 12 --output-dir "$out_dir/top12"
 
-echo "[done] $out_dir/top12/reference_next100t_adamw_four_linear_raw_endpoint_top12.png"
+echo "[done] $out_dir/top12/reference_next100t_adamw_four_linear_${score_variant}_${direction_tag}_endpoint_top12.png"
