@@ -112,16 +112,11 @@ def score_artifact(
     timesteps = np.asarray(payload.get("timesteps", ()), dtype=np.int64).reshape(-1)
     if ckpts.shape != (train.shape[0],) or timesteps.shape != (train.shape[0],):
         raise ValueError("train artifact is missing aligned checkpoint/timestep metadata")
-    timestamps = sorted(int(value) for value in np.unique(timesteps))
-    for timestep in timestamps:
-        term_ckpts = ckpts[timesteps == timestep]
-        if len(term_ckpts) != len(np.unique(term_ckpts)):
-            raise ValueError(f"t={timestep} contains duplicate checkpoint terms")
-
     sample_root = result_root / "sample_ddim_eta0_1000"
     query_rows: list[np.ndarray] = []
     selected_records: list[dict[str, object]] = []
     query_paths: list[Path] = []
+    train_term_indices: np.ndarray | None = None
     for query_id in query_ids:
         record = records[query_id]
         prompt = str(record["prompt"])
@@ -150,17 +145,43 @@ def score_artifact(
             (int(ckpt), int(timestep)): row
             for row, (ckpt, timestep) in enumerate(zip(query_ckpts, query_timesteps))
         }
-        try:
-            aligned = np.asarray(
-                [query[lookup[(int(ckpt), int(timestep))]] for ckpt, timestep in zip(ckpts, timesteps)],
-                dtype=np.float32,
+        current_train_indices = np.asarray(
+            [
+                term_i
+                for term_i, (ckpt, timestep) in enumerate(zip(ckpts, timesteps))
+                if (int(ckpt), int(timestep)) in lookup
+            ],
+            dtype=np.int64,
+        )
+        if current_train_indices.size == 0:
+            raise ValueError(f"query {query_id} has no terms aligned with {artifact_path}")
+        if train_term_indices is None:
+            train_term_indices = current_train_indices
+        elif not np.array_equal(train_term_indices, current_train_indices):
+            raise ValueError(
+                f"query {query_id} has a different train/query term intersection"
             )
-        except KeyError as exc:
-            raise ValueError(f"query {query_id} lacks aligned term {exc.args[0]}") from exc
+        aligned = np.asarray(
+            [
+                query[lookup[(int(ckpts[term_i]), int(timesteps[term_i]))]]
+                for term_i in current_train_indices
+            ],
+            dtype=np.float32,
+        )
         query_rows.append(aligned)
         selected_records.append(record)
         query_paths.append(path)
         print(f"[load] query Q{query_id} seed={initial_seed}: {path}", flush=True)
+
+    if train_term_indices is None:
+        raise ValueError("no aligned train/query terms")
+    aligned_ckpts = ckpts[train_term_indices]
+    aligned_timesteps = timesteps[train_term_indices]
+    timestamps = sorted(int(value) for value in np.unique(aligned_timesteps))
+    for timestep in timestamps:
+        term_ckpts = aligned_ckpts[aligned_timesteps == timestep]
+        if len(term_ckpts) != len(np.unique(term_ckpts)):
+            raise ValueError(f"t={timestep} contains duplicate checkpoint terms")
 
     queries = np.stack(query_rows, axis=0)
     normalized_queries = _normalize_rows(queries, 1e-8).astype(np.float32, copy=False)
@@ -178,19 +199,20 @@ def score_artifact(
     }
 
     print(
-        f"[score] train={train.shape} queries={queries.shape} timestamps={timestamps}",
+        f"[score] train={train.shape} aligned_terms={len(train_term_indices)} "
+        f"queries={queries.shape} timestamps={timestamps}",
         flush=True,
     )
-    for term_i in range(train.shape[0]):
-        timestep = int(timesteps[term_i])
-        train_term = np.asarray(train[term_i], dtype=np.float32)
-        query_term = queries[:, term_i, :]
-        normalized_query_term = normalized_queries[:, term_i, :]
+    for aligned_i, train_i in enumerate(train_term_indices):
+        timestep = int(timesteps[train_i])
+        train_term = np.asarray(train[train_i], dtype=np.float32)
+        query_term = queries[:, aligned_i, :]
+        normalized_query_term = normalized_queries[:, aligned_i, :]
         for kind in ("residual", "full"):
             effective_train = (
                 train_term
                 if kind == "residual"
-                else train_term + history[term_i][None, :]
+                else train_term + history[train_i][None, :]
             )
             raw_dot = effective_train @ query_term.T
             query_dot = effective_train @ normalized_query_term.T
@@ -202,8 +224,11 @@ def score_artifact(
             scores[kind]["query_l2"][timestep] += query_dot.T
             scores[kind]["train_l2"][timestep] += (raw_dot / denominator).T
             scores[kind]["query_train_l2"][timestep] += (query_dot / denominator).T
-        if (term_i + 1) % 25 == 0 or term_i + 1 == train.shape[0]:
-            print(f"[score] term {term_i + 1}/{train.shape[0]}", flush=True)
+        if (aligned_i + 1) % 25 == 0 or aligned_i + 1 == len(train_term_indices):
+            print(
+                f"[score] term {aligned_i + 1}/{len(train_term_indices)}",
+                flush=True,
+            )
 
     indices = _score_indices(payload, num_points)
     for query_slot, (query_id, record, query_path) in enumerate(
