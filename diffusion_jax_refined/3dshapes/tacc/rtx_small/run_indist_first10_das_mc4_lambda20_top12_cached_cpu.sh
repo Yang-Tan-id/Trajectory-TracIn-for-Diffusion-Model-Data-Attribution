@@ -30,7 +30,7 @@ python script/plot_endpoint_top6_datapoints.py \
   --query-file "$query_file" \
   --das-namespace "$das_namespace" \
   --das-lambda 20 \
-  --das-ranking-sign -1 \
+  --das-ranking-sign 1 \
   --only-das \
   --top-k 12 \
   --output-dir "$out_dir"
