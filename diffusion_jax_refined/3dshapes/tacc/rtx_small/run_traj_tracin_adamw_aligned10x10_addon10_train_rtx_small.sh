@@ -44,6 +44,7 @@ export TRAJ_NUM_SNAPSHOTS=10
 # 0,111,222,333,444,555,666,777,888,999 positions.
 export TRAJ_SNAPSHOT_POSITIONS=50,150,250,350,450,550,650,750,850,950
 export TRAJ_TRAIN_MC_SAMPLES=10
+export TRAJ_SCORE_BATCH_SIZE="${TRAJ_SCORE_BATCH_SIZE:-8}"
 export TRAJ_TRACIN_PROJ_DIM=4096
 export TRAJ_TRACIN_TRAIN_AGGREGATE_TIMESTAMPS=0
 export TRAJ_TRACIN_TRAIN_BATCH_DTYPE=float32
@@ -75,6 +76,7 @@ echo '[timesteps] 949,849,749,649,549,449,349,249,149,49'
 echo '[definition] AdamW(mean_MC10 gradient) - AdamW(zero gradient); then CountSketch'
 echo '[combine] uniform linear 20t = 0.5 * original10 + 0.5 * addon10'
 echo "[gpus] ${TRAIN_GPUS:-0,1}"
+echo "[batch size] $TRAJ_SCORE_BATCH_SIZE"
 echo "[artifact] $artifact"
 
 cd "$stage"
