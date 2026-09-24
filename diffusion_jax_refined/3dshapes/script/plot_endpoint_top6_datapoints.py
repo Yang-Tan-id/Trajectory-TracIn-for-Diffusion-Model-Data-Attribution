@@ -309,6 +309,7 @@ def main() -> None:
     parser.add_argument("--traj-ranking-sign", type=int, choices=(-1, 1), default=-1)
     parser.add_argument("--traj-output-stem", default="own_trajectory_next_both_l2")
     parser.add_argument("--only-traj", action="store_true")
+    parser.add_argument("--only-das", action="store_true")
     parser.add_argument(
         "--das-namespace",
         default="factorized_mc4_original100x1",
@@ -318,6 +319,7 @@ def main() -> None:
         default="predicted_noise_jvp_l2_squared_probe12_adamw4_four_reference12_single_lr",
     )
     parser.add_argument("--das-lambda", type=float, default=100.0)
+    parser.add_argument("--das-ranking-sign", type=int, choices=(-1, 1), default=1)
     parser.add_argument("--top-k", type=int, default=12)
     parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument("--dpi", type=int, default=180)
@@ -325,6 +327,8 @@ def main() -> None:
 
     if args.top_k <= 0:
         parser.error("--top-k must be positive")
+    if args.only_traj and args.only_das:
+        parser.error("--only-traj and --only-das are mutually exclusive")
     queries = load_queries(args.query_file)
     dataset_images, dataset_labels = load_dataset(args.dataset)
     result_root = SHAPES_ROOT / "result" / args.experiment
@@ -357,19 +361,21 @@ def main() -> None:
         for query in queries
     }
 
-    plot_method(
-        queries=queries,
-        dataset_images=dataset_images,
-        dataset_labels=dataset_labels,
-        endpoint_paths=endpoints,
-        score_dirs=traj_dirs,
-        top_k=args.top_k,
-        title=args.traj_title,
-        output=output_dir / f"{args.traj_output_stem}_endpoint_top{args.top_k}.png",
-        dpi=args.dpi,
-        ranking_sign=args.traj_ranking_sign,
-    )
+    if not args.only_das:
+        plot_method(
+            queries=queries,
+            dataset_images=dataset_images,
+            dataset_labels=dataset_labels,
+            endpoint_paths=endpoints,
+            score_dirs=traj_dirs,
+            top_k=args.top_k,
+            title=args.traj_title,
+            output=output_dir / f"{args.traj_output_stem}_endpoint_top{args.top_k}.png",
+            dpi=args.dpi,
+            ranking_sign=args.traj_ranking_sign,
+        )
     if not args.only_traj:
+        das_direction = "most negative" if args.das_ranking_sign == -1 else "top positive"
         plot_method(
             queries=queries,
             dataset_images=dataset_images,
@@ -377,11 +383,15 @@ def main() -> None:
             endpoint_paths=endpoints,
             score_dirs=das_dirs,
             top_k=args.top_k,
-            title=f"DAS factorized MC4 · endpoint · lambda={args.das_lambda:g} · raw score",
+            title=(
+                f"DAS factorized MC4 · endpoint · lambda={args.das_lambda:g} · "
+                f"raw score · {das_direction}"
+            ),
             output=output_dir / f"das_mc4_lambda_{damping_tag(args.das_lambda)}_endpoint_top{args.top_k}.png",
             dpi=args.dpi,
-            ranking_sign=1,
+            ranking_sign=args.das_ranking_sign,
         )
+    if not args.only_traj and not args.only_das:
         plot_method(
             queries=queries,
             dataset_images=dataset_images,
