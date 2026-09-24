@@ -77,6 +77,32 @@ def output_root(
     )
 
 
+def outputs_complete(
+    result_root: Path,
+    *,
+    train_seed: int,
+    records: list[dict[str, object]],
+    query_ids: list[int],
+    timestamps: tuple[int, ...],
+) -> bool:
+    for query_id in query_ids:
+        record = records[query_id]
+        for timestep in timestamps:
+            for kind in ("residual", "full"):
+                root = output_root(
+                    result_root,
+                    train_seed=train_seed,
+                    prompt=str(record["prompt"]),
+                    initial_seed=int(record["initial_seed"]),
+                    kind=kind,
+                    timestep=timestep,
+                )
+                for directory_name in VARIANT_DIRS.values():
+                    if not (root / directory_name / "scores.npy").is_file():
+                        return False
+    return True
+
+
 def score_artifact(
     artifact_path: Path,
     *,
@@ -282,8 +308,12 @@ def main() -> None:
     )
     parser.add_argument("--query-ids", default="0,1,2,3,4,5,6,7,8,9")
     parser.add_argument(
-        "--query-namespace",
+        "--original-query-namespace",
         default="loss_direction_original_f_reference_trajectory_100t_indist_first10",
+    )
+    parser.add_argument(
+        "--addon-query-namespace",
+        default="loss_direction_original_f_reference_trajectory_addon10_indist_first10",
     )
     parser.add_argument("--train-normalize-eps", type=float, default=1e-8)
     args = parser.parse_args()
@@ -308,31 +338,57 @@ def main() -> None:
         / "prompted_solo"
         / f"seed_{args.train_seed}_train_gradient"
     )
-    artifacts = (
-        train_root
-        / "traj_tracin_adamw_dual_aligned10x10"
-        / "train_datapoint_gradient_artifact.npz",
-        train_root
-        / "traj_tracin_adamw_dual_aligned10x10_addon10"
-        / "train_datapoint_gradient_artifact.npz",
+    artifact_jobs = (
+        (
+            train_root
+            / "traj_tracin_adamw_dual_aligned10x10"
+            / "train_datapoint_gradient_artifact.npz",
+            args.original_query_namespace,
+            (0, 111, 222, 333, 444, 555, 666, 777, 888, 999),
+        ),
+        (
+            train_root
+            / "traj_tracin_adamw_dual_aligned10x10_addon10"
+            / "train_datapoint_gradient_artifact.npz",
+            args.addon_query_namespace,
+            (49, 149, 249, 349, 449, 549, 649, 749, 849, 949),
+        ),
     )
     seen: set[int] = set()
-    for artifact in artifacts:
+    for artifact, query_namespace, expected_timestamps in artifact_jobs:
         if not artifact.is_file():
             raise FileNotFoundError(str(artifact))
+        if outputs_complete(
+            result_root,
+            train_seed=args.train_seed,
+            records=records,
+            query_ids=query_ids,
+            timestamps=expected_timestamps,
+        ):
+            print(
+                f"[skip] complete single-timestamp grid: {list(expected_timestamps)}",
+                flush=True,
+            )
+            seen.update(expected_timestamps)
+            continue
         timestamps = score_artifact(
             artifact,
             result_root=result_root,
             checkpoint=checkpoint,
             records=records,
             query_ids=query_ids,
-            query_namespace=args.query_namespace,
+            query_namespace=query_namespace,
             train_seed=args.train_seed,
             train_eps=args.train_normalize_eps,
         )
         overlap = seen.intersection(timestamps)
         if overlap:
             raise ValueError(f"timestamp grids overlap: {sorted(overlap)}")
+        if tuple(timestamps) != expected_timestamps:
+            raise ValueError(
+                f"unexpected aligned timestamps for {artifact}: {timestamps}; "
+                f"expected {list(expected_timestamps)}"
+            )
         seen.update(timestamps)
     print(f"[done] single-timestamp scores: {sorted(seen)}", flush=True)
 
