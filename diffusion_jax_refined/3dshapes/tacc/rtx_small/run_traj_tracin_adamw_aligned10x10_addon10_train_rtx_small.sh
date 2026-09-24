@@ -102,4 +102,7 @@ python 01_train_datapoint_gradient.py
   echo "Merged add-on artifact was not created: $artifact" >&2
   exit 1
 }
+echo '[cleanup] final artifact verified; removing the 50 add-on checkpoint parts'
+find "$parts" -maxdepth 1 -type f -name 'ckpt_*.npz' -delete
+rmdir "$parts" 2>/dev/null || true
 echo "[done] add-on AdamW aligned10x10 train artifact: $artifact"
