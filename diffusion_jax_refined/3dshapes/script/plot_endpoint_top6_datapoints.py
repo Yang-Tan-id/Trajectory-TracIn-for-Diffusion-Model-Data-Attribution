@@ -308,6 +308,16 @@ def main() -> None:
     )
     parser.add_argument("--traj-ranking-sign", type=int, choices=(-1, 1), default=-1)
     parser.add_argument("--traj-output-stem", default="own_trajectory_next_both_l2")
+    parser.add_argument(
+        "--traj-score-component",
+        choices=(
+            "score",
+            "score_query_normalized",
+            "score_train_l2_normalized",
+            "score_query_train_l2_normalized",
+        ),
+        default="score",
+    )
     parser.add_argument("--only-traj", action="store_true")
     parser.add_argument("--only-das", action="store_true")
     parser.add_argument(
@@ -343,7 +353,7 @@ def main() -> None:
     traj_dirs = {
         query.query_id: score_root(result_root, args.train_seed, query)
         / f"traj_tracin_{args.traj_namespace}"
-        / "score"
+        / args.traj_score_component
         for query in queries
     }
     das_lambda_dir = f"lambda_{damping_tag(args.das_lambda)}"
