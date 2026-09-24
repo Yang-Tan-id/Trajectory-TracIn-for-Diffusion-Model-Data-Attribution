@@ -50,6 +50,24 @@ SCHEME_GROUPS = {
             "traj_tracin_adamw_full_aligned20x10_endpoint_linear",
         ),
     ),
+    "corrected": (
+        (
+            "addon_residual_corrected",
+            "traj_tracin_adamw_residual_aligned10x10_addon10_corrected",
+        ),
+        (
+            "addon_full_corrected",
+            "traj_tracin_adamw_full_aligned10x10_addon10_corrected",
+        ),
+        (
+            "combined_residual_corrected",
+            "traj_tracin_adamw_residual_aligned20x10_combined_corrected",
+        ),
+        (
+            "combined_full_corrected",
+            "traj_tracin_adamw_full_aligned20x10_combined_corrected",
+        ),
+    ),
 }
 VARIANTS = ("raw", "query_l2", "train_l2", "query_train_l2")
 
@@ -78,6 +96,7 @@ def main() -> None:
             "addon_combined",
             "halves",
             "endpoint_linear",
+            "corrected",
             "all",
         ),
         default="original",
@@ -95,6 +114,7 @@ def main() -> None:
             + SCHEME_GROUPS["combined"]
             + SCHEME_GROUPS["halves"]
             + SCHEME_GROUPS["endpoint_linear"]
+            + SCHEME_GROUPS["corrected"]
         )
     else:
         schemes = SCHEME_GROUPS[args.scheme_group]
