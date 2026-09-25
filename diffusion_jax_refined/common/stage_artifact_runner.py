@@ -590,6 +590,7 @@ def _combine_das_scores(
         train_path,
         damping=damping,
         train_indices=train_indices,
+        allowlist_text="",
     )
     denominator_cache = None
     computed_denominator = None
@@ -811,6 +812,7 @@ def _das_denominator_cache_path(
     *,
     damping: float | None,
     train_indices: np.ndarray,
+    allowlist_text: str | None = None,
 ) -> Path | None:
     if not _env_flag("DAS_SCORE_DENOMINATOR_CACHE", "1"):
         return None
@@ -818,7 +820,20 @@ def _das_denominator_cache_path(
     cache_root = Path(root) if root else train_path.parent / "das_denominator_cache"
     if root:
         cache_root = cache_root / train_path.parent.name
-    return cache_root / f"lambda_{_damping_tag(damping or 0)}_n{train_indices.shape[0]}.npz"
+    if allowlist_text is None:
+        allowlist_text = os.environ.get("DAS_SCORE_TIMESTEP_ALLOWLIST", "").strip()
+    allowlist_tag = ""
+    if allowlist_text:
+        values = [
+            int(value)
+            for value in allowlist_text.replace(",", " ").split()
+            if value.strip()
+        ]
+        allowlist_tag = "_t" + "-".join(str(value) for value in values)
+    return cache_root / (
+        f"lambda_{_damping_tag(damping or 0)}_n{train_indices.shape[0]}"
+        f"{allowlist_tag}.npz"
+    )
 
 
 def _load_das_denominator_cache(
@@ -826,6 +841,7 @@ def _load_das_denominator_cache(
     *,
     terms: int,
     train_indices: np.ndarray,
+    term_indices: np.ndarray | None = None,
 ) -> np.ndarray | None:
     if cache_path is None or not cache_path.is_file():
         return None
@@ -836,11 +852,28 @@ def _load_das_denominator_cache(
     except Exception as exc:
         print(f"[das-score] ignoring unreadable denominator cache {cache_path}: {exc}", flush=True)
         return None
-    if denominator.shape != (terms, train_indices.shape[0]) or not np.array_equal(cached_indices, train_indices):
+    if not np.array_equal(cached_indices, train_indices):
         print(f"[das-score] ignoring stale denominator cache {cache_path}", flush=True)
         return None
-    print(f"[das-score] loaded denominator cache: {cache_path}", flush=True)
-    return denominator
+    if denominator.shape == (terms, train_indices.shape[0]):
+        print(f"[das-score] loaded denominator cache: {cache_path}", flush=True)
+        return denominator
+    if term_indices is not None:
+        term_indices = np.asarray(term_indices, dtype=np.int64).reshape(-1)
+        if (
+            denominator.ndim == 2
+            and denominator.shape[1] == train_indices.shape[0]
+            and term_indices.shape[0] == terms
+            and term_indices.size > 0
+            and int(np.max(term_indices)) < denominator.shape[0]
+        ):
+            print(
+                f"[das-score] loaded and cropped denominator cache: {cache_path}",
+                flush=True,
+            )
+            return denominator[term_indices]
+    print(f"[das-score] ignoring stale denominator cache {cache_path}", flush=True)
+    return None
 
 
 def _write_das_denominator_cache(
@@ -879,6 +912,35 @@ def _das_score_contraction() -> str:
             f"DAS_SCORE_CONTRACTION must be 'squared' or 'linear', got {value!r}"
         )
     return value
+
+
+def _das_score_term_indices(term_ids: np.ndarray) -> np.ndarray:
+    term_ids = np.asarray(term_ids, dtype=np.int64)
+    if term_ids.ndim != 2 or term_ids.shape[1] < 2:
+        raise ValueError(f"DAS term ids must have shape (terms, >=2), got {term_ids.shape}")
+    text = os.environ.get("DAS_SCORE_TIMESTEP_ALLOWLIST", "").strip()
+    if not text:
+        return np.arange(term_ids.shape[0], dtype=np.int64)
+    requested = tuple(
+        dict.fromkeys(
+            int(value)
+            for value in text.replace(",", " ").split()
+            if value.strip()
+        )
+    )
+    if not requested:
+        raise ValueError("DAS_SCORE_TIMESTEP_ALLOWLIST selected no timesteps")
+    available = set(int(value) for value in term_ids[:, 1])
+    missing = [value for value in requested if value not in available]
+    if missing:
+        raise ValueError(f"DAS score timestep allowlist is missing from artifacts: {missing}")
+    allowed = set(requested)
+    selected = np.flatnonzero(
+        np.asarray([int(value) in allowed for value in term_ids[:, 1]], dtype=bool)
+    ).astype(np.int64)
+    if selected.size == 0:
+        raise ValueError("DAS score timestep allowlist retained no terms")
+    return selected
 
 
 def _score_float_dtype() -> np.dtype:
@@ -1419,6 +1481,7 @@ def run_das_score_batch_stage(config_path: str | Path) -> None:
     if residual.shape != train.shape[:2]:
         raise ValueError(f"residual shape {residual.shape} does not match train shape {train.shape}")
     train_term_ids = _das_term_ids(train_payload, path=train_path, expected_terms=train.shape[0])
+    score_term_indices = _das_score_term_indices(train_term_ids)
 
     print(f"[das-score-batch] loading global Gram once: {gram_path}", flush=True)
     # The standard DAS artifact stores train features, residuals, and Gram in
@@ -1469,6 +1532,7 @@ def run_das_score_batch_stage(config_path: str | Path) -> None:
 
     print(
         f"[das-score-batch] ready | train={train.shape} queries={queries.shape} "
+        f"selected_terms={len(score_term_indices)}/{train.shape[0]} "
         f"lambdas={len(damping_values)} backend={'jax' if use_jax else 'numpy'} "
         f"denominator={int(use_denominator)} contraction={score_contraction}",
         flush=True,
@@ -1483,12 +1547,34 @@ def run_das_score_batch_stage(config_path: str | Path) -> None:
         if use_denominator:
             denominator = _load_das_denominator_cache(
                 cache_path,
-                terms=train.shape[0],
+                terms=len(score_term_indices),
                 train_indices=indices,
             )
+            if denominator is None and len(score_term_indices) != train.shape[0]:
+                full_cache_path = _das_denominator_cache_path(
+                    train_path,
+                    damping=float(damping),
+                    train_indices=indices,
+                    allowlist_text="",
+                )
+                denominator = _load_das_denominator_cache(
+                    full_cache_path,
+                    terms=len(score_term_indices),
+                    train_indices=indices,
+                    term_indices=score_term_indices,
+                )
+                if denominator is not None:
+                    _write_das_denominator_cache(
+                        cache_path,
+                        denominator=denominator,
+                        train_indices=indices,
+                        damping=float(damping),
+                    )
             if denominator is None:
                 computed_denominator = True
-                denominator = np.empty(train.shape[:2], dtype=np.float32)
+                denominator = np.empty(
+                    (len(score_term_indices), train.shape[1]), dtype=np.float32
+                )
             else:
                 denominator_cache_hit = True
 
@@ -1497,7 +1583,8 @@ def run_das_score_batch_stage(config_path: str | Path) -> None:
             f"denominator_cache={'hit' if denominator_cache_hit else 'miss'}",
             flush=True,
         )
-        for term_i in range(train.shape[0]):
+        for selected_i, term_i in enumerate(score_term_indices):
+            term_i = int(term_i)
             gram_i = gram_undamped[term_i] + float(damping) * eye
             query_rhs = queries[:, term_i, :].T
             if use_jax:
@@ -1538,12 +1625,16 @@ def run_das_score_batch_stage(config_path: str | Path) -> None:
                 if computed_denominator:
                     denom = 1.0 - leverage
                     denom = np.where(np.abs(denom) < 1e-6, np.where(denom >= 0, 1e-6, -1e-6), denom)
-                    denominator[term_i] = denom.astype(np.float32)
-                raw = raw / denominator[term_i, :, None]
+                    denominator[selected_i] = denom.astype(np.float32)
+                raw = raw / denominator[selected_i, :, None]
             term_scores = raw.T if score_contraction == "linear" else np.square(raw.T)
             scores += np.asarray(term_scores, dtype=np.float64)
-            if (term_i + 1) % 10 == 0 or term_i + 1 == train.shape[0]:
-                print(f"[das-score-batch] lambda={damping:g} term {term_i + 1}/{train.shape[0]}", flush=True)
+            if (selected_i + 1) % 10 == 0 or selected_i + 1 == len(score_term_indices):
+                print(
+                    f"[das-score-batch] lambda={damping:g} "
+                    f"term {selected_i + 1}/{len(score_term_indices)}",
+                    flush=True,
+                )
 
         if computed_denominator:
             _write_das_denominator_cache(
@@ -1552,7 +1643,7 @@ def run_das_score_batch_stage(config_path: str | Path) -> None:
                 train_indices=indices,
                 damping=float(damping),
             )
-        scores /= float(train.shape[0])
+        scores /= float(len(score_term_indices))
         for job_i, job in enumerate(jobs):
             output_dir = Path(job["output_dir"]) / f"lambda_{_damping_tag(damping)}"
             _write_score_outputs(
@@ -1570,6 +1661,9 @@ def run_das_score_batch_stage(config_path: str | Path) -> None:
                     "shared_train_gram_load": True,
                     "batch_query_count": len(jobs),
                     "score_contraction": score_contraction,
+                    "score_timestep_allowlist": sorted(
+                        set(int(train_term_ids[index, 1]) for index in score_term_indices)
+                    ),
                 },
             )
         print(f"[das-score-batch] lambda={damping:g} complete for {len(jobs)} queries", flush=True)

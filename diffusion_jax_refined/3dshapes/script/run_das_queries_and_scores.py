@@ -20,6 +20,10 @@ def parse_ints(text: str) -> list[int]:
     return [int(value) for value in text.replace(",", " ").split() if value.strip()]
 
 
+def parse_floats(text: str) -> list[float]:
+    return [float(value) for value in text.replace(",", " ").split() if value.strip()]
+
+
 def run_command(command: list[str], *, env: dict[str, str], log_path: Path, execute: bool) -> None:
     print(f"[command] gpu={env.get('CUDA_VISIBLE_DEVICES')} {' '.join(command)}", flush=True)
     if not execute:
@@ -76,6 +80,16 @@ def main() -> None:
         default="squared",
     )
     parser.add_argument("--timesteps", default="", help="Optional comma-separated DAS timesteps.")
+    parser.add_argument(
+        "--score-timesteps",
+        default="",
+        help="Score-only timestep allowlist while reusing full train/query artifacts.",
+    )
+    parser.add_argument(
+        "--damping-values",
+        default="",
+        help="Optional comma-separated subset of damping values to score.",
+    )
     parser.add_argument("--num-mc-noise", type=int, default=1)
     parser.add_argument(
         "--aggregate-mc-gradient",
@@ -176,6 +190,8 @@ def main() -> None:
     )
     if args.timesteps.strip():
         base_env["DAS_TIMESTEPS"] = args.timesteps
+    if args.score_timesteps.strip():
+        base_env["DAS_SCORE_TIMESTEP_ALLOWLIST"] = args.score_timesteps
     if args.aggregate_mc_gradient:
         base_env["DAS_AGGREGATE_MC_GRADIENT"] = "1"
     if args.aggregate_mc_normalized:
@@ -252,7 +268,13 @@ def main() -> None:
             {"label": f"query_{query_id}_seed_{seed}", "query_path": str(query_artifact), "output_dir": str(output_dir)}
         )
 
-    lambdas = [float(value) for value in DAS_DAMPING_SWEEP_VALUES]
+    lambdas = (
+        parse_floats(args.damping_values)
+        if args.damping_values.strip()
+        else [float(value) for value in DAS_DAMPING_SWEEP_VALUES]
+    )
+    if not lambdas:
+        raise ValueError("--damping-values selected no values")
     lambda_shards = [lambdas[index::len(gpu_ids)] for index in range(len(gpu_ids))]
 
     def score_worker(gpu: str, damping_values: list[float]) -> None:
@@ -280,7 +302,7 @@ def main() -> None:
             future.result()
 
     print(
-        f"DAS query gradients and all 16 lambda scores completed | "
+        f"DAS query gradients and {len(lambdas)} lambda scores completed | "
         f"query_input={args.query_input_mode} train={train_das_name} "
         f"contraction={args.score_contraction} output={score_das_name}.",
         flush=True,
