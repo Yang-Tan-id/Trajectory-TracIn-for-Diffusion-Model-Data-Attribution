@@ -58,12 +58,25 @@ def main():
     ap.add_argument('--epochs',type=int,default=200); ap.add_argument('--query-namespace',default='loss_direction_residual_rms_original_f')
     ap.add_argument('--query-file',type=Path,default=ROOT/'queries_seed_0_9.json'); ap.add_argument('--query-ids',default='0,1,2,3,4,5,6,7,8,9')
     ap.add_argument('--attribution-points',type=int,default=5000); ap.add_argument('--out-dir',type=Path,required=True)
-    ap.add_argument('--checkpoint-weighting',choices=('stored_lr','uniform'),default='stored_lr',help='uniform removes the outer checkpoint learning-rate factor while retaining equal averaging over timestamps')
+    ap.add_argument(
+        '--checkpoint-weighting',
+        choices=('stored_lr','uniform','previous_checkpoint_lr'),
+        default='stored_lr',
+        help=(
+            'uniform removes the outer checkpoint learning-rate factor while retaining '
+            'equal averaging over timestamps; previous_checkpoint_lr gives checkpoint c '
+            'the stored outer weight from checkpoint c-1 and gives checkpoint 0 zero weight'
+        ),
+    )
     ap.add_argument(
         '--contraction',
-        choices=('linear', 'squared'),
+        choices=('linear', 'squared', 'timestamp_sum_squared'),
         default='linear',
-        help='linear sums signed dot products; squared squares each checkpoint/timestamp dot product before summing',
+        help=(
+            'linear sums signed dot products; squared squares each checkpoint/timestamp '
+            'dot product before summing; timestamp_sum_squared first sums checkpoints '
+            'within each query timestamp, then squares and sums timestamps'
+        ),
     )
     ap.add_argument('--plot-selection',action='store_true',help='write endpoint and trajectory LDS scatter plots for four_residual/query_train_l2')
     ap.add_argument('--include-all-events',action='store_true',help='also score E2, E3, E4 and their history-subtracted residuals')
@@ -99,6 +112,8 @@ def main():
     if a.event_original_lr and a.single_checkpoint_lr:
         ap.error('--event-original-lr and --single-checkpoint-lr are mutually exclusive')
     eventwise_lr = a.event_original_lr or a.single_checkpoint_lr
+    if eventwise_lr and a.checkpoint_weighting == 'previous_checkpoint_lr':
+        ap.error('eventwise LR modes cannot be combined with previous_checkpoint_lr')
     if eventwise_lr and a.include_all_events:
         ap.error('eventwise LR modes cannot be combined with --include-all-events')
     methods=('four','four_residual') if eventwise_lr else (ALL_EVENT_METHODS if a.include_all_events else METHODS)
@@ -134,6 +149,19 @@ def main():
     if num_timestamps <= 0:
         raise ValueError('query artifact contains no trajectory timestamps')
     scores={(m,v):np.zeros((len(query_ids),a.attribution_points),np.float64) for m in methods for v in VARIANTS}; score_idx=None
+    timestamp_order=tuple(dict.fromkeys(int(x) for x in meta['timesteps']))
+    timestamp_position={t:i for i,t in enumerate(timestamp_order)}
+    timestamp_scores=(
+        {
+            (m,v):np.zeros(
+                (len(timestamp_order),len(query_ids),a.attribution_points),
+                np.float64,
+            )
+            for m in methods for v in VARIANTS
+        }
+        if a.contraction=='timestamp_sum_squared'
+        else None
+    )
     for c in range(49):
         se=4*(c+1); state,_=mod._restore_checkpoint(str(ckroot/f'seed_{a.train_seed}_epoch_{se:04d}.ckpt'),template)
         zero=jax.tree_util.tree_map(jnp.zeros_like,state.params); hu,_=state.tx.update(zero,state.opt_state,state.params)
@@ -161,11 +189,21 @@ def main():
         checkpoint_lr=mod.learning_rate_at_step(cfg,se*steps_per_epoch,total_steps)
         if eventwise_lr and checkpoint_lr<=0:
             raise ValueError(f'checkpoint {c+1} has nonpositive LR {checkpoint_lr}')
-        for t in dict.fromkeys(int(x) for x in meta['timesteps']):
+        for t in timestamp_order:
             qi=lookup.get((c,t))
             if qi is None: continue
             q=query[:,qi,:]
-            weight=(1.0/num_timestamps if a.checkpoint_weighting=='uniform' else float(meta['term_weights'][qi]))
+            if a.checkpoint_weighting=='uniform':
+                weight=1.0/num_timestamps
+            elif a.checkpoint_weighting=='previous_checkpoint_lr':
+                previous_qi=lookup.get((c-1,t)) if c>0 else None
+                weight=(
+                    float(meta['term_weights'][previous_qi])
+                    if previous_qi is not None
+                    else 0.0
+                )
+            else:
+                weight=float(meta['term_weights'][qi])
             qn=np.linalg.norm(q,axis=1)+1e-8
             if eventwise_lr:
                 weighted_banks={
@@ -204,10 +242,17 @@ def main():
                     'query_train_l2':dots/(xn[:,None]*qn[None,:]),
                 }
                 for v,value in values.items():
+                    if a.contraction == 'timestamp_sum_squared':
+                        assert timestamp_scores is not None
+                        timestamp_scores[(m,v)][timestamp_position[t]]+=weight*value.T
+                        continue
                     if a.contraction == 'squared':
                         value = np.square(value)
                     scores[(m,v)]+=weight*value.T
         print(f'[score] checkpoint={c+1}/49',flush=True)
+    if timestamp_scores is not None:
+        for key,value in timestamp_scores.items():
+            scores[key]=np.square(value).sum(axis=0)
     assert score_idx is not None
     records=[records_all[q] for q in query_ids]; rows=[]
     if a.save_score_namespace:

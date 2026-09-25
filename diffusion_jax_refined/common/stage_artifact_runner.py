@@ -186,6 +186,8 @@ def _apply_traj_timestep_weighting(
 def _apply_traj_checkpoint_weighting(
     weights: np.ndarray,
     ckpt_indices: np.ndarray,
+    *,
+    checkpoint_total_weights: np.ndarray | None = None,
 ) -> np.ndarray:
     """Optionally replace stored checkpoint LR weights before timestep weighting."""
     mode = os.environ.get("TRACIN_SCORE_CHECKPOINT_WEIGHTING", "stored_lr").strip().lower()
@@ -198,17 +200,27 @@ def _apply_traj_checkpoint_weighting(
             raise ValueError(
                 "previous-checkpoint LR weighting requires one ckpt_index per score term"
             )
+        total_weights = (
+            weights
+            if checkpoint_total_weights is None
+            else np.asarray(checkpoint_total_weights, dtype=np.float64).reshape(-1)
+        )
+        if total_weights.shape != weights.shape:
+            raise ValueError(
+                "previous-checkpoint LR weighting requires checkpoint_total_weights "
+                "to match score weights"
+            )
         result = np.zeros_like(weights)
         checkpoints = sorted(int(value) for value in np.unique(ckpt_indices))
         checkpoint_totals = {
-            checkpoint: float(np.sum(weights[ckpt_indices == checkpoint]))
+            checkpoint: float(np.sum(total_weights[ckpt_indices == checkpoint]))
             for checkpoint in checkpoints
         }
         for position, checkpoint in enumerate(checkpoints):
             if position == 0:
                 continue
             mask = ckpt_indices == checkpoint
-            current_total = checkpoint_totals[checkpoint]
+            current_total = float(np.sum(weights[mask]))
             previous_total = checkpoint_totals[checkpoints[position - 1]]
             if current_total == 0.0:
                 if previous_total != 0.0:
@@ -486,8 +498,19 @@ def _combine_multiterm_dot_scores(
         if weights.shape[0] != train.shape[0]:
             raise ValueError(f"train term_weights length {weights.shape[0]} does not match train terms {train.shape[0]}")
         train_keep_array = np.asarray(train_keep, dtype=np.int64)
+        query_keep_array = np.asarray(query_keep, dtype=np.int64)
+        query_weights = np.asarray(
+            query_payload.get("term_weights", ()), dtype=np.float64
+        ).reshape(-1)
+        aligned_total_weights = (
+            query_weights[query_keep_array]
+            if query_weights.shape[0] == query.shape[0]
+            else None
+        )
         aligned_weights = _apply_traj_checkpoint_weighting(
-            weights[train_keep_array], train_ckpts[train_keep_array]
+            weights[train_keep_array],
+            train_ckpts[train_keep_array],
+            checkpoint_total_weights=aligned_total_weights,
         )
         aligned_weights = _apply_traj_timestep_weighting(
             aligned_weights,
@@ -1167,8 +1190,19 @@ def _aligned_query_terms_for_fused_score(
     if weights.shape[0] != train.shape[0]:
         return None
     train_keep_array = np.asarray(train_keep, dtype=np.int64)
+    query_keep_array = np.asarray(query_keep, dtype=np.int64)
+    query_weights = np.asarray(
+        query_payload.get("term_weights", ()), dtype=np.float64
+    ).reshape(-1)
+    aligned_total_weights = (
+        query_weights[query_keep_array]
+        if query_weights.shape[0] == query.shape[0]
+        else None
+    )
     aligned_weights = _apply_traj_checkpoint_weighting(
-        weights[train_keep_array], train_ckpts[train_keep_array]
+        weights[train_keep_array],
+        train_ckpts[train_keep_array],
+        checkpoint_total_weights=aligned_total_weights,
     )
     aligned_weights = _apply_traj_timestep_weighting(
         aligned_weights,
@@ -1176,7 +1210,7 @@ def _aligned_query_terms_for_fused_score(
         train_timesteps[train_keep_array],
     )
     return (
-        query[np.asarray(query_keep, dtype=np.int64)],
+        query[query_keep_array],
         aligned_weights,
         train_keep_array,
     )

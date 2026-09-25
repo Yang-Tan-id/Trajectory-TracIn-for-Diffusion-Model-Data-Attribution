@@ -169,6 +169,60 @@ class TrajScoreContractionTest(unittest.TestCase):
             [0.0, 0.0, 0.1, 0.1, 0.2, 0.2],
         )
 
+    def test_aligned_previous_lr_uses_query_lr_when_adamw_train_weights_are_uniform(self) -> None:
+        train = np.asarray(
+            [[[1.0]], [[2.0]], [[3.0]], [[4.0]]], dtype=np.float32
+        )
+        train_payload = {
+            "train_features": train,
+            "ckpt_indices": np.asarray([0, 0, 1, 1]),
+            "timesteps": np.asarray([0, 1, 0, 1]),
+            # AdamW-aware train features already contain their internal LR.
+            "term_weights": np.asarray([0.5, 0.5, 0.5, 0.5]),
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            query_path = root / "query.npz"
+            output_dir = root / "score"
+            np.savez(
+                query_path,
+                query_features=np.ones((4, 1), dtype=np.float32),
+                ckpt_indices=np.asarray([0, 0, 1, 1]),
+                timesteps=np.asarray([0, 1, 0, 1]),
+                # Stored query totals are LR_0=0.2 and LR_1=0.4.
+                term_weights=np.asarray([0.1, 0.1, 0.2, 0.2]),
+            )
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "TRACIN_SCORE_CONTRACTION": "timestamp_sum_squared",
+                    "TRACIN_SCORE_CHECKPOINT_WEIGHTING": "previous_checkpoint_lr",
+                    "TRACIN_SCORE_TQDM": "0",
+                    "TRACIN_ALIGN_TERMS_BY_CKPT_TIMESTEP": "1",
+                },
+            ):
+                handled = _run_fused_traj_score_batch(
+                    train_payload=train_payload,
+                    train=train,
+                    train_path=root / "train.npz",
+                    indices=np.asarray([42]),
+                    jobs=[
+                        {
+                            "label": "q0",
+                            "query_path": str(query_path),
+                            "output_dir": str(output_dir),
+                        }
+                    ],
+                    normalize_query=False,
+                    normalize_train=False,
+                )
+            self.assertTrue(handled)
+            result = np.load(output_dir / "scores.npy")
+        # Checkpoint 0 is zero. Checkpoint 1 receives LR_0=0.2,
+        # distributed equally across its two timestamps.
+        expected = (0.1 * 3.0) ** 2 + (0.1 * 4.0) ** 2
+        np.testing.assert_allclose(result, [expected])
+
 
 if __name__ == "__main__":
     unittest.main()
