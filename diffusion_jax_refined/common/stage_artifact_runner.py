@@ -96,6 +96,20 @@ def _normalize_rows(x: np.ndarray, eps: float) -> np.ndarray:
     return x / np.maximum(denom, float(eps))
 
 
+def _traj_score_contraction() -> str:
+    value = os.environ.get("TRACIN_SCORE_CONTRACTION", "linear").strip().lower()
+    if value not in ("linear", "squared"):
+        raise ValueError(
+            "TRACIN_SCORE_CONTRACTION must be 'linear' or 'squared', "
+            f"got {value!r}"
+        )
+    return value
+
+
+def _contract_traj_term(values: np.ndarray, contraction: str) -> np.ndarray:
+    return values if contraction == "linear" else np.square(values)
+
+
 def _ddim_step_squared_weights(timesteps: np.ndarray) -> np.ndarray:
     total = int(os.environ.get("TRACIN_SCORE_TIMESTEPS_TOTAL", "1000"))
     beta_start = float(os.environ.get("TRACIN_SCORE_BETA_START", "0.0001"))
@@ -209,7 +223,7 @@ def _combine_dot_scores(
     query = _query_vector(query_payload, path=query_path, normalize=normalize_query, eps=query_normalize_eps)
     if train.shape[1] != query.shape[0]:
         raise ValueError(f"feature dimension mismatch: train {train.shape} vs query {query.shape}")
-    return train @ query
+    return _contract_traj_term(train @ query, _traj_score_contraction())
 
 
 def _combine_dtrak_scores(train_payload: dict[str, np.ndarray], query_payload: dict[str, np.ndarray], *, train_path: Path, query_path: Path) -> np.ndarray:
@@ -256,6 +270,7 @@ def _combine_multiterm_dot_scores(
     train_norms: np.ndarray | None = None,
 ) -> np.ndarray:
     use_tqdm = _env_flag("TRACIN_SCORE_TQDM", "1")
+    score_contraction = _traj_score_contraction()
     score_dtype = np.float64 if _env_flag("TRACIN_SCORE_FLOAT64", "0") else np.float32
     train = _first_array(train_payload, ("train_features", "features", "train_gradients", "gradients"), path=train_path)
     train = np.asarray(train, dtype=score_dtype)
@@ -307,7 +322,7 @@ def _combine_multiterm_dot_scores(
         values = train_term @ query[query_i]
         if normalize_train:
             values = values / np.maximum(train_norms[train_i], float(train_normalize_eps))
-        return values
+        return _contract_traj_term(values, score_contraction)
     train_ckpts = np.asarray(train_payload.get("ckpt_indices", ()), dtype=np.int32).reshape(-1)
     train_timesteps = np.asarray(train_payload.get("timesteps", ()), dtype=np.int32).reshape(-1)
     inferred_checkpoint_shared = (
@@ -1068,6 +1083,7 @@ def _run_fused_traj_score_batch(
     train_scores = np.zeros_like(raw_scores) if normalize_train else None
     both_scores = np.zeros_like(raw_scores) if normalize_query and normalize_train else None
     train_eps = float(os.environ.get("TRACIN_SCORE_TRAIN_NORMALIZE_EPS", "1e-8"))
+    score_contraction = _traj_score_contraction()
     history = None
     if _env_flag("TRACIN_SCORE_ADD_OPTIMIZER_HISTORY", "0"):
         if "optimizer_history_features" not in train_payload:
@@ -1086,12 +1102,16 @@ def _run_fused_traj_score_batch(
         f"[traj-score-fused] queries={num_queries} terms={num_terms} points={num_points} "
         f"dim={train.shape[2]} raw=1 query_l2={int(normalize_query)} "
         f"train_l2={int(normalize_train)} both_l2={int(normalize_query and normalize_train)} "
+        f"contraction={score_contraction} "
         f"checkpoint_weighting={os.environ.get('TRACIN_SCORE_CHECKPOINT_WEIGHTING', 'stored_lr')} "
         f"timestep_weighting={os.environ.get('TRACIN_SCORE_TIMESTEP_WEIGHTING', 'uniform')}",
         flush=True,
     )
     unique_train_indices = list(dict.fromkeys(int(value) for value in train_term_indices))
-    if len(unique_train_indices) < num_terms:
+    # Query aggregation before the matrix multiply is valid only for a linear
+    # contraction.  Squared contraction must retain every aligned term so that
+    # sum_t <g_t, q_t>^2 does not acquire cross terms.
+    if len(unique_train_indices) < num_terms and score_contraction == "linear":
         train_slot = {train_i: slot for slot, train_i in enumerate(unique_train_indices)}
         raw_query_aggregate = np.zeros(
             (num_queries, len(unique_train_indices), train.shape[2]), dtype=np.float32
@@ -1147,18 +1167,30 @@ def _run_fused_traj_score_batch(
         if history is not None:
             train_term = train_term + history[train_i][None, :]
         raw_dot = train_term @ query_all[:, term_i, :].T
-        weighted_raw = raw_dot * weights_all[:, term_i][None, :]
+        weighted_raw = _contract_traj_term(
+            raw_dot, score_contraction
+        ) * weights_all[:, term_i][None, :]
         raw_scores += weighted_raw.T
         if normalize_train:
             train_norm = np.sqrt(np.einsum("ij,ij->i", train_term, train_term, optimize=True))
             train_denom = np.maximum(train_norm, train_eps)[:, None]
-            train_scores += (weighted_raw / train_denom).T
+            normalized_train_dot = raw_dot / train_denom
+            weighted_train = _contract_traj_term(
+                normalized_train_dot, score_contraction
+            ) * weights_all[:, term_i][None, :]
+            train_scores += weighted_train.T
         if normalize_query:
             query_dot = train_term @ query_norm_all[:, term_i, :].T
-            weighted_query = query_dot * weights_all[:, term_i][None, :]
+            weighted_query = _contract_traj_term(
+                query_dot, score_contraction
+            ) * weights_all[:, term_i][None, :]
             query_scores += weighted_query.T
             if normalize_train:
-                both_scores += (weighted_query / train_denom).T
+                normalized_both_dot = query_dot / train_denom
+                weighted_both = _contract_traj_term(
+                    normalized_both_dot, score_contraction
+                ) * weights_all[:, term_i][None, :]
+                both_scores += weighted_both.T
         if (term_i + 1) % 25 == 0 or term_i + 1 == num_terms:
             print(f"[traj-score-fused] term {term_i + 1}/{num_terms}", flush=True)
 
@@ -1167,6 +1199,7 @@ def _run_fused_traj_score_batch(
         query_path = Path(job["query_path"])
         timestep_allowlist = os.environ.get("TRACIN_SCORE_TIMESTEP_ALLOWLIST", "").strip()
         shared_metadata = {
+            "score_contraction": score_contraction,
             "checkpoint_weighting": os.environ.get(
                 "TRACIN_SCORE_CHECKPOINT_WEIGHTING", "stored_lr"
             ),
@@ -1570,6 +1603,7 @@ def run_traj_score_batch_stage(config_path: str | Path) -> None:
     indices = _score_indices(train_payload, int(train.shape[1]))
     normalize_query = _env_flag("TRACIN_SCORE_QUERY_NORMALIZE", "0")
     normalize_train = _env_flag("TRACIN_SCORE_TRAIN_NORMALIZE", "0")
+    score_contraction = _traj_score_contraction()
     pending_jobs = []
     for job in batch_jobs:
         out_dir = Path(job["output_dir"])
@@ -1653,7 +1687,10 @@ def run_traj_score_batch_stage(config_path: str | Path) -> None:
                 train_dir=train_path.parent,
                 query_dir=query_path.parent,
                 algorithm="traj_tracin",
-                extra_manifest={"batched_query_scoring": True},
+                extra_manifest={
+                    "batched_query_scoring": True,
+                    "score_contraction": score_contraction,
+                },
             )
         if normalize_query and not normalized_complete:
             eps = float(os.environ.get("TRACIN_SCORE_QUERY_NORMALIZE_EPS", "1e-8"))
@@ -1674,6 +1711,7 @@ def run_traj_score_batch_stage(config_path: str | Path) -> None:
                 algorithm="traj_tracin",
                 extra_manifest={
                     "batched_query_scoring": True,
+                    "score_contraction": score_contraction,
                     "query_gradient": "l2",
                     "query_normalize_eps": eps,
                     "raw_score_dir": str(out_dir),
@@ -1699,6 +1737,7 @@ def run_traj_score_batch_stage(config_path: str | Path) -> None:
                 algorithm="traj_tracin",
                 extra_manifest={
                     "batched_query_scoring": True,
+                    "score_contraction": score_contraction,
                     "train_gradient": "l2",
                     "train_normalize_eps": eps,
                     "raw_score_dir": str(out_dir),
@@ -1727,6 +1766,7 @@ def run_traj_score_batch_stage(config_path: str | Path) -> None:
                 algorithm="traj_tracin",
                 extra_manifest={
                     "batched_query_scoring": True,
+                    "score_contraction": score_contraction,
                     "query_gradient": "l2",
                     "train_gradient": "l2",
                     "query_normalize_eps": query_eps,
