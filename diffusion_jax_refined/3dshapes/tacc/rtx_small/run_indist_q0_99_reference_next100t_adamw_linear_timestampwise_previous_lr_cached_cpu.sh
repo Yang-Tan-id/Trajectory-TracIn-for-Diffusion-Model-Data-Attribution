@@ -67,7 +67,7 @@ python "$shapes/script/run_adamw_four_event_original_f_scores.py" \
   --out-dir "$out_root/linear"
 
 echo '[2/2] non-aligned 100t: sum checkpoints within each timestamp, square, then sum timestamps'
-echo '[weighting] checkpoint c receives the stored outer LR weight from checkpoint c-1; checkpoint 0 is zero'
+echo '[weighting] replace internal LR[c] by LR[c-1] via LR[c-1]/LR[c]; checkpoint 0 is zero'
 python "$shapes/script/run_adamw_four_event_original_f_scores.py" \
   --experiment "$experiment" --train-seed "$seed" \
   --query-file "$query_file" --query-ids "$query_ids" \

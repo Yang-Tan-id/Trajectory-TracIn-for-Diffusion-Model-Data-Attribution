@@ -64,8 +64,8 @@ def main():
         default='stored_lr',
         help=(
             'uniform removes the outer checkpoint learning-rate factor while retaining '
-            'equal averaging over timestamps; previous_checkpoint_lr gives checkpoint c '
-            'the stored outer weight from checkpoint c-1 and gives checkpoint 0 zero weight'
+            'equal averaging over timestamps; previous_checkpoint_lr rescales the '
+            'AdamW-aware feature by LR[c-1]/LR[c] and gives checkpoint 0 zero weight'
         ),
     )
     ap.add_argument(
@@ -197,11 +197,22 @@ def main():
                 weight=1.0/num_timestamps
             elif a.checkpoint_weighting=='previous_checkpoint_lr':
                 previous_qi=lookup.get((c-1,t)) if c>0 else None
-                weight=(
-                    float(meta['term_weights'][previous_qi])
-                    if previous_qi is not None
-                    else 0.0
-                )
+                current_weight=float(meta['term_weights'][qi])
+                if previous_qi is None:
+                    weight=0.0
+                elif current_weight==0.0:
+                    raise ValueError(
+                        f'checkpoint {c} timestamp {t} has zero current LR weight'
+                    )
+                else:
+                    # Query term weights are LR_c / num_timestamps.  The ratio
+                    # removes the LR_c already inside the AdamW feature and
+                    # replaces it with LR_{c-1}; 1/T remains the timestamp mean.
+                    weight=(
+                        float(meta['term_weights'][previous_qi])
+                        / current_weight
+                        / num_timestamps
+                    )
             else:
                 weight=float(meta['term_weights'][qi])
             qn=np.linalg.norm(q,axis=1)+1e-8

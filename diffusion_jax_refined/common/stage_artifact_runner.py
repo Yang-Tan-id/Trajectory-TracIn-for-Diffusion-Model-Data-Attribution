@@ -220,7 +220,7 @@ def _apply_traj_checkpoint_weighting(
             if position == 0:
                 continue
             mask = ckpt_indices == checkpoint
-            current_total = float(np.sum(weights[mask]))
+            current_total = checkpoint_totals[checkpoint]
             previous_total = checkpoint_totals[checkpoints[position - 1]]
             if current_total == 0.0:
                 if previous_total != 0.0:
@@ -229,6 +229,9 @@ def _apply_traj_checkpoint_weighting(
                         f"checkpoint weight is {previous_total}"
                     )
                 continue
+            # AdamW-aware train features already contain LR_c internally.  The
+            # ratio replaces that LR with LR_{c-1}; it must not multiply the
+            # feature by a second absolute learning rate.
             result[mask] = weights[mask] * (previous_total / current_total)
         return result
     if mode not in ("constant", "constant1", "constant_1", "uniform_checkpoint"):

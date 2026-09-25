@@ -197,6 +197,7 @@ class TrajScoreContractionTest(unittest.TestCase):
                 {
                     "TRACIN_SCORE_CONTRACTION": "timestamp_sum_squared",
                     "TRACIN_SCORE_CHECKPOINT_WEIGHTING": "previous_checkpoint_lr",
+                    "TRACIN_SCORE_TIMESTEP_ALLOWLIST": "0,1",
                     "TRACIN_SCORE_TQDM": "0",
                     "TRACIN_ALIGN_TERMS_BY_CKPT_TIMESTEP": "1",
                 },
@@ -218,9 +219,10 @@ class TrajScoreContractionTest(unittest.TestCase):
                 )
             self.assertTrue(handled)
             result = np.load(output_dir / "scores.npy")
-        # Checkpoint 0 is zero. Checkpoint 1 receives LR_0=0.2,
-        # distributed equally across its two timestamps.
-        expected = (0.1 * 3.0) ** 2 + (0.1 * 4.0) ** 2
+        # Checkpoint 0 is zero. Checkpoint 1's uniform train weights are
+        # rescaled by LR_0/LR_1 = 0.2/0.4 = 0.5, replacing the LR already
+        # inside its AdamW feature rather than multiplying by another LR.
+        expected = (0.25 * 3.0) ** 2 + (0.25 * 4.0) ** 2
         np.testing.assert_allclose(result, [expected])
 
 
