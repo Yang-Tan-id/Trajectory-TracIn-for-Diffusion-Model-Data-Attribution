@@ -180,6 +180,18 @@ SCORE_SCHEMES = {
         "traj_tracin_adamw_residual_aligned10x10_previous_target_linear_previous_lr_q0_20",
     "adamw_full_aligned10x10_previous_target_linear_previous_lr_q0_20":
         "traj_tracin_adamw_full_aligned10x10_previous_target_linear_previous_lr_q0_20",
+    "raw_mc10_aligned10x10_previous_target_termwise_squared_previous_lr_q0_20":
+        "traj_tracin_raw_mc10_aligned10x10_previous_target_termwise_squared_previous_lr_q0_20",
+    "adamw_residual_aligned10x10_previous_target_termwise_squared_previous_lr_q0_20":
+        "traj_tracin_adamw_residual_aligned10x10_previous_target_termwise_squared_previous_lr_q0_20",
+    "adamw_full_aligned10x10_previous_target_termwise_squared_previous_lr_q0_20":
+        "traj_tracin_adamw_full_aligned10x10_previous_target_termwise_squared_previous_lr_q0_20",
+    "raw_mc10_aligned10x10_previous_target_timestamp_sum_squared_previous_lr_q0_20":
+        "traj_tracin_raw_mc10_aligned10x10_previous_target_timestamp_sum_squared_previous_lr_q0_20",
+    "adamw_residual_aligned10x10_previous_target_timestamp_sum_squared_previous_lr_q0_20":
+        "traj_tracin_adamw_residual_aligned10x10_previous_target_timestamp_sum_squared_previous_lr_q0_20",
+    "adamw_full_aligned10x10_previous_target_timestamp_sum_squared_previous_lr_q0_20":
+        "traj_tracin_adamw_full_aligned10x10_previous_target_timestamp_sum_squared_previous_lr_q0_20",
     "raw_mc10_aligned10x10_previous_target_linear_previous_lr_q0_20":
         "traj_tracin_raw_mc10_aligned10x10_previous_target_linear_previous_lr_q0_20",
     "adamw_residual_aligned10x10_previous_target_linear_previous_lr_q0_20":

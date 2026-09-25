@@ -113,6 +113,34 @@ SCHEME_GROUPS = {
             "traj_tracin_adamw_full_aligned10x10_previous_target_linear_previous_lr_q0_20",
         ),
     ),
+    "previous_target_termwise_squared": (
+        (
+            "raw_previous_target_termwise_squared",
+            "traj_tracin_raw_mc10_aligned10x10_previous_target_termwise_squared_previous_lr_q0_20",
+        ),
+        (
+            "adamw_residual_previous_target_termwise_squared",
+            "traj_tracin_adamw_residual_aligned10x10_previous_target_termwise_squared_previous_lr_q0_20",
+        ),
+        (
+            "adamw_full_previous_target_termwise_squared",
+            "traj_tracin_adamw_full_aligned10x10_previous_target_termwise_squared_previous_lr_q0_20",
+        ),
+    ),
+    "previous_target_timestamp_sum_squared": (
+        (
+            "raw_previous_target_timestamp_sum_squared",
+            "traj_tracin_raw_mc10_aligned10x10_previous_target_timestamp_sum_squared_previous_lr_q0_20",
+        ),
+        (
+            "adamw_residual_previous_target_timestamp_sum_squared",
+            "traj_tracin_adamw_residual_aligned10x10_previous_target_timestamp_sum_squared_previous_lr_q0_20",
+        ),
+        (
+            "adamw_full_previous_target_timestamp_sum_squared",
+            "traj_tracin_adamw_full_aligned10x10_previous_target_timestamp_sum_squared_previous_lr_q0_20",
+        ),
+    ),
     "previous_target_linear": (
         (
             "raw_previous_target_linear",
@@ -250,6 +278,8 @@ def main() -> None:
             "second_order_hvp",
             "second_order_hvp_linear",
             "previous_target_linear",
+            "previous_target_termwise_squared",
+            "previous_target_timestamp_sum_squared",
             "previous_target_linear",
             "second_order_qts_probe_hvp",
             "second_order_qts_probe_hvp_termwise",
