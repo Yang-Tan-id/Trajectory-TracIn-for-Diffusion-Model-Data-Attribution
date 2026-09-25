@@ -17,6 +17,9 @@ TRAJ_METHODS = (
     "traj_projected_second_raw_linear",
     "traj_projected_second_raw_timestamp_sum_squared",
     "traj_projected_second_raw_termwise_squared",
+    "traj_projected_backward_first_raw_linear",
+    "traj_projected_backward_first_raw_timestamp_sum_squared",
+    "traj_projected_backward_first_raw_termwise_squared",
 )
 
 DAS_METHODS = (

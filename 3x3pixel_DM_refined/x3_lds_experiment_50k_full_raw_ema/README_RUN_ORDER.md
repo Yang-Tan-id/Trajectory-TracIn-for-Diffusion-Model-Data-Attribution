@@ -12,6 +12,16 @@ bank. It samples 100 queries (75 prompted, 25 unprompted), then runs:
 - EMA DAS at 100 timestamps x 10 query MC, with train-gradient MC=10;
 - the existing DAS lambda sweep unchanged.
 
+An additional backward first-order mode evaluates checkpoints `c=1..49`
+(zero-based indices, 49 transitions including the final checkpoint) at
+`theta_c`, targets `theta_{c-1}`, and weights the transition with the previous
+checkpoint learning rate `eta_{c-1}`. It uses the same 100 queries, 100x10
+train-gradient sampling, 4096-D projection, and three contractions:
+
+```bash
+python 04_launch_projected_backward_100q_4gpu.py
+```
+
 AdamW optimizer-history correction is intentionally disabled. No model or LDS
 subset retraining is part of this run.
 
