@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import glob
 import json
 import math
 from collections import defaultdict
@@ -41,7 +42,10 @@ def parse_floats(text: str) -> list[float]:
 
 
 def load_one_summary(pattern: Path, description: str) -> dict:
-    matches = sorted(pattern.parent.glob(pattern.name))
+    # The wildcard is in an ancestor component (the LDS subset-group directory),
+    # so Path.glob(pattern.name) from pattern.parent would treat that ``*`` as a
+    # literal directory. Expand the complete path instead.
+    matches = [Path(value) for value in sorted(glob.glob(str(pattern)))]
     if len(matches) != 1:
         raise RuntimeError(
             f"Expected exactly one {description}; found {len(matches)} for {pattern}"
