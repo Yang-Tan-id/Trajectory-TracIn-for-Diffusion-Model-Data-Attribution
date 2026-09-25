@@ -90,7 +90,7 @@ def main():
                     device=device, normalize_projected_grads=normalize,
                     normalize_eps=eps,
                 )
-                phi_queries.append(phi_q.to(torch.float32))
+                phi_queries.append(phi_q.to(torch.float32).detach())
             phi_queries = torch.stack(phi_queries)
 
             probe_single = output_probe[0]
@@ -157,6 +157,19 @@ def main():
                 f"train_mc={train_mc} elapsed={elapsed/3600:.2f}h eta={eta/3600:.2f}h",
                 flush=True,
             )
+            del (
+                phi_cache,
+                residual_cache,
+                gram,
+                eye,
+                phi_queries,
+                solved_queries,
+                raw,
+                grads_b,
+                phi,
+            )
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
     for qi, record in enumerate(records):
         for lam, values in scores.items():

@@ -307,7 +307,10 @@ def _project_batched_grads(grads_dict, names, projection_specs, d, normalize, ep
         norms = torch.linalg.vector_norm(out, dim=1, keepdim=True)
         out = out / (norms + float(eps))
 
-    return out
+    # Attribution never differentiates through cached train features. Keeping
+    # this graph alive across batches causes the cache assignment to retain a
+    # full backward graph for every processed datapoint.
+    return out.detach()
 
 
 def _project_gradient_tuple(grads, projection_specs, d):
