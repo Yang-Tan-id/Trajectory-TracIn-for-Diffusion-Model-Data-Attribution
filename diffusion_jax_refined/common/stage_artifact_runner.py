@@ -510,11 +510,31 @@ def _combine_multiterm_dot_scores(
             if query_weights.shape[0] == query.shape[0]
             else None
         )
-        aligned_weights = _apply_traj_checkpoint_weighting(
-            weights[train_keep_array],
-            train_ckpts[train_keep_array],
-            checkpoint_total_weights=aligned_total_weights,
-        )
+        checkpoint_mode = os.environ.get(
+            "TRACIN_SCORE_CHECKPOINT_WEIGHTING", "stored_lr"
+        ).strip().lower()
+        if checkpoint_mode == "previous_target_checkpoint_lr":
+            ratios = np.asarray(
+                query_payload.get("previous_checkpoint_lr_ratios", ()),
+                dtype=np.float64,
+            ).reshape(-1)
+            if query_weights.shape[0] != query.shape[0] or ratios.shape[0] != query.shape[0]:
+                raise ValueError(
+                    "previous_target_checkpoint_lr requires query term_weights and "
+                    "previous_checkpoint_lr_ratios for every query term"
+                )
+            if _env_flag("TRACIN_SCORE_FEATURES_INCLUDE_LR", "0"):
+                aligned_weights = weights[train_keep_array] * ratios[query_keep_array]
+            else:
+                aligned_weights = (
+                    query_weights[query_keep_array] * ratios[query_keep_array]
+                )
+        else:
+            aligned_weights = _apply_traj_checkpoint_weighting(
+                weights[train_keep_array],
+                train_ckpts[train_keep_array],
+                checkpoint_total_weights=aligned_total_weights,
+            )
         aligned_weights = _apply_traj_timestep_weighting(
             aligned_weights,
             train_ckpts[train_keep_array],
@@ -1202,11 +1222,25 @@ def _aligned_query_terms_for_fused_score(
         if query_weights.shape[0] == query.shape[0]
         else None
     )
-    aligned_weights = _apply_traj_checkpoint_weighting(
-        weights[train_keep_array],
-        train_ckpts[train_keep_array],
-        checkpoint_total_weights=aligned_total_weights,
-    )
+    checkpoint_mode = os.environ.get(
+        "TRACIN_SCORE_CHECKPOINT_WEIGHTING", "stored_lr"
+    ).strip().lower()
+    if checkpoint_mode == "previous_target_checkpoint_lr":
+        ratios = np.asarray(
+            query_payload.get("previous_checkpoint_lr_ratios", ()), dtype=np.float64
+        ).reshape(-1)
+        if query_weights.shape[0] != query.shape[0] or ratios.shape[0] != query.shape[0]:
+            return None
+        if _env_flag("TRACIN_SCORE_FEATURES_INCLUDE_LR", "0"):
+            aligned_weights = weights[train_keep_array] * ratios[query_keep_array]
+        else:
+            aligned_weights = query_weights[query_keep_array] * ratios[query_keep_array]
+    else:
+        aligned_weights = _apply_traj_checkpoint_weighting(
+            weights[train_keep_array],
+            train_ckpts[train_keep_array],
+            checkpoint_total_weights=aligned_total_weights,
+        )
     aligned_weights = _apply_traj_timestep_weighting(
         aligned_weights,
         train_ckpts[train_keep_array],

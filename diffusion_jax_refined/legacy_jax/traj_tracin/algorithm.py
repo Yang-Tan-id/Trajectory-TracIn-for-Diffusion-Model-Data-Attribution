@@ -1676,6 +1676,10 @@ def normalize_query_objective_name(name: str) -> str:
         "next_checkpoint_noise_mse": "trajectory_next_checkpoint_noise_mse",
         "next_ckpt_noise_mse": "trajectory_next_checkpoint_noise_mse",
         "next_checkpoint_predicted_noise_mse": "trajectory_next_checkpoint_noise_mse",
+        "trajectory_previous_checkpoint_noise_mse": "trajectory_previous_checkpoint_noise_mse",
+        "previous_checkpoint_noise_mse": "trajectory_previous_checkpoint_noise_mse",
+        "previous_ckpt_noise_mse": "trajectory_previous_checkpoint_noise_mse",
+        "previous_checkpoint_predicted_noise_mse": "trajectory_previous_checkpoint_noise_mse",
         "trajectory_next_checkpoint_implied_noise_mse": "trajectory_next_checkpoint_implied_noise_mse",
         "next_checkpoint_implied_noise_mse": "trajectory_next_checkpoint_implied_noise_mse",
         "next_ckpt_implied_noise_mse": "trajectory_next_checkpoint_implied_noise_mse",
@@ -1710,6 +1714,7 @@ def normalize_query_objective_name(name: str) -> str:
         raise ValueError(
             "query_objective must be one of "
             "trajectory_noise_squared_deviation, trajectory_next_checkpoint_noise_mse, "
+            "trajectory_previous_checkpoint_noise_mse, "
             "trajectory_next_checkpoint_implied_noise_mse, "
             "trajectory_next_checkpoint_trajectory_noise_mse, "
             "trajectory_next_checkpoint_ref_projection, trajectory_future_residual_mixture, "
@@ -1729,12 +1734,18 @@ def query_objective_uses_next_checkpoint(name: str) -> bool:
     }
 
 
+def query_objective_uses_previous_checkpoint(name: str) -> bool:
+    return normalize_query_objective_name(name) == "trajectory_previous_checkpoint_noise_mse"
+
+
 def query_objective_formula(name: str) -> str:
     name = normalize_query_objective_name(name)
     if name == "trajectory_noise_squared_deviation":
         return "sum_k w_k ||eps_theta(x_ref_k,k)-eps_theta_ref(x_ref_k,k)||_2^2"
     if name == "trajectory_next_checkpoint_noise_mse":
         return "sum_k w_k mean((eps_theta_c(x_c_k,k)-stopgrad(eps_theta_c_plus_1(x_c_k,k)))^2)"
+    if name == "trajectory_previous_checkpoint_noise_mse":
+        return "sum_k w_k mean((eps_theta_c(x_c_k,k)-stopgrad(eps_theta_c_minus_1(x_c_k,k)))^2)"
     if name == "trajectory_next_checkpoint_implied_noise_mse":
         return (
             "sum_k w_k mean((eps_theta_c(x_c_k,k)-stopgrad((x_c_plus_1_k_minus_1-"
@@ -1773,7 +1784,10 @@ def query_scalar(adapter, model, params, query_target_params, reference_params, 
     diff = eps - eps_query_target
     if objective == "trajectory_noise_squared_deviation":
         return jnp.sum(diff ** 2)
-    if objective == "trajectory_next_checkpoint_noise_mse":
+    if objective in (
+        "trajectory_next_checkpoint_noise_mse",
+        "trajectory_previous_checkpoint_noise_mse",
+    ):
         return jnp.mean(diff ** 2)
     if objective == "trajectory_next_checkpoint_ref_projection":
         return jnp.mean((eps_query_target - eps) * (eps_ref - eps))
@@ -2359,6 +2373,9 @@ def run_attribution(cfg: TrajAttributionConfig):
             f"probe count {cfg.predicted_noise_probe_count}"
         )
     uses_next_checkpoint_target = query_objective_uses_next_checkpoint(cfg.query_objective)
+    uses_previous_checkpoint_target = query_objective_uses_previous_checkpoint(
+        cfg.query_objective
+    )
     uses_implied_noise_trajectory_target = (
         cfg.query_objective == "trajectory_next_checkpoint_implied_noise_mse"
     )
@@ -2465,6 +2482,8 @@ def run_attribution(cfg: TrajAttributionConfig):
             if uses_checkpoint_trajectory_target
             else "next_checkpoint_predicted_noise"
             if uses_next_checkpoint_target
+            else "previous_checkpoint_predicted_noise"
+            if uses_previous_checkpoint_target
             else "reference_checkpoint_predicted_noise"
         )
     )
@@ -2498,6 +2517,17 @@ def run_attribution(cfg: TrajAttributionConfig):
             print(
                 "[setup] next-checkpoint query target enabled; "
                 "final checkpoint has no c+1 target and will be skipped."
+            )
+    if uses_previous_checkpoint_target:
+        if stage_mode == "train":
+            print(
+                "[setup] previous-checkpoint query target enabled; train gradients are "
+                "query-independent, so all checkpoints are retained."
+            )
+        else:
+            print(
+                "[setup] previous-checkpoint query target enabled; "
+                "first checkpoint has no c-1 target and will be skipped."
             )
 
     print("[setup] importing adapter and selecting device...")
@@ -2554,9 +2584,11 @@ def run_attribution(cfg: TrajAttributionConfig):
         return previous_params
 
     def query_target_params_for_checkpoint(ckpt_i: int):
-        if not uses_next_checkpoint_target:
-            return reference_params
-        return next_checkpoint_params(ckpt_i)
+        if uses_next_checkpoint_target:
+            return next_checkpoint_params(ckpt_i)
+        if uses_previous_checkpoint_target:
+            return previous_checkpoint_params(ckpt_i)
+        return reference_params
 
     example_x, _ = adapter.get_example_batch(ds)
     print(f"[setup] example input shape={tuple(example_x.shape)}")
@@ -3255,6 +3287,7 @@ def run_attribution(cfg: TrajAttributionConfig):
         stage_snapshot_positions = []
         stage_ckpt_paths = []
         stage_term_weights = []
+        stage_previous_lr_ratios = []
         used_ckpts_for_stage = []
         stage_part_dir = f"{stage_artifact_path}.parts" if stage_mode == "train" else None
         stage_checkpoint_count = (
@@ -3264,6 +3297,7 @@ def run_attribution(cfg: TrajAttributionConfig):
                 len(ckpts) - 1
                 if (
                     uses_next_checkpoint_target
+                    or uses_previous_checkpoint_target
                     or save_query_hvp
                     or probe_alignment_next_checkpoint
                     or probe_alignment_previous_checkpoint
@@ -3560,7 +3594,7 @@ def run_attribution(cfg: TrajAttributionConfig):
                 continue
             if (
                 stage_mode != "train"
-                and probe_alignment_previous_checkpoint
+                and (probe_alignment_previous_checkpoint or uses_previous_checkpoint_target)
                 and ckpt_i == 0
             ):
                 print(
@@ -4651,10 +4685,27 @@ def run_attribution(cfg: TrajAttributionConfig):
                         stage_snapshot_positions.append(int(pos_seq[snap_id]))
                         stage_ckpt_paths.append(str(ckpt_path))
                         stage_term_weights.append(ckpt_lr_weight / float(max(1, len(t_seq))))
+                        if uses_previous_checkpoint_target:
+                            previous_lr = tracin_checkpoint_lr_weight(
+                                cfg,
+                                ckpts[ckpt_i - 1],
+                                ckpt_i - 1,
+                                len(ckpts),
+                                len(ds),
+                            )
+                            stage_previous_lr_ratios.append(
+                                float(previous_lr) / float(ckpt_lr_weight)
+                                if float(ckpt_lr_weight) != 0.0
+                                else 0.0
+                            )
                     stage_terms_done += len(chunk_ids)
                     query_total_terms = (
                         len(ckpts) - 1
-                        if uses_next_checkpoint_target or save_query_hvp
+                        if (
+                            uses_next_checkpoint_target
+                            or uses_previous_checkpoint_target
+                            or save_query_hvp
+                        )
                         else len(ckpts)
                     ) * len(t_seq)
                     print(
@@ -6027,9 +6078,22 @@ def run_attribution(cfg: TrajAttributionConfig):
                 proj_dim=np.asarray(proj_dim, dtype=np.int32),
                 query_objective=np.asarray(cfg.query_objective),
                 query_target_checkpoint=np.asarray(
-                    "next_checkpoint" if uses_next_checkpoint_target else "reference_checkpoint"
+                    "next_checkpoint"
+                    if uses_next_checkpoint_target
+                    else "previous_checkpoint"
+                    if uses_previous_checkpoint_target
+                    else "reference_checkpoint"
                 ),
             )
+            if uses_previous_checkpoint_target:
+                if len(stage_previous_lr_ratios) != len(stage_features):
+                    raise RuntimeError(
+                        "previous-checkpoint LR-ratio/query term-count mismatch: "
+                        f"{len(stage_previous_lr_ratios)} != {len(stage_features)}"
+                    )
+                query_payload["previous_checkpoint_lr_ratios"] = np.asarray(
+                    stage_previous_lr_ratios, dtype=np.float32
+                )
             if save_query_hvp:
                 if len(stage_query_hvp_features) != len(stage_features):
                     raise RuntimeError(
