@@ -77,19 +77,38 @@ fi
 
 python - "$artifact" <<'PY'
 import sys
+import zipfile
 import numpy as np
 
 path = sys.argv[1]
+with zipfile.ZipFile(path) as archive:
+    with archive.open("train_features.npy") as handle:
+        version = np.lib.format.read_magic(handle)
+        if version == (1, 0):
+            shape, _, _ = np.lib.format.read_array_header_1_0(handle)
+        else:
+            shape, _, _ = np.lib.format.read_array_header_2_0(handle)
 with np.load(path, allow_pickle=False) as data:
-    shape = data["train_features"].shape
-    semantics = str(np.asarray(data["train_feature_semantics"]).item())
-    transform = str(np.asarray(data.get("train_optimizer_transform", "none")).item())
+    keys = set(data.files)
+    semantics = (
+        str(np.asarray(data["train_feature_semantics"]).item())
+        if "train_feature_semantics" in keys
+        else "projected_expected_loss_gradient (legacy inferred)"
+    )
+    transform = (
+        str(np.asarray(data["train_optimizer_transform"]).item())
+        if "train_optimizer_transform" in keys
+        else "none (legacy inferred)"
+    )
     timesteps = sorted(set(np.asarray(data["timesteps"], dtype=np.int64).tolist()))
+    has_optimizer_history = "optimizer_history_features" in keys
 expected_t = [0, 111, 222, 333, 444, 555, 666, 777, 888, 999]
 if shape != (500, 5000, 4096):
     raise SystemExit(f"Unexpected raw train shape: {shape}")
-if semantics != "projected_expected_loss_gradient" or transform != "none":
+if not semantics.startswith("projected_expected_loss_gradient") or not transform.startswith("none"):
     raise SystemExit(f"Not a raw loss-gradient artifact: semantics={semantics} transform={transform}")
+if has_optimizer_history:
+    raise SystemExit("Legacy raw artifact unexpectedly contains optimizer_history_features")
 if timesteps != expected_t:
     raise SystemExit(f"Unexpected raw train timestamps: {timesteps}")
 print(f"[validated] shape={shape} semantics={semantics} transform={transform} timesteps={timesteps}")
