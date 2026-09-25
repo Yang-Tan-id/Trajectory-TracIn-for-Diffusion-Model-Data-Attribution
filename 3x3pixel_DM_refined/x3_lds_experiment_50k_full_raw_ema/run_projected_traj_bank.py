@@ -45,12 +45,18 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--family", choices=FAMILIES, required=True)
     parser.add_argument("--gpu", type=int, default=0)
+    parser.add_argument("--timestamp-shard-index", type=int, default=0)
+    parser.add_argument("--timestamp-shard-count", type=int, default=1)
     args = parser.parse_args()
+    if args.timestamp_shard_count <= 0:
+        raise ValueError("--timestamp-shard-count must be positive")
+    if not 0 <= args.timestamp_shard_index < args.timestamp_shard_count:
+        raise ValueError("timestamp shard index is outside the shard count")
     device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
 
     with open(QUERY_DIR / "manifest.json") as handle:
         records = [r for r in json.load(handle) if r["family"] == args.family]
-    if not records or family_complete(records):
+    if not records or (args.timestamp_shard_count == 1 and family_complete(records)):
         print(f"[skip] projected Traj bank complete for {args.family}", flush=True)
         return
 
@@ -63,6 +69,19 @@ def main():
     t_seq = timestep_arrays[0]
     if len(t_seq) != 100 or any(not np.array_equal(t_seq, values) for values in timestep_arrays):
         raise ValueError("all bank queries must share the same 100 trajectory timestamps")
+    selected_timestamp_indices = list(
+        range(args.timestamp_shard_index, len(t_seq), args.timestamp_shard_count)
+    )
+    shard_root = (
+        ATTR_DIR
+        / "_projected_traj_shards"
+        / args.family
+        / f"shard_{args.timestamp_shard_index:02d}_of_{args.timestamp_shard_count:02d}"
+    )
+    shard_done = shard_root / "done.json"
+    if args.timestamp_shard_count > 1 and shard_done.is_file():
+        print(f"[skip] projected Traj shard complete: {shard_done}", flush=True)
+        return
     conditions = [cond_for(r, ds, device) for r in records]
 
     q_count = len(records)
@@ -77,17 +96,20 @@ def main():
     started = time.perf_counter()
     print(
         f"[projected-bank {args.family}] start queries={q_count} "
-        f"checkpoints={len(paths)-1} timestamps={len(t_seq)} "
+        f"checkpoints={len(paths)-1} timestamps={len(selected_timestamp_indices)}/{len(t_seq)} "
+        f"shard={args.timestamp_shard_index}/{args.timestamp_shard_count} "
         f"train_points={N_TRAIN} train_mc={mc_count} batch={batch_size} dim={d}",
         flush=True,
     )
 
     # Timestamp-major traversal keeps only one QxN timestamp accumulator in memory.
-    for si, tval_raw in enumerate(t_seq.tolist()):
+    for shard_timestamp_i, si in enumerate(selected_timestamp_indices, start=1):
+        tval_raw = t_seq[si]
         tval = int(tval_raw)
         timestamp_acc = {o: torch.zeros_like(linear[o]) for o in linear}
         print(
             f"[projected-bank {args.family}] timestamp {si+1}/{len(t_seq)} "
+            f"shard_timestamp={shard_timestamp_i}/{len(selected_timestamp_indices)} "
             f"t={tval} start",
             flush=True,
         )
@@ -195,6 +217,28 @@ def main():
         ("second", "timestamp_sum_squared"): timestamp_square["second"],
         ("second", "termwise_squared"): term_square["second"],
     }
+    if args.timestamp_shard_count > 1:
+        shard_root.mkdir(parents=True, exist_ok=True)
+        for (order, contraction), values in result_map.items():
+            np.save(
+                shard_root / f"{order}_{contraction}.npy",
+                values.cpu().numpy(),
+            )
+        with open(shard_done, "w") as handle:
+            json.dump(
+                {
+                    "family": args.family,
+                    "timestamp_shard_index": args.timestamp_shard_index,
+                    "timestamp_shard_count": args.timestamp_shard_count,
+                    "timestamp_indices": selected_timestamp_indices,
+                    "query_ids": [int(record["query_id"]) for record in records],
+                },
+                handle,
+                indent=2,
+            )
+        print(f"[done] projected Traj shard saved: {shard_root}", flush=True)
+        return
+
     for qi, record in enumerate(records):
         for (order, contraction), values in result_map.items():
             method = f"traj_projected_{order}_raw_{contraction}"

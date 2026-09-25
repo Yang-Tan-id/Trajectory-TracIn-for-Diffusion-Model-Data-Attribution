@@ -8,42 +8,18 @@ import time
 from exp_config import CUDA_IDS, LOG_DIR, QUERY_DIR
 
 
-def run_all():
-    if len(CUDA_IDS) < 4:
-        raise ValueError("the bank launcher requires four CUDA_IDS")
-    LOG_DIR.mkdir(parents=True, exist_ok=True)
-    traj_log_path = LOG_DIR / "projected_traj_100q.log"
-    das_log_path = LOG_DIR / "das_100q.log"
-    traj_log = open(traj_log_path, "a", buffering=1)
-    das_log = open(das_log_path, "a", buffering=1)
-    traj_log.write("\n[launcher] starting projected Traj prompted/unprompted workers\n")
-    das_log.write("\n[launcher] starting DAS prompted/unprompted workers\n")
+def run_workers(commands, log_path, phase_label):
+    with open(log_path, "a", buffering=1) as stream:
+        stream.write(f"\n[launcher] starting {phase_label}\n")
+        workers = []
+        for label, command in commands:
+            stream.write(f"[launcher] {label}: {' '.join(command)}\n")
+            process = subprocess.Popen(command, stdout=stream, stderr=subprocess.STDOUT)
+            workers.append((label, process))
+            print(f"[launcher] started {label} pid={process.pid}", flush=True)
+        print(f"[launcher] {phase_label} log: {log_path}", flush=True)
 
-    commands = []
-    for family, gpu in zip(("prompted", "unprompted"), CUDA_IDS[:2]):
-        commands.append((
-            f"traj-{family}",
-            [sys.executable, "run_projected_traj_bank.py", "--family", family, "--gpu", str(gpu)],
-            traj_log,
-        ))
-    for family, gpu in zip(("prompted", "unprompted"), CUDA_IDS[2:4]):
-        commands.append((
-            f"das-{family}",
-            [sys.executable, "run_das_bank.py", "--family", family, "--gpu", str(gpu)],
-            das_log,
-        ))
-
-    workers = []
-    for label, command, stream in commands:
-        stream.write(f"[launcher] {label}: {' '.join(command)}\n")
-        process = subprocess.Popen(command, stdout=stream, stderr=subprocess.STDOUT)
-        workers.append((label, process))
-        print(f"[launcher] started {label} pid={process.pid}", flush=True)
-    print(f"[launcher] Traj log: {traj_log_path}", flush=True)
-    print(f"[launcher] DAS log:  {das_log_path}", flush=True)
-
-    active = dict(workers)
-    try:
+        active = dict(workers)
         while active:
             for label, process in list(active.items()):
                 code = process.poll()
@@ -59,9 +35,53 @@ def run_all():
                     raise SystemExit(code)
             if active:
                 time.sleep(1)
-    finally:
-        traj_log.close()
-        das_log.close()
+
+
+def run_all():
+    if len(CUDA_IDS) < 4:
+        raise ValueError("the bank launcher requires four CUDA_IDS")
+    LOG_DIR.mkdir(parents=True, exist_ok=True)
+    traj_log_path = LOG_DIR / "projected_traj_100q.log"
+    das_log_path = LOG_DIR / "das_100q.log"
+
+    das_commands = []
+    for family, gpu in zip(("prompted", "unprompted"), CUDA_IDS[:2]):
+        das_commands.append((
+            f"das-{family}",
+            [sys.executable, "run_das_bank.py", "--family", family, "--gpu", str(gpu)],
+        ))
+    run_workers(das_commands, das_log_path, "DAS prompted/unprompted")
+
+    traj_commands = []
+    assignments = (
+        ("prompted", 0, CUDA_IDS[0]),
+        ("prompted", 1, CUDA_IDS[1]),
+        ("unprompted", 0, CUDA_IDS[2]),
+        ("unprompted", 1, CUDA_IDS[3]),
+    )
+    for family, shard, gpu in assignments:
+        traj_commands.append((
+            f"traj-{family}-shard-{shard}",
+            [
+                sys.executable,
+                "run_projected_traj_bank.py",
+                "--family", family,
+                "--gpu", str(gpu),
+                "--timestamp-shard-index", str(shard),
+                "--timestamp-shard-count", "2",
+            ],
+        ))
+    run_workers(traj_commands, traj_log_path, "four-GPU projected Traj")
+
+    with open(traj_log_path, "a", buffering=1) as stream:
+        for family in ("prompted", "unprompted"):
+            command = [
+                sys.executable,
+                "merge_projected_traj_shards.py",
+                "--family", family,
+                "--timestamp-shard-count", "2",
+            ]
+            subprocess.run(command, stdout=stream, stderr=subprocess.STDOUT, check=True)
 
 
 def main():
@@ -70,8 +90,8 @@ def main():
     if len(queries) != 100:
         raise ValueError(f"expected 100 queries, found {len(queries)}")
 
-    # Four concurrent workers: Traj prompted/unprompted and DAS
-    # prompted/unprompted. Each shares train work across its query family.
+    # DAS runs first (and skips if already complete), then Traj uses all four
+    # GPUs as two timestamp shards per family and merges exact partial sums.
     run_all()
     print("[done] projected Traj + DAS family-bank attribution", flush=True)
 
