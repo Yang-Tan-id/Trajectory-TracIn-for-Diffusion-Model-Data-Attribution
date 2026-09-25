@@ -164,6 +164,10 @@ SCORE_SCHEMES = {
         "traj_tracin_adamw_residual_aligned10x10_query_timestamp_shared_timestamp_sum_squared_previous_lr",
     "adamw_full_aligned10x10_query_timestamp_shared_timestamp_sum_squared_previous_lr":
         "traj_tracin_adamw_full_aligned10x10_query_timestamp_shared_timestamp_sum_squared_previous_lr",
+    "adamw_residual_aligned10x10_query_timestamp_shared_termwise_squared":
+        "traj_tracin_adamw_residual_aligned10x10_query_timestamp_shared_termwise_squared",
+    "adamw_full_aligned10x10_query_timestamp_shared_termwise_squared":
+        "traj_tracin_adamw_full_aligned10x10_query_timestamp_shared_termwise_squared",
     "adamw_residual_aligned10x10_addon10":
         "traj_tracin_adamw_residual_aligned10x10_addon10",
     "adamw_full_aligned10x10_addon10":

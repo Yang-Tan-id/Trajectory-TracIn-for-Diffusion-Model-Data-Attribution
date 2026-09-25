@@ -73,6 +73,16 @@ SCHEME_GROUPS = {
             "traj_tracin_adamw_full_aligned10x10_query_timestamp_shared_timestamp_sum_squared_previous_lr",
         ),
     ),
+    "query_timestamp_shared_termwise_squared": (
+        (
+            "residual_query_timestamp_shared_termwise_squared",
+            "traj_tracin_adamw_residual_aligned10x10_query_timestamp_shared_termwise_squared",
+        ),
+        (
+            "full_query_timestamp_shared_termwise_squared",
+            "traj_tracin_adamw_full_aligned10x10_query_timestamp_shared_termwise_squared",
+        ),
+    ),
     "addon": (
         ("addon_residual", "traj_tracin_adamw_residual_aligned10x10_addon10"),
         ("addon_full", "traj_tracin_adamw_full_aligned10x10_addon10"),
@@ -144,6 +154,7 @@ def main() -> None:
             "timestamp_sum_squared",
             "query_timestamp_shared",
             "query_timestamp_shared_previous_lr",
+            "query_timestamp_shared_termwise_squared",
             "addon",
             "combined",
             "addon_combined",
