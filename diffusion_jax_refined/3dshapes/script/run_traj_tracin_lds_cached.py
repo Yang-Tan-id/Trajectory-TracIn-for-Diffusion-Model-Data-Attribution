@@ -141,6 +141,7 @@ PREDICTED_NOISE_JVP_SCHEMES = {
     "predicted_noise_shared_orthogonal_probe8_termwise_square",
 }
 SCORE_SCHEMES = {
+    "raw_mc10_aligned10x10": "traj_tracin_raw_mc10_aligned10x10",
     "adamw_residual_aligned10x10": "traj_tracin_adamw_residual_aligned10x10",
     "adamw_full_aligned10x10": "traj_tracin_adamw_full_aligned10x10",
     "adamw_residual_aligned10x10_squared":

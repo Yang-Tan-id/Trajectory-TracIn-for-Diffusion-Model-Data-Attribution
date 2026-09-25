@@ -22,6 +22,9 @@ TARGETS = (
     "noise_trajectory",
 )
 SCHEME_GROUPS = {
+    "raw_loss": (
+        ("raw_loss_mc10", "traj_tracin_raw_mc10_aligned10x10"),
+    ),
     "original": (
         ("residual", "traj_tracin_adamw_residual_aligned10x10"),
         ("full", "traj_tracin_adamw_full_aligned10x10"),
@@ -104,6 +107,7 @@ def main() -> None:
     parser.add_argument(
         "--scheme-group",
         choices=(
+            "raw_loss",
             "original",
             "squared",
             "absolute",
