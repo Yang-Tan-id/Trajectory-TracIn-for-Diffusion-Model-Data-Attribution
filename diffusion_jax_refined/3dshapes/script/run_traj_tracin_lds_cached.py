@@ -168,6 +168,10 @@ SCORE_SCHEMES = {
         "traj_tracin_adamw_residual_aligned10x10_qts_probe_second_order_hvp_next_delta_timestamp_sum_squared_q0_20",
     "adamw_full_aligned10x10_qts_probe_second_order_hvp_next_delta_timestamp_sum_squared_q0_20":
         "traj_tracin_adamw_full_aligned10x10_qts_probe_second_order_hvp_next_delta_timestamp_sum_squared_q0_20",
+    "adamw_residual_aligned10x10_qts_probe_second_order_hvp_next_delta_termwise_squared_q0_20":
+        "traj_tracin_adamw_residual_aligned10x10_qts_probe_second_order_hvp_next_delta_termwise_squared_q0_20",
+    "adamw_full_aligned10x10_qts_probe_second_order_hvp_next_delta_termwise_squared_q0_20":
+        "traj_tracin_adamw_full_aligned10x10_qts_probe_second_order_hvp_next_delta_termwise_squared_q0_20",
     "adamw_residual_aligned10x10_query_timestamp_shared_timestamp_sum_squared":
         "traj_tracin_adamw_residual_aligned10x10_query_timestamp_shared_timestamp_sum_squared",
     "adamw_full_aligned10x10_query_timestamp_shared_timestamp_sum_squared":
