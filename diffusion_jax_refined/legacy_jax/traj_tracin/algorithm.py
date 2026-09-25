@@ -70,6 +70,21 @@ def timestamp_shared_predicted_noise_probe_key(
     return key
 
 
+def query_timestamp_shared_predicted_noise_probe_key(
+    seed: int,
+    query_seed: int,
+    timestep: int,
+    probe_index: int = 0,
+):
+    """One probe per query/timestep, shared across every checkpoint."""
+    key = jax.random.PRNGKey(seed)
+    for value in (0x51545350, query_seed, timestep):
+        key = jax.random.fold_in(key, int(value))
+    if probe_index:
+        key = jax.random.fold_in(key, int(probe_index))
+    return key
+
+
 def shared_orthogonal_predicted_noise_probes(
     seed: int,
     output_shape: Sequence[int],
@@ -2205,12 +2220,14 @@ def run_attribution(cfg: TrajAttributionConfig):
     if predicted_noise_probe_mode not in (
         "independent_gaussian",
         "timestamp_shared_gaussian",
+        "query_timestamp_shared_gaussian",
         "shared_orthogonal",
         "shared_orthogonal_extended",
     ):
         raise ValueError(
             "predicted_noise_probe_mode must be 'independent_gaussian', "
             "'timestamp_shared_gaussian', "
+            "'query_timestamp_shared_gaussian', "
             "'shared_orthogonal', or 'shared_orthogonal_extended', got "
             f"{cfg.predicted_noise_probe_mode!r}"
         )
@@ -4319,7 +4336,19 @@ def run_attribution(cfg: TrajAttributionConfig):
                             probe_keys = array_to_device(
                                 jnp.stack(
                                     [
-                                        timestamp_shared_predicted_noise_probe_key(
+                                        query_timestamp_shared_predicted_noise_probe_key(
+                                            predicted_noise_probe_seed,
+                                            int(
+                                                cfg.attribution_sample_seed
+                                                if cfg.attribution_sample_seed is not None
+                                                else cfg.seed
+                                            ),
+                                            int(t_seq[i]),
+                                            cfg.predicted_noise_probe_index,
+                                        )
+                                        if predicted_noise_probe_mode
+                                        == "query_timestamp_shared_gaussian"
+                                        else timestamp_shared_predicted_noise_probe_key(
                                             predicted_noise_probe_seed,
                                             int(t_seq[i]),
                                             cfg.predicted_noise_probe_index,
@@ -5792,6 +5821,8 @@ def run_attribution(cfg: TrajAttributionConfig):
                         if predicted_noise_probe_mode == "shared_orthogonal"
                         else "standard_normal_timestamp_shared"
                         if predicted_noise_probe_mode == "timestamp_shared_gaussian"
+                        else "standard_normal_query_timestamp_shared"
+                        if predicted_noise_probe_mode == "query_timestamp_shared_gaussian"
                         else "standard_normal"
                     ),
                     output_probes_per_term=np.asarray(1, dtype=np.int32),
@@ -5814,6 +5845,8 @@ def run_attribution(cfg: TrajAttributionConfig):
                         if predicted_noise_probe_mode == "shared_orthogonal"
                         else "fold_in(PRNGKey(seed),timestamp_domain_tag,timestep); shared across queries/checkpoints"
                         if predicted_noise_probe_mode == "timestamp_shared_gaussian"
+                        else "fold_in(PRNGKey(seed),query_timestamp_domain_tag,query_seed,timestep); shared across checkpoints"
+                        if predicted_noise_probe_mode == "query_timestamp_shared_gaussian"
                         else "historical fold_in(PRNGKey(seed),domain_tag,checkpoint_index,"
                         "timestep,snapshot_position), then fold_in(probe_index) when nonzero"
                     ),
