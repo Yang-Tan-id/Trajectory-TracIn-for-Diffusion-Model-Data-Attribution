@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import tempfile
 import unittest
 from unittest import mock
 
@@ -9,6 +10,7 @@ import numpy as np
 
 from diffusion_jax_refined.common.stage_artifact_runner import (
     _combine_multiterm_dot_scores,
+    _run_fused_traj_score_batch,
 )
 
 
@@ -66,6 +68,92 @@ class TrajScoreContractionTest(unittest.TestCase):
         wrong_absolute_after_sum = abs(0.25 * 3.0 + 0.75 * -8.0)
         np.testing.assert_allclose(result, [expected])
         self.assertNotAlmostEqual(float(result[0]), wrong_absolute_after_sum)
+
+    def test_timestamp_sum_squared_sums_checkpoints_before_square(self) -> None:
+        train = {
+            "train_features": np.asarray(
+                [[[1.0]], [[2.0]], [[3.0]], [[4.0]]], dtype=np.float32
+            ),
+            "ckpt_indices": np.asarray([0, 0, 1, 1]),
+            "timesteps": np.asarray([0, 1, 0, 1]),
+            "term_weights": np.asarray([0.5, 0.5, 0.5, 0.5]),
+        }
+        query = {
+            "query_features": np.ones((4, 1), dtype=np.float32),
+            "ckpt_indices": np.asarray([0, 0, 1, 1]),
+            "timesteps": np.asarray([0, 1, 0, 1]),
+            "term_weights": np.asarray([0.5, 0.5, 0.5, 0.5]),
+        }
+        with mock.patch.dict(
+            os.environ,
+            {
+                "TRACIN_SCORE_CONTRACTION": "timestamp_sum_squared",
+                "TRACIN_SCORE_TQDM": "0",
+            },
+        ):
+            result = _combine_multiterm_dot_scores(
+                train,
+                query,
+                train_path=Path("train.npz"),
+                query_path=Path("query.npz"),
+            )
+        expected = (0.5 * 1.0 + 0.5 * 3.0) ** 2 + (
+            0.5 * 2.0 + 0.5 * 4.0
+        ) ** 2
+        termwise_square = 0.5 * (1.0**2 + 2.0**2 + 3.0**2 + 4.0**2)
+        np.testing.assert_allclose(result, [expected])
+        self.assertNotAlmostEqual(float(result[0]), termwise_square)
+
+    def test_fused_timestamp_sum_squared_matches_nonfused_definition(self) -> None:
+        train = np.asarray(
+            [[[1.0]], [[2.0]], [[3.0]], [[4.0]]], dtype=np.float32
+        )
+        train_payload = {
+            "train_features": train,
+            "ckpt_indices": np.asarray([0, 0, 1, 1]),
+            "timesteps": np.asarray([0, 1, 0, 1]),
+            "term_weights": np.asarray([0.5, 0.5, 0.5, 0.5]),
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            query_path = root / "query.npz"
+            output_dir = root / "score"
+            np.savez(
+                query_path,
+                query_features=np.ones((4, 1), dtype=np.float32),
+                ckpt_indices=np.asarray([0, 0, 1, 1]),
+                timesteps=np.asarray([0, 1, 0, 1]),
+                term_weights=np.asarray([0.5, 0.5, 0.5, 0.5]),
+            )
+            with mock.patch.dict(
+                os.environ,
+                {
+                    "TRACIN_SCORE_CONTRACTION": "timestamp_sum_squared",
+                    "TRACIN_SCORE_TQDM": "0",
+                    "TRACIN_ALIGN_TERMS_BY_CKPT_TIMESTEP": "1",
+                },
+            ):
+                handled = _run_fused_traj_score_batch(
+                    train_payload=train_payload,
+                    train=train,
+                    train_path=root / "train.npz",
+                    indices=np.asarray([42]),
+                    jobs=[
+                        {
+                            "label": "q0",
+                            "query_path": str(query_path),
+                            "output_dir": str(output_dir),
+                        }
+                    ],
+                    normalize_query=False,
+                    normalize_train=False,
+                )
+            self.assertTrue(handled)
+            result = np.load(output_dir / "scores.npy")
+        expected = (0.5 * 1.0 + 0.5 * 3.0) ** 2 + (
+            0.5 * 2.0 + 0.5 * 4.0
+        ) ** 2
+        np.testing.assert_allclose(result, [expected])
 
 
 if __name__ == "__main__":

@@ -98,9 +98,10 @@ def _normalize_rows(x: np.ndarray, eps: float) -> np.ndarray:
 
 def _traj_score_contraction() -> str:
     value = os.environ.get("TRACIN_SCORE_CONTRACTION", "linear").strip().lower()
-    if value not in ("linear", "squared", "absolute"):
+    if value not in ("linear", "squared", "absolute", "timestamp_sum_squared"):
         raise ValueError(
-            "TRACIN_SCORE_CONTRACTION must be 'linear', 'squared', or 'absolute', "
+            "TRACIN_SCORE_CONTRACTION must be 'linear', 'squared', 'absolute', "
+            "or 'timestamp_sum_squared', "
             f"got {value!r}"
         )
     return value
@@ -111,6 +112,10 @@ def _contract_traj_term(values: np.ndarray, contraction: str) -> np.ndarray:
         return values
     if contraction == "squared":
         return np.square(values)
+    if contraction == "timestamp_sum_squared":
+        raise ValueError(
+            "timestamp_sum_squared requires multi-term features with timestep metadata"
+        )
     return np.abs(values)
 
 
@@ -319,6 +324,31 @@ def _combine_multiterm_dot_scores(
         if train_norms.shape != train.shape[:2]:
             raise ValueError(f"train norm shape mismatch: expected {train.shape[:2]}, got {train_norms.shape}")
 
+    grouped_by_timestamp = score_contraction == "timestamp_sum_squared"
+
+    def add_term(
+        scores: np.ndarray,
+        groups: dict[int, np.ndarray],
+        values: np.ndarray,
+        *,
+        weight: float,
+        timestep: int,
+    ) -> None:
+        weighted = float(weight) * values
+        if grouped_by_timestamp:
+            if timestep not in groups:
+                groups[timestep] = np.zeros_like(scores)
+            groups[timestep] += weighted
+        else:
+            scores += weighted
+
+    def finish_groups(scores: np.ndarray, groups: dict[int, np.ndarray]) -> np.ndarray:
+        if not grouped_by_timestamp:
+            return scores
+        if not groups:
+            raise ValueError("timestamp_sum_squared retained no timestamp groups")
+        return sum((np.square(values) for values in groups.values()), np.zeros_like(scores))
+
     def term_scores(train_i: int, query_i: int) -> np.ndarray:
         train_term = train[train_i]
         if history is not None:
@@ -326,7 +356,11 @@ def _combine_multiterm_dot_scores(
         values = train_term @ query[query_i]
         if normalize_train:
             values = values / np.maximum(train_norms[train_i], float(train_normalize_eps))
-        return _contract_traj_term(values, score_contraction)
+        return (
+            values
+            if grouped_by_timestamp
+            else _contract_traj_term(values, score_contraction)
+        )
     train_ckpts = np.asarray(train_payload.get("ckpt_indices", ()), dtype=np.int32).reshape(-1)
     train_timesteps = np.asarray(train_payload.get("timesteps", ()), dtype=np.int32).reshape(-1)
     inferred_checkpoint_shared = (
@@ -364,6 +398,7 @@ def _combine_multiterm_dot_scores(
             flush=True,
         )
         scores = np.zeros((train.shape[1],), dtype=np.float64)
+        timestamp_groups: dict[int, np.ndarray] = {}
         query_iter = _iter_with_tqdm(
             range(query.shape[0]),
             total=query.shape[0],
@@ -372,10 +407,16 @@ def _combine_multiterm_dot_scores(
         )
         for i in query_iter:
             train_i = by_ckpt[int(query_ckpts[i])]
-            scores += float(weights[i]) * term_scores(train_i, i)
+            add_term(
+                scores,
+                timestamp_groups,
+                term_scores(train_i, i),
+                weight=float(weights[i]),
+                timestep=int(query_timesteps[i]),
+            )
             if (i + 1) % 100 == 0 or i + 1 == query.shape[0]:
                 print(f"[traj-score] broadcast term {i + 1}/{query.shape[0]}", flush=True)
-        return scores
+        return finish_groups(scores, timestamp_groups)
     if train.shape[0] != query.shape[0] and _env_flag("TRACIN_ALIGN_TERMS_BY_CKPT_TIMESTEP", "0"):
         query_ckpts = np.asarray(query_payload.get("ckpt_indices", ()), dtype=np.int32).reshape(-1)
         query_timesteps = np.asarray(query_payload.get("timesteps", ()), dtype=np.int32).reshape(-1)
@@ -427,6 +468,7 @@ def _combine_multiterm_dot_scores(
             train_timesteps[train_keep_array],
         )
         scores = np.zeros((train.shape[1],), dtype=np.float64)
+        timestamp_groups: dict[int, np.ndarray] = {}
         term_iter = _iter_with_tqdm(
             range(len(train_keep)),
             total=len(train_keep),
@@ -436,10 +478,16 @@ def _combine_multiterm_dot_scores(
         for j in term_iter:
             train_i = train_keep[j]
             query_i = query_keep[j]
-            scores += float(aligned_weights[j]) * term_scores(train_i, query_i)
+            add_term(
+                scores,
+                timestamp_groups,
+                term_scores(train_i, query_i),
+                weight=float(aligned_weights[j]),
+                timestep=int(train_timesteps[train_i]),
+            )
             if (j + 1) % 100 == 0 or j + 1 == len(train_keep):
                 print(f"[traj-score] aligned term {j + 1}/{len(train_keep)}", flush=True)
-        return scores
+        return finish_groups(scores, timestamp_groups)
     if train.shape[0] != query.shape[0] or train.shape[2] != query.shape[1]:
         raise ValueError(f"feature dimension mismatch: train {train.shape} vs query {query.shape}")
     weights = np.asarray(query_payload.get("term_weights", np.full((train.shape[0],), 1.0 / float(train.shape[0]))), dtype=np.float64).reshape(-1)
@@ -454,6 +502,7 @@ def _combine_multiterm_dot_scores(
     weights = _apply_traj_checkpoint_weighting(weights, train_ckpts)
     weights = _apply_traj_timestep_weighting(weights, train_ckpts, train_timesteps)
     scores = np.zeros((train.shape[1],), dtype=np.float64)
+    timestamp_groups: dict[int, np.ndarray] = {}
     print(
         "[traj-score] "
         f"checkpoint_shared=0 terms={train.shape[0]} points={train.shape[1]} dim={train.shape[2]} "
@@ -467,10 +516,16 @@ def _combine_multiterm_dot_scores(
         enabled=use_tqdm,
     )
     for i in term_iter:
-        scores += float(weights[i]) * term_scores(i, i)
+        add_term(
+            scores,
+            timestamp_groups,
+            term_scores(i, i),
+            weight=float(weights[i]),
+            timestep=int(train_timesteps[i]),
+        )
         if (i + 1) % 100 == 0 or i + 1 == train.shape[0]:
             print(f"[traj-score] term {i + 1}/{train.shape[0]}", flush=True)
-    return scores
+    return finish_groups(scores, timestamp_groups)
 
 
 def _combine_das_scores(
@@ -1150,6 +1205,37 @@ def _run_fused_traj_score_batch(
     both_scores = np.zeros_like(raw_scores) if normalize_query and normalize_train else None
     train_eps = float(os.environ.get("TRACIN_SCORE_TRAIN_NORMALIZE_EPS", "1e-8"))
     score_contraction = _traj_score_contraction()
+    grouped_by_timestamp = score_contraction == "timestamp_sum_squared"
+    grouped_raw = grouped_query = grouped_train = grouped_both = None
+    timestamp_slot: dict[int, int] = {}
+    train_timesteps = np.asarray(
+        train_payload.get("timesteps", ()), dtype=np.int32
+    ).reshape(-1)
+    if grouped_by_timestamp:
+        if train_timesteps.shape[0] != train.shape[0]:
+            raise ValueError(
+                "timestamp_sum_squared requires one train timestep per train term"
+            )
+        selected_timesteps = [
+            int(train_timesteps[int(train_i)]) for train_i in train_term_indices
+        ]
+        unique_timestamps = list(dict.fromkeys(selected_timesteps))
+        timestamp_slot = {
+            timestep: slot for slot, timestep in enumerate(unique_timestamps)
+        }
+        grouped_shape = (len(unique_timestamps), num_queries, num_points)
+        grouped_raw = np.zeros(grouped_shape, dtype=np.float64)
+        grouped_query = (
+            np.zeros(grouped_shape, dtype=np.float64) if normalize_query else None
+        )
+        grouped_train = (
+            np.zeros(grouped_shape, dtype=np.float64) if normalize_train else None
+        )
+        grouped_both = (
+            np.zeros(grouped_shape, dtype=np.float64)
+            if normalize_query and normalize_train
+            else None
+        )
     history = None
     if _env_flag("TRACIN_SCORE_ADD_OPTIMIZER_HISTORY", "0"):
         if "optimizer_history_features" not in train_payload:
@@ -1233,32 +1319,66 @@ def _run_fused_traj_score_batch(
         if history is not None:
             train_term = train_term + history[train_i][None, :]
         raw_dot = train_term @ query_all[:, term_i, :].T
-        weighted_raw = _contract_traj_term(
-            raw_dot, score_contraction
-        ) * weights_all[:, term_i][None, :]
-        raw_scores += weighted_raw.T
+        if grouped_by_timestamp:
+            assert grouped_raw is not None
+            slot = timestamp_slot[int(train_timesteps[train_i])]
+            grouped_raw[slot] += raw_dot.T * weights_all[:, term_i, None]
+        else:
+            weighted_raw = _contract_traj_term(
+                raw_dot, score_contraction
+            ) * weights_all[:, term_i][None, :]
+            raw_scores += weighted_raw.T
         if normalize_train:
             train_norm = np.sqrt(np.einsum("ij,ij->i", train_term, train_term, optimize=True))
             train_denom = np.maximum(train_norm, train_eps)[:, None]
             normalized_train_dot = raw_dot / train_denom
-            weighted_train = _contract_traj_term(
-                normalized_train_dot, score_contraction
-            ) * weights_all[:, term_i][None, :]
-            train_scores += weighted_train.T
+            if grouped_by_timestamp:
+                assert grouped_train is not None
+                grouped_train[slot] += (
+                    normalized_train_dot.T * weights_all[:, term_i, None]
+                )
+            else:
+                weighted_train = _contract_traj_term(
+                    normalized_train_dot, score_contraction
+                ) * weights_all[:, term_i][None, :]
+                train_scores += weighted_train.T
         if normalize_query:
             query_dot = train_term @ query_norm_all[:, term_i, :].T
-            weighted_query = _contract_traj_term(
-                query_dot, score_contraction
-            ) * weights_all[:, term_i][None, :]
-            query_scores += weighted_query.T
+            if grouped_by_timestamp:
+                assert grouped_query is not None
+                grouped_query[slot] += query_dot.T * weights_all[:, term_i, None]
+            else:
+                weighted_query = _contract_traj_term(
+                    query_dot, score_contraction
+                ) * weights_all[:, term_i][None, :]
+                query_scores += weighted_query.T
             if normalize_train:
                 normalized_both_dot = query_dot / train_denom
-                weighted_both = _contract_traj_term(
-                    normalized_both_dot, score_contraction
-                ) * weights_all[:, term_i][None, :]
-                both_scores += weighted_both.T
+                if grouped_by_timestamp:
+                    assert grouped_both is not None
+                    grouped_both[slot] += (
+                        normalized_both_dot.T * weights_all[:, term_i, None]
+                    )
+                else:
+                    weighted_both = _contract_traj_term(
+                        normalized_both_dot, score_contraction
+                    ) * weights_all[:, term_i][None, :]
+                    both_scores += weighted_both.T
         if (term_i + 1) % 25 == 0 or term_i + 1 == num_terms:
             print(f"[traj-score-fused] term {term_i + 1}/{num_terms}", flush=True)
+
+    if grouped_by_timestamp:
+        assert grouped_raw is not None
+        raw_scores = np.square(grouped_raw).sum(axis=0)
+        if normalize_query:
+            assert grouped_query is not None
+            query_scores = np.square(grouped_query).sum(axis=0)
+        if normalize_train:
+            assert grouped_train is not None
+            train_scores = np.square(grouped_train).sum(axis=0)
+        if normalize_query and normalize_train:
+            assert grouped_both is not None
+            both_scores = np.square(grouped_both).sum(axis=0)
 
     for job_i, (job, query_payload) in enumerate(zip(jobs, query_payloads), start=1):
         out_dir = Path(job["output_dir"])

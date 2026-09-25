@@ -43,6 +43,16 @@ SCHEME_GROUPS = {
         ),
         ("full_absolute", "traj_tracin_adamw_full_aligned10x10_absolute"),
     ),
+    "timestamp_sum_squared": (
+        (
+            "residual_timestamp_sum_squared",
+            "traj_tracin_adamw_residual_aligned10x10_timestamp_sum_squared",
+        ),
+        (
+            "full_timestamp_sum_squared",
+            "traj_tracin_adamw_full_aligned10x10_timestamp_sum_squared",
+        ),
+    ),
     "addon": (
         ("addon_residual", "traj_tracin_adamw_residual_aligned10x10_addon10"),
         ("addon_full", "traj_tracin_adamw_full_aligned10x10_addon10"),
@@ -111,6 +121,7 @@ def main() -> None:
             "original",
             "squared",
             "absolute",
+            "timestamp_sum_squared",
             "addon",
             "combined",
             "addon_combined",
