@@ -36,6 +36,16 @@ SCHEME_GROUPS = {
         ),
         ("full_squared", "traj_tracin_adamw_full_aligned10x10_squared"),
     ),
+    "squared_previous_lr": (
+        (
+            "residual_squared_previous_lr",
+            "traj_tracin_adamw_residual_aligned10x10_squared_previous_lr",
+        ),
+        (
+            "full_squared_previous_lr",
+            "traj_tracin_adamw_full_aligned10x10_squared_previous_lr",
+        ),
+    ),
     "absolute": (
         (
             "residual_absolute",
@@ -150,6 +160,7 @@ def main() -> None:
             "raw_loss",
             "original",
             "squared",
+            "squared_previous_lr",
             "absolute",
             "timestamp_sum_squared",
             "query_timestamp_shared",

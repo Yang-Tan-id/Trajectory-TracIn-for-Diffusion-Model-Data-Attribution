@@ -148,6 +148,10 @@ SCORE_SCHEMES = {
         "traj_tracin_adamw_residual_aligned10x10_squared",
     "adamw_full_aligned10x10_squared":
         "traj_tracin_adamw_full_aligned10x10_squared",
+    "adamw_residual_aligned10x10_squared_previous_lr":
+        "traj_tracin_adamw_residual_aligned10x10_squared_previous_lr",
+    "adamw_full_aligned10x10_squared_previous_lr":
+        "traj_tracin_adamw_full_aligned10x10_squared_previous_lr",
     "adamw_residual_aligned10x10_absolute":
         "traj_tracin_adamw_residual_aligned10x10_absolute",
     "adamw_full_aligned10x10_absolute":
