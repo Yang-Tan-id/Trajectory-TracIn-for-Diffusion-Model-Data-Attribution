@@ -33,6 +33,13 @@ SCHEME_GROUPS = {
         ),
         ("full_squared", "traj_tracin_adamw_full_aligned10x10_squared"),
     ),
+    "absolute": (
+        (
+            "residual_absolute",
+            "traj_tracin_adamw_residual_aligned10x10_absolute",
+        ),
+        ("full_absolute", "traj_tracin_adamw_full_aligned10x10_absolute"),
+    ),
     "addon": (
         ("addon_residual", "traj_tracin_adamw_residual_aligned10x10_addon10"),
         ("addon_full", "traj_tracin_adamw_full_aligned10x10_addon10"),
@@ -99,6 +106,7 @@ def main() -> None:
         choices=(
             "original",
             "squared",
+            "absolute",
             "addon",
             "combined",
             "addon_combined",

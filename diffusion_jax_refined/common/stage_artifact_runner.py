@@ -98,16 +98,20 @@ def _normalize_rows(x: np.ndarray, eps: float) -> np.ndarray:
 
 def _traj_score_contraction() -> str:
     value = os.environ.get("TRACIN_SCORE_CONTRACTION", "linear").strip().lower()
-    if value not in ("linear", "squared"):
+    if value not in ("linear", "squared", "absolute"):
         raise ValueError(
-            "TRACIN_SCORE_CONTRACTION must be 'linear' or 'squared', "
+            "TRACIN_SCORE_CONTRACTION must be 'linear', 'squared', or 'absolute', "
             f"got {value!r}"
         )
     return value
 
 
 def _contract_traj_term(values: np.ndarray, contraction: str) -> np.ndarray:
-    return values if contraction == "linear" else np.square(values)
+    if contraction == "linear":
+        return values
+    if contraction == "squared":
+        return np.square(values)
+    return np.abs(values)
 
 
 def _ddim_step_squared_weights(timesteps: np.ndarray) -> np.ndarray:
@@ -1109,8 +1113,8 @@ def _run_fused_traj_score_batch(
     )
     unique_train_indices = list(dict.fromkeys(int(value) for value in train_term_indices))
     # Query aggregation before the matrix multiply is valid only for a linear
-    # contraction.  Squared contraction must retain every aligned term so that
-    # sum_t <g_t, q_t>^2 does not acquire cross terms.
+    # contraction. Nonlinear contractions must retain every aligned term so
+    # that square/absolute value is applied before the term sum.
     if len(unique_train_indices) < num_terms and score_contraction == "linear":
         train_slot = {train_i: slot for slot, train_i in enumerate(unique_train_indices)}
         raw_query_aggregate = np.zeros(

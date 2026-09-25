@@ -49,6 +49,24 @@ class TrajScoreContractionTest(unittest.TestCase):
         np.testing.assert_allclose(result, [expected])
         self.assertNotAlmostEqual(float(result[0]), wrong_square_after_sum)
 
+    def test_absolute_takes_each_absolute_value_before_weighting(self) -> None:
+        query = dict(self.query)
+        query["query_features"] = np.asarray([[3.0, 0.0], [-4.0, 0.0]])
+        with mock.patch.dict(
+            os.environ,
+            {"TRACIN_SCORE_CONTRACTION": "absolute", "TRACIN_SCORE_TQDM": "0"},
+        ):
+            result = _combine_multiterm_dot_scores(
+                self.train,
+                query,
+                train_path=Path("train.npz"),
+                query_path=Path("query.npz"),
+            )
+        expected = 0.25 * abs(3.0) + 0.75 * abs(-8.0)
+        wrong_absolute_after_sum = abs(0.25 * 3.0 + 0.75 * -8.0)
+        np.testing.assert_allclose(result, [expected])
+        self.assertNotAlmostEqual(float(result[0]), wrong_absolute_after_sum)
+
 
 if __name__ == "__main__":
     unittest.main()
