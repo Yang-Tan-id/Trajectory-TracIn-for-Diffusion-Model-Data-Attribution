@@ -89,6 +89,16 @@ SCHEME_GROUPS = {
             "traj_tracin_adamw_full_aligned10x10_second_order_hvp_next_delta_timestamp_sum_squared_q0_20",
         ),
     ),
+    "second_order_hvp_linear": (
+        (
+            "residual_second_order_hvp_linear",
+            "traj_tracin_adamw_residual_aligned10x10_second_order_hvp_next_delta_linear_q0_20",
+        ),
+        (
+            "full_second_order_hvp_linear",
+            "traj_tracin_adamw_full_aligned10x10_second_order_hvp_next_delta_linear_q0_20",
+        ),
+    ),
     "second_order_qts_probe_hvp": (
         (
             "residual_second_order_qts_probe_hvp",
@@ -210,6 +220,7 @@ def main() -> None:
             "absolute",
             "timestamp_sum_squared",
             "second_order_hvp",
+            "second_order_hvp_linear",
             "second_order_qts_probe_hvp",
             "second_order_qts_probe_hvp_termwise",
             "query_timestamp_shared",
