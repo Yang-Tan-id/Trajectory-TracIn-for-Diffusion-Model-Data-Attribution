@@ -17,6 +17,14 @@ SCHEMES = (
         "adamw_full_timestamp_square_previous_lr",
         "traj_tracin_adamw_full_aligned10x10_timestamp_sum_squared_previous_lr_ref100q",
     ),
+    (
+        "adamw_residual_termwise_square_previous_lr",
+        "traj_tracin_adamw_residual_aligned10x10_termwise_squared_previous_lr_ref100q",
+    ),
+    (
+        "adamw_full_termwise_square_previous_lr",
+        "traj_tracin_adamw_full_aligned10x10_termwise_squared_previous_lr_ref100q",
+    ),
 )
 
 
