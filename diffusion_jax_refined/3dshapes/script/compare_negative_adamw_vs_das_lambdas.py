@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import csv
 import glob
 import json
@@ -92,6 +93,12 @@ def main() -> None:
     parser.add_argument("--lambdas", default=DEFAULT_LAMBDAS)
     parser.add_argument("--equal-tolerance", type=float, default=1e-12)
     parser.add_argument(
+        "--io-workers",
+        type=int,
+        default=16,
+        help="parallel workers used to read small LDS JSON files (default: 16)",
+    )
+    parser.add_argument(
         "--output-dir",
         type=Path,
         default=None,
@@ -106,6 +113,8 @@ def main() -> None:
         raise ValueError("--query-ids contains duplicates")
     if len(set(lambdas)) != len(lambdas):
         raise ValueError("--lambdas contains duplicates")
+    if args.io_workers < 1:
+        raise ValueError("--io-workers must be at least 1")
 
     result_root = SHAPES_ROOT / "result" / args.experiment
     output_dir = args.output_dir or (
@@ -116,8 +125,11 @@ def main() -> None:
     das_base = f"das_{args.das_artifact_namespace.strip().strip('_/')}"
     adamw_values: dict[tuple[int, str], float] = {}
     das_values: dict[tuple[float, int, str], float] = {}
+    adamw_paths: dict[tuple[int, str], Path] = {}
+    das_candidates: list[tuple[int, str, Path]] = []
 
-    for query_id in query_ids:
+    print(f"[scan] locating LDS summaries for {len(query_ids)} queries...", flush=True)
+    for query_index, query_id in enumerate(query_ids, start=1):
         if query_id < 0 or query_id >= len(records):
             raise ValueError(f"query id {query_id} is outside [0, {len(records) - 1}]")
         record = records[query_id]
@@ -130,80 +142,110 @@ def main() -> None:
             / "lds"
         )
 
-        for target in TARGETS:
-            adamw_pattern = (
-                lds_root
-                / args.adamw_lds_namespace
-                / target
-                / f"pred_kept_sign_{args.adamw_prediction_sign}"
-                / "*"
-                / "lds_summary.json"
-            )
-            adamw_payload = load_one_summary(
-                adamw_pattern, f"AdamW LDS summary for Q{query_id}/{target}"
-            )
-            adamw_lds = float(adamw_payload["lds_percent"])
-            if not math.isfinite(adamw_lds):
-                raise RuntimeError(f"Non-finite AdamW LDS for Q{query_id}/{target}")
-            adamw_values[(query_id, target)] = adamw_lds
+        adamw_pattern = (
+            lds_root
+            / args.adamw_lds_namespace
+            / "*"
+            / f"pred_kept_sign_{args.adamw_prediction_sign}"
+            / "*"
+            / "lds_summary.json"
+        )
+        for value in sorted(glob.glob(str(adamw_pattern))):
+            path = Path(value)
+            target = path.parents[2].name
+            if target not in TARGETS:
+                continue
+            key = (query_id, target)
+            if key in adamw_paths:
+                raise RuntimeError(f"Duplicate AdamW LDS summaries for Q{query_id}/{target}")
+            adamw_paths[key] = path
 
-            # Do not infer lambda from the directory suffix: historical DAS runs
-            # used more than one filename encoding. Match every lambda directory
-            # and use the authoritative damping value stored inside its JSON.
-            das_pattern = (
-                lds_root
-                / f"{das_base}_lambda_*"
-                / target
-                / f"pred_kept_sign_{args.das_prediction_sign}"
-                / "*"
-                / "lds_summary.json"
-            )
-            matches = [Path(value) for value in sorted(glob.glob(str(das_pattern)))]
-            found_dampings: list[float] = []
-            for path in matches:
-                das_payload = json.loads(path.read_text())
-                payload_damping = float(das_payload["damping"])
-                damping = next(
-                    (
-                        requested
-                        for requested in lambdas
-                        if math.isclose(
-                            requested, payload_damping, rel_tol=0.0, abs_tol=1e-12
-                        )
-                    ),
-                    None,
-                )
-                if damping is None:
-                    continue
-                key = (damping, query_id, target)
-                if key in das_values:
-                    raise RuntimeError(
-                        f"Duplicate DAS LDS summaries for lambda={damping:g}/"
-                        f"Q{query_id}/{target}"
-                    )
-                das_lds = float(das_payload["lds_percent"])
-                if not math.isfinite(das_lds):
-                    raise RuntimeError(
-                        f"Non-finite DAS LDS for lambda={damping:g}/Q{query_id}/{target}"
-                    )
-                das_values[key] = das_lds
-                found_dampings.append(damping)
+        das_pattern = (
+            lds_root
+            / f"{das_base}_lambda_*"
+            / "*"
+            / f"pred_kept_sign_{args.das_prediction_sign}"
+            / "*"
+            / "lds_summary.json"
+        )
+        for value in sorted(glob.glob(str(das_pattern))):
+            path = Path(value)
+            target = path.parents[2].name
+            if target in TARGETS:
+                das_candidates.append((query_id, target, path))
 
-            missing_dampings = [
-                damping for damping in lambdas if damping not in found_dampings
-            ]
-            if missing_dampings:
-                missing_text = ",".join(f"{value:g}" for value in missing_dampings)
-                discovered = sorted(
-                    {
-                        float(json.loads(path.read_text())["damping"])
-                        for path in matches
-                    }
-                )
-                raise RuntimeError(
-                    f"Missing DAS LDS for Q{query_id}/{target}; requested lambdas "
-                    f"[{missing_text}], discovered lambdas {discovered}; pattern={das_pattern}"
-                )
+        if query_index % 10 == 0 or query_index == len(query_ids):
+            print(
+                f"[scan] {query_index}/{len(query_ids)} queries | "
+                f"AdamW files={len(adamw_paths)} DAS files={len(das_candidates)}",
+                flush=True,
+            )
+
+    missing_adamw = [
+        (query_id, target)
+        for query_id in query_ids
+        for target in TARGETS
+        if (query_id, target) not in adamw_paths
+    ]
+    if missing_adamw:
+        raise RuntimeError(f"Missing AdamW LDS summaries: {missing_adamw[:20]}")
+
+    all_paths = list(adamw_paths.values()) + [path for _, _, path in das_candidates]
+    print(
+        f"[read] loading {len(all_paths)} JSON files with {args.io_workers} workers...",
+        flush=True,
+    )
+
+    def read_payload(path: Path) -> tuple[Path, dict]:
+        return path, json.loads(path.read_text())
+
+    with ThreadPoolExecutor(max_workers=args.io_workers) as executor:
+        payload_by_path = dict(executor.map(read_payload, all_paths))
+
+    for key, path in adamw_paths.items():
+        adamw_lds = float(payload_by_path[path]["lds_percent"])
+        if not math.isfinite(adamw_lds):
+            raise RuntimeError(f"Non-finite AdamW LDS for Q{key[0]}/{key[1]}")
+        adamw_values[key] = adamw_lds
+
+    for query_id, target, path in das_candidates:
+        payload = payload_by_path[path]
+        payload_damping = float(payload["damping"])
+        damping = next(
+            (
+                requested
+                for requested in lambdas
+                if math.isclose(requested, payload_damping, rel_tol=0.0, abs_tol=1e-12)
+            ),
+            None,
+        )
+        if damping is None:
+            continue
+        key = (damping, query_id, target)
+        if key in das_values:
+            raise RuntimeError(
+                f"Duplicate DAS LDS summaries for lambda={damping:g}/Q{query_id}/{target}"
+            )
+        das_lds = float(payload["lds_percent"])
+        if not math.isfinite(das_lds):
+            raise RuntimeError(
+                f"Non-finite DAS LDS for lambda={damping:g}/Q{query_id}/{target}"
+            )
+        das_values[key] = das_lds
+
+    missing_das = [
+        (damping, query_id, target)
+        for damping in lambdas
+        for query_id in query_ids
+        for target in TARGETS
+        if (damping, query_id, target) not in das_values
+    ]
+    if missing_das:
+        discovered = sorted({key[0] for key in das_values})
+        raise RuntimeError(
+            f"Missing {len(missing_das)} requested DAS summaries; first missing entries: "
+            f"{missing_das[:20]}; discovered requested lambdas={discovered}"
+        )
 
     detail_path = output_dir / "per_query_comparison.csv"
     detail_rows: list[dict[str, object]] = []
