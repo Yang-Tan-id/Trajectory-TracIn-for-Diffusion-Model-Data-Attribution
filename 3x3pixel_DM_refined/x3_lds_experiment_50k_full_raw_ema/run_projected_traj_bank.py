@@ -75,13 +75,30 @@ def main():
     term_square = {o: torch.zeros_like(linear[o]) for o in linear}
     timestamp_square = {o: torch.zeros_like(linear[o]) for o in linear}
     started = time.perf_counter()
+    print(
+        f"[projected-bank {args.family}] start queries={q_count} "
+        f"checkpoints={len(paths)-1} timestamps={len(t_seq)} "
+        f"train_points={N_TRAIN} train_mc={mc_count} batch={batch_size} dim={d}",
+        flush=True,
+    )
 
     # Timestamp-major traversal keeps only one QxN timestamp accumulator in memory.
     for si, tval_raw in enumerate(t_seq.tolist()):
         tval = int(tval_raw)
         timestamp_acc = {o: torch.zeros_like(linear[o]) for o in linear}
+        print(
+            f"[projected-bank {args.family}] timestamp {si+1}/{len(t_seq)} "
+            f"t={tval} start",
+            flush=True,
+        )
 
         for ci, cur_path in enumerate(paths[:-1]):
+            checkpoint_started = time.perf_counter()
+            print(
+                f"[projected-bank {args.family}] timestamp {si+1}/{len(t_seq)} "
+                f"checkpoint {ci+1}/{len(paths)-1} start",
+                flush=True,
+            )
             model, _, ck = build_model(cur_path, "raw", device)
             target, _, _ = build_model(paths[ci + 1], "raw", device)
             named = dict(model.named_parameters())
@@ -125,7 +142,9 @@ def main():
 
             batched_grad = vmap(grad(single_mean_loss), in_dims=(None, 0, 0, 0))
             term_weight = float(tracin_lr_weight(ck)) * snap_weight
-            for start in range(0, N_TRAIN, batch_size):
+            num_batches = math.ceil(N_TRAIN / batch_size)
+            progress_every = max(1, num_batches // 10)
+            for batch_i, start in enumerate(range(0, N_TRAIN, batch_size), start=1):
                 end = min(start + batch_size, N_TRAIN)
                 xb, cb = x_all[start:end], cond_all[start:end]
                 generator = make_torch_generator(
@@ -142,10 +161,23 @@ def main():
                     linear[order][:, start:end] += term_weight * dots
                     term_square[order][:, start:end] += term_weight * dots.square()
                     timestamp_acc[order][:, start:end] += term_weight * dots
+                if batch_i == 1 or batch_i % progress_every == 0 or batch_i == num_batches:
+                    print(
+                        f"[projected-bank {args.family}] timestamp {si+1}/{len(t_seq)} "
+                        f"checkpoint {ci+1}/{len(paths)-1} train_batch "
+                        f"{batch_i}/{num_batches} points={end}/{N_TRAIN}",
+                        flush=True,
+                    )
 
             del model, target, query_matrix, first_queries, second_queries
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
+            print(
+                f"[projected-bank {args.family}] timestamp {si+1}/{len(t_seq)} "
+                f"checkpoint {ci+1}/{len(paths)-1} done "
+                f"elapsed={(time.perf_counter()-checkpoint_started)/60:.1f}m",
+                flush=True,
+            )
 
         for order in ("first", "second"):
             timestamp_square[order] += timestamp_acc[order].square()
