@@ -9,6 +9,7 @@ from unittest import mock
 import numpy as np
 
 from diffusion_jax_refined.common.stage_artifact_runner import (
+    _apply_traj_checkpoint_weighting,
     _combine_multiterm_dot_scores,
     _run_fused_traj_score_batch,
 )
@@ -154,6 +155,19 @@ class TrajScoreContractionTest(unittest.TestCase):
             0.5 * 2.0 + 0.5 * 4.0
         ) ** 2
         np.testing.assert_allclose(result, [expected])
+
+    def test_previous_checkpoint_lr_shifts_checkpoint_totals(self) -> None:
+        weights = np.asarray([0.1, 0.1, 0.2, 0.2, 0.3, 0.3])
+        checkpoints = np.asarray([0, 0, 1, 1, 2, 2])
+        with mock.patch.dict(
+            os.environ,
+            {"TRACIN_SCORE_CHECKPOINT_WEIGHTING": "previous_checkpoint_lr"},
+        ):
+            shifted = _apply_traj_checkpoint_weighting(weights, checkpoints)
+        np.testing.assert_allclose(
+            shifted,
+            [0.0, 0.0, 0.1, 0.1, 0.2, 0.2],
+        )
 
 
 if __name__ == "__main__":

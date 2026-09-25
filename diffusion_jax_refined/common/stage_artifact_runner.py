@@ -192,6 +192,33 @@ def _apply_traj_checkpoint_weighting(
     weights = np.asarray(weights, dtype=np.float64).reshape(-1)
     if mode in ("", "stored", "stored_lr", "learning_rate", "lr"):
         return weights
+    if mode in ("previous_checkpoint_lr", "previous_lr", "shifted_lr"):
+        ckpt_indices = np.asarray(ckpt_indices, dtype=np.int64).reshape(-1)
+        if ckpt_indices.shape != weights.shape:
+            raise ValueError(
+                "previous-checkpoint LR weighting requires one ckpt_index per score term"
+            )
+        result = np.zeros_like(weights)
+        checkpoints = sorted(int(value) for value in np.unique(ckpt_indices))
+        checkpoint_totals = {
+            checkpoint: float(np.sum(weights[ckpt_indices == checkpoint]))
+            for checkpoint in checkpoints
+        }
+        for position, checkpoint in enumerate(checkpoints):
+            if position == 0:
+                continue
+            mask = ckpt_indices == checkpoint
+            current_total = checkpoint_totals[checkpoint]
+            previous_total = checkpoint_totals[checkpoints[position - 1]]
+            if current_total == 0.0:
+                if previous_total != 0.0:
+                    raise ValueError(
+                        f"checkpoint {checkpoint} has zero stored weight but its previous "
+                        f"checkpoint weight is {previous_total}"
+                    )
+                continue
+            result[mask] = weights[mask] * (previous_total / current_total)
+        return result
     if mode not in ("constant", "constant1", "constant_1", "uniform_checkpoint"):
         raise ValueError(f"unknown TRACIN_SCORE_CHECKPOINT_WEIGHTING={mode!r}")
     ckpt_indices = np.asarray(ckpt_indices, dtype=np.int64).reshape(-1)
