@@ -1915,6 +1915,51 @@ def make_predicted_noise_probe_query_grad_chunk_fn(adapter, model):
     return jax.jit(grad_chunk)
 
 
+def make_predicted_noise_probe_query_grad_hvp_chunk_fn(adapter, model):
+    """Return probe gradients and HVPs for a direction shared across snapshots."""
+
+    def scalar_fn(params, xt_ref, t_scalar, cond, output_probe):
+        t = jnp.full((xt_ref.shape[0],), t_scalar, dtype=jnp.int32)
+        eps = adapter.eps_apply(model, params, xt_ref, t, cond)
+        normalizer = jnp.sqrt(jnp.asarray(eps.size, dtype=jnp.float32))
+        return jnp.sum(
+            eps.astype(jnp.float32) * output_probe.astype(jnp.float32)
+        ) / normalizer
+
+    grad_fn = jax.grad(scalar_fn)
+
+    def grad_hvp_one(params, xt_ref, t_scalar, cond, output_probe, direction):
+        return jax.jvp(
+            lambda current_params: grad_fn(
+                current_params, xt_ref, t_scalar, cond, output_probe
+            ),
+            (params,),
+            (direction,),
+        )
+
+    def grad_hvp_chunk(
+        params,
+        xt_refs_chunk,
+        t_scalars,
+        cond,
+        output_probes,
+        direction,
+    ):
+        return jax.vmap(
+            grad_hvp_one,
+            in_axes=(None, 0, 0, None, 0, None),
+        )(
+            params,
+            xt_refs_chunk,
+            t_scalars,
+            cond,
+            output_probes,
+            direction,
+        )
+
+    return jax.jit(grad_hvp_chunk)
+
+
 def implied_noise_target_from_step(
     schedule: DiffusionSchedule,
     xt: jnp.ndarray,
@@ -3194,6 +3239,15 @@ def run_attribution(cfg: TrajAttributionConfig):
             )
         if probe_alignment_only and probe_alignment_count <= 0:
             raise ValueError("TRAJ_TRACIN_PROBE_ALIGNMENT_COUNT must be positive")
+        save_query_hvp = (
+            stage_mode == "query"
+            and os.environ.get("TRAJ_TRACIN_QUERY_SAVE_HVP", "0").strip().lower()
+            in ("1", "true", "yes", "on")
+        )
+        query_hvp_direction = os.environ.get(
+            "TRAJ_TRACIN_QUERY_HVP_DIRECTION",
+            "next_checkpoint_parameter_delta",
+        ).strip().lower()
         stage_features = []
         stage_query_hvp_features = []
         stage_ckpt_indices = []
@@ -3210,6 +3264,7 @@ def run_attribution(cfg: TrajAttributionConfig):
                 len(ckpts) - 1
                 if (
                     uses_next_checkpoint_target
+                    or save_query_hvp
                     or probe_alignment_next_checkpoint
                     or probe_alignment_previous_checkpoint
                 )
@@ -3261,20 +3316,22 @@ def run_attribution(cfg: TrajAttributionConfig):
         parameter_directional_derivatives_per_update_norm = []
         parameter_update_query_gradient_cosines = []
         parameter_update_norms = []
-        save_query_hvp = (
-            stage_mode == "query"
-            and os.environ.get("TRAJ_TRACIN_QUERY_SAVE_HVP", "0").strip().lower()
-            in ("1", "true", "yes", "on")
-        )
-        query_hvp_direction = os.environ.get(
-            "TRAJ_TRACIN_QUERY_HVP_DIRECTION",
-            "next_checkpoint_parameter_delta",
-        ).strip().lower()
         if save_query_hvp:
-            if cfg.query_objective != "trajectory_next_checkpoint_noise_mse":
+            if cfg.query_objective not in (
+                "trajectory_next_checkpoint_noise_mse",
+                "trajectory_predicted_noise_probe",
+            ):
                 raise ValueError(
-                    "TRAJ_TRACIN_QUERY_SAVE_HVP currently requires "
-                    "trajectory_next_checkpoint_noise_mse"
+                    "TRAJ_TRACIN_QUERY_SAVE_HVP currently requires the next-checkpoint "
+                    "noise MSE or predicted-noise probe objective"
+                )
+            if (
+                cfg.query_objective == "trajectory_predicted_noise_probe"
+                and predicted_noise_probe_mode != "query_timestamp_shared_gaussian"
+            ):
+                raise ValueError(
+                    "second-order predicted-noise probes require "
+                    "query_timestamp_shared_gaussian so v(q,t) is shared across checkpoints"
                 )
             if cfg.parameter_source != "raw":
                 raise ValueError("query HVP generation requires TRAJ_PARAMETER_SOURCE=raw")
@@ -3514,7 +3571,11 @@ def run_attribution(cfg: TrajAttributionConfig):
                 continue
             if (
                 stage_mode != "train"
-                and (uses_next_checkpoint_target or probe_alignment_next_checkpoint)
+                and (
+                    uses_next_checkpoint_target
+                    or save_query_hvp
+                    or probe_alignment_next_checkpoint
+                )
                 and ckpt_i + 1 >= len(ckpts)
             ):
                 print(
@@ -3919,7 +3980,24 @@ def run_attribution(cfg: TrajAttributionConfig):
                 if uses_checkpoint_trajectory_target:
                     query_grad_chunk_fn = make_implied_noise_query_grad_chunk_fn(adapter, model)
                 elif uses_predicted_noise_probe:
-                    query_grad_chunk_fn = make_predicted_noise_probe_query_grad_chunk_fn(adapter, model)
+                    query_grad_hvp_chunk_fn = None
+                    query_hvp_delta = None
+                    if save_query_hvp:
+                        query_grad_hvp_chunk_fn = (
+                            make_predicted_noise_probe_query_grad_hvp_chunk_fn(
+                                adapter, model
+                            )
+                        )
+                        next_params = next_checkpoint_params(ckpt_i)
+                        query_hvp_delta = jax.tree_util.tree_map(
+                            lambda next_value, current_value: next_value - current_value,
+                            next_params,
+                            params,
+                        )
+                    else:
+                        query_grad_chunk_fn = (
+                            make_predicted_noise_probe_query_grad_chunk_fn(adapter, model)
+                        )
                 elif use_future_residual_mixture:
                     query_grad_chunk_fn = make_future_residual_mixture_grad_chunk_fn(adapter, model)
                     eps_cache = load_or_build_future_noise_cache(xt_refs, t_seq, pos_seq)
@@ -4487,13 +4565,25 @@ def run_attribution(cfg: TrajAttributionConfig):
                                     key, xt_chunk.shape[1:], dtype=jnp.float32
                                 )
                             )(probe_keys)
-                        query_grads = query_grad_chunk_fn(
-                            params,
-                            xt_chunk,
-                            t_chunk,
-                            query_cond,
-                            output_probes,
-                        )
+                        if save_query_hvp:
+                            assert query_grad_hvp_chunk_fn is not None
+                            assert query_hvp_delta is not None
+                            query_grads, query_hvps = query_grad_hvp_chunk_fn(
+                                params,
+                                xt_chunk,
+                                t_chunk,
+                                query_cond,
+                                output_probes,
+                                query_hvp_delta,
+                            )
+                        else:
+                            query_grads = query_grad_chunk_fn(
+                                params,
+                                xt_chunk,
+                                t_chunk,
+                                query_cond,
+                                output_probes,
+                            )
                     else:
                         if save_query_hvp:
                             assert query_grad_hvp_chunk_fn is not None
@@ -4562,7 +4652,11 @@ def run_attribution(cfg: TrajAttributionConfig):
                         stage_ckpt_paths.append(str(ckpt_path))
                         stage_term_weights.append(ckpt_lr_weight / float(max(1, len(t_seq))))
                     stage_terms_done += len(chunk_ids)
-                    query_total_terms = (len(ckpts) - 1 if uses_next_checkpoint_target else len(ckpts)) * len(t_seq)
+                    query_total_terms = (
+                        len(ckpts) - 1
+                        if uses_next_checkpoint_target or save_query_hvp
+                        else len(ckpts)
+                    ) * len(t_seq)
                     print(
                         f"[stage:query] checkpoint {ckpt_i + 1}/{len(ckpts)} "
                         f"snapshot {chunk_start + 1}-{chunk_end}/{len(t_seq)} | "
