@@ -25,9 +25,25 @@ SCHEME_GROUPS = {
     "raw_loss": (
         ("raw_loss_mc10", "traj_tracin_raw_mc10_aligned10x10"),
     ),
+    "raw_loss_squared_previous_lr": (
+        (
+            "raw_loss_mc10_squared_previous_lr",
+            "traj_tracin_raw_mc10_aligned10x10_squared_previous_lr",
+        ),
+    ),
     "original": (
         ("residual", "traj_tracin_adamw_residual_aligned10x10"),
         ("full", "traj_tracin_adamw_full_aligned10x10"),
+    ),
+    "linear_stored_lr": (
+        (
+            "residual_linear_stored_lr",
+            "traj_tracin_adamw_residual_aligned10x10_linear_stored_lr",
+        ),
+        (
+            "full_linear_stored_lr",
+            "traj_tracin_adamw_full_aligned10x10_linear_stored_lr",
+        ),
     ),
     "squared": (
         (
@@ -61,6 +77,16 @@ SCHEME_GROUPS = {
         (
             "full_timestamp_sum_squared",
             "traj_tracin_adamw_full_aligned10x10_timestamp_sum_squared",
+        ),
+    ),
+    "second_order_hvp": (
+        (
+            "residual_second_order_hvp",
+            "traj_tracin_adamw_residual_aligned10x10_second_order_hvp_next_delta_timestamp_sum_squared_q0_20",
+        ),
+        (
+            "full_second_order_hvp",
+            "traj_tracin_adamw_full_aligned10x10_second_order_hvp_next_delta_timestamp_sum_squared_q0_20",
         ),
     ),
     "query_timestamp_shared": (
@@ -163,6 +189,7 @@ def main() -> None:
             "squared_previous_lr",
             "absolute",
             "timestamp_sum_squared",
+            "second_order_hvp",
             "query_timestamp_shared",
             "query_timestamp_shared_previous_lr",
             "query_timestamp_shared_termwise_squared",

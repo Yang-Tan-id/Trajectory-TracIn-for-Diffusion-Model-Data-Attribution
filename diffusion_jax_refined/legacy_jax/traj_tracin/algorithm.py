@@ -1820,6 +1820,78 @@ def make_query_grad_chunk_fn(adapter, model, objective: str):
     return jax.jit(grad_chunk)
 
 
+def make_query_grad_hvp_chunk_fn(adapter, model, objective: str):
+    """Return query gradients and exact Hessian-vector products for a snapshot chunk.
+
+    The Hessian is with respect to the current checkpoint parameters only. The
+    target/reference parameters and the HVP direction are held fixed, matching
+    the stop-gradient next-checkpoint query objective.
+    """
+    objective = normalize_query_objective_name(objective)
+
+    def scalar_fn(params, query_target_params, reference_params, xt_ref, t_scalar, cond):
+        t = jnp.full((xt_ref.shape[0],), t_scalar, dtype=jnp.int32)
+        return query_scalar(
+            adapter=adapter,
+            model=model,
+            params=params,
+            query_target_params=query_target_params,
+            reference_params=reference_params,
+            xt_ref=xt_ref,
+            t=t,
+            cond=cond,
+            objective=objective,
+        )
+
+    grad_fn = jax.grad(scalar_fn)
+
+    def grad_hvp_one(
+        params,
+        query_target_params,
+        reference_params,
+        xt_ref,
+        t_scalar,
+        cond,
+        direction,
+    ):
+        return jax.jvp(
+            lambda current_params: grad_fn(
+                current_params,
+                query_target_params,
+                reference_params,
+                xt_ref,
+                t_scalar,
+                cond,
+            ),
+            (params,),
+            (direction,),
+        )
+
+    def grad_hvp_chunk(
+        params,
+        query_target_params,
+        reference_params,
+        xt_refs_chunk,
+        t_scalars,
+        cond,
+        direction,
+    ):
+        return jax.vmap(
+            grad_hvp_one,
+            in_axes=(None, None, None, 0, 0, None, None),
+        )(
+            params,
+            query_target_params,
+            reference_params,
+            xt_refs_chunk,
+            t_scalars,
+            cond,
+            direction,
+        )
+
+    return jax.jit(grad_hvp_chunk)
+
+
 def make_predicted_noise_probe_query_grad_chunk_fn(adapter, model):
     """Gradients of Gaussian scalar probes of the vector predicted-noise output."""
 
@@ -3123,6 +3195,7 @@ def run_attribution(cfg: TrajAttributionConfig):
         if probe_alignment_only and probe_alignment_count <= 0:
             raise ValueError("TRAJ_TRACIN_PROBE_ALIGNMENT_COUNT must be positive")
         stage_features = []
+        stage_query_hvp_features = []
         stage_ckpt_indices = []
         stage_timesteps = []
         stage_snapshot_positions = []
@@ -3188,6 +3261,33 @@ def run_attribution(cfg: TrajAttributionConfig):
         parameter_directional_derivatives_per_update_norm = []
         parameter_update_query_gradient_cosines = []
         parameter_update_norms = []
+        save_query_hvp = (
+            stage_mode == "query"
+            and os.environ.get("TRAJ_TRACIN_QUERY_SAVE_HVP", "0").strip().lower()
+            in ("1", "true", "yes", "on")
+        )
+        query_hvp_direction = os.environ.get(
+            "TRAJ_TRACIN_QUERY_HVP_DIRECTION",
+            "next_checkpoint_parameter_delta",
+        ).strip().lower()
+        if save_query_hvp:
+            if cfg.query_objective != "trajectory_next_checkpoint_noise_mse":
+                raise ValueError(
+                    "TRAJ_TRACIN_QUERY_SAVE_HVP currently requires "
+                    "trajectory_next_checkpoint_noise_mse"
+                )
+            if cfg.parameter_source != "raw":
+                raise ValueError("query HVP generation requires TRAJ_PARAMETER_SOURCE=raw")
+            if query_hvp_direction != "next_checkpoint_parameter_delta":
+                raise ValueError(
+                    "TRAJ_TRACIN_QUERY_HVP_DIRECTION currently supports only "
+                    "next_checkpoint_parameter_delta"
+                )
+            print(
+                "[stage:query] exact query-loss HVP enabled | "
+                "direction=theta[c+1]-theta[c] | projection=same checkpoint CountSketch",
+                flush=True,
+            )
         alignment_eps_chunk_fn = None
         parameter_delta_jvp_chunk_fn = None
         if probe_alignment_only:
@@ -3833,8 +3933,22 @@ def run_attribution(cfg: TrajAttributionConfig):
                         flush=True,
                     )
                 else:
-                    query_grad_chunk_fn = make_query_grad_chunk_fn(adapter, model, cfg.query_objective)
                     query_target_params = query_target_params_for_checkpoint(ckpt_i)
+                    query_grad_hvp_chunk_fn = None
+                    query_hvp_delta = None
+                    if save_query_hvp:
+                        query_grad_hvp_chunk_fn = make_query_grad_hvp_chunk_fn(
+                            adapter, model, cfg.query_objective
+                        )
+                        query_hvp_delta = jax.tree_util.tree_map(
+                            lambda next_value, current_value: next_value - current_value,
+                            query_target_params,
+                            params,
+                        )
+                    else:
+                        query_grad_chunk_fn = make_query_grad_chunk_fn(
+                            adapter, model, cfg.query_objective
+                        )
                 parameter_update_delta = None
                 parameter_update_norm = None
                 if collect_parameter_directional_derivatives:
@@ -4381,14 +4495,27 @@ def run_attribution(cfg: TrajAttributionConfig):
                             output_probes,
                         )
                     else:
-                        query_grads = query_grad_chunk_fn(
-                            params,
-                            query_target_params,
-                            reference_params,
-                            xt_chunk,
-                            t_chunk,
-                            query_cond,
-                        )
+                        if save_query_hvp:
+                            assert query_grad_hvp_chunk_fn is not None
+                            assert query_hvp_delta is not None
+                            query_grads, query_hvps = query_grad_hvp_chunk_fn(
+                                params,
+                                query_target_params,
+                                reference_params,
+                                xt_chunk,
+                                t_chunk,
+                                query_cond,
+                                query_hvp_delta,
+                            )
+                        else:
+                            query_grads = query_grad_chunk_fn(
+                                params,
+                                query_target_params,
+                                reference_params,
+                                xt_chunk,
+                                t_chunk,
+                                query_cond,
+                            )
                     for local_i, snap_id in enumerate(chunk_ids):
                         one_grad = jax.tree_util.tree_map(lambda x: x[local_i], query_grads)
                         if collect_parameter_directional_derivatives:
@@ -4422,6 +4549,13 @@ def run_attribution(cfg: TrajAttributionConfig):
                                 float(jax.device_get(parameter_update_norm))
                             )
                         stage_features.append(np.asarray(projector(one_grad), dtype=np.float32))
+                        if save_query_hvp:
+                            one_hvp = jax.tree_util.tree_map(
+                                lambda x: x[local_i], query_hvps
+                            )
+                            stage_query_hvp_features.append(
+                                np.asarray(projector(one_hvp), dtype=np.float32)
+                            )
                         stage_ckpt_indices.append(int(ckpt_i))
                         stage_timesteps.append(int(t_seq[snap_id]))
                         stage_snapshot_positions.append(int(pos_seq[snap_id]))
@@ -5802,6 +5936,35 @@ def run_attribution(cfg: TrajAttributionConfig):
                     "next_checkpoint" if uses_next_checkpoint_target else "reference_checkpoint"
                 ),
             )
+            if save_query_hvp:
+                if len(stage_query_hvp_features) != len(stage_features):
+                    raise RuntimeError(
+                        "query HVP/query gradient term-count mismatch: "
+                        f"{len(stage_query_hvp_features)} != {len(stage_features)}"
+                    )
+                query_payload.update(
+                    query_hvp_features=np.stack(
+                        stage_query_hvp_features, axis=0
+                    ).astype(np.float32),
+                    query_hvp_direction=np.asarray(query_hvp_direction),
+                    query_hvp_definition=np.asarray(
+                        "H_query(theta_c) @ stopgrad(theta_c_plus_1-theta_c)"
+                    ),
+                    query_hvp_second_order_coefficient=np.asarray(
+                        0.5, dtype=np.float32
+                    ),
+                    query_hvp_projection_matches_query=np.asarray(True),
+                    query_hvp_projection_seed_rule=np.asarray(
+                        "(train_seed,'traj_tracin_projection',checkpoint_index)"
+                    ),
+                    query_hvp_projection_train_seed=np.asarray(
+                        int(cfg.seed), dtype=np.int64
+                    ),
+                    query_hvp_update_semantics=np.asarray(
+                        "actual signed checkpoint-interval parameter delta; "
+                        "checkpoint-level approximation to the per-step AdamW batch update"
+                    ),
+                )
             if cfg.query_objective == "trajectory_future_residual_mixture":
                 query_payload.update(
                     future_noise_cache_path=np.asarray("" if future_noise_cache_path is None else future_noise_cache_path),

@@ -1232,9 +1232,12 @@ def _run_fused_traj_score_batch(
     if train.ndim != 3 or not jobs:
         return False
     query_terms = []
+    query_hvp_terms = []
     term_weights = []
     train_term_indices = None
     query_payloads = []
+    query_hvp_key = os.environ.get("TRACIN_SCORE_QUERY_HVP_KEY", "").strip()
+    second_order_coefficients = []
     for job in jobs:
         query_path = Path(job["query_path"])
         if not query_path.is_file():
@@ -1250,6 +1253,81 @@ def _run_fused_traj_score_batch(
         if aligned is None:
             return False
         query, weights, current_train_indices = aligned
+        if query_hvp_key:
+            if query_hvp_key not in payload:
+                raise ValueError(
+                    f"{query_path}: missing requested HVP array {query_hvp_key!r}"
+                )
+            projection_matches = bool(
+                np.asarray(
+                    payload.get("query_hvp_projection_matches_query", False)
+                ).item()
+            )
+            if not projection_matches:
+                raise ValueError(
+                    f"{query_path}: HVP was not certified to use the query CountSketch"
+                )
+            seed_rule = str(
+                np.asarray(payload.get("query_hvp_projection_seed_rule", "")).item()
+            )
+            expected_seed_rule = (
+                "(train_seed,'traj_tracin_projection',checkpoint_index)"
+            )
+            if seed_rule != expected_seed_rule:
+                raise ValueError(
+                    f"{query_path}: unexpected HVP projection seed rule {seed_rule!r}"
+                )
+            expected_projection_seed = os.environ.get(
+                "TRACIN_SCORE_EXPECTED_PROJECTION_SEED", ""
+            ).strip()
+            if expected_projection_seed:
+                actual_projection_seed = int(
+                    np.asarray(
+                        payload.get("query_hvp_projection_train_seed", -1)
+                    ).item()
+                )
+                if actual_projection_seed != int(expected_projection_seed):
+                    raise ValueError(
+                        f"{query_path}: HVP/query projection seed "
+                        f"{actual_projection_seed} != expected train seed "
+                        f"{expected_projection_seed}"
+                    )
+            query_proj_dim = int(np.asarray(payload.get("proj_dim", -1)).item())
+            if query_proj_dim != train.shape[2]:
+                raise ValueError(
+                    f"{query_path}: query/HVP projection dimension {query_proj_dim} "
+                    f"does not match train dimension {train.shape[2]}"
+                )
+            hvp_payload = dict(payload)
+            hvp_payload["query_features"] = payload[query_hvp_key]
+            aligned_hvp = _aligned_query_terms_for_fused_score(
+                train_payload,
+                hvp_payload,
+                train=train,
+                train_path=train_path,
+                query_path=query_path,
+            )
+            if aligned_hvp is None:
+                raise ValueError(f"{query_path}: could not align query HVP terms")
+            query_hvp, hvp_weights, hvp_train_indices = aligned_hvp
+            if not np.array_equal(current_train_indices, hvp_train_indices):
+                raise ValueError(f"{query_path}: query-gradient/HVP alignment mismatch")
+            if not np.array_equal(weights, hvp_weights):
+                raise ValueError(f"{query_path}: query-gradient/HVP weight mismatch")
+            coefficient = float(
+                os.environ.get(
+                    "TRACIN_SCORE_SECOND_ORDER_COEFFICIENT",
+                    str(
+                        float(
+                            np.asarray(
+                                payload.get("query_hvp_second_order_coefficient", 0.5)
+                            ).item()
+                        )
+                    ),
+                )
+            )
+            query_hvp_terms.append(query_hvp)
+            second_order_coefficients.append(coefficient)
         if train_term_indices is None:
             train_term_indices = current_train_indices
         elif not np.array_equal(train_term_indices, current_train_indices):
@@ -1259,6 +1337,17 @@ def _run_fused_traj_score_batch(
         query_payloads.append(payload)
 
     query_all = np.stack(query_terms, axis=0).astype(np.float32, copy=False)
+    if query_hvp_key:
+        query_hvp_all = np.stack(query_hvp_terms, axis=0).astype(
+            np.float32, copy=False
+        )
+        coefficient_all = np.asarray(
+            second_order_coefficients, dtype=np.float32
+        )[:, None, None]
+        # In update space the first- plus second-order utility is
+        # delta_z^T (g_q + 1/2 H_q Delta). CountSketch is linear, so the
+        # effective query may be formed directly in the shared sketch space.
+        query_all = query_all + coefficient_all * query_hvp_all
     weights_all = np.stack(term_weights, axis=0).astype(np.float64, copy=False)
     query_norm_all = _normalize_rows(query_all, float(os.environ.get("TRACIN_SCORE_QUERY_NORMALIZE_EPS", "1e-8")))
     num_queries, num_terms, _ = query_all.shape
@@ -1318,6 +1407,7 @@ def _run_fused_traj_score_batch(
         f"[traj-score-fused] queries={num_queries} terms={num_terms} points={num_points} "
         f"dim={train.shape[2]} raw=1 query_l2={int(normalize_query)} "
         f"train_l2={int(normalize_train)} both_l2={int(normalize_query and normalize_train)} "
+        f"second_order_hvp={int(bool(query_hvp_key))} "
         f"contraction={score_contraction} "
         f"checkpoint_weighting={os.environ.get('TRACIN_SCORE_CHECKPOINT_WEIGHTING', 'stored_lr')} "
         f"timestep_weighting={os.environ.get('TRACIN_SCORE_TIMESTEP_WEIGHTING', 'uniform')}",
@@ -1460,7 +1550,18 @@ def _run_fused_traj_score_batch(
                 int(value)
                 for value in timestep_allowlist.replace(",", " ").split()
                 if value.strip()
-            ]
+            ],
+            "second_order_hvp_key": query_hvp_key,
+            "second_order_coefficient": (
+                float(second_order_coefficients[job_i - 1])
+                if query_hvp_key
+                else 0.0
+            ),
+            "second_order_effective_query": (
+                "projected_query_gradient + coefficient * projected_query_hvp"
+                if query_hvp_key
+                else "disabled"
+            ),
         }
         variants = [
             (out_dir, raw_scores[job_i - 1], {"score_variant": "raw", **shared_metadata})
