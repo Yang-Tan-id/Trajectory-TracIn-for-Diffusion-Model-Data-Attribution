@@ -64,7 +64,7 @@ def _module_parameter_matrix(module, module_name, tensors):
 
 
 class X3AdamClipSourceComputer(X3SourceComputer):
-    """SOURCE with Adam diagonal P, diagonal S, and raw/query-L2 outputs."""
+    """SOURCE with Adam diagonal P, diagonal S, and query-only normalization."""
 
     def build_adam_clip_blocks(self, loader):
         # Existing SOURCE builds the EK-FAC bases/eigenvalues used for H^{-1}.
@@ -203,14 +203,26 @@ class X3AdamClipSourceComputer(X3SourceComputer):
         return {name: value.clone() for name, value in grads.items()}
 
     @staticmethod
-    def _query_l2_normalize(grads):
-        norm_sq = None
+    def _jacobian_frobenius_rms_normalize(grads, output_dim):
+        """Divide each query's Jacobian rows by ||J||_F/sqrt(output_dim)."""
+        if not grads:
+            raise ValueError("cannot normalize an empty gradient dictionary")
+        first = next(iter(grads.values()))
+        if first.shape[0] % output_dim != 0:
+            raise ValueError(
+                f"measurement count {first.shape[0]} is not divisible by {output_dim}"
+            )
+        row_norm_sq = None
         for value in grads.values():
             contribution = value.float().square().flatten(1).sum(dim=1)
-            norm_sq = contribution if norm_sq is None else norm_sq + contribution
-        denominator = torch.sqrt(norm_sq).clamp_min(
+            row_norm_sq = (
+                contribution if row_norm_sq is None else row_norm_sq + contribution
+            )
+        num_queries = first.shape[0] // output_dim
+        frobenius_sq = row_norm_sq.reshape(num_queries, output_dim).sum(dim=1)
+        denominator = torch.sqrt(frobenius_sq / float(output_dim)).clamp_min(
             ADAM_CLIP_SOURCE_NORM_EPS
-        )
+        ).repeat_interleave(output_dim)
         return {
             name: value / denominator.reshape(-1, *([1] * (value.ndim - 1)))
             for name, value in grads.items()
@@ -273,7 +285,9 @@ class X3AdamClipSourceComputer(X3SourceComputer):
             del measurement_grads
             running = {
                 "unnormalized": self._clone_grads(module_grads),
-                "query_l2": self._query_l2_normalize(module_grads),
+                "jacobian_fro_rms": self._jacobian_frobenius_rms_normalize(
+                    module_grads, ADAM_CLIP_SOURCE_OUTPUT_DIM
+                ),
             }
             del module_grads
 

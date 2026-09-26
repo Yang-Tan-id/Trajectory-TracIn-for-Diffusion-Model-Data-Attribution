@@ -264,7 +264,7 @@ def main():
             "clip_jacobian": "frozen batch-scale approximation; dc/dtheta omitted",
             "query_normalization": {
                 "unnormalized": "none",
-                "query_l2": "per scalar output-component gradient over selected parameters",
+                "jacobian_fro_rms": "one exact ||J_qt||_F/sqrt(27) denominator shared by all 27 output components; selected parameters only",
             },
             "weight_decay_in_decay_operator": False,
             "adam_first_moment_used": False,

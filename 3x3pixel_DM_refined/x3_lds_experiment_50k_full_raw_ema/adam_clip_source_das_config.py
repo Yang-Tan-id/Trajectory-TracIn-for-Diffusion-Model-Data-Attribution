@@ -28,7 +28,7 @@ ADAM_CLIP_SOURCE_NORM_EPS = 1e-12
 
 ADAM_CLIP_SOURCE_METHODS = {
     "unnormalized": "source_das_adam_clip_raw_10ckpt_100t_mc10_unnormalized",
-    "query_l2": "source_das_adam_clip_raw_10ckpt_100t_mc10_query_l2",
+    "jacobian_fro_rms": "source_das_adam_clip_raw_10ckpt_100t_mc10_jacobian_fro_rms",
 }
 
 

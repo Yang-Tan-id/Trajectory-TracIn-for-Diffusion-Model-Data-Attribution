@@ -284,8 +284,10 @@ python -u 22_launch_adam_clip_source_das_4gpu.py
 One run saves and evaluates two methods:
 
 - `source_das_adam_clip_raw_10ckpt_100t_mc10_unnormalized`
-- `source_das_adam_clip_raw_10ckpt_100t_mc10_query_l2`
+- `source_das_adam_clip_raw_10ckpt_100t_mc10_jacobian_fro_rms`
 
-`query_l2` normalizes each scalar predicted-noise component's gradient over the
-selected attribution parameters before SOURCE propagation.  Both methods square
-the resulting 27 component effects, sum them, and average over 100 timestamps.
+`jacobian_fro_rms` computes the exact Jacobian Frobenius norm over the selected
+attribution parameters and all 27 predicted-noise components, then divides all
+components for that query/timestamp by the shared `||J||_F / sqrt(27)` value.
+It never normalizes the SOURCE parameter delta.  Both methods square the
+resulting 27 component effects, sum them, and average over 100 timestamps.
