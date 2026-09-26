@@ -6,7 +6,11 @@ import json
 import numpy as np
 
 from exp_config import ATTR_DIR, N_TRAIN, QUERY_DIR
-from run_exact_traj_next_bank import METHOD, SHARD_NAMESPACE
+from run_exact_traj_next_bank import (
+    METHOD,
+    SCORE_CONTRACT_VERSION,
+    SHARD_NAMESPACE,
+)
 
 
 def main():
@@ -30,6 +34,8 @@ def main():
             raise ValueError(f"query IDs mismatch in {shard}")
         if metadata.get("projection") is not None:
             raise ValueError(f"{shard} is not an exact/no-projection shard")
+        if metadata.get("score_contract_version") != SCORE_CONTRACT_VERSION:
+            raise ValueError(f"score contract mismatch in {shard}")
         values = np.load(shard / "linear.npy")
         expected_shape = (len(records), N_TRAIN)
         if values.shape != expected_shape:
@@ -58,6 +64,11 @@ def main():
                     "merged_timestamp_indices": sorted(covered_timestamps),
                     "train_mc": shard_metadata[0]["train_mc"],
                     "learning_rate_source": "current_checkpoint",
+                    "score_contract_version": SCORE_CONTRACT_VERSION,
+                    "train_noise_seed_contract": shard_metadata[0][
+                        "train_noise_seed_contract"
+                    ],
+                    "score_scale": shard_metadata[0]["score_scale"],
                 },
                 handle,
                 indent=2,

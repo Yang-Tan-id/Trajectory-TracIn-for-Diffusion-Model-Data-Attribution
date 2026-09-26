@@ -12,8 +12,8 @@ TOPK = 1000
 OUT_ROOT = ROOT / "topk_removal_retrain"
 METHODS = (
     {
-        "tag": "traj_next_raw_exact",
-        "method": "traj_next_raw_exact_100q",
+        "tag": "traj_next_raw_exact_aligned",
+        "method": "traj_next_raw_exact_aligned_100q",
         "score_param_source": "raw",
         "eval_param_source": "ema",
         "lambda": None,

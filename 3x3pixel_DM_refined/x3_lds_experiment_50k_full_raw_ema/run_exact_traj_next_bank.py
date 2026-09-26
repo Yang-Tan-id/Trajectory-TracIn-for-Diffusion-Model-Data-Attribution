@@ -24,8 +24,9 @@ from exp_config import *
 from x3_endpoint_das_jax_logic_pytorch import make_torch_generator
 
 
-METHOD = "traj_next_raw_exact_100q"
-SHARD_NAMESPACE = "_exact_traj_next_raw_shards"
+METHOD = "traj_next_raw_exact_aligned_100q"
+SHARD_NAMESPACE = "_exact_traj_next_raw_aligned_shards"
+SCORE_CONTRACT_VERSION = 2
 
 
 def flatten_gradient_tuple(values):
@@ -106,6 +107,8 @@ def main():
         expected_ids = [int(item["query_id"]) for item in records]
         if progress.get("query_ids") != expected_ids:
             raise ValueError(f"query IDs changed since {progress_path} was written")
+        if progress.get("score_contract_version") != SCORE_CONTRACT_VERSION:
+            raise ValueError(f"score contract changed since {progress_path} was written")
         completed_timestamps = [int(value) for value in progress["completed_timestamps"]]
         partial = np.load(partial_path)
         expected_shape = (len(records), N_TRAIN)
@@ -209,7 +212,7 @@ def main():
                 end = min(start + args.batch_size, N_TRAIN)
                 x_batch, condition_batch = x_all[start:end], cond_all[start:end]
                 generator = make_torch_generator(
-                    device, 70000000, "traj_train", checkpoint_index,
+                    device, TRAIN_SEED, "projected_traj_train", checkpoint_index,
                     snapshot_index, start, mc_count,
                 )
                 noises = torch.randn(
@@ -222,8 +225,13 @@ def main():
                     parameter_dict, x_batch, condition_batch, noises
                 )
                 train_matrix = flatten_batched_gradients(gradients, names).detach()
-                dots = torch.matmul(
-                    train_matrix, query_matrix.T
+                # The projected worker divides both CountSketch vectors by
+                # sqrt(d), so its dot has expected scale full_dot / d. Keep
+                # that positive scalar here for numerical comparability; it
+                # does not affect descending top-k ranks.
+                dots = (
+                    torch.matmul(train_matrix, query_matrix.T)
+                    / float(TRACIN_PROJ_DIM)
                 ).T.to(torch.float64)
                 scores[:, start:end] += weight * dots
                 if (
@@ -272,6 +280,7 @@ def main():
                 "timestamp_shard_index": args.timestamp_shard_index,
                 "timestamp_shard_count": args.timestamp_shard_count,
                 "completed_timestamps": completed_timestamps,
+                "score_contract_version": SCORE_CONTRACT_VERSION,
             },
         )
         print(
@@ -297,6 +306,11 @@ def main():
             "projection": None,
             "train_mc": mc_count,
             "batch_size": args.batch_size,
+            "score_contract_version": SCORE_CONTRACT_VERSION,
+            "train_noise_seed_contract": (
+                "TRAIN_SEED/projected_traj_train/checkpoint/timestamp/batch/mc"
+            ),
+            "score_scale": f"full_gradient_dot/{int(TRACIN_PROJ_DIM)}",
         },
     )
     print(f"[done] exact Traj shard saved: {shard_root}", flush=True)

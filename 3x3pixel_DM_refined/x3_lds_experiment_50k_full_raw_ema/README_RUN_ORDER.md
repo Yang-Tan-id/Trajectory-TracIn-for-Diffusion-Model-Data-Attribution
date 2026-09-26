@@ -53,6 +53,12 @@ evaluated from their EMA weights. The evaluator replays the query's exact saved
 initial noise and prompt, compares directly against the saved base-EMA query
 trajectory, and records full-trajectory and endpoint changes.
 
+For a controlled projected-versus-exact comparison, the exact bank reuses the
+projected bank's train-noise seeds, checkpoint/timestamp weights, MC averaging,
+and loss reductions. Exact dots are divided by the projected dimension because
+both CountSketch vectors use `1/sqrt(d)` scaling; this positive constant does
+not change the top-1000 ordering.
+
 ```bash
 python 04_launch_exact_traj_next_100q_4gpu.py
 python 09_prepare_topk_removal.py
