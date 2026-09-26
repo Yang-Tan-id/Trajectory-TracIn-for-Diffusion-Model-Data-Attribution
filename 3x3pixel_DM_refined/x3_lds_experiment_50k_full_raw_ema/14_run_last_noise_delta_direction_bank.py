@@ -88,6 +88,12 @@ def main():
             progress = json.load(handle)
         if progress["query_ids"] != query_ids or progress["score_version"] != SCORE_VERSION:
             raise ValueError("partial score contract no longer matches")
+        if int(progress.get("batch_size", -1)) != args.batch_size:
+            raise ValueError(
+                f"partial batch size is {progress.get('batch_size')}, but current "
+                f"batch size is {args.batch_size}; move the old shard directory "
+                "aside and restart to keep Monte Carlo noise consistent"
+            )
         completed_timestamps = [int(value) for value in progress["completed_timestamps"]]
         scores = torch.from_numpy(np.load(partial_path)).to(device, torch.float64)
         print(f"[resume] timestamps={len(completed_timestamps)}/{len(selected_timestamps)}", flush=True)
@@ -196,6 +202,7 @@ def main():
                 "query_ids": query_ids,
                 "completed_timestamps": completed_timestamps,
                 "score_version": SCORE_VERSION,
+                "batch_size": args.batch_size,
             },
         )
         print(f"[checkpoint] timestamps={len(completed_timestamps)}/{len(selected_timestamps)}", flush=True)
@@ -220,6 +227,7 @@ def main():
             "delta_normalized": CF_DELTA_NORMALIZE,
             "parameter_projection": None,
             "train_mc": CF_TRAIN_MC,
+            "batch_size": args.batch_size,
             "score_version": SCORE_VERSION,
         },
     )
