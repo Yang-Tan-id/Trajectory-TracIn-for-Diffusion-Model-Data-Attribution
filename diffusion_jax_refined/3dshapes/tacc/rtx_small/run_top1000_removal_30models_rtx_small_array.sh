@@ -30,7 +30,7 @@ export JAX_BATCH_SIZE="${JAX_BATCH_SIZE:-16}"
 export JAX_PREFETCH_SIZE="${JAX_PREFETCH_SIZE:-1}"
 export JAX_BFLOAT16="${JAX_BFLOAT16:-1}"
 
-task="${SLURM_ARRAY_TASK_ID}"
+task="$((${TASK_OFFSET:-0} + SLURM_ARRAY_TASK_ID))"
 query_id="$((task % 10))"
 method_id="$((task / 10))"
 case "$method_id" in
