@@ -13,22 +13,24 @@ def main():
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     log_path = LOG_DIR / "exact_traj_next_raw_100q_4gpu.log"
     assignments = (
-        ("prompted", 0, CUDA_IDS[0]),
-        ("prompted", 1, CUDA_IDS[1]),
-        ("unprompted", 0, CUDA_IDS[2]),
-        ("unprompted", 1, CUDA_IDS[3]),
+        # 75 prompted queries on three GPUs and 25 unprompted queries on one
+        # GPU gives each worker the same query x timestamp workload.
+        ("prompted", 0, 3, CUDA_IDS[0]),
+        ("prompted", 1, 3, CUDA_IDS[1]),
+        ("prompted", 2, 3, CUDA_IDS[2]),
+        ("unprompted", 0, 1, CUDA_IDS[3]),
     )
     with open(log_path, "a", buffering=1) as stream:
         stream.write("\n[launcher] exact/no-projection Traj-next raw start\n")
         active = {}
-        for family, shard, gpu in assignments:
+        for family, shard, shard_count, gpu in assignments:
             label = f"exact-traj-{family}-shard-{shard}"
             command = [
                 sys.executable, "-u", "run_exact_traj_next_bank.py",
                 "--family", family,
                 "--gpu", str(gpu),
                 "--timestamp-shard-index", str(shard),
-                "--timestamp-shard-count", "2",
+                "--timestamp-shard-count", str(shard_count),
             ]
             stream.write(f"[launcher] {label}: {' '.join(command)}\n")
             process = subprocess.Popen(
@@ -54,12 +56,12 @@ def main():
             if active:
                 time.sleep(1)
 
-        for family in ("prompted", "unprompted"):
+        for family, shard_count in (("prompted", 3), ("unprompted", 1)):
             subprocess.run(
                 [
                     sys.executable, "merge_exact_traj_next_shards.py",
                     "--family", family,
-                    "--timestamp-shard-count", "2",
+                    "--timestamp-shard-count", str(shard_count),
                 ],
                 stdout=stream,
                 stderr=subprocess.STDOUT,
