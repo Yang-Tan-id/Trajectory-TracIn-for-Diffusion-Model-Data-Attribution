@@ -21,8 +21,8 @@ from run_exact_traj_next_bank import flatten_batched_gradients, flatten_gradient
 from x3_endpoint_das_jax_logic_pytorch import make_torch_generator
 
 
-SCORE_VERSION = 1
-SHARD_NAMESPACE = "_last_noise_delta_direction_shards"
+SCORE_VERSION = 3
+SHARD_NAMESPACE = "_last_noise_delta_direction_parameter_delta_scalar_square_shards"
 
 
 def atomic_numpy(path, value):
@@ -152,7 +152,7 @@ def main():
                 return (prediction - noises).pow(2).reshape(CF_TRAIN_MC, -1).mean()
 
             batched_gradient = vmap(grad(one_loss), in_dims=(None, 0, 0, 0))
-            weight = float(tracin_lr_weight(checkpoint)) * snapshot_weight
+            learning_rate = float(tracin_lr_weight(checkpoint))
             num_batches = math.ceil(N_TRAIN / args.batch_size)
             progress_every = max(1, num_batches // 10)
             for batch_index, start in enumerate(range(0, N_TRAIN, args.batch_size), start=1):
@@ -169,7 +169,11 @@ def main():
                 gradients = batched_gradient(named, x_batch, condition_batch, noises)
                 train_matrix = flatten_batched_gradients(gradients, names).detach()
                 dots = torch.matmul(train_matrix, query_matrix.T).T.to(torch.float64)
-                scores[:, start:end] += weight * dots
+                # First apply the datapoint's SGD parameter displacement to
+                # the projected-noise gradient, yielding one scalar. Square
+                # that scalar term before summing checkpoints/timestamps.
+                scalar_responses = learning_rate * dots
+                scores[:, start:end] += snapshot_weight * scalar_responses.square()
                 if batch_index == 1 or batch_index % progress_every == 0 or batch_index == num_batches:
                     print(
                         f"[delta-direction {args.family}] timestamp={snapshot_index+1}/100 "
@@ -188,7 +192,7 @@ def main():
             )
             del model, checkpoint, named, parameters, query_vectors, query_matrix
             del current_epsilon, last_epsilon, direction, projected_noise, query_gradient
-            del batched_gradient, gradients, train_matrix, dots, noises
+            del batched_gradient, gradients, train_matrix, dots, scalar_responses, noises
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
@@ -224,6 +228,7 @@ def main():
             "reference_checkpoint": str(paths[-1]),
             "current_checkpoints": len(transitions),
             "query_scalar": "dot(epsilon_current, normalize(epsilon_last-epsilon_current))",
+            "contraction": "mean_timestamp_sum_checkpoint[(dot(query_gradient,-lr*train_gradient))^2]",
             "delta_normalized": CF_DELTA_NORMALIZE,
             "parameter_projection": None,
             "train_mc": CF_TRAIN_MC,

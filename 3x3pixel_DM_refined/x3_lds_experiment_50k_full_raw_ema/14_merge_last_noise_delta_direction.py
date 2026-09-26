@@ -10,7 +10,7 @@ from exp_config import ATTR_DIR, N_TRAIN
 from run_exact_traj_next_bank import atomic_json_save, atomic_numpy_save
 
 
-SHARD_NAMESPACE = "_last_noise_delta_direction_shards"
+SHARD_NAMESPACE = "_last_noise_delta_direction_parameter_delta_scalar_square_shards"
 
 
 def main():
@@ -53,7 +53,7 @@ def main():
                 "method": CF_DIRECTION_SCORE_METHOD,
                 "query_id": int(query_id),
                 "family": args.family,
-                "score_sign": "saved_as_positive_lr_times_train_gradient_dot_query_direction_gradient",
+                "score_sign": "nonnegative_termwise_squared_parameter_delta_scalar",
                 "lds_evaluates_both_saved_score_and_negated_score": True,
                 "shards": metadata,
             },
