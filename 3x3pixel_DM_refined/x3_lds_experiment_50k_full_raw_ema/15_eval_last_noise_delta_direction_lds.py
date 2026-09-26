@@ -1,5 +1,6 @@
-"""Evaluate both signs of the last-noise delta-direction score."""
+"""Evaluate both signs of a last-noise delta-direction score bank."""
 
+import argparse
 import json
 
 import numpy as np
@@ -18,8 +19,11 @@ METRICS = (
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--method", default=CF_DIRECTION_SCORE_METHOD)
+    args = parser.parse_args()
     membership = np.load(MASK_DIR / "membership.npy").astype(np.float64)
-    output = {"method": CF_DIRECTION_SCORE_METHOD, "results": {}}
+    output = {"method": args.method, "results": {}}
     for metric in METRICS:
         observed = np.load(LDS_DIR / f"observed_{metric}.npy").astype(np.float64)
         by_sign = {}
@@ -27,7 +31,7 @@ def main():
             query_values = []
             for query_id in range(observed.shape[0]):
                 score = np.load(
-                    ATTR_DIR / CF_DIRECTION_SCORE_METHOD / f"q{query_id:02d}" / "scores.npy"
+                    ATTR_DIR / args.method / f"q{query_id:02d}" / "scores.npy"
                 ).astype(np.float64)
                 prediction = sign * (membership @ score)
                 rho = spearman_correlation(prediction, observed[query_id])
@@ -36,7 +40,7 @@ def main():
             by_sign[sign_name] = {"multiplier": sign, "mean": mean, "queries": query_values}
             print(f"[LDS] {metric} {sign_name}: mean={mean:.6f}", flush=True)
         output["results"][metric] = by_sign
-    path = LDS_DIR / f"{CF_DIRECTION_SCORE_METHOD}_both_signs.json"
+    path = LDS_DIR / f"{args.method}_both_signs.json"
     with open(path, "w") as handle:
         json.dump(output, handle, indent=2)
     print(f"[saved] {path}", flush=True)

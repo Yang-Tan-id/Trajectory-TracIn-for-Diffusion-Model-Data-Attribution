@@ -17,6 +17,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--family", choices=("prompted", "unprompted"), required=True)
     parser.add_argument("--timestamp-shard-count", type=int, required=True)
+    parser.add_argument("--method", default=CF_DIRECTION_SCORE_METHOD)
+    parser.add_argument("--shard-namespace", default=SHARD_NAMESPACE)
     args = parser.parse_args()
     merged = None
     query_ids = None
@@ -24,7 +26,7 @@ def main():
     metadata = []
     for shard in range(args.timestamp_shard_count):
         root = (
-            ATTR_DIR / SHARD_NAMESPACE / args.family
+            ATTR_DIR / args.shard_namespace / args.family
             / f"shard_{shard:02d}_of_{args.timestamp_shard_count:02d}"
         )
         with open(root / "done.json") as handle:
@@ -44,23 +46,27 @@ def main():
     if sorted(covered) != list(range(100)):
         raise ValueError(f"timestamp coverage is not 0..99: {sorted(covered)}")
     for row, query_id in enumerate(query_ids):
-        output = ATTR_DIR / CF_DIRECTION_SCORE_METHOD / f"q{int(query_id):02d}"
+        output = ATTR_DIR / args.method / f"q{int(query_id):02d}"
         output.mkdir(parents=True, exist_ok=True)
         atomic_numpy_save(output / "scores.npy", merged[row])
         atomic_json_save(
             output / "meta.json",
             {
-                "method": CF_DIRECTION_SCORE_METHOD,
+                "method": args.method,
                 "query_id": int(query_id),
                 "family": args.family,
-                "score_sign": "nonnegative_termwise_squared_parameter_delta_scalar",
+                "score_sign": (
+                    "nonnegative_termwise_squared_parameter_delta_scalar"
+                    if "square" in args.method or "squared" in args.method
+                    else "signed_linear_scalar_response"
+                ),
                 "lds_evaluates_both_saved_score_and_negated_score": True,
                 "shards": metadata,
             },
         )
     print(
         f"[done] merged {args.family}: queries={len(query_ids)} "
-        f"shape={merged.shape} method={CF_DIRECTION_SCORE_METHOD}",
+        f"shape={merged.shape} method={args.method}",
         flush=True,
     )
 
