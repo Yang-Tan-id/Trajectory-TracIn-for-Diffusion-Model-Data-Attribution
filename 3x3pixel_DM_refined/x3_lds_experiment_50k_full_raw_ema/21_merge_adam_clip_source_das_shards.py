@@ -58,7 +58,14 @@ def main():
                     "score_sign": "nonnegative_jvp_norm_squared",
                     "final_parameter_source": "raw",
                     "query_trajectory_source": "cached_final_ema_ddim",
-                    "checkpoints": list(ADAM_CLIP_SOURCE_CHECKPOINT_EPOCHS),
+                    "curvature_checkpoints_per_segment": [
+                        list(values)
+                        for values in ADAM_CLIP_SOURCE_CURVATURE_EPOCHS_PER_SEGMENT
+                    ],
+                    "preconditioner_checkpoints_per_segment": [
+                        list(values)
+                        for values in ADAM_CLIP_SOURCE_P_CHECKPOINT_EPOCHS
+                    ],
                     "train_mc": ADAM_CLIP_SOURCE_TRAIN_MC,
                     "timestamp_aligned": True,
                     "adam_second_moment": True,

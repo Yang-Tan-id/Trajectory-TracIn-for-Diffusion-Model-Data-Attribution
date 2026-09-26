@@ -4,12 +4,33 @@ from exp_config import *
 from source_das_config import SOURCE_DAS_INFLUENCE_MODULES
 
 
-ADAM_CLIP_SOURCE_ROOT = ROOT / "source_das_adam_clip_raw"
+ADAM_CLIP_SOURCE_ROOT = ROOT / "source_das_adam_clip_raw_20h50p_lrweighted"
 ADAM_CLIP_SOURCE_SHARD_ROOT = ADAM_CLIP_SOURCE_ROOT / "timestamp_shards"
 
-# Keep the first ablation directly comparable to the existing 10-checkpoint run.
-ADAM_CLIP_SOURCE_CHECKPOINT_EPOCHS = tuple(range(20, EPOCHS + 1, 20))
-ADAM_CLIP_SOURCE_NUM_SEGMENTS = len(ADAM_CLIP_SOURCE_CHECKPOINT_EPOCHS)
+# Ten 20-epoch dynamics segments. Curvature and datapoint gradients use both
+# the nearest later midpoint checkpoint and the segment endpoint. This retains
+# the endpoint while reducing the endpoint-only time asymmetry.
+ADAM_CLIP_SOURCE_SEGMENT_BOUNDARIES = tuple(range(0, EPOCHS + 1, 20))
+ADAM_CLIP_SOURCE_CURVATURE_EPOCHS_PER_SEGMENT = tuple(
+    (start + 12, end)
+    for start, end in zip(
+        ADAM_CLIP_SOURCE_SEGMENT_BOUNDARIES[:-1],
+        ADAM_CLIP_SOURCE_SEGMENT_BOUNDARIES[1:],
+    )
+)
+ADAM_CLIP_SOURCE_NUM_SEGMENTS = len(
+    ADAM_CLIP_SOURCE_CURVATURE_EPOCHS_PER_SEGMENT
+)
+
+# Adam/clipping dynamics use every saved checkpoint in each segment.  A
+# checkpoint at epoch e represents the preceding four-epoch interval.
+ADAM_CLIP_SOURCE_P_CHECKPOINT_EPOCHS = tuple(
+    tuple(range(start + 4, end + 1, 4))
+    for start, end in zip(
+        ADAM_CLIP_SOURCE_SEGMENT_BOUNDARIES[:-1],
+        ADAM_CLIP_SOURCE_SEGMENT_BOUNDARIES[1:],
+    )
+)
 ADAM_CLIP_SOURCE_TRAIN_MC = 10
 ADAM_CLIP_SOURCE_TRAIN_BATCH_SIZE = BATCH_SIZE
 ADAM_CLIP_SOURCE_FINAL_PARAM_SOURCE = "raw"
@@ -27,8 +48,8 @@ ADAM_CLIP_SOURCE_EIGENVALUE_ABSOLUTE_FLOOR = 1e-12
 ADAM_CLIP_SOURCE_NORM_EPS = 1e-12
 
 ADAM_CLIP_SOURCE_METHODS = {
-    "unnormalized": "source_das_adam_clip_raw_10ckpt_100t_mc10_unnormalized",
-    "jacobian_fro_rms": "source_das_adam_clip_raw_10ckpt_100t_mc10_jacobian_fro_rms",
+    "unnormalized": "source_das_adam_clip_raw_20h50p_100t_mc10_unnormalized",
+    "jacobian_fro_rms": "source_das_adam_clip_raw_20h50p_100t_mc10_jacobian_fro_rms",
 }
 
 
@@ -37,7 +58,7 @@ def adam_clip_source_steps_per_epoch():
 
 
 def adam_clip_source_segment_boundaries():
-    return (0,) + ADAM_CLIP_SOURCE_CHECKPOINT_EPOCHS
+    return ADAM_CLIP_SOURCE_SEGMENT_BOUNDARIES
 
 
 def adam_clip_source_iters_per_segment():
@@ -76,3 +97,26 @@ def adam_clip_source_lr_sums_per_segment():
         )
         for index in range(ADAM_CLIP_SOURCE_NUM_SEGMENTS)
     )
+
+
+def adam_clip_source_p_lr_weights_per_segment():
+    """LR integrals for the five four-epoch p/c samples in each segment."""
+    steps_per_epoch = adam_clip_source_steps_per_epoch()
+    total_steps = EPOCHS * steps_per_epoch
+    result = []
+    for epochs in ADAM_CLIP_SOURCE_P_CHECKPOINT_EPOCHS:
+        weights = []
+        previous_epoch = epochs[0] - 4
+        for epoch in epochs:
+            weights.append(
+                sum(
+                    _lr_at(step, total_steps)
+                    for step in range(
+                        previous_epoch * steps_per_epoch,
+                        epoch * steps_per_epoch,
+                    )
+                )
+            )
+            previous_epoch = epoch
+        result.append(tuple(weights))
+    return tuple(result)

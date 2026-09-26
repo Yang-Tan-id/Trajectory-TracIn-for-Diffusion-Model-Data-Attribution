@@ -7,8 +7,6 @@ be recovered because the original shuffled batches and their gradients were
 not saved.
 """
 
-from collections import defaultdict
-
 import torch
 
 from adam_clip_source_das_config import *
@@ -66,6 +64,153 @@ def _module_parameter_matrix(module, module_name, tensors):
 class X3AdamClipSourceComputer(X3SourceComputer):
     """SOURCE with Adam diagonal P, diagonal S, and query-only normalization."""
 
+    def __init__(
+        self,
+        *args,
+        preconditioner_checkpoints_per_segment,
+        preconditioner_lr_weights_per_segment,
+        **kwargs,
+    ):
+        super().__init__(*args, **kwargs)
+        if len(preconditioner_checkpoints_per_segment) != len(
+            self.checkpoints_per_segment
+        ):
+            raise ValueError("preconditioner checkpoint segment count mismatch")
+        if len(preconditioner_lr_weights_per_segment) != len(
+            preconditioner_checkpoints_per_segment
+        ):
+            raise ValueError("preconditioner LR-weight segment count mismatch")
+        for checkpoints, weights in zip(
+            preconditioner_checkpoints_per_segment,
+            preconditioner_lr_weights_per_segment,
+        ):
+            if len(checkpoints) != len(weights) or not checkpoints:
+                raise ValueError("each p/c checkpoint needs one positive LR weight")
+            if any(float(weight) <= 0.0 for weight in weights):
+                raise ValueError("p/c LR weights must be positive")
+        self.preconditioner_checkpoints_per_segment = (
+            preconditioner_checkpoints_per_segment
+        )
+        self.preconditioner_lr_weights_per_segment = (
+            preconditioner_lr_weights_per_segment
+        )
+
+    def _checkpoint_preconditioner(self, checkpoint, segment):
+        payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
+        self._load_checkpoint(checkpoint)
+        optimizer_state = _optimizer_state_by_parameter_name(payload, self.model)
+        config = payload.get("config", {})
+        beta2 = float(config.get("adam_b2", ADAM_B2))
+        adam_eps = float(config.get("adam_eps", ADAM_EPS))
+        tensors = {
+            name: _bias_corrected_adam_preconditioner(
+                optimizer_state[name], beta2, adam_eps, self.task.device
+            )
+            for name, _ in self.model.named_parameters()
+        }
+        return {
+            name: _module_parameter_matrix(module, name, tensors).detach()
+            for name, module in zip(segment.modules_name, segment.modules)
+        }
+
+    def _clip_scale_from_batch_grads(self, grads_dict, batch_size):
+        norm_sq = torch.zeros((), device=self.task.device)
+        with torch.no_grad():
+            for value in grads_dict.values():
+                # Per-example vmap gradients have a leading batch axis.  A
+                # regular batch gradient is the gradient of the summed loss.
+                if value.shape[0] == batch_size:
+                    batch_gradient = value.mean(dim=0)
+                else:
+                    batch_gradient = value / float(batch_size)
+                norm_sq.add_(batch_gradient.float().square().sum())
+        gradient_norm = float(torch.sqrt(norm_sq).item())
+        return min(
+            1.0,
+            float(ADAM_CLIP_SOURCE_CLIP_NORM)
+            / max(gradient_norm, ADAM_CLIP_SOURCE_NORM_EPS),
+        )
+
+    def _estimate_clip_scale(self, checkpoint, loader):
+        """Estimate c with one ordinary batch-gradient pass (no per-example vmap)."""
+        self._load_checkpoint(checkpoint)
+        params = dict(self.model.named_parameters())
+        buffers = dict(self.model.named_buffers())
+        grad_fn = self._compute_train_loss_grad()
+        examples_seen = 0
+        scale_sum = 0.0
+        clipped_examples = 0
+        for batch in loader:
+            batch_size = self.task.get_batch_size(batch)
+            grads_dict = grad_fn(params, buffers, batch)
+            # grad_fn differentiates the sum of per-example losses.
+            norm_sq = torch.zeros((), device=self.task.device)
+            with torch.no_grad():
+                for value in grads_dict.values():
+                    norm_sq.add_((value.float() / float(batch_size)).square().sum())
+            gradient_norm = float(torch.sqrt(norm_sq).item())
+            clip_scale = min(
+                1.0,
+                float(ADAM_CLIP_SOURCE_CLIP_NORM)
+                / max(gradient_norm, ADAM_CLIP_SOURCE_NORM_EPS),
+            )
+            scale_sum += clip_scale * batch_size
+            if clip_scale < 1.0:
+                clipped_examples += batch_size
+            examples_seen += batch_size
+            del grads_dict
+        if examples_seen != len(loader.dataset):
+            raise RuntimeError(
+                f"clip pass saw {examples_seen}, expected {len(loader.dataset)}"
+            )
+        return (
+            scale_sum / float(examples_seen),
+            clipped_examples / float(examples_seen),
+        )
+
+    def _diagonal_and_clip(self, checkpoint, segment, loader):
+        """Compute direct diagonal empirical Fisher and c at one checkpoint."""
+        self._load_checkpoint(checkpoint)
+        params = dict(self.model.named_parameters())
+        buffers = dict(self.model.named_buffers())
+        diagonal_sums = {
+            name: torch.zeros_like(segment.kronecker_eigvals[name])
+            for name in segment.modules_name
+        }
+        examples_seen = 0
+        scale_sum = 0.0
+        clipped_examples = 0
+        for batch in loader:
+            batch_size = self.task.get_batch_size(batch)
+            grads_dict = self._train_loss_grads_dict(batch, params, buffers)
+            clip_scale = self._clip_scale_from_batch_grads(grads_dict, batch_size)
+            scale_sum += clip_scale * batch_size
+            if clip_scale < 1.0:
+                clipped_examples += batch_size
+            with torch.no_grad():
+                for name, module in zip(segment.modules_name, segment.modules):
+                    matrix = make_grads_dict_to_matrix(
+                        module=module,
+                        module_name=name,
+                        grads_dict=grads_dict,
+                        remove_grads=False,
+                    ).to(dtype=self.grads_dtype)
+                    diagonal_sums[name].add_(matrix.square().sum(dim=0))
+            examples_seen += batch_size
+            del grads_dict
+        if examples_seen != len(loader.dataset):
+            raise RuntimeError(
+                f"diagonal pass saw {examples_seen}, expected {len(loader.dataset)}"
+            )
+        return (
+            {
+                name: value / float(examples_seen)
+                for name, value in diagonal_sums.items()
+            },
+            scale_sum / float(examples_seen),
+            clipped_examples / float(examples_seen),
+        )
+
     def build_adam_clip_blocks(self, loader):
         # Existing SOURCE builds the EK-FAC bases/eigenvalues used for H^{-1}.
         super().build_curvature_blocks(loader)
@@ -73,126 +218,102 @@ class X3AdamClipSourceComputer(X3SourceComputer):
         for seg_idx, (segment, checkpoints) in enumerate(
             zip(self.segments, self.checkpoints_per_segment)
         ):
-            preconditioners = defaultdict(list)
-            diagonal_curvatures = defaultdict(list)
-            checkpoint_clip_scales = []
-            checkpoint_clip_fractions = []
-
+            diagonal_curvatures = []
+            clip_cache = {}
             for checkpoint in checkpoints:
-                payload = torch.load(checkpoint, map_location="cpu", weights_only=False)
-                self._load_checkpoint(checkpoint)
-                optimizer_state = _optimizer_state_by_parameter_name(payload, self.model)
-                config = payload.get("config", {})
-                beta2 = float(config.get("adam_b2", ADAM_B2))
-                adam_eps = float(config.get("adam_eps", ADAM_EPS))
-
-                parameter_preconditioners = {}
-                for name, _ in self.model.named_parameters():
-                    parameter_preconditioners[name] = (
-                        _bias_corrected_adam_preconditioner(
-                            optimizer_state[name], beta2, adam_eps, self.task.device
-                        )
-                    )
-                for name, module in zip(segment.modules_name, segment.modules):
-                    preconditioners[name].append(
-                        _module_parameter_matrix(
-                            module, name, parameter_preconditioners
-                        ).detach()
-                    )
-
-                params = dict(self.model.named_parameters())
-                buffers = dict(self.model.named_buffers())
-                diagonal_sums = {
-                    name: torch.zeros_like(preconditioners[name][-1])
-                    for name in segment.modules_name
-                }
-                examples_seen = 0
-                clip_scale_weighted_sum = 0.0
-                clipped_examples = 0
-                for batch in loader:
-                    batch_size = self.task.get_batch_size(batch)
-                    grads_dict = self._train_loss_grads_dict(batch, params, buffers)
-
-                    # The real training clips the global norm of the mean batch
-                    # gradient over every parameter, including parameters that
-                    # are not included in the EK-FAC attribution modules.
-                    norm_sq = torch.zeros((), device=self.task.device)
-                    with torch.no_grad():
-                        for value in grads_dict.values():
-                            mean_gradient = value.mean(dim=0)
-                            norm_sq.add_(mean_gradient.float().square().sum())
-                        gradient_norm = float(torch.sqrt(norm_sq).item())
-                        clip_scale = min(
-                            1.0,
-                            float(ADAM_CLIP_SOURCE_CLIP_NORM)
-                            / max(gradient_norm, ADAM_CLIP_SOURCE_NORM_EPS),
-                        )
-                        clip_scale_weighted_sum += clip_scale * batch_size
-                        if clip_scale < 1.0:
-                            clipped_examples += batch_size
-
-                        for name, module in zip(
-                            segment.modules_name, segment.modules
-                        ):
-                            matrix = make_grads_dict_to_matrix(
-                                module=module,
-                                module_name=name,
-                                grads_dict=grads_dict,
-                                remove_grads=False,
-                            ).to(dtype=self.grads_dtype)
-                            diagonal_sums[name].add_(matrix.square().sum(dim=0))
-                    examples_seen += batch_size
-                    del grads_dict
-
-                if examples_seen != len(loader.dataset):
-                    raise RuntimeError(
-                        f"diagonal pass saw {examples_seen}, expected {len(loader.dataset)}"
-                    )
-                checkpoint_clip_scales.append(
-                    clip_scale_weighted_sum / float(examples_seen)
+                diagonal, clip_scale, clip_fraction = (
+                    self._diagonal_and_clip(checkpoint, segment, loader)
                 )
-                checkpoint_clip_fractions.append(
-                    clipped_examples / float(examples_seen)
+                diagonal_curvatures.append(diagonal)
+                clip_cache[str(checkpoint)] = (clip_scale, clip_fraction)
+            segment.diagonal_curvature = {
+                name: torch.stack(
+                    [value[name] for value in diagonal_curvatures]
+                ).mean(dim=0)
+                for name in segment.modules_name
+            }
+
+            p_checkpoints = self.preconditioner_checkpoints_per_segment[seg_idx]
+            lr_weights = self.preconditioner_lr_weights_per_segment[seg_idx]
+            lr_sum = float(adam_clip_source_lr_sums_per_segment()[seg_idx])
+            if abs(sum(lr_weights) - lr_sum) > max(1e-10, 1e-8 * lr_sum):
+                raise ValueError(
+                    f"segment {seg_idx} p/c weights sum to {sum(lr_weights)}, "
+                    f"expected {lr_sum}"
                 )
-                for name in segment.modules_name:
-                    diagonal_curvatures[name].append(
-                        diagonal_sums[name] / float(examples_seen)
+            weighted_p = None
+            weighted_cp = None
+            weighted_clip_scale = 0.0
+            weighted_clip_fraction = 0.0
+            checkpoint_diagnostics = []
+            for checkpoint, weight in zip(p_checkpoints, lr_weights):
+                preconditioner = self._checkpoint_preconditioner(
+                    checkpoint, segment
+                )
+                cache_key = str(checkpoint)
+                if cache_key in clip_cache:
+                    clip_scale, clip_fraction = clip_cache[cache_key]
+                else:
+                    clip_scale, clip_fraction = self._estimate_clip_scale(
+                        checkpoint, loader
                     )
+                if weighted_p is None:
+                    weighted_p = {
+                        name: float(weight) * value
+                        for name, value in preconditioner.items()
+                    }
+                    weighted_cp = {
+                        name: float(weight) * clip_scale * value
+                        for name, value in preconditioner.items()
+                    }
+                else:
+                    for name in segment.modules_name:
+                        weighted_p[name].add_(
+                            preconditioner[name], alpha=float(weight)
+                        )
+                        weighted_cp[name].add_(
+                            preconditioner[name],
+                            alpha=float(weight) * clip_scale,
+                        )
+                weighted_clip_scale += float(weight) * clip_scale
+                weighted_clip_fraction += float(weight) * clip_fraction
+                checkpoint_diagnostics.append(
+                    {
+                        "checkpoint": str(checkpoint),
+                        "lr_weight": float(weight),
+                        "clip_scale": float(clip_scale),
+                        "clip_fraction": float(clip_fraction),
+                    }
+                )
 
             segment.adam_preconditioner = {
-                name: torch.stack(values).mean(dim=0)
-                for name, values in preconditioners.items()
+                name: value / lr_sum for name, value in weighted_p.items()
             }
-            segment.diagonal_curvature = {
-                name: torch.stack(values).mean(dim=0)
-                for name, values in diagonal_curvatures.items()
+            segment.effective_adam_clip_preconditioner = {
+                name: value / lr_sum for name, value in weighted_cp.items()
             }
-            segment.clip_scale = float(
-                sum(checkpoint_clip_scales) / len(checkpoint_clip_scales)
-            )
-            segment.clip_fraction = float(
-                sum(checkpoint_clip_fractions) / len(checkpoint_clip_fractions)
-            )
-            lr_sum = float(adam_clip_source_lr_sums_per_segment()[seg_idx])
+            segment.clip_scale = weighted_clip_scale / lr_sum
+            segment.clip_fraction = weighted_clip_fraction / lr_sum
+            segment.adam_clip_checkpoint_diagnostics = checkpoint_diagnostics
             segment.adam_clip_decay = {}
             with torch.no_grad():
                 for name in segment.modules_name:
                     exponent = (
                         lr_sum
-                        * segment.clip_scale
-                        * segment.adam_preconditioner[name]
+                        * segment.effective_adam_clip_preconditioner[name]
                         * segment.diagonal_curvature[name]
                     )
                     segment.adam_clip_decay[name] = torch.exp(
                         -exponent.clamp(min=0.0, max=80.0)
                     )
             self.logger.info(
-                "Adam/clipping segment %d/%d: mean_clip_scale=%.6g "
-                "clipped_fraction=%.4f lr_sum=%.6g",
+                "Adam/clipping segment %d/%d: lr-weighted_clip_scale=%.6g "
+                "lr-weighted_clipped_fraction=%.4f p_checkpoints=%d lr_sum=%.6g",
                 seg_idx + 1,
                 len(self.segments),
                 segment.clip_scale,
                 segment.clip_fraction,
+                len(p_checkpoints),
                 lr_sum,
             )
 
@@ -389,6 +510,9 @@ class X3AdamClipSourceComputer(X3SourceComputer):
                 ),
                 "decay_max": float(
                     max(value.max().item() for value in segment.adam_clip_decay.values())
+                ),
+                "preconditioner_checkpoint_diagnostics": (
+                    segment.adam_clip_checkpoint_diagnostics
                 ),
             }
             for index, segment in enumerate(self.segments)

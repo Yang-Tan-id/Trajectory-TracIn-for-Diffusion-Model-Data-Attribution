@@ -17,8 +17,19 @@ def main():
         records = json.load(handle)
     if len(records) != 100:
         raise ValueError(f"expected 100 queries, found {len(records)}")
+    required_epochs = sorted(
+        {
+            epoch
+            for groups in (
+                ADAM_CLIP_SOURCE_CURVATURE_EPOCHS_PER_SEGMENT,
+                ADAM_CLIP_SOURCE_P_CHECKPOINT_EPOCHS,
+            )
+            for group in groups
+            for epoch in group
+        }
+    )
     for family in FAMILIES:
-        for epoch in ADAM_CLIP_SOURCE_CHECKPOINT_EPOCHS:
+        for epoch in required_epochs:
             path = MODEL_DIR / "base" / family / f"epoch_{epoch:04d}.pt"
             payload = torch.load(path, map_location="cpu", weights_only=False)
             if "optimizer_state" not in payload:
@@ -34,9 +45,23 @@ def main():
                 raise ValueError(f"optimizer parameter mapping failed: {path}")
     print(f"simple-influence = {SOURCE_DAS_SIMPLE_INFLUENCE_ROOT}")
     print(f"methods = {ADAM_CLIP_SOURCE_METHODS}")
-    print(f"checkpoints = {ADAM_CLIP_SOURCE_CHECKPOINT_EPOCHS}")
+    print(
+        "curvature checkpoints/segment = "
+        f"{ADAM_CLIP_SOURCE_CURVATURE_EPOCHS_PER_SEGMENT}"
+    )
+    print(
+        "Adam p/clipping checkpoints/segment = "
+        f"{ADAM_CLIP_SOURCE_P_CHECKPOINT_EPOCHS}"
+    )
     print(f"iterations/segment = {adam_clip_source_iters_per_segment()}")
     print(f"LR sums/segment = {adam_clip_source_lr_sums_per_segment()}")
+    p_weights = adam_clip_source_p_lr_weights_per_segment()
+    print(f"p/clipping LR weights/segment = {p_weights}")
+    for index, (weights, total) in enumerate(
+        zip(p_weights, adam_clip_source_lr_sums_per_segment())
+    ):
+        if abs(sum(weights) - total) > max(1e-10, 1e-8 * total):
+            raise ValueError(f"segment {index} LR weights do not sum to LR total")
     print(f"train MC = {ADAM_CLIP_SOURCE_TRAIN_MC}")
     print(f"train batch = {ADAM_CLIP_SOURCE_TRAIN_BATCH_SIZE}")
     print(f"clip norm = {ADAM_CLIP_SOURCE_CLIP_NORM}")

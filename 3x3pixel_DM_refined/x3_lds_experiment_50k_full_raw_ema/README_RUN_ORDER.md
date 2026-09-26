@@ -267,10 +267,12 @@ If memory allows, increase them. If OOM occurs, reduce them.
 ## Adam/clipping-aware raw SOURCE-DAS
 
 This is a separate ablation and does not overwrite the SGD-style SOURCE-DAS
-artifacts.  It uses the 10 raw checkpoints at epochs 20..200, recovers Adam's
-bias-corrected `exp_avg_sq`, estimates the original global-norm clipping scale
-with batch size 256, and evaluates the query Jacobian at the final raw model on
-the cached EMA-generated DDIM trajectory.
+artifacts. Each 20-epoch segment uses its midpoint and endpoint checkpoints for
+EK-FAC curvature, diagonal curvature, and datapoint gradients. Adam's
+bias-corrected `exp_avg_sq` and the clipping scale use all five saved
+checkpoints in the segment and are averaged together as an LR-weighted
+effective `c*p`. The query Jacobian is evaluated at the final raw model on the
+cached EMA-generated DDIM trajectory.
 
 The clipping replay is a frozen-scale approximation: it includes the estimated
 `c = min(1, C / ||g_batch||)` in each segment decay but omits `dc/dtheta`, since
@@ -283,8 +285,8 @@ python -u 22_launch_adam_clip_source_das_4gpu.py
 
 One run saves and evaluates two methods:
 
-- `source_das_adam_clip_raw_10ckpt_100t_mc10_unnormalized`
-- `source_das_adam_clip_raw_10ckpt_100t_mc10_jacobian_fro_rms`
+- `source_das_adam_clip_raw_20h50p_100t_mc10_unnormalized`
+- `source_das_adam_clip_raw_20h50p_100t_mc10_jacobian_fro_rms`
 
 `jacobian_fro_rms` computes the exact Jacobian Frobenius norm over the selected
 attribution parameters and all 27 predicted-noise components, then divides all

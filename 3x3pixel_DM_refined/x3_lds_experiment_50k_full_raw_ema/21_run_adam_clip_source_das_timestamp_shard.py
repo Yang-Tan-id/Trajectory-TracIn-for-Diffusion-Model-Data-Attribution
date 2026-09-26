@@ -108,7 +108,13 @@ def main():
         "methods": ADAM_CLIP_SOURCE_METHODS,
         "query_ids": query_ids,
         "timestamp_indices": selected_timestamps,
-        "checkpoint_epochs": list(ADAM_CLIP_SOURCE_CHECKPOINT_EPOCHS),
+        "curvature_checkpoint_epochs_per_segment": [
+            list(values)
+            for values in ADAM_CLIP_SOURCE_CURVATURE_EPOCHS_PER_SEGMENT
+        ],
+        "preconditioner_checkpoint_epochs_per_segment": [
+            list(values) for values in ADAM_CLIP_SOURCE_P_CHECKPOINT_EPOCHS
+        ],
         "train_mc": ADAM_CLIP_SOURCE_TRAIN_MC,
         "train_batch_size": args.train_batch_size,
         "clip_norm": ADAM_CLIP_SOURCE_CLIP_NORM,
@@ -147,9 +153,20 @@ def main():
     dataset = ColorGridDataset(str(BASE_CSV), grid_size=3)
     conditions = [cond_for(item, dataset, device).cpu() for item in records]
     checkpoint_segments = [
-        [str(MODEL_DIR / "base" / args.family / f"epoch_{epoch:04d}.pt")]
-        for epoch in ADAM_CLIP_SOURCE_CHECKPOINT_EPOCHS
+        [
+            str(MODEL_DIR / "base" / args.family / f"epoch_{epoch:04d}.pt")
+            for epoch in epochs
+        ]
+        for epochs in ADAM_CLIP_SOURCE_CURVATURE_EPOCHS_PER_SEGMENT
     ]
+    preconditioner_checkpoint_segments = [
+        [
+            str(MODEL_DIR / "base" / args.family / f"epoch_{epoch:04d}.pt")
+            for epoch in epochs
+        ]
+        for epochs in ADAM_CLIP_SOURCE_P_CHECKPOINT_EPOCHS
+    ]
+    preconditioner_lr_weights = list(adam_clip_source_p_lr_weights_per_segment())
     iterations = list(adam_clip_source_iters_per_segment())
     lr_sums = list(adam_clip_source_lr_sums_per_segment())
     learning_rates = [total / count for total, count in zip(lr_sums, iterations)]
@@ -197,6 +214,10 @@ def main():
             model=final_model,
             task=task,
             checkpoints_per_segment=checkpoint_segments,
+            preconditioner_checkpoints_per_segment=(
+                preconditioner_checkpoint_segments
+            ),
+            preconditioner_lr_weights_per_segment=preconditioner_lr_weights,
             iters_per_segment=iterations,
             lrs_per_segment=learning_rates,
             n_epoch=1,
@@ -262,6 +283,8 @@ def main():
             "timestamp_diagnostics": timestamp_diagnostics,
             "definition": "mean_t ||J_final_raw_on_cached_ema_trajectory @ adam_clip_source_delta||_2^2",
             "clip_jacobian": "frozen batch-scale approximation; dc/dtheta omitted",
+            "effective_cp": "sum_checkpoint(lr_mass * clip_scale * bias_corrected_adam_preconditioner) / segment_lr_sum",
+            "curvature_checkpoint_weighting": "uniform midpoint-plus-endpoint within each segment",
             "query_normalization": {
                 "unnormalized": "none",
                 "jacobian_fro_rms": "one exact ||J_qt||_F/sqrt(27) denominator shared by all 27 output components; selected parameters only",
