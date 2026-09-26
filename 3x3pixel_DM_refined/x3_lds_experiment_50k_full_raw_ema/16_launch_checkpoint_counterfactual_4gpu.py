@@ -5,6 +5,7 @@ import subprocess
 import sys
 import time
 
+from checkpoint_counterfactual_config import CF_DIRECTION_GRAD_BATCH_SIZE
 from exp_config import CUDA_IDS, LOG_DIR
 
 
@@ -84,7 +85,7 @@ def run_subset_unlearning():
     subprocess.run([sys.executable, "13_eval_subset_unlearning_lds.py"], check=True)
 
 
-def run_delta_direction():
+def run_delta_direction(batch_size):
     assignments = (
         # Train-gradient construction dominates the query-matrix multiply, so
         # balance timestamp/checkpoint terms evenly rather than query counts.
@@ -103,6 +104,7 @@ def run_delta_direction():
                     "--family", family, "--gpu", str(gpu),
                     "--timestamp-shard-index", str(shard),
                     "--timestamp-shard-count", str(count),
+                    "--batch-size", str(batch_size),
                 ],
             )
         )
@@ -125,14 +127,22 @@ def main():
         choices=("subset-unlearning", "delta-direction", "all"),
         default="all",
     )
+    parser.add_argument(
+        "--direction-batch-size",
+        type=int,
+        default=CF_DIRECTION_GRAD_BATCH_SIZE,
+        help="per-example train-gradient batch for delta-direction scoring",
+    )
     args = parser.parse_args()
     if len(CUDA_IDS) < 4:
         raise ValueError("this launcher requires four configured GPUs")
+    if args.direction_batch_size <= 0:
+        raise ValueError("--direction-batch-size must be positive")
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     if args.experiment in ("subset-unlearning", "all"):
         run_subset_unlearning()
     if args.experiment in ("delta-direction", "all"):
-        run_delta_direction()
+        run_delta_direction(args.direction_batch_size)
     print(f"[done] checkpoint counterfactual experiment={args.experiment}", flush=True)
 
 

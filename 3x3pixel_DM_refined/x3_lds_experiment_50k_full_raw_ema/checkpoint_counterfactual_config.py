@@ -13,7 +13,7 @@ CF_UPDATE_GRAD_BATCH_SIZE = int(TRACIN_PROJECTED_BATCH_SIZE)
 # Delta-direction scoring materializes one per-example gradient matrix but the
 # 3x3 model/input is small. A larger batch removes thousands of tiny GPU
 # launches per checkpoint/timestamp term without changing score semantics.
-CF_DIRECTION_GRAD_BATCH_SIZE = 128
+CF_DIRECTION_GRAD_BATCH_SIZE = 640
 CF_UPDATE_SCALE = 1.0
 CF_FINAL_PARAM_SOURCE = "ema"
 CF_UNLEARN_SET = "removed"
