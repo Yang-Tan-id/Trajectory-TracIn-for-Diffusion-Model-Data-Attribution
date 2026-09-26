@@ -275,6 +275,11 @@ clipping scale use all five saved checkpoints per segment and are averaged
 together as an LR-weighted effective `c*p`. The query Jacobian is evaluated at
 the final raw model on the cached EMA-generated DDIM trajectory.
 
+Curvature, diagonal-Fisher, and SOURCE score passes use compute batch 512.
+Clipping coefficients are estimated through a separate loader at the original
+training batch size 256, so increasing compute throughput does not change the
+definition of `c = min(1, C / ||g_batch||)`.
+
 The clipping replay is a frozen-scale approximation: it includes the estimated
 `c = min(1, C / ||g_batch||)` in each segment decay but omits `dc/dtheta`, since
 the original shuffled batch gradients were not saved.

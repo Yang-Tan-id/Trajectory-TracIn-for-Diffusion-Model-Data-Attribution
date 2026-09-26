@@ -16,10 +16,8 @@ def main():
     args = parser.parse_args()
     if len(CUDA_IDS) < 4:
         raise ValueError("Adam/clipping SOURCE launcher requires four GPUs")
-    if args.train_batch_size != BATCH_SIZE:
-        raise ValueError(
-            f"use original training batch size {BATCH_SIZE} for clipping replay"
-        )
+    if args.train_batch_size <= 0:
+        raise ValueError("--train-batch-size must be positive")
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     log_path = LOG_DIR / "source_das_adam_clip_raw_11h50p_100q_100t_mc10_4gpu.log"
     assignments = (

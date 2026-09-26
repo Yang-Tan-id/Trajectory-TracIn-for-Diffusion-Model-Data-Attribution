@@ -113,24 +113,6 @@ class X3AdamClipSourceComputer(X3SourceComputer):
             for name, module in zip(segment.modules_name, segment.modules)
         }
 
-    def _clip_scale_from_batch_grads(self, grads_dict, batch_size):
-        norm_sq = torch.zeros((), device=self.task.device)
-        with torch.no_grad():
-            for value in grads_dict.values():
-                # Per-example vmap gradients have a leading batch axis.  A
-                # regular batch gradient is the gradient of the summed loss.
-                if value.shape[0] == batch_size:
-                    batch_gradient = value.mean(dim=0)
-                else:
-                    batch_gradient = value / float(batch_size)
-                norm_sq.add_(batch_gradient.float().square().sum())
-        gradient_norm = float(torch.sqrt(norm_sq).item())
-        return min(
-            1.0,
-            float(ADAM_CLIP_SOURCE_CLIP_NORM)
-            / max(gradient_norm, ADAM_CLIP_SOURCE_NORM_EPS),
-        )
-
     def _estimate_clip_scale(self, checkpoint, loader):
         """Estimate c with one ordinary batch-gradient pass (no per-example vmap)."""
         self._load_checkpoint(checkpoint)
@@ -168,8 +150,8 @@ class X3AdamClipSourceComputer(X3SourceComputer):
             clipped_examples / float(examples_seen),
         )
 
-    def _diagonal_and_clip(self, checkpoint, segment, loader):
-        """Compute direct diagonal empirical Fisher and c at one checkpoint."""
+    def _diagonal_curvature(self, checkpoint, segment, loader):
+        """Compute direct diagonal empirical Fisher at one checkpoint."""
         self._load_checkpoint(checkpoint)
         params = dict(self.model.named_parameters())
         buffers = dict(self.model.named_buffers())
@@ -178,15 +160,9 @@ class X3AdamClipSourceComputer(X3SourceComputer):
             for name in segment.modules_name
         }
         examples_seen = 0
-        scale_sum = 0.0
-        clipped_examples = 0
         for batch in loader:
             batch_size = self.task.get_batch_size(batch)
             grads_dict = self._train_loss_grads_dict(batch, params, buffers)
-            clip_scale = self._clip_scale_from_batch_grads(grads_dict, batch_size)
-            scale_sum += clip_scale * batch_size
-            if clip_scale < 1.0:
-                clipped_examples += batch_size
             with torch.no_grad():
                 for name, module in zip(segment.modules_name, segment.modules):
                     matrix = make_grads_dict_to_matrix(
@@ -202,16 +178,12 @@ class X3AdamClipSourceComputer(X3SourceComputer):
             raise RuntimeError(
                 f"diagonal pass saw {examples_seen}, expected {len(loader.dataset)}"
             )
-        return (
-            {
-                name: value / float(examples_seen)
-                for name, value in diagonal_sums.items()
-            },
-            scale_sum / float(examples_seen),
-            clipped_examples / float(examples_seen),
-        )
+        return {
+            name: value / float(examples_seen)
+            for name, value in diagonal_sums.items()
+        }
 
-    def build_adam_clip_blocks(self, loader):
+    def build_adam_clip_blocks(self, loader, clip_loader):
         # Existing SOURCE builds the EK-FAC bases/eigenvalues used for H^{-1}.
         super().build_curvature_blocks(loader)
 
@@ -219,13 +191,10 @@ class X3AdamClipSourceComputer(X3SourceComputer):
             zip(self.segments, self.checkpoints_per_segment)
         ):
             diagonal_curvatures = []
-            clip_cache = {}
             for checkpoint in checkpoints:
-                diagonal, clip_scale, clip_fraction = (
-                    self._diagonal_and_clip(checkpoint, segment, loader)
+                diagonal_curvatures.append(
+                    self._diagonal_curvature(checkpoint, segment, loader)
                 )
-                diagonal_curvatures.append(diagonal)
-                clip_cache[str(checkpoint)] = (clip_scale, clip_fraction)
             segment.diagonal_curvature = {
                 name: torch.stack(
                     [value[name] for value in diagonal_curvatures]
@@ -250,13 +219,9 @@ class X3AdamClipSourceComputer(X3SourceComputer):
                 preconditioner = self._checkpoint_preconditioner(
                     checkpoint, segment
                 )
-                cache_key = str(checkpoint)
-                if cache_key in clip_cache:
-                    clip_scale, clip_fraction = clip_cache[cache_key]
-                else:
-                    clip_scale, clip_fraction = self._estimate_clip_scale(
-                        checkpoint, loader
-                    )
+                clip_scale, clip_fraction = self._estimate_clip_scale(
+                    checkpoint, clip_loader
+                )
                 if weighted_p is None:
                     weighted_p = {
                         name: float(weight) * value

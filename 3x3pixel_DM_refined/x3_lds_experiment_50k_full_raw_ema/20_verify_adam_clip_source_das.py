@@ -63,7 +63,13 @@ def main():
         if abs(sum(weights) - total) > max(1e-10, 1e-8 * total):
             raise ValueError(f"segment {index} LR weights do not sum to LR total")
     print(f"train MC = {ADAM_CLIP_SOURCE_TRAIN_MC}")
-    print(f"train batch = {ADAM_CLIP_SOURCE_TRAIN_BATCH_SIZE}")
+    print(f"curvature/scoring batch = {ADAM_CLIP_SOURCE_TRAIN_BATCH_SIZE}")
+    print(
+        "clipping replay batch = "
+        f"{ADAM_CLIP_SOURCE_CLIP_REPLAY_BATCH_SIZE}"
+    )
+    if ADAM_CLIP_SOURCE_CLIP_REPLAY_BATCH_SIZE != BATCH_SIZE:
+        raise ValueError("clipping replay batch must equal original training batch")
     print(f"clip norm = {ADAM_CLIP_SOURCE_CLIP_NORM}")
     print(f"final/query parameter source = {ADAM_CLIP_SOURCE_FINAL_PARAM_SOURCE}")
     print("query trajectory source = cached EMA DDIM trajectory_xt.npy")

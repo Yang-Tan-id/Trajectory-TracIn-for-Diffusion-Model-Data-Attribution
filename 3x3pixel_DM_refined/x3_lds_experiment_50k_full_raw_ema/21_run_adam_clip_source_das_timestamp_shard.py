@@ -65,11 +65,8 @@ def main():
     args = parser.parse_args()
     if not 0 <= args.timestamp_shard_index < args.timestamp_shard_count:
         raise ValueError("invalid timestamp shard")
-    if args.train_batch_size != BATCH_SIZE:
-        raise ValueError(
-            f"clipping replay requires original training batch size {BATCH_SIZE}; "
-            f"got {args.train_batch_size}"
-        )
+    if args.train_batch_size <= 0:
+        raise ValueError("--train-batch-size must be positive")
     logging.basicConfig(
         level=logging.INFO,
         format=f"[adam-clip-source gpu={args.gpu} %(name)s] %(message)s",
@@ -117,6 +114,7 @@ def main():
         ],
         "train_mc": ADAM_CLIP_SOURCE_TRAIN_MC,
         "train_batch_size": args.train_batch_size,
+        "clip_replay_batch_size": ADAM_CLIP_SOURCE_CLIP_REPLAY_BATCH_SIZE,
         "clip_norm": ADAM_CLIP_SOURCE_CLIP_NORM,
         "final_parameter_source": ADAM_CLIP_SOURCE_FINAL_PARAM_SOURCE,
     }
@@ -193,6 +191,13 @@ def main():
             num_workers=0,
             pin_memory=torch.cuda.is_available(),
         )
+        clip_loader = DataLoader(
+            train_dataset,
+            batch_size=ADAM_CLIP_SOURCE_CLIP_REPLAY_BATCH_SIZE,
+            shuffle=False,
+            num_workers=0,
+            pin_memory=torch.cuda.is_available(),
+        )
         query_dataset = TrajectoryOutputComponentDataset(
             records, trajectories, conditions, snapshot_index
         )
@@ -223,7 +228,10 @@ def main():
             n_epoch=1,
             use_true_fisher=False,
         )
-        source.build_adam_clip_blocks(loader=train_loader)
+        source.build_adam_clip_blocks(
+            loader=train_loader,
+            clip_loader=clip_loader,
+        )
         component_effects = source.compute_score_variants_with_loader(
             test_loader=query_loader,
             train_loader=train_loader,
@@ -267,7 +275,15 @@ def main():
             f"shard_elapsed={elapsed/3600:.2f}h eta≈{eta/3600:.2f}h",
             flush=True,
         )
-        del component_effects, source, final_model, query_loader, train_loader, noises
+        del (
+            component_effects,
+            source,
+            final_model,
+            query_loader,
+            train_loader,
+            clip_loader,
+            noises,
+        )
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
