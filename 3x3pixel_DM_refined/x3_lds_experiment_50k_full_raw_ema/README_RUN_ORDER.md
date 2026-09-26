@@ -263,3 +263,29 @@ DAS_FEATURE_BATCH_SIZE = 64
 ```
 
 If memory allows, increase them. If OOM occurs, reduce them.
+
+## Adam/clipping-aware raw SOURCE-DAS
+
+This is a separate ablation and does not overwrite the SGD-style SOURCE-DAS
+artifacts.  It uses the 10 raw checkpoints at epochs 20..200, recovers Adam's
+bias-corrected `exp_avg_sq`, estimates the original global-norm clipping scale
+with batch size 256, and evaluates the query Jacobian at the final raw model on
+the cached EMA-generated DDIM trajectory.
+
+The clipping replay is a frozen-scale approximation: it includes the estimated
+`c = min(1, C / ||g_batch||)` in each segment decay but omits `dc/dtheta`, since
+the original shuffled batch gradients were not saved.
+
+```bash
+python 20_verify_adam_clip_source_das.py
+python -u 22_launch_adam_clip_source_das_4gpu.py
+```
+
+One run saves and evaluates two methods:
+
+- `source_das_adam_clip_raw_10ckpt_100t_mc10_unnormalized`
+- `source_das_adam_clip_raw_10ckpt_100t_mc10_query_l2`
+
+`query_l2` normalizes each scalar predicted-noise component's gradient over the
+selected attribution parameters before SOURCE propagation.  Both methods square
+the resulting 27 component effects, sum them, and average over 100 timestamps.
