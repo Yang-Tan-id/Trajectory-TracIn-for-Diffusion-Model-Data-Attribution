@@ -86,10 +86,12 @@ def run_subset_unlearning():
 
 def run_delta_direction():
     assignments = (
-        ("prompted", 0, 3, CUDA_IDS[0]),
-        ("prompted", 1, 3, CUDA_IDS[1]),
-        ("prompted", 2, 3, CUDA_IDS[2]),
-        ("unprompted", 0, 1, CUDA_IDS[3]),
+        # Train-gradient construction dominates the query-matrix multiply, so
+        # balance timestamp/checkpoint terms evenly rather than query counts.
+        ("prompted", 0, 2, CUDA_IDS[0]),
+        ("prompted", 1, 2, CUDA_IDS[1]),
+        ("unprompted", 0, 2, CUDA_IDS[2]),
+        ("unprompted", 1, 2, CUDA_IDS[3]),
     )
     commands = []
     for family, shard, count, gpu in assignments:
@@ -105,7 +107,7 @@ def run_delta_direction():
             )
         )
     run_group("last-noise delta-direction", commands, LOG_DIR / "cf_delta_direction_4gpu.log")
-    for family, count in (("prompted", 3), ("unprompted", 1)):
+    for family, count in (("prompted", 2), ("unprompted", 2)):
         subprocess.run(
             [
                 sys.executable, "14_merge_last_noise_delta_direction.py",

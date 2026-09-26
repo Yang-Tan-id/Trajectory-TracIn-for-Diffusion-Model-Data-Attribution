@@ -47,7 +47,7 @@ def main():
     parser.add_argument("--gpu", type=int, required=True)
     parser.add_argument("--timestamp-shard-index", type=int, required=True)
     parser.add_argument("--timestamp-shard-count", type=int, required=True)
-    parser.add_argument("--batch-size", type=int, default=CF_GRAD_BATCH_SIZE)
+    parser.add_argument("--batch-size", type=int, default=CF_DIRECTION_GRAD_BATCH_SIZE)
     args = parser.parse_args()
     if not 0 <= args.timestamp_shard_index < args.timestamp_shard_count:
         raise ValueError("invalid timestamp shard")
