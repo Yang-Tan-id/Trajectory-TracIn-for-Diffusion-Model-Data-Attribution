@@ -1110,6 +1110,14 @@ def _aligned_query_terms_for_fused_score(
         for value in timestep_allowlist_text.replace(",", " ").split()
         if value.strip()
     }
+    checkpoint_allowlist_text = os.environ.get(
+        "TRACIN_SCORE_CHECKPOINT_ALLOWLIST", ""
+    ).strip()
+    checkpoint_allowlist = {
+        int(value)
+        for value in checkpoint_allowlist_text.replace(",", " ").split()
+        if value.strip()
+    }
     query = _first_array(
         query_payload,
         ("query_features", "query_feature", "query_gradient", "query_gradients"),
@@ -1121,7 +1129,11 @@ def _aligned_query_terms_for_fused_score(
     if query.ndim != 2 or query.shape[1] != train.shape[2]:
         return None
 
-    if query.shape[0] == train.shape[0] and not timestep_allowlist:
+    if (
+        query.shape[0] == train.shape[0]
+        and not timestep_allowlist
+        and not checkpoint_allowlist
+    ):
         weights = np.asarray(
             query_payload.get("term_weights", np.full((train.shape[0],), 1.0 / train.shape[0])),
             dtype=np.float64,
@@ -1158,8 +1170,11 @@ def _aligned_query_terms_for_fused_score(
         keep = np.asarray(
             [
                 i
-                for i, timestep in enumerate(query_timesteps)
-                if not timestep_allowlist or int(timestep) in timestep_allowlist
+                for i, (ckpt, timestep) in enumerate(
+                    zip(query_ckpts, query_timesteps)
+                )
+                if (not timestep_allowlist or int(timestep) in timestep_allowlist)
+                and (not checkpoint_allowlist or int(ckpt) in checkpoint_allowlist)
             ],
             dtype=np.int64,
         )
@@ -1197,6 +1212,8 @@ def _aligned_query_terms_for_fused_score(
     train_keep = []
     query_keep = []
     for train_i, (ckpt, timestep) in enumerate(zip(train_ckpts, train_timesteps)):
+        if checkpoint_allowlist and int(ckpt) not in checkpoint_allowlist:
+            continue
         if timestep_allowlist and int(timestep) not in timestep_allowlist:
             continue
         query_i = query_by_term.get((int(ckpt), int(timestep)))
@@ -1572,6 +1589,9 @@ def _run_fused_traj_score_batch(
         out_dir = Path(job["output_dir"])
         query_path = Path(job["query_path"])
         timestep_allowlist = os.environ.get("TRACIN_SCORE_TIMESTEP_ALLOWLIST", "").strip()
+        checkpoint_allowlist = os.environ.get(
+            "TRACIN_SCORE_CHECKPOINT_ALLOWLIST", ""
+        ).strip()
         shared_metadata = {
             "score_contraction": score_contraction,
             "checkpoint_weighting": os.environ.get(
@@ -1583,6 +1603,11 @@ def _run_fused_traj_score_batch(
             "timestep_allowlist": [
                 int(value)
                 for value in timestep_allowlist.replace(",", " ").split()
+                if value.strip()
+            ],
+            "checkpoint_allowlist": [
+                int(value)
+                for value in checkpoint_allowlist.replace(",", " ").split()
                 if value.strip()
             ],
             "second_order_hvp_key": query_hvp_key,
