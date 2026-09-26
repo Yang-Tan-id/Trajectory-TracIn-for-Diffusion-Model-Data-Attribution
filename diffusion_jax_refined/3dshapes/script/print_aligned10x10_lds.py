@@ -155,6 +155,12 @@ SCHEME_GROUPS = {
             "traj_tracin_adamw_full_previous_target_last_checkpoint_squared_previous_lr_q0_20",
         ),
     ),
+    "previous_target_last_checkpoint_raw_unit": (
+        (
+            "raw_previous_target_last_checkpoint_squared_unit_weight",
+            "traj_tracin_raw_mc10_previous_target_last_checkpoint_squared_unit_weight_q0_20",
+        ),
+    ),
     "previous_target_linear": (
         (
             "raw_previous_target_linear",
@@ -295,6 +301,7 @@ def main() -> None:
             "previous_target_termwise_squared",
             "previous_target_timestamp_sum_squared",
             "previous_target_last_checkpoint_squared",
+            "previous_target_last_checkpoint_raw_unit",
             "previous_target_linear",
             "second_order_qts_probe_hvp",
             "second_order_qts_probe_hvp_termwise",
