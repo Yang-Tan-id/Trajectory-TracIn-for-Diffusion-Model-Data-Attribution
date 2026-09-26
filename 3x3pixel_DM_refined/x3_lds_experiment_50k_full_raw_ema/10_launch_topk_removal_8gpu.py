@@ -1,4 +1,4 @@
-"""Prepare, train, and evaluate 200 top-1000 removal models."""
+"""Prepare, train, and evaluate 200 top-1000 removal models (four GPUs by default)."""
 
 import argparse
 import json
@@ -24,7 +24,7 @@ def run_logged(command, log_path):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--gpus", default="0,1,2,3,4,5,6,7")
+    parser.add_argument("--gpus", default="0,1,2,3")
     args = parser.parse_args()
     gpus = [int(value.strip()) for value in args.gpus.split(",") if value.strip()]
     if not gpus:

@@ -40,22 +40,23 @@ replace the old 16-query bank with the requested 100-query bank.
 
 ## Query-specific top-1000 removal retraining
 
-This follow-up trains 200 models: one removal model per query for raw
-first-order projected Traj-TracIn linear scores, and one per query for EMA DAS
-at lambda 10. Both methods rank their saved scores directly in descending
+This follow-up trains 200 models: one removal model per query for exact,
+unprojected raw first-order next-checkpoint Traj-TracIn linear scores, and one
+per query for EMA DAS at lambda 10. Both methods rank their saved scores directly in descending
 order, without applying the LDS prediction sign, and remove the largest 1000
 training indices. Each retrain keeps the original seed and optimization
 settings on the remaining 49,000 examples.
 
-The Traj ranking comes from the already-computed raw first-order linear score,
-while DAS ranking comes from its EMA score bank. Both retrained models are
+The Traj ranking comes from a raw-parameter exact-gradient score bank (no
+projection), while DAS ranking comes from its EMA score bank. Both retrained models are
 evaluated from their EMA weights. The evaluator replays the query's exact saved
 initial noise and prompt, compares directly against the saved base-EMA query
 trajectory, and records full-trajectory and endpoint changes.
 
 ```bash
+python 04_launch_exact_traj_next_100q_4gpu.py
 python 09_prepare_topk_removal.py
-python -u 10_launch_topk_removal_8gpu.py --gpus 0,1,2,3,4,5,6,7 2>&1 \
+python -u 10_launch_topk_removal_8gpu.py --gpus 0,1,2,3 2>&1 \
   | tee x3_lds_exp_50k/logs/topk_removal_200_models.log
 ```
 
