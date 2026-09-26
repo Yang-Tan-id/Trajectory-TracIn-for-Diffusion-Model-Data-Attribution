@@ -16,6 +16,7 @@ For endpoint/trajectory-state metrics, each subset model regenerates a full
 we compare the same 100 saved trajectory states.
 """
 
+import argparse
 import json
 import time
 from pathlib import Path
@@ -146,126 +147,122 @@ def regenerated_trajectory_metrics(
 
 
 def main():
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
-    print(f"[device] {device}", flush=True)
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--gpu", type=int, default=0)
+    parser.add_argument("--query-shard-index", type=int, default=0)
+    parser.add_argument("--query-shard-count", type=int, default=1)
+    args = parser.parse_args()
+    if args.query_shard_count <= 0:
+        raise ValueError("--query-shard-count must be positive")
+    if not 0 <= args.query_shard_index < args.query_shard_count:
+        raise ValueError("query shard index is outside the shard count")
+    device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
+    print(
+        f"[device] {device} query_shard="
+        f"{args.query_shard_index}/{args.query_shard_count}",
+        flush=True,
+    )
 
     ds = ColorGridDataset(str(BASE_CSV), grid_size=3)
     sched = base.make_linear_schedule(T, device=device)
+    with open(MASK_DIR / "manifest.json") as handle:
+        masks = json.load(handle)
+    with open(QUERY_DIR / "manifest.json") as handle:
+        queries = json.load(handle)
 
-    with open(MASK_DIR / "manifest.json") as f:
-        masks = json.load(f)
-    with open(QUERY_DIR / "manifest.json") as f:
-        qs = json.load(f)
-
-    shape = (len(qs), len(masks))
-    arrays = {
-        "simple_loss_ema": np.zeros(shape, dtype=np.float64),
-        "simple_loss_raw": np.zeros(shape, dtype=np.float64),
-        "traj_ref_ema": np.zeros(shape, dtype=np.float64),
-        "traj_ref_raw": np.zeros(shape, dtype=np.float64),
-        "endpoint_deviation_ema": np.zeros(shape, dtype=np.float64),
-        "endpoint_deviation_raw": np.zeros(shape, dtype=np.float64),
-        "trajectory_state_mse_ema": np.zeros(shape, dtype=np.float64),
-        "trajectory_state_mse_raw": np.zeros(shape, dtype=np.float64),
-    }
+    metric_names = (
+        "simple_loss_ema", "simple_loss_raw",
+        "traj_ref_ema", "traj_ref_raw",
+        "endpoint_deviation_ema", "endpoint_deviation_raw",
+        "trajectory_state_mse_ema", "trajectory_state_mse_raw",
+    )
+    query_indices = list(
+        range(args.query_shard_index, len(queries), args.query_shard_count)
+    )
+    shard_dir = LDS_DIR / "observed_query_shards"
+    shard_dir.mkdir(parents=True, exist_ok=True)
 
     ref_models = {}
     for family in FAMILIES:
-        p = MODEL_DIR / "base" / family / f"epoch_{EPOCHS:04d}.pt"
-        ref_models[(family, "ema")] = build(p, "ema", device, ds)
-        ref_models[(family, "raw")] = build(p, "raw", device, ds)
+        path = MODEL_DIR / "base" / family / f"epoch_{EPOCHS:04d}.pt"
+        ref_models[(family, "ema")] = build(path, "ema", device, ds)
+        ref_models[(family, "raw")] = build(path, "raw", device, ds)
 
-    total_pairs = len(qs) * len(masks)
+    pending = [
+        qi for qi in query_indices
+        if not (shard_dir / f"q{qi:02d}.npz").is_file()
+    ]
+    total_pairs = len(pending) * len(masks)
     done_pairs = 0
-    t0 = time.perf_counter()
+    started = time.perf_counter()
 
-    for qi, q in enumerate(qs):
-        family = q["family"]
-        cond = cond_for(q, ds, device)
-        qdir = Path(q["dir"])
-
-        x0 = torch.from_numpy(np.load(qdir / "final_state.npy")).to(
-            device=device,
-            dtype=torch.float32,
+    for qi in query_indices:
+        shard_path = shard_dir / f"q{qi:02d}.npz"
+        if shard_path.is_file():
+            print(f"[skip] observed query shard exists: {shard_path}", flush=True)
+            continue
+        query = queries[qi]
+        values = {
+            metric: np.zeros((len(masks),), dtype=np.float64)
+            for metric in metric_names
+        }
+        family = query["family"]
+        cond = cond_for(query, ds, device)
+        query_dir = Path(query["dir"])
+        x0 = torch.from_numpy(np.load(query_dir / "final_state.npy")).to(
+            device=device, dtype=torch.float32
         )
-        traj = np.load(qdir / "trajectory_xt.npy")
-        t_seq = np.load(qdir / "trajectory_t.npy")
-        x_T = torch.from_numpy(traj[0]).to(
-            device=device,
-            dtype=torch.float32,
-        )
+        traj = np.load(query_dir / "trajectory_xt.npy")
+        t_seq = np.load(query_dir / "trajectory_t.npy")
+        x_T = torch.from_numpy(traj[0]).to(device=device, dtype=torch.float32)
 
-        for mi, mr in enumerate(masks):
-            p = model_path(mr, family)
-            if not p.exists():
-                raise FileNotFoundError(f"Missing subset checkpoint: {p}")
-
+        for mi, mask_record in enumerate(masks):
+            path = model_path(mask_record, family)
+            if not path.exists():
+                raise FileNotFoundError(f"Missing subset checkpoint: {path}")
             for source in ("ema", "raw"):
-                m = build(p, source, device, ds)
-
-                arrays[f"simple_loss_{source}"][qi, mi] = simple_loss_metric(
-                    m, x0, cond, sched, qi
+                model = build(path, source, device, ds)
+                values[f"simple_loss_{source}"][mi] = simple_loss_metric(
+                    model, x0, cond, sched, qi
                 )
-
-                arrays[f"traj_ref_{source}"][qi, mi] = traj_ref_metric(
-                    m,
-                    traj,
-                    t_seq,
-                    cond,
-                    ref_models[(family, source)],
+                values[f"traj_ref_{source}"][mi] = traj_ref_metric(
+                    model, traj, t_seq, cond, ref_models[(family, source)]
                 )
-
-                endpoint_val, trajstate_val = regenerated_trajectory_metrics(
-                    model=m,
-                    sched=sched,
-                    cond=cond,
-                    x_T=x_T,
-                    x0_ref=x0,
-                    ref_traj=traj,
-                    device=device,
+                endpoint, trajectory_mse = regenerated_trajectory_metrics(
+                    model=model, sched=sched, cond=cond, x_T=x_T,
+                    x0_ref=x0, ref_traj=traj, device=device,
                 )
-
-                arrays[f"endpoint_deviation_{source}"][qi, mi] = endpoint_val
-                arrays[f"trajectory_state_mse_{source}"][qi, mi] = trajstate_val
-
-                del m
+                values[f"endpoint_deviation_{source}"][mi] = endpoint
+                values[f"trajectory_state_mse_{source}"][mi] = trajectory_mse
+                del model
 
             done_pairs += 1
-
-            if mi == 0 or (mi + 1) % 16 == 0 or (mi + 1) == len(masks):
-                elapsed = time.perf_counter() - t0
+            if mi == 0 or (mi + 1) % 16 == 0 or mi + 1 == len(masks):
+                elapsed = time.perf_counter() - started
                 eta = elapsed / max(done_pairs, 1) * (total_pairs - done_pairs)
-
                 print(
-                    f"[LDS collect] q{qi:02d} subset {mi+1}/{len(masks)} | "
-                    f"simple ema/raw="
-                    f"{arrays['simple_loss_ema'][qi,mi]:.4f}/"
-                    f"{arrays['simple_loss_raw'][qi,mi]:.4f} | "
-                    f"traj ema/raw="
-                    f"{arrays['traj_ref_ema'][qi,mi]:.4f}/"
-                    f"{arrays['traj_ref_raw'][qi,mi]:.4f} | "
-                    f"endpoint ema/raw="
-                    f"{arrays['endpoint_deviation_ema'][qi,mi]:.4f}/"
-                    f"{arrays['endpoint_deviation_raw'][qi,mi]:.4f} | "
-                    f"state ema/raw="
-                    f"{arrays['trajectory_state_mse_ema'][qi,mi]:.4f}/"
-                    f"{arrays['trajectory_state_mse_raw'][qi,mi]:.4f} | "
-                    f"overall {done_pairs}/{total_pairs} "
-                    f"({100.0*done_pairs/total_pairs:.1f}%) | "
-                    f"elapsed={elapsed/3600:.2f}h | eta≈{eta/3600:.2f}h",
+                    f"[LDS collect gpu={args.gpu} shard="
+                    f"{args.query_shard_index}/{args.query_shard_count}] "
+                    f"q{qi:02d} subset {mi+1}/{len(masks)} | "
+                    f"simple ema/raw={values['simple_loss_ema'][mi]:.4f}/"
+                    f"{values['simple_loss_raw'][mi]:.4f} | "
+                    f"traj ema/raw={values['traj_ref_ema'][mi]:.4f}/"
+                    f"{values['traj_ref_raw'][mi]:.4f} | "
+                    f"overall {done_pairs}/{total_pairs} | "
+                    f"elapsed={elapsed/3600:.2f}h eta≈{eta/3600:.2f}h",
                     flush=True,
                 )
 
-        LDS_DIR.mkdir(parents=True, exist_ok=True)
-        for metric, arr in arrays.items():
-            np.save(LDS_DIR / f"observed_{metric}.npy", arr)
+        temp_path = shard_path.with_suffix(".tmp.npz")
+        np.savez(temp_path, query_id=np.asarray(qi, dtype=np.int64), **values)
+        temp_path.replace(shard_path)
+        print(f"[saved query shard] {shard_path}", flush=True)
 
-        print(f"[saved partial] q{qi:02d}", flush=True)
-
-    for metric, arr in arrays.items():
-        np.save(LDS_DIR / f"observed_{metric}.npy", arr)
-
-    print("[done] all raw/EMA observed LDS responses saved", flush=True)
+    print(
+        f"[done] observed worker shard "
+        f"{args.query_shard_index}/{args.query_shard_count}",
+        flush=True,
+    )
 
 
 if __name__ == "__main__":
