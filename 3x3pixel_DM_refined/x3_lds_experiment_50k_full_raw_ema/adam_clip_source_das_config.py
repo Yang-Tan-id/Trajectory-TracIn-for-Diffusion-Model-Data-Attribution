@@ -4,15 +4,15 @@ from exp_config import *
 from source_das_config import SOURCE_DAS_INFLUENCE_MODULES
 
 
-ADAM_CLIP_SOURCE_ROOT = ROOT / "source_das_adam_clip_raw_20h50p_lrweighted"
+ADAM_CLIP_SOURCE_ROOT = ROOT / "source_das_adam_clip_raw_11h50p_lrweighted"
 ADAM_CLIP_SOURCE_SHARD_ROOT = ADAM_CLIP_SOURCE_ROOT / "timestamp_shards"
 
-# Ten 20-epoch dynamics segments. Curvature and datapoint gradients use both
-# the nearest later midpoint checkpoint and the segment endpoint. This retains
-# the endpoint while reducing the endpoint-only time asymmetry.
+# Ten 20-epoch dynamics segments. Curvature and datapoint gradients use one
+# midpoint checkpoint per segment, plus the final epoch-200 endpoint in the
+# last segment: ten midpoints + one final endpoint = eleven checkpoints total.
 ADAM_CLIP_SOURCE_SEGMENT_BOUNDARIES = tuple(range(0, EPOCHS + 1, 20))
 ADAM_CLIP_SOURCE_CURVATURE_EPOCHS_PER_SEGMENT = tuple(
-    (start + 12, end)
+    ((start + 12,) if end < EPOCHS else (start + 12, end))
     for start, end in zip(
         ADAM_CLIP_SOURCE_SEGMENT_BOUNDARIES[:-1],
         ADAM_CLIP_SOURCE_SEGMENT_BOUNDARIES[1:],
@@ -48,8 +48,8 @@ ADAM_CLIP_SOURCE_EIGENVALUE_ABSOLUTE_FLOOR = 1e-12
 ADAM_CLIP_SOURCE_NORM_EPS = 1e-12
 
 ADAM_CLIP_SOURCE_METHODS = {
-    "unnormalized": "source_das_adam_clip_raw_20h50p_100t_mc10_unnormalized",
-    "jacobian_fro_rms": "source_das_adam_clip_raw_20h50p_100t_mc10_jacobian_fro_rms",
+    "unnormalized": "source_das_adam_clip_raw_11h50p_100t_mc10_unnormalized",
+    "jacobian_fro_rms": "source_das_adam_clip_raw_11h50p_100t_mc10_jacobian_fro_rms",
 }
 
 

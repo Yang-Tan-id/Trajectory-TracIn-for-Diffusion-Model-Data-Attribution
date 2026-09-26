@@ -21,7 +21,7 @@ def main():
             f"use original training batch size {BATCH_SIZE} for clipping replay"
         )
     LOG_DIR.mkdir(parents=True, exist_ok=True)
-    log_path = LOG_DIR / "source_das_adam_clip_raw_20h50p_100q_100t_mc10_4gpu.log"
+    log_path = LOG_DIR / "source_das_adam_clip_raw_11h50p_100q_100t_mc10_4gpu.log"
     assignments = (
         ("prompted", 0, 2, CUDA_IDS[0]),
         ("prompted", 1, 2, CUDA_IDS[1]),

@@ -284,7 +284,7 @@ def main():
             "definition": "mean_t ||J_final_raw_on_cached_ema_trajectory @ adam_clip_source_delta||_2^2",
             "clip_jacobian": "frozen batch-scale approximation; dc/dtheta omitted",
             "effective_cp": "sum_checkpoint(lr_mass * clip_scale * bias_corrected_adam_preconditioner) / segment_lr_sum",
-            "curvature_checkpoint_weighting": "uniform midpoint-plus-endpoint within each segment",
+            "curvature_checkpoint_weighting": "one midpoint per segment; final segment uniformly averages midpoint and epoch-200 endpoint",
             "query_normalization": {
                 "unnormalized": "none",
                 "jacobian_fro_rms": "one exact ||J_qt||_F/sqrt(27) denominator shared by all 27 output components; selected parameters only",
