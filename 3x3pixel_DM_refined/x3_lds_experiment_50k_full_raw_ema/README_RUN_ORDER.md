@@ -460,6 +460,40 @@ score signs and writes the combined result to:
 x3_lds_exp_50k/lds/checkpoint_adamw_reference_learning_four_scores_both_signs_q00_q09.json
 ```
 
+## Continuous reference learning from saved checkpoint index 0 (q00-q09)
+
+This separate experiment starts from the first of the 50 saved raw
+checkpoints (`epoch_0004.pt`). It restores that checkpoint's AdamW state and
+continues the original warmup/cosine LR schedule from its saved global step.
+The 1000 fixed final-EMA reference states are divided into four consecutive
+250-state batches and visited cyclically, one AdamW update per batch. No noise
+is added to this reference-imitation objective.
+
+After every update, the full 1000-state reference loss is recomputed. Learning
+stops when it reaches at most 95% of its initial value, or after 200 updates.
+The capped 200-step model remains a valid result if the threshold is not met.
+The initial and final models are then compared on each training point with
+paired MC100 diffusion losses. Two uniform scores are saved:
+
+```text
+mean_m[L_before - L_after]
+mean_m[(L_before - L_after) / (L_before + L_after + epsilon)]
+```
+
+Run on four GPUs:
+
+```bash
+python 56_verify_checkpoint0_continuous_reference_learning.py
+python -u 59_launch_checkpoint0_continuous_reference_learning_4gpu.py
+```
+
+The optimizer/model state is saved every five updates, and final models are
+reused if scoring is interrupted. The combined LDS output is:
+
+```text
+x3_lds_exp_50k/lds/checkpoint0_continuous_reference_learning_two_scores_both_signs_q00_q09.json
+```
+
 ## q00-q09 top-1000 removal: normalized unlearning alpha=.25 vs DAS
 
 This comparison uses the first ten queries from the same original 100-query
