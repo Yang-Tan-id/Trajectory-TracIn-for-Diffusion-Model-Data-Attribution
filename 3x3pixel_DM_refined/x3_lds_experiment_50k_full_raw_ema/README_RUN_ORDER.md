@@ -684,9 +684,10 @@ alpha = -1, -0.5, -0.25, -0.1, 0, 0.1, 0.25, 0.5, 1
 ```
 
 Positive alpha between zero and one is a convex interpolation. Negative alpha
-is an affine extrapolation that subtracts the previous direction. Alpha is
-shared by all queries; it is never selected separately per query. Each alpha's
-50k attribution is saved as float32 under a method namespace such as:
+is an affine extrapolation that subtracts the previous direction. Each fixed
+alpha is shared by all queries. The script also saves a clearly marked
+per-query oracle selection as a diagnostic. Each alpha's 50k attribution is
+saved as float32 under a method namespace such as:
 
 ```text
 traj_next_previous_affine_timestamp_sum_squared_alpha_p0p25/q00/scores.npy
@@ -723,3 +724,25 @@ traj_next_previous_affine_<contraction>_per_query_best_traj_ref_raw/qXX/scores.n
 LDS. `per_query_best` selects alpha separately for every query on the same LDS
 target and is therefore explicitly an oracle diagnostic rather than a fair
 held-out hyperparameter result.
+
+## Ten evenly spaced checkpoint intervals
+
+To compare the full 49-transition calculation with a cheaper first-order
+version, run:
+
+```bash
+python -u 49_launch_10interval_next_previous_alpha_4gpu.py
+```
+
+This selects transition positions `0,5,11,16,21,27,32,37,43,48` from each
+direction's 49-pair list. Forward scoring uses the left endpoint of each
+selected interval and its next checkpoint; backward scoring uses the right
+endpoint and its previous checkpoint. It evaluates all 100 timestamps and all
+100 queries, saves `linear`, `termwise_squared`, and
+`timestamp_sum_squared`, and then runs the same signed alpha sweep. Existing
+49-transition artifacts are not overwritten. The source methods end in
+`_10interval_even`, and the LDS summary is:
+
+```text
+x3_lds_exp_50k/lds/traj_next_previous_alpha_sweep_10interval_even.json
+```

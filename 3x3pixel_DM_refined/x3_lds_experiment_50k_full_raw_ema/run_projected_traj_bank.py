@@ -3,6 +3,7 @@
 import argparse
 import json
 import math
+import re
 import time
 from pathlib import Path
 
@@ -25,26 +26,50 @@ from exp_config import *
 from x3_endpoint_das_jax_logic_pytorch import build_countsketch_specs, make_torch_generator
 
 
-def output_methods(checkpoint_direction):
+def output_methods(checkpoint_direction, first_order_only=False, output_suffix=""):
     prefix = (
         "traj_projected"
         if checkpoint_direction == "forward"
         else "traj_projected_backward"
     )
-    orders = ("first", "second") if checkpoint_direction == "forward" else ("first",)
+    orders = (
+        ("first",)
+        if first_order_only or checkpoint_direction == "backward"
+        else ("first", "second")
+    )
+    suffix = f"_{output_suffix}" if output_suffix else ""
     return tuple(
-        f"{prefix}_{order}_raw_{contraction}"
+        f"{prefix}_{order}_raw_{contraction}{suffix}"
         for order in orders
         for contraction in TRACIN_CONTRACTIONS
     )
 
 
-def family_complete(records, checkpoint_direction):
+def family_complete(
+    records, checkpoint_direction, first_order_only=False, output_suffix=""
+):
     return all(
         (ATTR_DIR / method / f"q{int(record['query_id']):02d}" / "scores.npy").is_file()
         for record in records
-        for method in output_methods(checkpoint_direction)
+        for method in output_methods(
+            checkpoint_direction, first_order_only, output_suffix
+        )
     )
+
+
+def parse_pair_indices(value, pair_count):
+    if value is None:
+        return list(range(pair_count))
+    indices = [int(item.strip()) for item in value.split(",") if item.strip()]
+    if not indices:
+        raise ValueError("--checkpoint-pair-indices must contain at least one index")
+    if len(indices) != len(set(indices)):
+        raise ValueError("--checkpoint-pair-indices contains duplicates")
+    if any(index < 0 or index >= pair_count for index in indices):
+        raise ValueError(
+            f"checkpoint pair indices must be in [0, {pair_count - 1}]"
+        )
+    return indices
 
 
 def main():
@@ -58,7 +83,19 @@ def main():
         choices=("forward", "backward"),
         default="forward",
     )
+    parser.add_argument(
+        "--checkpoint-pair-indices",
+        help="comma-separated positions in the direction-specific list of 49 pairs",
+    )
+    parser.add_argument("--first-order-only", action="store_true")
+    parser.add_argument(
+        "--output-suffix",
+        default="",
+        help="suffix added to shard namespaces and final attribution methods",
+    )
     args = parser.parse_args()
+    if args.output_suffix and not re.fullmatch(r"[A-Za-z0-9_]+", args.output_suffix):
+        raise ValueError("--output-suffix may contain only letters, digits, and underscores")
     if args.timestamp_shard_count <= 0:
         raise ValueError("--timestamp-shard-count must be positive")
     if not 0 <= args.timestamp_shard_index < args.timestamp_shard_count:
@@ -69,7 +106,12 @@ def main():
         records = [r for r in json.load(handle) if r["family"] == args.family]
     if not records or (
         args.timestamp_shard_count == 1
-        and family_complete(records, args.checkpoint_direction)
+        and family_complete(
+            records,
+            args.checkpoint_direction,
+            args.first_order_only,
+            args.output_suffix,
+        )
     ):
         print(
             f"[skip] projected Traj {args.checkpoint_direction} bank complete "
@@ -95,6 +137,8 @@ def main():
         if args.checkpoint_direction == "forward"
         else "_projected_backward_traj_shards"
     )
+    if args.output_suffix:
+        shard_namespace += f"_{args.output_suffix}"
     shard_root = (
         ATTR_DIR
         / shard_namespace
@@ -114,14 +158,20 @@ def main():
     coefficient = float(TRACIN_SECOND_ORDER_COEFFICIENT)
     snap_weight = 1.0 / len(t_seq)
     orders = (
-        ("first", "second")
-        if args.checkpoint_direction == "forward"
-        else ("first",)
+        ("first",)
+        if args.first_order_only or args.checkpoint_direction == "backward"
+        else ("first", "second")
     )
     if args.checkpoint_direction == "forward":
-        checkpoint_pairs = [(ci, ci + 1) for ci in range(len(paths) - 1)]
+        all_checkpoint_pairs = [(ci, ci + 1) for ci in range(len(paths) - 1)]
     else:
-        checkpoint_pairs = [(ci, ci - 1) for ci in range(1, len(paths))]
+        all_checkpoint_pairs = [(ci, ci - 1) for ci in range(1, len(paths))]
+    checkpoint_pair_indices = parse_pair_indices(
+        args.checkpoint_pair_indices, len(all_checkpoint_pairs)
+    )
+    checkpoint_pairs = [
+        all_checkpoint_pairs[index] for index in checkpoint_pair_indices
+    ]
     linear = {o: torch.zeros((q_count, N_TRAIN), device=device, dtype=torch.float64) for o in orders}
     term_square = {o: torch.zeros_like(linear[o]) for o in linear}
     timestamp_square = {o: torch.zeros_like(linear[o]) for o in linear}
@@ -129,6 +179,7 @@ def main():
     print(
         f"[projected-bank {args.family}] start direction={args.checkpoint_direction} "
         f"queries={q_count} transitions={len(checkpoint_pairs)} "
+        f"pair_indices={checkpoint_pair_indices} first_order_only={args.first_order_only} "
         f"timestamps={len(selected_timestamp_indices)}/{len(t_seq)} "
         f"shard={args.timestamp_shard_index}/{args.timestamp_shard_count} "
         f"train_points={N_TRAIN} train_mc={mc_count} batch={batch_size} dim={d}",
@@ -164,9 +215,10 @@ def main():
             params = tuple(named.values())
             params_dict = dict(named)
             target_named = dict(target.named_parameters())
+            compute_second = "second" in orders
             delta = (
                 tuple(target_named[n].detach() - named[n].detach() for n in names)
-                if args.checkpoint_direction == "forward"
+                if compute_second
                 else None
             )
             specs = build_countsketch_specs(
@@ -184,10 +236,10 @@ def main():
                 query_grad = torch.autograd.grad(
                     query_loss,
                     params,
-                    create_graph=args.checkpoint_direction == "forward",
+                    create_graph=compute_second,
                 )
                 first_queries.append(_project_gradient_tuple(query_grad, specs, d))
-                if args.checkpoint_direction == "forward":
+                if compute_second:
                     directional = sum(
                         (g * direction).sum()
                         for g, direction in zip(query_grad, delta)
@@ -199,7 +251,7 @@ def main():
                         d,
                     ))
             query_matrix = {"first": torch.stack(first_queries)}
-            if args.checkpoint_direction == "forward":
+            if compute_second:
                 query_matrix["second"] = torch.stack(second_queries)
                 del query_hvp, directional
             del query_grad, query_loss, eps_target
@@ -280,6 +332,10 @@ def main():
                 {
                     "family": args.family,
                     "checkpoint_direction": args.checkpoint_direction,
+                    "checkpoint_pair_indices": checkpoint_pair_indices,
+                    "checkpoint_pairs": checkpoint_pairs,
+                    "first_order_only": args.first_order_only,
+                    "output_suffix": args.output_suffix,
                     "timestamp_shard_index": args.timestamp_shard_index,
                     "timestamp_shard_count": args.timestamp_shard_count,
                     "timestamp_indices": selected_timestamp_indices,
@@ -298,7 +354,8 @@ def main():
                 if args.checkpoint_direction == "forward"
                 else "traj_projected_backward"
             )
-            method = f"{prefix}_{order}_raw_{contraction}"
+            suffix = f"_{args.output_suffix}" if args.output_suffix else ""
+            method = f"{prefix}_{order}_raw_{contraction}{suffix}"
             out = ATTR_DIR / method / f"q{int(record['query_id']):02d}"
             out.mkdir(parents=True, exist_ok=True)
             np.save(out / "scores.npy", values[qi].cpu().numpy())
@@ -309,6 +366,10 @@ def main():
                         "next" if args.checkpoint_direction == "forward" else "previous"
                     ),
                     "checkpoint_direction": args.checkpoint_direction,
+                    "checkpoint_pair_indices": checkpoint_pair_indices,
+                    "checkpoint_pairs": checkpoint_pairs,
+                    "first_order_only": args.first_order_only,
+                    "output_suffix": args.output_suffix,
                     "param_source": "raw", "projection": "countsketch",
                     "proj_dim": d, "num_snapshots": 100, "train_mc": mc_count,
                     "contraction": contraction, "lr_weighted": TRACIN_USE_LR_WEIGHTS,

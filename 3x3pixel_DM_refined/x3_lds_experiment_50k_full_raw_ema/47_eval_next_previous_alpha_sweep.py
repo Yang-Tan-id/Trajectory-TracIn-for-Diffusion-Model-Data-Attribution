@@ -1,8 +1,10 @@
 """Save and evaluate fixed-alpha next/previous Traj score combinations."""
 
+import argparse
 import csv
 import json
 import os
+import re
 
 import numpy as np
 
@@ -21,12 +23,14 @@ def alpha_tag(alpha):
     return f"{sign}{magnitude}"
 
 
-def combined_method(contraction, alpha):
-    return f"traj_next_previous_affine_{contraction}_alpha_{alpha_tag(alpha)}"
+def combined_method(contraction, alpha, output_suffix=""):
+    suffix = f"_{output_suffix}" if output_suffix else ""
+    return f"traj_next_previous_affine_{contraction}_alpha_{alpha_tag(alpha)}{suffix}"
 
 
-def selected_method(contraction, selection):
-    return f"traj_next_previous_affine_{contraction}_{selection}_traj_ref_raw"
+def selected_method(contraction, selection, output_suffix=""):
+    suffix = f"_{output_suffix}" if output_suffix else ""
+    return f"traj_next_previous_affine_{contraction}_{selection}_traj_ref_raw{suffix}"
 
 
 def atomic_json(path, payload):
@@ -38,6 +42,36 @@ def atomic_json(path, payload):
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--source-method-suffix",
+        default="",
+        help="suffix on both next and previous source attribution methods",
+    )
+    parser.add_argument(
+        "--output-suffix",
+        default="",
+        help="suffix on generated alpha and selected attribution methods",
+    )
+    parser.add_argument(
+        "--result-stem",
+        default="traj_next_previous_alpha_sweep",
+        help="basename for LDS JSON and per-query CSV outputs",
+    )
+    args = parser.parse_args()
+    for label, value in (
+        ("source method suffix", args.source_method_suffix),
+        ("output suffix", args.output_suffix),
+        ("result stem", args.result_stem),
+    ):
+        if value and not re.fullmatch(r"[A-Za-z0-9_]+", value):
+            raise ValueError(
+                f"{label} may contain only letters, digits, and underscores"
+            )
+    source_suffix = (
+        f"_{args.source_method_suffix}" if args.source_method_suffix else ""
+    )
+
     membership = np.load(MASK_DIR / "membership.npy").astype(np.float64)
     observed = {
         metric: np.load(LDS_DIR / f"observed_{metric}.npy").astype(np.float64)
@@ -55,8 +89,8 @@ def main():
         for contraction in CONTRACTIONS
     }
     for contraction in CONTRACTIONS:
-        next_method = f"traj_projected_first_raw_{contraction}"
-        previous_method = f"traj_projected_backward_first_raw_{contraction}"
+        next_method = f"traj_projected_first_raw_{contraction}{source_suffix}"
+        previous_method = f"traj_projected_backward_first_raw_{contraction}{source_suffix}"
         for query_id in range(query_count):
             next_path = ATTR_DIR / next_method / f"q{query_id:02d}" / "scores.npy"
             previous_path = (
@@ -79,7 +113,7 @@ def main():
             for alpha in ALPHAS:
                 score = (1.0 - alpha) * next_score + alpha * previous_score
                 saved_score = score.astype(np.float32)
-                method = combined_method(contraction, alpha)
+                method = combined_method(contraction, alpha, args.output_suffix)
                 output = ATTR_DIR / method / f"q{query_id:02d}"
                 output.mkdir(parents=True, exist_ok=True)
                 np.save(output / "scores.npy", saved_score)
@@ -96,8 +130,16 @@ def main():
                         "formula": "(1-alpha)*next + alpha*previous",
                         "next_method": next_method,
                         "previous_method": previous_method,
-                        "next_checkpoint_pairs": "c=1..49, target=c+1; final excluded",
-                        "previous_checkpoint_pairs": "c=2..50, target=c-1; first excluded",
+                        "next_checkpoint_pairs": (
+                            "defined by next source info.json"
+                            if args.source_method_suffix
+                            else "c=1..49, target=c+1; final excluded"
+                        ),
+                        "previous_checkpoint_pairs": (
+                            "defined by previous source info.json"
+                            if args.source_method_suffix
+                            else "c=2..50, target=c-1; first excluded"
+                        ),
                         "score_dtype": "float32",
                     },
                 )
@@ -130,7 +172,9 @@ def main():
                 alpha_results.append(
                     {
                         "alpha": alpha,
-                        "method": combined_method(contraction, alpha),
+                        "method": combined_method(
+                            contraction, alpha, args.output_suffix
+                        ),
                         "mean": float(
                             np.nanmean([item["spearman"] for item in query_rows])
                         ),
@@ -176,8 +220,12 @@ def main():
         alpha_results = primary["alpha_results"]
         global_alpha = float(primary["best_overall"]["alpha"])
         global_mean = float(primary["best_overall"]["mean"])
-        global_method = selected_method(contraction, "global_best")
-        per_query_method = selected_method(contraction, "per_query_best")
+        global_method = selected_method(
+            contraction, "global_best", args.output_suffix
+        )
+        per_query_method = selected_method(
+            contraction, "per_query_best", args.output_suffix
+        )
         per_query = []
         for query_id in range(query_count):
             candidates = [
@@ -218,7 +266,7 @@ def main():
             for method, alpha, semantics in selections:
                 source = (
                     ATTR_DIR
-                    / combined_method(contraction, alpha)
+                    / combined_method(contraction, alpha, args.output_suffix)
                     / f"q{query_id:02d}"
                     / "scores.npy"
                 )
@@ -235,7 +283,9 @@ def main():
                         "selection_metric": PRIMARY_METRIC,
                         "selection_semantics": semantics,
                         "selected_alpha": alpha,
-                        "source_method": combined_method(contraction, alpha),
+                        "source_method": combined_method(
+                            contraction, alpha, args.output_suffix
+                        ),
                         "formula": "(1-alpha)*next + alpha*previous",
                     },
                 )
@@ -267,13 +317,15 @@ def main():
         "prediction": "-(membership @ combined_score)",
         "primary_metric": PRIMARY_METRIC,
         "query_count": query_count,
+        "source_method_suffix": args.source_method_suffix,
+        "output_suffix": args.output_suffix,
         "primary_metric_alpha_selection": primary_selection,
         "results": results,
     }
-    json_path = LDS_DIR / "traj_next_previous_alpha_sweep.json"
-    csv_path = LDS_DIR / "traj_next_previous_alpha_sweep_per_query.csv"
+    json_path = LDS_DIR / f"{args.result_stem}.json"
+    csv_path = LDS_DIR / f"{args.result_stem}_per_query.csv"
     selection_csv_path = (
-        LDS_DIR / "traj_next_previous_alpha_selection_traj_ref_raw.csv"
+        LDS_DIR / f"{args.result_stem}_selection_traj_ref_raw.csv"
     )
     atomic_json(json_path, payload)
     with open(csv_path, "w", newline="") as handle:
