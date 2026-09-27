@@ -326,10 +326,19 @@ reduction over the exact four shuffled `(t, noise)` training events:
 mean_event [loss(theta_c) - loss(theta+)].
 ```
 
-The final score sums these contributions over all 50 checkpoints.  Parameters
+For each of the two update rules, the same forward pass produces three scores:
+
+- `absolute`: mean `loss_before - loss_after` over four events;
+- `log_relative`: mean `log((loss_before + eps) / (loss_after + eps))`;
+- `loss_conditioned_robust`: split datapoints into 20 equal-count bins by
+  baseline loss, robust-standardize the log-relative score with median/MAD
+  inside each bin, and clip to `[-5, 5]`.
+
+The final score averages each contribution over all 50 checkpoints. Parameters
 remain raw; the trajectory and predicted-noise targets come from the final EMA
-model.  LDS evaluates both score signs on the existing subset models and
-observations.
+model. LDS evaluates both score signs on the existing subset models and
+observations. Event-level baseline losses are retained so the three scores do
+not require three model runs.
 
 Run preparation once on one GPU.  The replay cache is about 1.1 GB because the
 original float32 noise is retained:
@@ -349,7 +358,14 @@ python -u 27_launch_forward_loss_alignment_4gpu.py \
   2>&1 | tee x3_lds_exp_50k/logs/forward_loss_alignment_4gpu.log
 ```
 
-The two attribution methods are:
+The six attribution methods are the Cartesian product of:
 
-- `forward_loss_alignment_raw_sgd_50ckpt_1000t_4event`
-- `forward_loss_alignment_normalized_sgd_50ckpt_1000t_4event`
+- update: `raw_sgd` or `normalized_sgd`;
+- normalization: the base method name (`absolute`), suffix `_log_relative`, or
+  suffix `_loss_conditioned_robust`.
+
+If preparation was run with the earlier absolute-only implementation, rerun
+`24_prepare_forward_loss_alignment.py`. Existing replay/query caches are kept;
+only the missing event-level baseline cache is generated. The scorer uses a
+new v2 partial file, so an old absolute-only partial cannot be mixed into these
+six results.

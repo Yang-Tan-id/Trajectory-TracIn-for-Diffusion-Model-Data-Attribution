@@ -45,6 +45,8 @@ def main():
     print(f"training events/datapoint/checkpoint = {FLA_EVENTS_PER_CHECKPOINT}")
     print(f"reference timestamps = {DDIM_STEPS}")
     print(f"artificial updates = raw SGD and global-gradient-normalized SGD")
+    print("score normalizations = absolute, log-relative, loss-conditioned robust")
+    print(f"loss-conditioned bins = {FLA_LOSS_CONDITION_BINS}")
     print(f"datapoint batch = {FLA_DATAPOINT_BATCH_SIZE} (forward event batch={FLA_DATAPOINT_BATCH_SIZE * FLA_EVENTS_PER_CHECKPOINT})")
     print(f"reference trajectory = cached EMA DDIM initial state, replayed at all {DDIM_STEPS} states")
     print(f"checkpoint/update/evaluation parameters = raw")

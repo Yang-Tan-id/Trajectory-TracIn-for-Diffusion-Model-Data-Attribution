@@ -1,6 +1,7 @@
 """Launch q00-q49 forward-loss alignment on exactly four GPUs, then LDS."""
 
 import os
+import json
 import subprocess
 import sys
 import threading
@@ -36,6 +37,7 @@ def main():
         replay_noise_path(),
         FLA_REPLAY_DIR / "metadata.json",
         baseline_path(),
+        baseline_event_path(),
         FLA_BASELINE_DIR / "done.json",
     )
     required += tuple(
@@ -53,6 +55,13 @@ def main():
         raise FileNotFoundError(
             "Preparation is incomplete. Run `python -u 24_prepare_forward_loss_alignment.py --gpu 0` first. "
             f"Missing: {missing}"
+        )
+    with open(FLA_BASELINE_DIR / "done.json") as handle:
+        baseline_done = json.load(handle)
+    if int(baseline_done.get("format_version", 0)) < 2:
+        raise RuntimeError(
+            "Event-level baseline cache is from the absolute-only format. "
+            "Rerun `python -u 24_prepare_forward_loss_alignment.py --gpu 0`."
         )
     errors = []
     threads = []

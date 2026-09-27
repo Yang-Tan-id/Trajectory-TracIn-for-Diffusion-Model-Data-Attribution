@@ -206,10 +206,14 @@ def prepare_reference_queries(device):
 def prepare_baseline_losses(device):
     FLA_BASELINE_DIR.mkdir(parents=True, exist_ok=True)
     output_path = baseline_path()
+    event_output_path = baseline_event_path()
     done_path = FLA_BASELINE_DIR / "done.json"
-    if output_path.is_file() and done_path.is_file():
-        print(f"[baseline] existing cache found: {output_path}", flush=True)
-        return
+    if output_path.is_file() and event_output_path.is_file() and done_path.is_file():
+        with open(done_path) as handle:
+            done = json.load(handle)
+        if int(done.get("format_version", 0)) >= 2:
+            print(f"[baseline] existing event-level cache found: {event_output_path}", flush=True)
+            return
     if not replay_t_path().is_file() or not replay_noise_path().is_file():
         raise FileNotFoundError("Run training-event replay preparation first")
     ds = ColorGridDataset(str(BASE_CSV), grid_size=3)
@@ -217,9 +221,18 @@ def prepare_baseline_losses(device):
     t_cache = np.load(replay_t_path(), mmap_mode="r")
     noise_cache = np.load(replay_noise_path(), mmap_mode="r")
     temporary_path = FLA_BASELINE_DIR / f"{FLA_FAMILY}_raw.tmp.npy"
+    event_temporary_path = FLA_BASELINE_DIR / f"{FLA_FAMILY}_raw_events.tmp.npy"
     output = np.lib.format.open_memmap(
         temporary_path, mode="w+", dtype=np.float64,
         shape=(len(FLA_CHECKPOINT_EPOCHS), N_TRAIN),
+    )
+    event_output = np.lib.format.open_memmap(
+        event_temporary_path, mode="w+", dtype=np.float64,
+        shape=(
+            len(FLA_CHECKPOINT_EPOCHS),
+            N_TRAIN,
+            FLA_EVENTS_PER_CHECKPOINT,
+        ),
     )
     schedule = base.make_linear_schedule(T, device=device)
     started = time.perf_counter()
@@ -242,8 +255,11 @@ def prepare_baseline_losses(device):
             # Keep model arithmetic in its native float32, but do the loss
             # reduction in float64.  The one-step decrease can be ~1e-8.
             event_loss = (pred.double() - noise.double()).square().flatten(1).mean(1)
-            output[checkpoint_index, start:end] = event_loss.reshape(count, FLA_EVENTS_PER_CHECKPOINT).mean(1).cpu().numpy()
+            event_loss = event_loss.reshape(count, FLA_EVENTS_PER_CHECKPOINT).cpu().numpy()
+            event_output[checkpoint_index, start:end] = event_loss
+            output[checkpoint_index, start:end] = event_loss.mean(axis=1)
         output.flush()
+        event_output.flush()
         elapsed = time.perf_counter() - started
         print(
             f"[baseline] checkpoint={checkpoint_index + 1:02d}/{len(FLA_CHECKPOINT_EPOCHS)} "
@@ -252,21 +268,31 @@ def prepare_baseline_losses(device):
         )
         del model
         torch.cuda.empty_cache()
-    del output
+    del output, event_output
     os.replace(temporary_path, output_path)
+    os.replace(event_temporary_path, event_output_path)
     with open(done_path, "w") as handle:
         json.dump(
             {
+                "format_version": 2,
                 "family": FLA_FAMILY,
                 "parameter_source": FLA_CHECKPOINT_PARAM_SOURCE,
                 "shape": [len(FLA_CHECKPOINT_EPOCHS), N_TRAIN],
+                "event_shape": [
+                    len(FLA_CHECKPOINT_EPOCHS),
+                    N_TRAIN,
+                    FLA_EVENTS_PER_CHECKPOINT,
+                ],
                 "dtype": "float64",
                 "events_per_checkpoint": FLA_EVENTS_PER_CHECKPOINT,
             },
             handle,
             indent=2,
         )
-    print(f"[baseline] saved -> {output_path}", flush=True)
+    print(
+        f"[baseline] saved mean -> {output_path}; event-level -> {event_output_path}",
+        flush=True,
+    )
 
 
 def main():

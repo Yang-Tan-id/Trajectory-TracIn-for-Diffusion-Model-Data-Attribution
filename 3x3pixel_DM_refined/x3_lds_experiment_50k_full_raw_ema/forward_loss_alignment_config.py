@@ -20,13 +20,31 @@ FLA_CHECKPOINT_PARAM_SOURCE = "raw"
 
 FLA_METHOD_RAW_STEP = "forward_loss_alignment_raw_sgd_50ckpt_1000t_4event"
 FLA_METHOD_NORMALIZED_STEP = "forward_loss_alignment_normalized_sgd_50ckpt_1000t_4event"
-FLA_METHODS = (FLA_METHOD_RAW_STEP, FLA_METHOD_NORMALIZED_STEP)
+FLA_METHOD_RAW_STEP_LOG_RELATIVE = FLA_METHOD_RAW_STEP + "_log_relative"
+FLA_METHOD_NORMALIZED_STEP_LOG_RELATIVE = FLA_METHOD_NORMALIZED_STEP + "_log_relative"
+FLA_METHOD_RAW_STEP_LOSS_CONDITIONED = FLA_METHOD_RAW_STEP + "_loss_conditioned_robust"
+FLA_METHOD_NORMALIZED_STEP_LOSS_CONDITIONED = (
+    FLA_METHOD_NORMALIZED_STEP + "_loss_conditioned_robust"
+)
+FLA_METHOD_BY_VARIANT = {
+    ("raw", "absolute"): FLA_METHOD_RAW_STEP,
+    ("raw", "log_relative"): FLA_METHOD_RAW_STEP_LOG_RELATIVE,
+    ("raw", "loss_conditioned_robust"): FLA_METHOD_RAW_STEP_LOSS_CONDITIONED,
+    ("normalized", "absolute"): FLA_METHOD_NORMALIZED_STEP,
+    ("normalized", "log_relative"): FLA_METHOD_NORMALIZED_STEP_LOG_RELATIVE,
+    ("normalized", "loss_conditioned_robust"): FLA_METHOD_NORMALIZED_STEP_LOSS_CONDITIONED,
+}
+FLA_METHODS = tuple(FLA_METHOD_BY_VARIANT.values())
 
 # This is a datapoint batch. Four realized training events are flattened into
 # a forward batch of 4 * FLA_DATAPOINT_BATCH_SIZE.
 FLA_DATAPOINT_BATCH_SIZE = 640
 FLA_QUERY_BATCH_SIZE = 250
 FLA_NORMALIZE_EPS = 1e-12
+FLA_LOG_EPS = 1e-12
+FLA_LOSS_CONDITION_BINS = 20
+FLA_ROBUST_SCALE_EPS = 1e-12
+FLA_ROBUST_CLIP = 5.0
 
 FLA_LDS_METRICS = (
     "endpoint_deviation_ema",
@@ -50,3 +68,7 @@ def replay_noise_path():
 
 def baseline_path():
     return FLA_BASELINE_DIR / f"{FLA_FAMILY}_raw.npy"
+
+
+def baseline_event_path():
+    return FLA_BASELINE_DIR / f"{FLA_FAMILY}_raw_events.npy"

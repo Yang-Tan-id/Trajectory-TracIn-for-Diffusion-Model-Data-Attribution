@@ -83,7 +83,7 @@ def updated_parameters(model, gradients, learning_rate, normalize):
 
 
 @torch.no_grad()
-def checkpoint_loss_reductions(
+def checkpoint_updated_event_losses(
     model,
     parameter_variants,
     checkpoint_index,
@@ -91,12 +91,11 @@ def checkpoint_loss_reductions(
     conds,
     t_cache,
     noise_cache,
-    baseline,
     schedule,
     device,
 ):
-    reductions = {
-        name: np.empty(N_TRAIN, dtype=np.float64)
+    updated_losses = {
+        name: np.empty((N_TRAIN, FLA_EVENTS_PER_CHECKPOINT), dtype=np.float64)
         for name in parameter_variants
     }
     for start in range(0, N_TRAIN, FLA_DATAPOINT_BATCH_SIZE):
@@ -114,23 +113,69 @@ def checkpoint_loss_reductions(
         for name, params in parameter_variants.items():
             prediction = functional_call(model, params, (xt, t, cond))
             event_loss = (prediction.double() - noise.double()).square().flatten(1).mean(1)
-            updated_loss = event_loss.reshape(count, FLA_EVENTS_PER_CHECKPOINT).mean(1).cpu().numpy()
-            reductions[name][start:end] = baseline[checkpoint_index, start:end] - updated_loss
-    return reductions
+            updated_losses[name][start:end] = event_loss.reshape(
+                count, FLA_EVENTS_PER_CHECKPOINT
+            ).cpu().numpy()
+    return updated_losses
 
 
-def score_query(qid, gpu, images, conds, t_cache, noise_cache, baseline, schedule, ds):
+def make_loss_condition_bins(baseline_events):
+    order = np.argsort(baseline_events.mean(axis=1), kind="mergesort")
+    return tuple(np.array_split(order, FLA_LOSS_CONDITION_BINS))
+
+
+def loss_conditioned_robust_score(log_relative, condition_bins):
+    """Robustly standardize within equal-count baseline-loss quantile bins."""
+    result = np.empty_like(log_relative, dtype=np.float64)
+    global_center = np.median(log_relative)
+    global_mad = 1.4826 * np.median(np.abs(log_relative - global_center))
+    scale_floor = max(FLA_ROBUST_SCALE_EPS, 0.05 * float(global_mad))
+    for indices in condition_bins:
+        values = log_relative[indices]
+        center = np.median(values)
+        scale = 1.4826 * np.median(np.abs(values - center))
+        scale = max(float(scale), scale_floor)
+        result[indices] = np.clip(
+            (values - center) / scale,
+            -FLA_ROBUST_CLIP,
+            FLA_ROBUST_CLIP,
+        )
+    return result
+
+
+def score_contributions(baseline_events, updated_events, condition_bins):
+    absolute = (baseline_events - updated_events).mean(axis=1)
+    log_relative = np.log(
+        (baseline_events + FLA_LOG_EPS) / (updated_events + FLA_LOG_EPS)
+    ).mean(axis=1)
+    conditioned = loss_conditioned_robust_score(
+        log_relative,
+        condition_bins,
+    )
+    return {
+        "absolute": absolute,
+        "log_relative": log_relative,
+        "loss_conditioned_robust": conditioned,
+    }
+
+
+def score_query(
+    qid, gpu, images, conds, t_cache, noise_cache,
+    baseline_events, condition_bins_by_checkpoint, schedule, ds,
+):
     device = torch.device(f"cuda:{gpu}")
     partial_dir = FLA_PARTIAL_DIR / f"q{qid:02d}"
     partial_dir.mkdir(parents=True, exist_ok=True)
-    partial_path = partial_dir / "state.npz"
-    raw_scores = np.zeros(N_TRAIN, dtype=np.float64)
-    normalized_scores = np.zeros(N_TRAIN, dtype=np.float64)
+    partial_path = partial_dir / "state_all_normalizations_v2.npz"
+    score_sums = {
+        method: np.zeros(N_TRAIN, dtype=np.float64)
+        for method in FLA_METHODS
+    }
     next_checkpoint = 0
     if partial_path.is_file():
         partial = np.load(partial_path)
-        raw_scores[:] = partial["raw_scores"]
-        normalized_scores[:] = partial["normalized_scores"]
+        for method_index, method in enumerate(FLA_METHODS):
+            score_sums[method][:] = partial[f"score_{method_index}"]
         next_checkpoint = int(partial["next_checkpoint"])
         print(f"[gpu {gpu} q{qid:02d}] resume checkpoint {next_checkpoint + 1}", flush=True)
 
@@ -145,18 +190,35 @@ def score_query(qid, gpu, images, conds, t_cache, noise_cache, baseline, schedul
             "raw": updated_parameters(model, gradients, learning_rate, normalize=False),
             "normalized": updated_parameters(model, gradients, learning_rate, normalize=True),
         }
-        reductions = checkpoint_loss_reductions(
+        updated_losses = checkpoint_updated_event_losses(
             model, variants, checkpoint_index, images, conds,
-            t_cache, noise_cache, baseline, schedule, device,
+            t_cache, noise_cache, schedule, device,
         )
-        raw_scores += reductions["raw"]
-        normalized_scores += reductions["normalized"]
-        temporary_partial = partial_dir / "state.tmp.npz"
+        baseline_checkpoint = np.asarray(
+            baseline_events[checkpoint_index], dtype=np.float64
+        )
+        checkpoint_stats = []
+        for update_name, after_events in updated_losses.items():
+            contributions = score_contributions(
+                baseline_checkpoint,
+                after_events,
+                condition_bins_by_checkpoint[checkpoint_index],
+            )
+            for normalization, values in contributions.items():
+                method = FLA_METHOD_BY_VARIANT[(update_name, normalization)]
+                score_sums[method] += values
+            checkpoint_stats.append(
+                f"{update_name}:abs={np.median(contributions['absolute']):.2e},"
+                f"log={np.median(contributions['log_relative']):.2e}"
+            )
+        temporary_partial = partial_dir / "state_all_normalizations_v2.tmp.npz"
         np.savez(
             temporary_partial,
             next_checkpoint=np.asarray(checkpoint_index + 1, dtype=np.int64),
-            raw_scores=raw_scores,
-            normalized_scores=normalized_scores,
+            **{
+                f"score_{method_index}": score_sums[method]
+                for method_index, method in enumerate(FLA_METHODS)
+            },
         )
         os.replace(temporary_partial, partial_path)
         elapsed = time.perf_counter() - started
@@ -166,10 +228,11 @@ def score_query(qid, gpu, images, conds, t_cache, noise_cache, baseline, schedul
         print(
             f"[gpu {gpu} q{qid:02d}] checkpoint={checkpoint_index + 1:02d}/{len(FLA_CHECKPOINT_EPOCHS)} "
             f"epoch={epoch:03d} lr={learning_rate:.3e} query_loss={query_loss:.6e} "
-            f"|g|={gradient_norm:.6e} elapsed={elapsed / 60:.1f}m eta={eta / 60:.1f}m",
+            f"|g|={gradient_norm:.6e} {' '.join(checkpoint_stats)} "
+            f"elapsed={elapsed / 60:.1f}m eta={eta / 60:.1f}m",
             flush=True,
         )
-        del model, gradients, variants, reductions
+        del model, gradients, variants, updated_losses, baseline_checkpoint
         torch.cuda.empty_cache()
 
     metadata = {
@@ -178,21 +241,34 @@ def score_query(qid, gpu, images, conds, t_cache, noise_cache, baseline, schedul
         "checkpoint_epochs": list(FLA_CHECKPOINT_EPOCHS),
         "events_per_checkpoint": FLA_EVENTS_PER_CHECKPOINT,
         "reference_timestamps": DDIM_STEPS,
-        "score_definition": "sum_c mean_event(loss_before - loss_after_one_query_SGD_step)",
+        "checkpoint_aggregation": "mean over 50 checkpoints",
+        "normalizations": {
+            "absolute": "mean_event(loss_before - loss_after)",
+            "log_relative": "mean_event(log((loss_before + eps) / (loss_after + eps)))",
+            "loss_conditioned_robust": (
+                "log_relative robust-z within 20 equal-count baseline-loss bins; clip [-5,5]"
+            ),
+        },
         "raw_update": "theta_plus = theta - checkpoint_lr * grad(reference_imitation_loss)",
         "normalized_update": "theta_plus = theta - checkpoint_lr * grad / global_grad_norm",
         "reference_target": "final EMA predicted noise on cached EMA DDIM trajectory",
         "updated_parameter_source": "raw checkpoint",
     }
-    for method, scores in (
-        (FLA_METHOD_RAW_STEP, raw_scores),
-        (FLA_METHOD_NORMALIZED_STEP, normalized_scores),
-    ):
+    reverse_variants = {
+        method: {"update": update, "normalization": normalization}
+        for (update, normalization), method in FLA_METHOD_BY_VARIANT.items()
+    }
+    for method in FLA_METHODS:
+        scores = score_sums[method] / float(len(FLA_CHECKPOINT_EPOCHS))
         output_dir = ATTR_DIR / method / f"q{qid:02d}"
         output_dir.mkdir(parents=True, exist_ok=True)
         np.save(output_dir / "scores.npy", scores)
         with open(output_dir / "metadata.json", "w") as handle:
-            json.dump({**metadata, "method": method}, handle, indent=2)
+            json.dump(
+                {**metadata, "method": method, **reverse_variants[method]},
+                handle,
+                indent=2,
+            )
     print(f"[gpu {gpu} q{qid:02d}] DONE", flush=True)
 
 
@@ -211,11 +287,28 @@ def main():
     images, conds = dataset_arrays(ds)
     t_cache = np.load(replay_t_path(), mmap_mode="r")
     noise_cache = np.load(replay_noise_path(), mmap_mode="r")
-    baseline = np.load(baseline_path(), mmap_mode="r")
+    baseline_events = np.load(baseline_event_path(), mmap_mode="r")
+    expected_baseline_shape = (
+        len(FLA_CHECKPOINT_EPOCHS),
+        N_TRAIN,
+        FLA_EVENTS_PER_CHECKPOINT,
+    )
+    if baseline_events.shape != expected_baseline_shape:
+        raise ValueError(
+            f"event baseline shape={baseline_events.shape}, expected={expected_baseline_shape}; "
+            "rerun 24_prepare_forward_loss_alignment.py"
+        )
+    condition_bins_by_checkpoint = tuple(
+        make_loss_condition_bins(np.asarray(baseline_events[checkpoint_index]))
+        for checkpoint_index in range(len(FLA_CHECKPOINT_EPOCHS))
+    )
     schedule = base.make_linear_schedule(T, device=device)
     print(f"[gpu {args.gpu}] shard={args.shard_index}/{args.shard_count} qids={qids}", flush=True)
     for qid in qids:
-        score_query(qid, args.gpu, images, conds, t_cache, noise_cache, baseline, schedule, ds)
+        score_query(
+            qid, args.gpu, images, conds, t_cache, noise_cache,
+            baseline_events, condition_bins_by_checkpoint, schedule, ds,
+        )
 
 
 if __name__ == "__main__":
