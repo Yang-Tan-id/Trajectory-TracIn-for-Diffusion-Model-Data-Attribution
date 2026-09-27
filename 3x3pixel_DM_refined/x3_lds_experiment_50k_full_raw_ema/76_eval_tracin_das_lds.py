@@ -40,7 +40,7 @@ def main():
             )
         output["methods"][method] = method_result
     LDS_DIR.mkdir(parents=True, exist_ok=True)
-    path = LDS_DIR / "tracin_das_endpoint_next_delta_q00_q09.json"
+    path = LDS_DIR / "tracin_das_endpoint_next_delta_checkpoint_noise_q00_q09.json"
     with open(path, "w") as handle:
         json.dump(output, handle, indent=2)
     print(f"[saved] {path}", flush=True)

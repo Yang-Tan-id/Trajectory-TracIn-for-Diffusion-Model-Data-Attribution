@@ -3,9 +3,10 @@
 This experiment uses the original non-staged 50-checkpoint model bank and
 prompted queries q00-q09.
 
-For each of 100 timestamps, one deterministic noise tensor is shared by every
-query endpoint and every training example. At raw checkpoint `c`, the query
-output direction is
+For every `(checkpoint, timestamp)` pair, an independent deterministic noise
+tensor is sampled. Within that pair, the noise is shared by every query
+endpoint and every training example so the two gradient sides remain exactly
+noise-aligned. At raw checkpoint `c`, the query output direction is
 
 ```text
 normalize(epsilon_{c+1}(x_qt,t) - epsilon_c(x_qt,t)).
@@ -25,9 +26,9 @@ python -u 75_launch_tracin_das_4gpu.py --batch-size 128
 The launcher automatically merges three contractions:
 
 ```text
-tracin_das_endpoint_next_delta_linear
-tracin_das_endpoint_next_delta_termwise_squared
-tracin_das_endpoint_next_delta_timestamp_sum_squared
+tracin_das_endpoint_next_delta_checkpoint_noise_linear
+tracin_das_endpoint_next_delta_checkpoint_noise_termwise_squared
+tracin_das_endpoint_next_delta_checkpoint_noise_timestamp_sum_squared
 ```
 
 Then evaluate all eight existing LDS response metrics and both score signs:
@@ -37,4 +38,4 @@ python -u 76_eval_tracin_das_lds.py
 ```
 
 The LDS summary is saved at
-`x3_lds_exp_50k/lds/tracin_das_endpoint_next_delta_q00_q09.json`.
+`x3_lds_exp_50k/lds/tracin_das_endpoint_next_delta_checkpoint_noise_q00_q09.json`.

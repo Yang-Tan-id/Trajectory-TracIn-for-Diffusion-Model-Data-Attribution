@@ -8,11 +8,11 @@ TRACIN_DAS_FAMILY = "prompted"
 TRACIN_DAS_BATCH_SIZE = 128
 TRACIN_DAS_NOISE_SEED = 7367
 TRACIN_DAS_DIRECTION_EPS = 1e-12
-TRACIN_DAS_SHARD_NAMESPACE = "_tracin_das_endpoint_delta_shards"
+TRACIN_DAS_SHARD_NAMESPACE = "_tracin_das_endpoint_delta_checkpoint_noise_shards"
 TRACIN_DAS_METHODS = {
-    "linear": "tracin_das_endpoint_next_delta_linear",
-    "termwise_squared": "tracin_das_endpoint_next_delta_termwise_squared",
-    "timestamp_sum_squared": "tracin_das_endpoint_next_delta_timestamp_sum_squared",
+    "linear": "tracin_das_endpoint_next_delta_checkpoint_noise_linear",
+    "termwise_squared": "tracin_das_endpoint_next_delta_checkpoint_noise_termwise_squared",
+    "timestamp_sum_squared": "tracin_das_endpoint_next_delta_checkpoint_noise_timestamp_sum_squared",
 }
 
 

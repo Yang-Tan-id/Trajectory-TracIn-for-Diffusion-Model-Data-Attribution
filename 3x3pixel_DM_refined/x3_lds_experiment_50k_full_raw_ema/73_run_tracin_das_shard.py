@@ -19,7 +19,7 @@ from tracin_das_config import *
 from x3_endpoint_das_jax_logic_pytorch import make_torch_generator
 
 
-CONTRACT_VERSION = 1
+CONTRACT_VERSION = 2
 
 
 def atomic_numpy(path, value):
@@ -117,25 +117,36 @@ def main():
     print(
         f"[tracin-das gpu={args.gpu}] q00-q09 exact_parameter_dot=true "
         f"timestamps={len(selected)}/100 transitions=49 batch={args.batch_size} "
-        "noise=one_shared_draw_per_timestamp output_delta_normalized=true",
+        "noise=independent_draw_per_checkpoint_and_timestamp "
+        "term_internal_alignment=true output_delta_normalized=true",
         flush=True,
     )
 
     for shard_timestamp_position, timestamp_index in enumerate(remaining, start=1):
         timestep = timestamps[timestamp_index]
         t_query = torch.tensor([timestep], device=device, dtype=torch.long)
-        noise_generator = make_torch_generator(
-            device, TRACIN_DAS_NOISE_SEED, "tracin_das_shared_noise", timestamp_index, timestep
-        )
-        shared_noise = torch.randn(
-            endpoints[0].shape, generator=noise_generator,
-            device=device, dtype=endpoints[0].dtype,
-        )
-        query_xt = [base.q_sample(endpoint, t_query, shared_noise, schedule) for endpoint in endpoints]
         timestamp_accumulator = torch.zeros(expected_shape, device=device, dtype=torch.float64)
 
         for transition_position, (checkpoint_index, target_index) in enumerate(transitions, start=1):
             term_started = time.perf_counter()
+            noise_generator = make_torch_generator(
+                device,
+                TRACIN_DAS_NOISE_SEED,
+                "tracin_das_checkpoint_timestamp_shared_noise",
+                checkpoint_index,
+                timestamp_index,
+                timestep,
+            )
+            shared_noise = torch.randn(
+                endpoints[0].shape,
+                generator=noise_generator,
+                device=device,
+                dtype=endpoints[0].dtype,
+            )
+            query_xt = [
+                base.q_sample(endpoint, t_query, shared_noise, schedule)
+                for endpoint in endpoints
+            ]
             model, _, checkpoint = build_model(paths[checkpoint_index], "raw", device)
             target, _, _ = build_model(paths[target_index], "raw", device)
             named = dict(model.named_parameters())
@@ -194,7 +205,7 @@ def main():
             )
             del model, target, named, parameters, query_vectors, query_matrix
             del current_prediction, next_prediction, direction, projected_prediction, query_gradient
-            del batched_gradient, gradients, train_matrix, dots
+            del batched_gradient, gradients, train_matrix, dots, shared_noise, query_xt
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
@@ -227,8 +238,8 @@ def main():
             "checkpoint_transitions": 49,
             "parameter_source": "raw",
             "endpoint_source": "cached final-EMA query endpoint",
-            "endpoint_noising": "q_sample with one timestamp-shared noise draw",
-            "train_loss_noise": "same timestamp-shared noise draw as query endpoint",
+            "endpoint_noising": "q_sample with one checkpoint-and-timestamp-specific noise draw",
+            "train_loss_noise": "same checkpoint-and-timestamp noise draw as query endpoint",
             "query_scalar": "dot(epsilon_current, normalize(epsilon_next-epsilon_current))",
             "parameter_projection": None,
             "lr_weighted": TRACIN_USE_LR_WEIGHTS,

@@ -62,7 +62,7 @@ def main():
                     "parameter_source": "raw",
                     "endpoint_source": "cached final-EMA query endpoint",
                     "timestamps": [int(value) for value in DAS_TIMESTEPS],
-                    "noise_alignment": "one shared noise per timestamp for query and every train loss",
+                    "noise_alignment": "one independent noise per checkpoint/timestamp, shared by query and every train loss within that term",
                     "query_scalar": "dot(epsilon_current, normalize(epsilon_next-epsilon_current))",
                     "parameter_projection": None,
                     "lr_weighted": TRACIN_USE_LR_WEIGHTS,
