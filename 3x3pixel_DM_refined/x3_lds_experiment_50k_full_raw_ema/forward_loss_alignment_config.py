@@ -36,6 +36,23 @@ FLA_METHOD_BY_VARIANT = {
 }
 FLA_METHODS = tuple(FLA_METHOD_BY_VARIANT.values())
 
+FLA_UNLEARN_METHOD_RAW = "trajectory_unlearning_raw_sgd_4step_50ckpt_1000t_4event"
+FLA_UNLEARN_METHOD_NORMALIZED = (
+    "trajectory_unlearning_normalized_sgd_4step_50ckpt_1000t_4event"
+)
+FLA_UNLEARN_METHOD_BY_VARIANT = {
+    ("raw", "absolute"): FLA_UNLEARN_METHOD_RAW,
+    ("raw", "log_relative"): FLA_UNLEARN_METHOD_RAW + "_log_relative",
+    ("raw", "loss_conditioned_robust"): FLA_UNLEARN_METHOD_RAW + "_loss_conditioned_robust",
+    ("normalized", "absolute"): FLA_UNLEARN_METHOD_NORMALIZED,
+    ("normalized", "log_relative"): FLA_UNLEARN_METHOD_NORMALIZED + "_log_relative",
+    ("normalized", "loss_conditioned_robust"): (
+        FLA_UNLEARN_METHOD_NORMALIZED + "_loss_conditioned_robust"
+    ),
+}
+FLA_UNLEARN_METHODS = tuple(FLA_UNLEARN_METHOD_BY_VARIANT.values())
+FLA_UNLEARN_STEPS = 4
+
 # This is a datapoint batch. Four realized training events are flattened into
 # a forward batch of 4 * FLA_DATAPOINT_BATCH_SIZE.
 FLA_DATAPOINT_BATCH_SIZE = 640

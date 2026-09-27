@@ -13,6 +13,7 @@ from torch.func import functional_call
 import x3pixel_DM_training as base
 from dataset_loader import ColorGridDataset
 from forward_loss_alignment_config import *
+from forward_loss_alignment_metrics import make_loss_condition_bins, score_contributions
 
 
 def load_checkpoint(path):
@@ -119,46 +120,6 @@ def checkpoint_updated_event_losses(
     return updated_losses
 
 
-def make_loss_condition_bins(baseline_events):
-    order = np.argsort(baseline_events.mean(axis=1), kind="mergesort")
-    return tuple(np.array_split(order, FLA_LOSS_CONDITION_BINS))
-
-
-def loss_conditioned_robust_score(log_relative, condition_bins):
-    """Robustly standardize within equal-count baseline-loss quantile bins."""
-    result = np.empty_like(log_relative, dtype=np.float64)
-    global_center = np.median(log_relative)
-    global_mad = 1.4826 * np.median(np.abs(log_relative - global_center))
-    scale_floor = max(FLA_ROBUST_SCALE_EPS, 0.05 * float(global_mad))
-    for indices in condition_bins:
-        values = log_relative[indices]
-        center = np.median(values)
-        scale = 1.4826 * np.median(np.abs(values - center))
-        scale = max(float(scale), scale_floor)
-        result[indices] = np.clip(
-            (values - center) / scale,
-            -FLA_ROBUST_CLIP,
-            FLA_ROBUST_CLIP,
-        )
-    return result
-
-
-def score_contributions(baseline_events, updated_events, condition_bins):
-    absolute = (baseline_events - updated_events).mean(axis=1)
-    log_relative = np.log(
-        (baseline_events + FLA_LOG_EPS) / (updated_events + FLA_LOG_EPS)
-    ).mean(axis=1)
-    conditioned = loss_conditioned_robust_score(
-        log_relative,
-        condition_bins,
-    )
-    return {
-        "absolute": absolute,
-        "log_relative": log_relative,
-        "loss_conditioned_robust": conditioned,
-    }
-
-
 def score_query(
     qid, gpu, images, conds, t_cache, noise_cache,
     baseline_events, condition_bins_by_checkpoint, schedule, ds,
@@ -203,6 +164,7 @@ def score_query(
                 baseline_checkpoint,
                 after_events,
                 condition_bins_by_checkpoint[checkpoint_index],
+                direction="decrease",
             )
             for normalization, values in contributions.items():
                 method = FLA_METHOD_BY_VARIANT[(update_name, normalization)]

@@ -369,3 +369,46 @@ If preparation was run with the earlier absolute-only implementation, rerun
 only the missing event-level baseline cache is generated. The scorer uses a
 new v2 partial file, so an old absolute-only partial cannot be mixed into these
 six results.
+
+## Four-step trajectory unlearning (q00-q49)
+
+This is a separate experiment and does not overwrite one-step learning. At
+every raw checkpoint `c`, it performs four trajectory-gradient ascent steps.
+Each step recomputes the mean gradient over all 1000 fixed reference states at
+the already-updated parameters. The reference states and final-EMA
+predicted-noise targets remain fixed.
+
+The four learning rates are the final real optimizer-step LR from each epoch,
+used in reverse chronological order. For checkpoint 200, the order is:
+
+```text
+eta_(199->200), eta_(198->199), eta_(197->198), eta_(196->197)
+```
+
+This is not the LR saved at checkpoint 196. All values are reconstructed from
+the original warmup/cosine schedule. The experiment uses trajectory-SGD rather
+than the checkpoint AdamW moments, because historical first moments contain
+training-data directions and negating a gradient through AdamW is not an exact
+optimizer reversal.
+
+After four steps, each datapoint's four realized events from the matching
+four-epoch interval are evaluated. Positive score means loss growth after
+unlearning. The same two update forms (raw and global-gradient-normalized) and
+three score normalizations (absolute, log-relative, loss-conditioned robust)
+produce six methods without repeating the datapoint forwards.
+
+It reuses all caches from script 24:
+
+```bash
+python -u 30_launch_trajectory_unlearning_4step_4gpu.py \
+  2>&1 | tee x3_lds_exp_50k/logs/trajectory_unlearning_4step_4gpu.log
+```
+
+The launcher runs LDS automatically. The six-method combined result is:
+
+```text
+x3_lds_exp_50k/lds/trajectory_unlearning_4step_all_normalizations_q00_q49.json
+```
+
+The scorer uses its own checkpoint-resumable partials under
+`forward_loss_alignment/partials/trajectory_unlearning_4step/`.
