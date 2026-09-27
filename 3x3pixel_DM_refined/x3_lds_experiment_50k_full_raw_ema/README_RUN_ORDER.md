@@ -597,3 +597,67 @@ The launcher writes `per_query_results.csv` and `summary.json`. If all ten DAS
 removal evaluations from the preceding joint-MUCS-vs-DAS experiment exist, it
 also writes `paired_with_existing_das.csv` without retraining those identical
 DAS models. Its deltas are timestamp-square minus DAS.
+
+## Twelve-probe Traj contractions with query-side L2 (q00-q19)
+
+This experiment uses the first 49 raw checkpoints, all 100 cached reference
+trajectory timestamps, train-gradient MC10, and a 4096-D CountSketch parameter
+projection. At timestamp `t`, twelve Gaussian output probes are shared across
+all checkpoints and queries. For probe `r`, the query feature is the projected
+parameter gradient of
+
+```text
+<epsilon_theta(x_q,t), v_t,r> / sqrt(27).
+```
+
+Let `z[c,t,r,i]` be its dot product with training point `i`'s aligned projected
+loss gradient. Four scores are produced:
+
+```text
+termwise raw:
+  sum_(t,c) eta_c/100 * mean_r z[c,t,r,i]^2
+
+termwise query-L2:
+  the same after dividing each query feature by its exact full-parameter L2 norm
+
+timestamp-wise raw:
+  sum_t mean_r (sum_c eta_c/100 * z[c,t,r,i])^2
+
+timestamp-wise query-L2:
+  the same checkpoint-before-square contraction using query-L2 features
+```
+
+The query L2 norm is computed from the full parameter gradient before
+CountSketch; the training gradient is never normalized.
+
+The twelve probes estimate output-direction energy; they are not a projection
+dimension of 12. The parameter projection remains 4096-D. Every method saves
+both a final `(50000,)` `scores.npy` and a `(100,50000)`
+`per_timestamp_scores.npy` for each query.
+
+Verify and run on four GPUs:
+
+```bash
+python 42_verify_traj_probe12.py
+
+python -u 46_launch_traj_probe12_20q_4gpu.py \
+  --gpus 0,1,2,3 --batch-size 128
+```
+
+The four method namespaces are:
+
+```text
+traj_probe12_first_raw_termwise_squared
+traj_probe12_first_raw_termwise_squared_query_l2
+traj_probe12_first_raw_timestamp_sum_squared
+traj_probe12_first_raw_timestamp_sum_squared_query_l2
+```
+
+The launcher is timestamp-level resumable, merges the per-timestamp artifacts,
+and evaluates q00-q19 with both score signs on all existing LDS targets. LDS
+outputs are:
+
+```text
+x3_lds_exp_50k/lds/traj_probe12_q00_q19_both_signs.json
+x3_lds_exp_50k/lds/traj_probe12_q00_q19_both_signs.csv
+```
