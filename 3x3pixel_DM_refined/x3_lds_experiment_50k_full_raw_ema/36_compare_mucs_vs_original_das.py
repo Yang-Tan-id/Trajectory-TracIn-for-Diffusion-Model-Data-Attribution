@@ -98,6 +98,8 @@ def main():
         "das_method": DAS_METHOD,
         "das_lambda": DAS_LAMBDA,
         "das_canonical_lds_prediction": "-(membership @ score)",
+        "topk_ranking": "descending saved score (largest first)",
+        "topk": TOPK,
         "score_comparison": score_comparison,
         "score_comparison_summary": {
             "mean_score_spearman": float(score_rhos.mean()),
@@ -110,6 +112,10 @@ def main():
     }
     json_path = LDS_DIR / "joint_mucs_vs_original_das_lambda10_q00_q09.json"
     csv_path = LDS_DIR / "joint_mucs_vs_original_das_lambda10_q00_q09.csv"
+    overlap_csv_path = (
+        LDS_DIR
+        / "joint_mucs_vs_original_das_lambda10_q00_q09_score_overlap.csv"
+    )
     with open(json_path, "w") as handle:
         json.dump(payload, handle, indent=2)
     with open(csv_path, "w", newline="") as handle:
@@ -119,12 +125,36 @@ def main():
         )
         writer.writeheader()
         writer.writerows(rows)
+    with open(overlap_csv_path, "w", newline="") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=(
+                "query_id",
+                "score_spearman",
+                "top1000_overlap",
+                "top1000_overlap_fraction",
+                "mucs_min",
+                "mucs_max",
+                "das_min",
+                "das_max",
+            ),
+        )
+        writer.writeheader()
+        writer.writerows(score_comparison)
 
     print("[score agreement]", flush=True)
+    for item in score_comparison:
+        print(
+            f"  q{item['query_id']:02d}: "
+            f"top1000 overlap={item['top1000_overlap']:4d}/{TOPK} "
+            f"({item['top1000_overlap_fraction']:.2%}) | "
+            f"score Spearman={item['score_spearman']:+.6f}",
+            flush=True,
+        )
     print(
-        f"  mean Spearman={score_rhos.mean():+.6f} | "
-        f"top1000 overlap={overlaps.mean():.1f}/{TOPK} "
+        f"  mean: top1000 overlap={overlaps.mean():.1f}/{TOPK} "
         f"({overlaps.mean()/TOPK:.2%})",
+        f"| score Spearman={score_rhos.mean():+.6f}",
         flush=True,
     )
     for metric, result in metric_results.items():
@@ -138,6 +168,7 @@ def main():
             )
     print(f"[saved] {json_path}", flush=True)
     print(f"[saved] {csv_path}", flush=True)
+    print(f"[saved] {overlap_csv_path}", flush=True)
 
 
 if __name__ == "__main__":

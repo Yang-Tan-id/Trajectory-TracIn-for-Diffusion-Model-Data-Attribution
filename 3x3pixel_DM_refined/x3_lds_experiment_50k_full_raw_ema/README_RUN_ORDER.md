@@ -530,7 +530,12 @@ computes direct 50k-score Spearman plus top-1000 overlap. Outputs:
 ```text
 x3_lds_exp_50k/lds/joint_mucs_vs_original_das_lambda10_q00_q09.json
 x3_lds_exp_50k/lds/joint_mucs_vs_original_das_lambda10_q00_q09.csv
+x3_lds_exp_50k/lds/joint_mucs_vs_original_das_lambda10_q00_q09_score_overlap.csv
 ```
+
+The terminal and score-overlap CSV report each query's overlap separately.
+Top-1000 means the 1,000 largest saved scores from each method; it does not
+apply the LDS-only DAS sign convention.
 
 If MUCS scores already exist, the comparison alone can be rerun with:
 
