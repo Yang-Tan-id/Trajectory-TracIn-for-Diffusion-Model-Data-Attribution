@@ -27,6 +27,13 @@ from x3_endpoint_das_jax_logic_pytorch import make_torch_generator
 METHOD = "traj_next_raw_exact_aligned_100q"
 SHARD_NAMESPACE = "_exact_traj_next_raw_aligned_shards"
 SCORE_CONTRACT_VERSION = 2
+EXACT_METHODS = {
+    "linear": "traj_exact_first_raw_linear",
+    "timestamp_sum_squared": "traj_exact_first_raw_timestamp_sum_squared",
+    "termwise_squared": "traj_exact_first_raw_termwise_squared",
+}
+EXACT_SHARD_NAMESPACE = "_exact_traj_next_raw_three_contractions_shards"
+EXACT_SCORE_CONTRACT_VERSION = 3
 
 
 def flatten_gradient_tuple(values):
@@ -59,6 +66,11 @@ def main():
     parser.add_argument("--timestamp-shard-index", type=int, required=True)
     parser.add_argument("--timestamp-shard-count", type=int, required=True)
     parser.add_argument("--batch-size", type=int, default=TRACIN_PROJECTED_BATCH_SIZE)
+    parser.add_argument(
+        "--all-contractions",
+        action="store_true",
+        help="save true full-dot linear, termwise-square, and timestamp-square scores",
+    )
     args = parser.parse_args()
     if args.timestamp_shard_count <= 0:
         raise ValueError("--timestamp-shard-count must be positive")
@@ -73,8 +85,12 @@ def main():
     if not records:
         raise ValueError(f"no queries found for family={args.family}")
 
+    shard_namespace = EXACT_SHARD_NAMESPACE if args.all_contractions else SHARD_NAMESPACE
+    score_contract_version = (
+        EXACT_SCORE_CONTRACT_VERSION if args.all_contractions else SCORE_CONTRACT_VERSION
+    )
     shard_root = (
-        ATTR_DIR / SHARD_NAMESPACE / args.family
+        ATTR_DIR / shard_namespace / args.family
         / f"shard_{args.timestamp_shard_index:02d}_of_{args.timestamp_shard_count:02d}"
     )
     done_path = shard_root / "done.json"
@@ -84,6 +100,8 @@ def main():
 
     dataset = ColorGridDataset(str(BASE_CSV), grid_size=3)
     paths = model_paths(args.family)
+    if args.all_contractions and len(paths) != 50:
+        raise ValueError(f"expected 50 checkpoints, found {len(paths)}")
     schedule = base.make_linear_schedule(T, device=device)
     x_all, cond_all = preload_dataset(dataset, args.family, device)
     trajectories = [np.load(Path(item["dir"]) / "trajectory_xt.npy") for item in records]
@@ -98,34 +116,47 @@ def main():
     )
     conditions = [cond_for(item, dataset, device) for item in records]
     shard_root.mkdir(parents=True, exist_ok=True)
-    partial_path = shard_root / "partial_linear.npy"
+    contractions = (
+        tuple(EXACT_METHODS) if args.all_contractions else ("linear",)
+    )
+    partial_paths = {
+        contraction: shard_root / f"partial_{contraction}.npy"
+        for contraction in contractions
+    }
     progress_path = shard_root / "progress.json"
     completed_timestamps = []
-    if partial_path.is_file() and progress_path.is_file():
+    if all(path.is_file() for path in partial_paths.values()) and progress_path.is_file():
         with open(progress_path) as handle:
             progress = json.load(handle)
         expected_ids = [int(item["query_id"]) for item in records]
         if progress.get("query_ids") != expected_ids:
             raise ValueError(f"query IDs changed since {progress_path} was written")
-        if progress.get("score_contract_version") != SCORE_CONTRACT_VERSION:
+        if progress.get("score_contract_version") != score_contract_version:
             raise ValueError(f"score contract changed since {progress_path} was written")
         completed_timestamps = [int(value) for value in progress["completed_timestamps"]]
-        partial = np.load(partial_path)
         expected_shape = (len(records), N_TRAIN)
-        if partial.shape != expected_shape:
-            raise ValueError(
-                f"{partial_path} has shape {partial.shape}, expected {expected_shape}"
+        scores = {}
+        for contraction, partial_path in partial_paths.items():
+            partial = np.load(partial_path)
+            if partial.shape != expected_shape:
+                raise ValueError(
+                    f"{partial_path} has shape {partial.shape}, expected {expected_shape}"
+                )
+            scores[contraction] = torch.from_numpy(partial).to(
+                device=device, dtype=torch.float64
             )
-        scores = torch.from_numpy(partial).to(device=device, dtype=torch.float64)
         print(
             f"[resume] exact Traj shard has {len(completed_timestamps)}/"
             f"{len(selected_timestamps)} timestamps complete",
             flush=True,
         )
     else:
-        scores = torch.zeros(
-            (len(records), N_TRAIN), device=device, dtype=torch.float64
-        )
+        scores = {
+            contraction: torch.zeros(
+                (len(records), N_TRAIN), device=device, dtype=torch.float64
+            )
+            for contraction in contractions
+        }
     mc_count = int(TRACIN_TRAIN_MC)
     snapshot_weight = 1.0 / float(len(t_seq))
     transitions = [(index, index + 1) for index in range(len(paths) - 1)]
@@ -139,6 +170,7 @@ def main():
     print(
         f"[exact-traj-next {args.family}] queries={len(records)} "
         f"parameters=full/no_projection transitions={len(transitions)} "
+        f"contractions={contractions} true_full_dot={args.all_contractions} "
         f"timestamps={len(selected_timestamps)}/{len(t_seq)} "
         f"shard={args.timestamp_shard_index}/{args.timestamp_shard_count} "
         f"batch={args.batch_size} train_mc={mc_count}",
@@ -149,6 +181,11 @@ def main():
         remaining_timestamps, start=1
     ):
         timestep = int(t_seq[snapshot_index])
+        timestamp_accumulator = (
+            torch.zeros_like(scores["linear"])
+            if args.all_contractions
+            else None
+        )
         for transition_index, (checkpoint_index, target_index) in enumerate(
             transitions, start=1
         ):
@@ -225,15 +262,16 @@ def main():
                     parameter_dict, x_batch, condition_batch, noises
                 )
                 train_matrix = flatten_batched_gradients(gradients, names).detach()
-                # The projected worker divides both CountSketch vectors by
-                # sqrt(d), so its dot has expected scale full_dot / d. Keep
-                # that positive scalar here for numerical comparability; it
-                # does not affect descending top-k ranks.
-                dots = (
-                    torch.matmul(train_matrix, query_matrix.T)
-                    / float(TRACIN_PROJ_DIM)
-                ).T.to(torch.float64)
-                scores[:, start:end] += weight * dots
+                dots = torch.matmul(train_matrix, query_matrix.T).T.to(torch.float64)
+                if not args.all_contractions:
+                    # Preserve the legacy top-k bank's historical scale.
+                    dots = dots / float(TRACIN_PROJ_DIM)
+                scores["linear"][:, start:end] += weight * dots
+                if args.all_contractions:
+                    scores["termwise_squared"][:, start:end] += (
+                        weight * dots.square()
+                    )
+                    timestamp_accumulator[:, start:end] += weight * dots
                 if (
                     batch_index == 1
                     or batch_index % progress_every == 0
@@ -269,9 +307,12 @@ def main():
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
+        if args.all_contractions:
+            scores["timestamp_sum_squared"] += timestamp_accumulator.square()
         completed_timestamps.append(snapshot_index)
         completed_timestamps.sort()
-        atomic_numpy_save(partial_path, scores.cpu().numpy())
+        for contraction, partial_path in partial_paths.items():
+            atomic_numpy_save(partial_path, scores[contraction].cpu().numpy())
         atomic_json_save(
             progress_path,
             {
@@ -280,7 +321,9 @@ def main():
                 "timestamp_shard_index": args.timestamp_shard_index,
                 "timestamp_shard_count": args.timestamp_shard_count,
                 "completed_timestamps": completed_timestamps,
-                "score_contract_version": SCORE_CONTRACT_VERSION,
+                "score_contract_version": score_contract_version,
+                "contractions": list(contractions),
+                "true_full_dot": args.all_contractions,
             },
         )
         print(
@@ -291,12 +334,16 @@ def main():
 
     if sorted(completed_timestamps) != sorted(selected_timestamps):
         raise RuntimeError("not all assigned timestamps completed")
-    atomic_numpy_save(shard_root / "linear.npy", scores.cpu().numpy())
+    for contraction in contractions:
+        atomic_numpy_save(
+            shard_root / f"{contraction}.npy",
+            scores[contraction].cpu().numpy(),
+        )
     atomic_json_save(
         done_path,
         {
             "family": args.family,
-            "method": METHOD,
+            "method": EXACT_METHODS if args.all_contractions else METHOD,
             "query_ids": [int(item["query_id"]) for item in records],
             "timestamp_indices": selected_timestamps,
             "timestamp_shard_index": args.timestamp_shard_index,
@@ -306,11 +353,17 @@ def main():
             "projection": None,
             "train_mc": mc_count,
             "batch_size": args.batch_size,
-            "score_contract_version": SCORE_CONTRACT_VERSION,
+            "score_contract_version": score_contract_version,
+            "contractions": list(contractions),
+            "true_full_dot": args.all_contractions,
             "train_noise_seed_contract": (
                 "TRAIN_SEED/projected_traj_train/checkpoint/timestamp/batch/mc"
             ),
-            "score_scale": f"full_gradient_dot/{int(TRACIN_PROJ_DIM)}",
+            "score_scale": (
+                "full_gradient_dot"
+                if args.all_contractions
+                else f"full_gradient_dot/{int(TRACIN_PROJ_DIM)}"
+            ),
         },
     )
     print(f"[done] exact Traj shard saved: {shard_root}", flush=True)

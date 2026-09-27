@@ -746,3 +746,33 @@ endpoint and its previous checkpoint. It evaluates all 100 timestamps and all
 ```text
 x3_lds_exp_50k/lds/traj_next_previous_alpha_sweep_10interval_even.json
 ```
+
+## Exact next Traj with all 50 checkpoints
+
+This run removes CountSketch completely and evaluates all 49 next-checkpoint
+transitions from the 50 raw checkpoints. It uses the same 100 queries, 100
+trajectory timestamps, train-gradient MC=10, and checkpoint learning-rate
+weights as the projected run. The inner product is the true full-parameter
+gradient dot product; it is not divided by the projection dimension.
+
+Run all three contractions on four GPUs and evaluate LDS automatically:
+
+```bash
+python -u 51_launch_exact_traj_next_three_4gpu.py --batch-size 16
+```
+
+The three attribution namespaces are:
+
+```text
+traj_exact_first_raw_linear
+traj_exact_first_raw_termwise_squared
+traj_exact_first_raw_timestamp_sum_squared
+```
+
+The run is resumable after every completed trajectory timestamp. Detailed logs
+and the combined LDS summary are saved to:
+
+```text
+x3_lds_exp_50k/logs/exact_traj_next_three_50ckpt_100q_4gpu.log
+x3_lds_exp_50k/lds/traj_exact_first_raw_three_contractions_lds.json
+```
