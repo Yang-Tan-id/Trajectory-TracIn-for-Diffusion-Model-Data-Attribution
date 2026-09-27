@@ -8,16 +8,33 @@ TRACIN_DAS_FAMILY = "prompted"
 TRACIN_DAS_BATCH_SIZE = 128
 TRACIN_DAS_NOISE_SEED = 7367
 TRACIN_DAS_DIRECTION_EPS = 1e-12
-TRACIN_DAS_SHARD_NAMESPACE = "_tracin_das_endpoint_delta_checkpoint_noise_shards"
-TRACIN_DAS_METHODS = {
-    "linear": "tracin_das_endpoint_next_delta_checkpoint_noise_linear",
-    "termwise_squared": "tracin_das_endpoint_next_delta_checkpoint_noise_termwise_squared",
-    "timestamp_sum_squared": "tracin_das_endpoint_next_delta_checkpoint_noise_timestamp_sum_squared",
+TRACIN_DAS_NOISE_MODES = ("checkpoint", "timestamp-shared")
+TRACIN_DAS_METHODS_BY_NOISE_MODE = {
+    "checkpoint": {
+        "linear": "tracin_das_endpoint_next_delta_checkpoint_noise_linear",
+        "termwise_squared": "tracin_das_endpoint_next_delta_checkpoint_noise_termwise_squared",
+        "timestamp_sum_squared": "tracin_das_endpoint_next_delta_checkpoint_noise_timestamp_sum_squared",
+    },
+    "timestamp-shared": {
+        "linear": "tracin_das_endpoint_next_delta_timestamp_shared_noise_linear",
+        "termwise_squared": "tracin_das_endpoint_next_delta_timestamp_shared_noise_termwise_squared",
+        "timestamp_sum_squared": "tracin_das_endpoint_next_delta_timestamp_shared_noise_timestamp_sum_squared",
+    },
 }
+TRACIN_DAS_METHODS = TRACIN_DAS_METHODS_BY_NOISE_MODE["checkpoint"]
 
 
-def tracin_das_shard_root(shard_index, shard_count):
+def tracin_das_methods(noise_mode):
+    return TRACIN_DAS_METHODS_BY_NOISE_MODE[str(noise_mode)]
+
+
+def tracin_das_shard_root(shard_index, shard_count, noise_mode="checkpoint"):
+    namespace = (
+        "_tracin_das_endpoint_delta_checkpoint_noise_shards"
+        if noise_mode == "checkpoint"
+        else "_tracin_das_endpoint_delta_timestamp_shared_noise_shards"
+    )
     return (
-        ATTR_DIR / TRACIN_DAS_SHARD_NAMESPACE
+        ATTR_DIR / namespace
         / f"shard_{int(shard_index):02d}_of_{int(shard_count):02d}"
     )

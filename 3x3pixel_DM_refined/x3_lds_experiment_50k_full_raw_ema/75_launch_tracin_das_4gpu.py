@@ -11,9 +11,11 @@ from tracin_das_config import *
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--batch-size", type=int, default=TRACIN_DAS_BATCH_SIZE)
+    parser.add_argument("--noise-mode", choices=TRACIN_DAS_NOISE_MODES, default="checkpoint")
     args = parser.parse_args()
     LOG_DIR.mkdir(parents=True, exist_ok=True)
-    log_path = LOG_DIR / "tracin_das_q00_q09_4gpu.log"
+    mode_tag = args.noise_mode.replace("-", "_")
+    log_path = LOG_DIR / f"tracin_das_{mode_tag}_q00_q09_4gpu.log"
     active = []
     with open(log_path, "a", buffering=1) as stream:
         stream.write("\n[launcher] TracIn-DAS q00-q09 four-GPU run\n")
@@ -22,6 +24,7 @@ def main():
                 sys.executable, "-u", "73_run_tracin_das_shard.py",
                 "--gpu", str(gpu), "--timestamp-shard-index", str(shard_index),
                 "--timestamp-shard-count", "4", "--batch-size", str(args.batch_size),
+                "--noise-mode", args.noise_mode,
             ]
             process = subprocess.Popen(command, stdout=stream, stderr=subprocess.STDOUT)
             active.append((shard_index, process))
@@ -42,7 +45,10 @@ def main():
             if active:
                 time.sleep(2)
         subprocess.run(
-            [sys.executable, "-u", "74_merge_tracin_das_shards.py"],
+            [
+                sys.executable, "-u", "74_merge_tracin_das_shards.py",
+                "--noise-mode", args.noise_mode,
+            ],
             stdout=stream, stderr=subprocess.STDOUT, check=True,
         )
     print("[done] TracIn-DAS q00-q09 merged", flush=True)

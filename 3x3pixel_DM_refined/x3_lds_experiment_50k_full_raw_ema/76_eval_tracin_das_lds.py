@@ -1,5 +1,6 @@
 """Evaluate both signs of all three TracIn-DAS contractions on q00-q09."""
 
+import argparse
 import json
 
 import numpy as np
@@ -9,9 +10,13 @@ from tracin_das_config import *
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--noise-mode", choices=TRACIN_DAS_NOISE_MODES, default="checkpoint")
+    args = parser.parse_args()
+    methods = tracin_das_methods(args.noise_mode)
     membership = np.load(MASK_DIR / "membership.npy").astype(np.float64)
     output = {"methods": {}}
-    for contraction, method in TRACIN_DAS_METHODS.items():
+    for contraction, method in methods.items():
         method_result = {"contraction": contraction, "metrics": {}}
         scores = [
             np.load(ATTR_DIR / method / f"q{query_id:02d}" / "scores.npy").astype(np.float64)
@@ -40,7 +45,8 @@ def main():
             )
         output["methods"][method] = method_result
     LDS_DIR.mkdir(parents=True, exist_ok=True)
-    path = LDS_DIR / "tracin_das_endpoint_next_delta_checkpoint_noise_q00_q09.json"
+    mode_tag = args.noise_mode.replace("-", "_")
+    path = LDS_DIR / f"tracin_das_endpoint_next_delta_{mode_tag}_q00_q09.json"
     with open(path, "w") as handle:
         json.dump(output, handle, indent=2)
     print(f"[saved] {path}", flush=True)

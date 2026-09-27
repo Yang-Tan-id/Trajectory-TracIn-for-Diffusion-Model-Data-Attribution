@@ -20,22 +20,28 @@ def atomic_json(path, payload):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--timestamp-shard-count", type=int, default=4)
+    parser.add_argument("--noise-mode", choices=TRACIN_DAS_NOISE_MODES, default="checkpoint")
     args = parser.parse_args()
+    methods = tracin_das_methods(args.noise_mode)
     totals = {
         contraction: np.zeros((len(TRACIN_DAS_QUERY_IDS), N_TRAIN), dtype=np.float64)
-        for contraction in TRACIN_DAS_METHODS
+        for contraction in methods
     }
     covered = []
     metadata = []
     for shard_index in range(args.timestamp_shard_count):
-        root = tracin_das_shard_root(shard_index, args.timestamp_shard_count)
+        root = tracin_das_shard_root(
+            shard_index, args.timestamp_shard_count, args.noise_mode
+        )
         with open(root / "done.json") as handle:
             info = json.load(handle)
         metadata.append(info)
         if info["query_ids"] != list(TRACIN_DAS_QUERY_IDS):
             raise ValueError(f"query mismatch in {root}")
+        if info.get("noise_mode", "checkpoint") != args.noise_mode:
+            raise ValueError(f"noise mode mismatch in {root}")
         covered.extend(int(value) for value in info["timestamp_indices"])
-        for contraction in TRACIN_DAS_METHODS:
+        for contraction in methods:
             values = np.load(root / f"{contraction}.npy")
             if values.shape != totals[contraction].shape:
                 raise ValueError(f"{root}/{contraction}.npy shape={values.shape}")
@@ -46,7 +52,7 @@ def main():
     with open(QUERY_DIR / "manifest.json") as handle:
         manifest = json.load(handle)
     by_id = {int(record["query_id"]): record for record in manifest}
-    for contraction, method in TRACIN_DAS_METHODS.items():
+    for contraction, method in methods.items():
         for query_position, query_id in enumerate(TRACIN_DAS_QUERY_IDS):
             output = ATTR_DIR / method / f"q{query_id:02d}"
             output.mkdir(parents=True, exist_ok=True)
@@ -62,7 +68,12 @@ def main():
                     "parameter_source": "raw",
                     "endpoint_source": "cached final-EMA query endpoint",
                     "timestamps": [int(value) for value in DAS_TIMESTEPS],
-                    "noise_alignment": "one independent noise per checkpoint/timestamp, shared by query and every train loss within that term",
+                    "noise_mode": args.noise_mode,
+                    "noise_alignment": (
+                        "one independent noise per checkpoint/timestamp"
+                        if args.noise_mode == "checkpoint"
+                        else "one noise per timestamp shared across all checkpoint transitions"
+                    ) + "; query and train loss share the term noise",
                     "query_scalar": "dot(epsilon_current, normalize(epsilon_next-epsilon_current))",
                     "parameter_projection": None,
                     "lr_weighted": TRACIN_USE_LR_WEIGHTS,

@@ -44,6 +44,7 @@ def main():
     parser.add_argument("--timestamp-shard-index", type=int, required=True)
     parser.add_argument("--timestamp-shard-count", type=int, default=4)
     parser.add_argument("--batch-size", type=int, default=TRACIN_DAS_BATCH_SIZE)
+    parser.add_argument("--noise-mode", choices=TRACIN_DAS_NOISE_MODES, default="checkpoint")
     args = parser.parse_args()
     if not 0 <= args.timestamp_shard_index < args.timestamp_shard_count:
         raise ValueError("invalid timestamp shard")
@@ -74,7 +75,10 @@ def main():
     conditions = [cond_for(record, dataset, device) for record in records]
     timestamps = tuple(int(value) for value in DAS_TIMESTEPS)
     selected = list(range(args.timestamp_shard_index, len(timestamps), args.timestamp_shard_count))
-    shard_root = tracin_das_shard_root(args.timestamp_shard_index, args.timestamp_shard_count)
+    methods = tracin_das_methods(args.noise_mode)
+    shard_root = tracin_das_shard_root(
+        args.timestamp_shard_index, args.timestamp_shard_count, args.noise_mode
+    )
     done_path = shard_root / "done.json"
     if done_path.is_file():
         print(f"[skip] {done_path}", flush=True)
@@ -82,7 +86,7 @@ def main():
 
     partial_paths = {
         contraction: shard_root / f"partial_{contraction}.npy"
-        for contraction in TRACIN_DAS_METHODS
+        for contraction in methods
     }
     progress_path = shard_root / "progress.json"
     completed_timestamps = []
@@ -94,6 +98,8 @@ def main():
             raise ValueError("partial score contract changed")
         if int(progress["batch_size"]) != args.batch_size:
             raise ValueError("partial shard batch size differs; move shard aside before restarting")
+        if progress.get("noise_mode", "checkpoint") != args.noise_mode:
+            raise ValueError("partial shard noise mode differs")
         completed_timestamps = [int(value) for value in progress["completed_timestamps"]]
         scores = {
             contraction: torch.from_numpy(np.load(path)).to(device=device, dtype=torch.float64)
@@ -105,7 +111,7 @@ def main():
     else:
         scores = {
             contraction: torch.zeros(expected_shape, device=device, dtype=torch.float64)
-            for contraction in TRACIN_DAS_METHODS
+            for contraction in methods
         }
 
     transitions = [(index, index + 1) for index in range(len(paths) - 1)]
@@ -117,7 +123,7 @@ def main():
     print(
         f"[tracin-das gpu={args.gpu}] q00-q09 exact_parameter_dot=true "
         f"timestamps={len(selected)}/100 transitions=49 batch={args.batch_size} "
-        "noise=independent_draw_per_checkpoint_and_timestamp "
+        f"noise_mode={args.noise_mode} "
         "term_internal_alignment=true output_delta_normalized=true",
         flush=True,
     )
@@ -129,14 +135,23 @@ def main():
 
         for transition_position, (checkpoint_index, target_index) in enumerate(transitions, start=1):
             term_started = time.perf_counter()
-            noise_generator = make_torch_generator(
-                device,
-                TRACIN_DAS_NOISE_SEED,
-                "tracin_das_checkpoint_timestamp_shared_noise",
-                checkpoint_index,
-                timestamp_index,
-                timestep,
+            noise_seed_parts = (
+                (
+                    TRACIN_DAS_NOISE_SEED,
+                    "tracin_das_checkpoint_timestamp_shared_noise",
+                    checkpoint_index,
+                    timestamp_index,
+                    timestep,
+                )
+                if args.noise_mode == "checkpoint"
+                else (
+                    TRACIN_DAS_NOISE_SEED,
+                    "tracin_das_timestamp_shared_noise",
+                    timestamp_index,
+                    timestep,
+                )
             )
+            noise_generator = make_torch_generator(device, *noise_seed_parts)
             shared_noise = torch.randn(
                 endpoints[0].shape,
                 generator=noise_generator,
@@ -219,6 +234,7 @@ def main():
             {
                 "contract_version": CONTRACT_VERSION,
                 "batch_size": args.batch_size,
+                "noise_mode": args.noise_mode,
                 "query_ids": list(TRACIN_DAS_QUERY_IDS),
                 "completed_timestamps": completed_timestamps,
             },
@@ -230,7 +246,7 @@ def main():
     atomic_json(
         done_path,
         {
-            "methods": TRACIN_DAS_METHODS,
+            "methods": methods,
             "query_ids": list(TRACIN_DAS_QUERY_IDS),
             "family": TRACIN_DAS_FAMILY,
             "timestamp_indices": selected,
@@ -238,8 +254,13 @@ def main():
             "checkpoint_transitions": 49,
             "parameter_source": "raw",
             "endpoint_source": "cached final-EMA query endpoint",
-            "endpoint_noising": "q_sample with one checkpoint-and-timestamp-specific noise draw",
-            "train_loss_noise": "same checkpoint-and-timestamp noise draw as query endpoint",
+            "noise_mode": args.noise_mode,
+            "endpoint_noising": (
+                "one independent noise per checkpoint/timestamp"
+                if args.noise_mode == "checkpoint"
+                else "one noise per timestamp shared across all checkpoint transitions"
+            ),
+            "train_loss_noise": "same term noise as query endpoint",
             "query_scalar": "dot(epsilon_current, normalize(epsilon_next-epsilon_current))",
             "parameter_projection": None,
             "lr_weighted": TRACIN_USE_LR_WEIGHTS,

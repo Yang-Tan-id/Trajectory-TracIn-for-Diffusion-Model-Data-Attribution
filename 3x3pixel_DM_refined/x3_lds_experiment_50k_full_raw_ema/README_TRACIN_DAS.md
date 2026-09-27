@@ -23,6 +23,17 @@ Run on four GPUs:
 python -u 75_launch_tracin_das_4gpu.py --batch-size 128
 ```
 
+Alternatively, use one identical noise across all 49 checkpoint transitions
+within each timestamp:
+
+```bash
+python -u 75_launch_tracin_das_4gpu.py \
+  --noise-mode timestamp-shared --batch-size 128
+```
+
+This second mode still uses a different noise for every timestamp and still
+shares the term noise between the query and training-loss sides.
+
 The launcher automatically merges three contractions:
 
 ```text
@@ -35,6 +46,12 @@ Then evaluate all eight existing LDS response metrics and both score signs:
 
 ```bash
 python -u 76_eval_tracin_das_lds.py
+```
+
+Evaluate the timestamp-shared variant with:
+
+```bash
+python -u 76_eval_tracin_das_lds.py --noise-mode timestamp-shared
 ```
 
 The LDS summary is saved at
