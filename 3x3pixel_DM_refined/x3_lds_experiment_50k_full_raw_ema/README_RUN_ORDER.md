@@ -455,7 +455,7 @@ The main outputs are `summary.json`, `per_query_results.csv`,
 `right_minus_left` is unlearning minus DAS because the method tags sort as
 `das_...` then `unlearning_...`.
 
-## Endpoint-MC100 AdamW unlearning + MUCS score (q00-q09)
+## Endpoint-MC100 joint FT+GA MUCS score (q00-q09)
 
 This pilot starts from the epoch-200 raw model and treats the epoch-4 raw model
 as the null model. For each query's saved final-EMA endpoint, it fixes 100
@@ -466,13 +466,28 @@ stopping target recovers 95% of the final-to-null loss gap:
 target = L_final + 0.95 * (L_null - L_final)
 ```
 
-The query-specific model loads epoch 200's own AdamW first/second moments and
-step count. It performs gradient ascent on the fixed endpoint MC100 loss by
-backpropagating `-loss`, keeps the original AdamW hyperparameters and global
-clip norm 1, and replaces the near-zero final scheduled LR with the requested
-constant `0.1 * PEAK_LR = 1e-5`. It stops immediately when the target is met.
-If `L_null <= L_final`, the job fails explicitly because ascent toward the null
-loss is not defined by this criterion.
+The query-specific `F2` is copied from final `F1` and loads epoch 200's own
+AdamW first/second moments and step count. Every continuation step draws one
+deterministically shuffled original training batch of size 256 and optimizes
+the true joint objective:
+
+```text
+L_joint = L_FT - lambda * L_GA, lambda=1
+```
+
+`L_FT` is the normal prompted diffusion training loss and `L_GA` is the fixed
+query-endpoint MC100 loss. Both terms participate in one backward and one
+AdamW step. The run keeps the original AdamW hyperparameters and global clip
+norm 1, and replaces the near-zero final scheduled LR with the requested
+constant `0.1 * PEAK_LR = 1e-5`. It stops immediately when the endpoint target
+is met. If `L_null <= L_final`, the job fails explicitly because ascent toward
+the null loss is not defined by this criterion.
+
+The older method name
+`mucs_endpoint_mc100_adamw_lr0p1_nullgap95_raw_q00_q09` is reserved for the
+GA-only ablation and is not overwritten. The launcher now writes the true
+joint method
+`mucs_joint_ft_ga_endpoint_mc100_adamw_lambda1_lr0p1_nullgap95_raw_q00_q09`.
 
 After stopping, every one of the 50,000 training points is evaluated with 100
 paired MC draws under the original final raw model `theta` and the unlearned

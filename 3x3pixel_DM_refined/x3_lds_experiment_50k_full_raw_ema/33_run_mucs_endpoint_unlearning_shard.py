@@ -76,6 +76,53 @@ def endpoint_loss(model, endpoint, condition, timesteps, noises, schedule):
     return F.mse_loss(prediction, noises)
 
 
+def continuation_epoch_order(qid, continuation_epoch):
+    generator = np.random.default_rng(
+        MUCS_FT_SHUFFLE_SEED_BASE + qid * 10000 + continuation_epoch
+    )
+    return generator.permutation(N_TRAIN).astype(np.int64)
+
+
+def continued_training_loss(
+    model,
+    dataset,
+    indices,
+    qid,
+    step,
+    device,
+    schedule,
+):
+    images = []
+    conditions = []
+    for index in indices:
+        image, condition = dataset[int(index)]
+        images.append(image)
+        conditions.append(condition)
+    x0 = torch.stack(images, dim=0).to(device)
+    cond = torch.stack(conditions, dim=0).to(device)
+    generator = torch.Generator(device=device)
+    generator.manual_seed(
+        MUCS_FT_DIFFUSION_SEED_BASE + qid * 100000 + int(step)
+    )
+    timesteps = torch.randint(
+        0,
+        T,
+        (len(indices),),
+        generator=generator,
+        device=device,
+        dtype=torch.long,
+    )
+    noises = torch.randn(
+        (len(indices), 3, 3, 3),
+        generator=generator,
+        device=device,
+        dtype=torch.float32,
+    )
+    xt = base.q_sample(x0, timesteps, noises, schedule)
+    prediction = model(xt, timesteps, cond)
+    return F.mse_loss(prediction, noises)
+
+
 def unlearn_endpoint(qid, query, dataset, device, schedule, work_dir):
     final_path = work_dir / "unlearned_model.pt"
     resume_path = work_dir / "unlearning_resume.pt"
@@ -157,44 +204,98 @@ def unlearn_endpoint(qid, query, dataset, device, schedule, work_dir):
     started = time.perf_counter()
     reached = False
     current_loss = float("nan")
+    batches_per_continuation_epoch = int(
+        math.ceil(N_TRAIN / MUCS_FT_BATCH_SIZE)
+    )
+    cached_continuation_epoch = None
+    cached_order = None
     for step in range(start_step, MUCS_MAX_UNLEARNING_STEPS + 1):
         model.eval()
-        loss = endpoint_loss(
+        ga_loss = endpoint_loss(
             model, endpoint, condition, endpoint_t, endpoint_noise, schedule
         )
-        current_loss = float(loss.detach().item())
+        current_loss = float(ga_loss.detach().item())
         if not math.isfinite(current_loss):
             raise RuntimeError(
                 f"q{qid:02d}: endpoint loss became non-finite at step {step}"
             )
-        if step == start_step or step % 10 == 0 or current_loss >= target_loss:
-            gap_fraction = (current_loss - initial_loss) / (null_loss - initial_loss)
+        gap_fraction = (current_loss - initial_loss) / (null_loss - initial_loss)
+        if current_loss >= target_loss:
             history.append(
                 {
                     "step": step,
                     "endpoint_loss": current_loss,
                     "null_gap_fraction": float(gap_fraction),
+                    "target_reached": True,
                 }
             )
             print(
                 f"[gpu {device.index} q{qid:02d}] step={step} "
                 f"loss={current_loss:.8g} target={target_loss:.8g} "
-                f"null={null_loss:.8g} gap={gap_fraction:.3%} "
+                f"null={null_loss:.8g} gap={gap_fraction:.3%} TARGET "
                 f"elapsed={(time.perf_counter()-started)/60:.1f}m",
                 flush=True,
             )
-        if current_loss >= target_loss:
             reached = True
             break
         if step == MUCS_MAX_UNLEARNING_STEPS:
+            history.append(
+                {
+                    "step": step,
+                    "endpoint_loss": current_loss,
+                    "null_gap_fraction": float(gap_fraction),
+                    "target_reached": False,
+                }
+            )
             break
 
+        continuation_epoch = step // batches_per_continuation_epoch
+        batch_in_epoch = step % batches_per_continuation_epoch
+        if continuation_epoch != cached_continuation_epoch:
+            cached_order = continuation_epoch_order(qid, continuation_epoch)
+            cached_continuation_epoch = continuation_epoch
+        batch_start = batch_in_epoch * MUCS_FT_BATCH_SIZE
+        batch_end = min(batch_start + MUCS_FT_BATCH_SIZE, N_TRAIN)
+        batch_indices = cached_order[batch_start:batch_end]
+        model.train()
+        ft_loss = continued_training_loss(
+            model,
+            dataset,
+            batch_indices,
+            qid,
+            step,
+            device,
+            schedule,
+        )
+        joint_loss = ft_loss - MUCS_LAMBDA * ga_loss
         optimizer.zero_grad(set_to_none=True)
-        (-loss).backward()
+        joint_loss.backward()
         gradient_norm = torch.nn.utils.clip_grad_norm_(
             model.parameters(), GRAD_CLIP
         )
         optimizer.step()
+
+        if step == start_step or step % 10 == 0:
+            record = {
+                "step": step,
+                "endpoint_loss": current_loss,
+                "null_gap_fraction": float(gap_fraction),
+                "ft_loss": float(ft_loss.detach().item()),
+                "joint_loss": float(joint_loss.detach().item()),
+                "lambda": MUCS_LAMBDA,
+                "continuation_epoch": continuation_epoch,
+                "batch_in_epoch": batch_in_epoch,
+                "target_reached": False,
+            }
+            history.append(record)
+            print(
+                f"[gpu {device.index} q{qid:02d}] step={step} "
+                f"GA={current_loss:.8g} FT={record['ft_loss']:.8g} "
+                f"joint={record['joint_loss']:.8g} target={target_loss:.8g} "
+                f"gap={gap_fraction:.3%} grad={float(gradient_norm):.4g} "
+                f"elapsed={(time.perf_counter()-started)/60:.1f}m",
+                flush=True,
+            )
 
         completed_step = step + 1
         if completed_step % MUCS_RESUME_EVERY_STEPS == 0:
@@ -226,7 +327,10 @@ def unlearn_endpoint(qid, query, dataset, device, schedule, work_dir):
             (current_loss - initial_loss) / (null_loss - initial_loss)
         ),
         "unlearning_lr": MUCS_UNLEARNING_LR,
-        "optimizer": "AdamW loaded from epoch-200 optimizer state; negative loss gradient",
+        "lambda": MUCS_LAMBDA,
+        "ft_batch_size": MUCS_FT_BATCH_SIZE,
+        "objective": "L_FT - lambda * L_GA",
+        "optimizer": "AdamW continued from epoch-200 optimizer state",
         "grad_clip_norm": GRAD_CLIP,
         "history": history,
     }

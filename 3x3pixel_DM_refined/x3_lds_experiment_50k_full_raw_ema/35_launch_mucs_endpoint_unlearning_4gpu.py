@@ -49,7 +49,8 @@ def verify_inputs():
     if missing:
         raise FileNotFoundError(f"missing {len(missing)} inputs; first={missing[0]}")
     print(
-        f"[verified] q00-q09 final raw -> AdamW ascent lr={MUCS_UNLEARNING_LR:.3e}; "
+        f"[verified] q00-q09 final raw -> AdamW joint FT-GA "
+        f"lambda={MUCS_LAMBDA:g} lr={MUCS_UNLEARNING_LR:.3e}; "
         f"null=epoch{MUCS_NULL_EPOCH}; target={MUCS_NULL_GAP_FRACTION:.0%} gap",
         flush=True,
     )
