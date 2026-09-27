@@ -676,7 +676,7 @@ traj_projected_backward_first_raw_timestamp_sum_squared
 ```
 
 After previous scoring, fixed global alphas are evaluated with next as the
-base:
+base for `linear`, `termwise_squared`, and `timestamp_sum_squared`:
 
 ```text
 combined(alpha) = (1-alpha) * next + alpha * previous
@@ -709,4 +709,17 @@ the next-only alpha-zero baseline. The primary printed target is
 ```text
 x3_lds_exp_50k/lds/traj_next_previous_alpha_sweep.json
 x3_lds_exp_50k/lds/traj_next_previous_alpha_sweep_per_query.csv
+x3_lds_exp_50k/lds/traj_next_previous_alpha_selection_traj_ref_raw.csv
 ```
+
+For each contraction, the primary `traj_ref_raw` result additionally saves:
+
+```text
+traj_next_previous_affine_<contraction>_global_best_traj_ref_raw/qXX/scores.npy
+traj_next_previous_affine_<contraction>_per_query_best_traj_ref_raw/qXX/scores.npy
+```
+
+`global_best` uses one alpha shared by all 100 queries and maximizes their mean
+LDS. `per_query_best` selects alpha separately for every query on the same LDS
+target and is therefore explicitly an oracle diagnostic rather than a fair
+held-out hyperparameter result.

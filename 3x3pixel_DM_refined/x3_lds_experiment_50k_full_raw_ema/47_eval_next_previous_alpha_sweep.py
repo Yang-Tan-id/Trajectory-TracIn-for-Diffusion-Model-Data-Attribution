@@ -10,7 +10,7 @@ from checkpoint_counterfactual_metrics import spearman_correlation
 from exp_config import *
 
 
-CONTRACTIONS = ("termwise_squared", "timestamp_sum_squared")
+CONTRACTIONS = ("linear", "termwise_squared", "timestamp_sum_squared")
 ALPHAS = (-1.0, -0.5, -0.25, -0.1, 0.0, 0.1, 0.25, 0.5, 1.0)
 PRIMARY_METRIC = "traj_ref_raw"
 
@@ -23,6 +23,10 @@ def alpha_tag(alpha):
 
 def combined_method(contraction, alpha):
     return f"traj_next_previous_affine_{contraction}_alpha_{alpha_tag(alpha)}"
+
+
+def selected_method(contraction, selection):
+    return f"traj_next_previous_affine_{contraction}_{selection}_traj_ref_raw"
 
 
 def atomic_json(path, payload):
@@ -165,6 +169,92 @@ def main():
             }
         results[contraction] = contraction_results
 
+    primary_selection = {}
+    selection_rows = []
+    for contraction in CONTRACTIONS:
+        primary = results[contraction][PRIMARY_METRIC]
+        alpha_results = primary["alpha_results"]
+        global_alpha = float(primary["best_overall"]["alpha"])
+        global_mean = float(primary["best_overall"]["mean"])
+        global_method = selected_method(contraction, "global_best")
+        per_query_method = selected_method(contraction, "per_query_best")
+        per_query = []
+        for query_id in range(query_count):
+            candidates = [
+                {
+                    "alpha": float(item["alpha"]),
+                    "spearman": float(item["queries"][query_id]["spearman"]),
+                }
+                for item in alpha_results
+            ]
+            best = max(
+                candidates,
+                key=lambda item: (
+                    -np.inf if np.isnan(item["spearman"]) else item["spearman"]
+                ),
+            )
+            per_query.append(
+                {
+                    "query_id": query_id,
+                    "alpha": best["alpha"],
+                    "spearman": best["spearman"],
+                }
+            )
+            selection_rows.append(
+                {
+                    "contraction": contraction,
+                    "query_id": query_id,
+                    "per_query_best_alpha": best["alpha"],
+                    "per_query_best_spearman": best["spearman"],
+                    "global_best_alpha": global_alpha,
+                    "global_best_mean_spearman": global_mean,
+                }
+            )
+
+            selections = (
+                (global_method, global_alpha, "one alpha shared by all queries"),
+                (per_query_method, best["alpha"], "oracle alpha selected separately per query"),
+            )
+            for method, alpha, semantics in selections:
+                source = (
+                    ATTR_DIR
+                    / combined_method(contraction, alpha)
+                    / f"q{query_id:02d}"
+                    / "scores.npy"
+                )
+                score = np.load(source).astype(np.float32)
+                output = ATTR_DIR / method / f"q{query_id:02d}"
+                output.mkdir(parents=True, exist_ok=True)
+                np.save(output / "scores.npy", score)
+                atomic_json(
+                    output / "info.json",
+                    {
+                        "method": method,
+                        "query_id": query_id,
+                        "contraction": contraction,
+                        "selection_metric": PRIMARY_METRIC,
+                        "selection_semantics": semantics,
+                        "selected_alpha": alpha,
+                        "source_method": combined_method(contraction, alpha),
+                        "formula": "(1-alpha)*next + alpha*previous",
+                    },
+                )
+
+        primary_selection[contraction] = {
+            "global": {
+                "alpha": global_alpha,
+                "mean_spearman": global_mean,
+                "method": global_method,
+            },
+            "per_query_oracle": {
+                "mean_spearman": float(
+                    np.nanmean([item["spearman"] for item in per_query])
+                ),
+                "method": per_query_method,
+                "queries": per_query,
+            },
+        }
+
     payload = {
         "formula": "combined=(1-alpha)*next + alpha*previous",
         "alphas": list(ALPHAS),
@@ -177,10 +267,14 @@ def main():
         "prediction": "-(membership @ combined_score)",
         "primary_metric": PRIMARY_METRIC,
         "query_count": query_count,
+        "primary_metric_alpha_selection": primary_selection,
         "results": results,
     }
     json_path = LDS_DIR / "traj_next_previous_alpha_sweep.json"
     csv_path = LDS_DIR / "traj_next_previous_alpha_sweep_per_query.csv"
+    selection_csv_path = (
+        LDS_DIR / "traj_next_previous_alpha_selection_traj_ref_raw.csv"
+    )
     atomic_json(json_path, payload)
     with open(csv_path, "w", newline="") as handle:
         writer = csv.DictWriter(
@@ -196,10 +290,25 @@ def main():
         )
         writer.writeheader()
         writer.writerows(rows)
+    with open(selection_csv_path, "w", newline="") as handle:
+        writer = csv.DictWriter(
+            handle,
+            fieldnames=(
+                "contraction",
+                "query_id",
+                "per_query_best_alpha",
+                "per_query_best_spearman",
+                "global_best_alpha",
+                "global_best_mean_spearman",
+            ),
+        )
+        writer.writeheader()
+        writer.writerows(selection_rows)
 
     print(f"[primary metric: {PRIMARY_METRIC}]", flush=True)
     for contraction in CONTRACTIONS:
         result = results[contraction][PRIMARY_METRIC]
+        selection = primary_selection[contraction]
         print(
             f"  {contraction}: next(alpha=0)={result['next_base']['mean']:+.6f} | "
             f"best negative alpha={result['best_negative']['alpha']:+g} "
@@ -210,8 +319,16 @@ def main():
             f"delta={result['best_positive']['improvement_over_next']:+.6f}",
             flush=True,
         )
+        print(
+            f"    global alpha={selection['global']['alpha']:+g} "
+            f"mean={selection['global']['mean_spearman']:+.6f} | "
+            f"per-query oracle mean="
+            f"{selection['per_query_oracle']['mean_spearman']:+.6f}",
+            flush=True,
+        )
     print(f"[saved] {json_path}", flush=True)
     print(f"[saved] {csv_path}", flush=True)
+    print(f"[saved] {selection_csv_path}", flush=True)
 
 
 if __name__ == "__main__":
