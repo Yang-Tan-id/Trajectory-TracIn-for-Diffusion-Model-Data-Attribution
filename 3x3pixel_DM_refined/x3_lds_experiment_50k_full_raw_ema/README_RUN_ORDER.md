@@ -299,3 +299,57 @@ attribution parameters and all 27 predicted-noise components, then divides all
 components for that query/timestamp by the shared `||J||_F / sqrt(27)` value.
 It never normalizes the SOURCE parameter delta.  Both methods square the
 resulting 27 component effects, sum them, and average over 100 timestamps.
+
+## 50-checkpoint forward-loss alignment (q00-q49)
+
+This experiment replays the four realized training events for every datapoint
+inside each four-epoch checkpoint interval.  At raw checkpoint `c`, it first
+uses all 1000 states of the existing final-EMA reference trajectory to form the
+noise-imitation loss
+
+```text
+L_ref(theta_c) = mean_k ||eps_theta_c(x_k, t_k, cond_q)
+                              - eps_final_EMA(x_k, t_k, cond_q)||^2.
+```
+
+It evaluates two artificial one-step updates:
+
+```text
+raw:        theta+ = theta_c - lr_c * grad L_ref
+normalized: theta+ = theta_c - lr_c * grad L_ref / ||grad L_ref||_2
+```
+
+For each datapoint and checkpoint, the score contribution is its mean loss
+reduction over the exact four shuffled `(t, noise)` training events:
+
+```text
+mean_event [loss(theta_c) - loss(theta+)].
+```
+
+The final score sums these contributions over all 50 checkpoints.  Parameters
+remain raw; the trajectory and predicted-noise targets come from the final EMA
+model.  LDS evaluates both score signs on the existing subset models and
+observations.
+
+Run preparation once on one GPU.  The replay cache is about 1.1 GB because the
+original float32 noise is retained:
+
+```bash
+python 23_verify_forward_loss_alignment.py
+python -u 24_prepare_forward_loss_alignment.py --gpu 0 \
+  2>&1 | tee x3_lds_exp_50k/logs/forward_loss_alignment_prepare.log
+```
+
+Then run the 50 queries on exactly four GPUs.  The launcher automatically runs
+LDS after all four shards succeed and can resume each query from its last
+completed checkpoint:
+
+```bash
+python -u 27_launch_forward_loss_alignment_4gpu.py \
+  2>&1 | tee x3_lds_exp_50k/logs/forward_loss_alignment_4gpu.log
+```
+
+The two attribution methods are:
+
+- `forward_loss_alignment_raw_sgd_50ckpt_1000t_4event`
+- `forward_loss_alignment_normalized_sgd_50ckpt_1000t_4event`
