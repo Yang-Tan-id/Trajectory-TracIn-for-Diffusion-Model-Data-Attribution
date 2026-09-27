@@ -16,12 +16,21 @@ def main():
     parser.add_argument(
         "--prompted-only",
         action="store_true",
-        help="run and evaluate only prompted q00-q74; reuse the three prompted shards",
+        help="run and evaluate only prompted q00-q74",
+    )
+    parser.add_argument(
+        "--prompted-shards",
+        type=int,
+        choices=(3, 4),
+        default=3,
+        help="timestamp shards for prompted-only mode; 4 uses all four GPUs",
     )
     args = parser.parse_args()
     if args.batch_size <= 0:
         raise ValueError("--batch-size must be positive")
-    required_gpus = 3 if args.prompted_only else 4
+    if not args.prompted_only and args.prompted_shards != 3:
+        parser.error("--prompted-shards is only configurable with --prompted-only")
+    required_gpus = args.prompted_shards if args.prompted_only else 4
     if len(CUDA_IDS) < required_gpus:
         raise ValueError(
             f"exact Traj launcher requires {required_gpus} CUDA_IDS"
@@ -29,7 +38,8 @@ def main():
 
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     log_name = (
-        "exact_traj_next_three_50ckpt_prompted_q00_q74_3gpu.log"
+        "exact_traj_next_three_50ckpt_prompted_q00_q74_"
+        f"{args.prompted_shards}gpu.log"
         if args.prompted_only
         else "exact_traj_next_three_50ckpt_100q_4gpu.log"
     )
@@ -40,7 +50,14 @@ def main():
         ("prompted", 2, 3, CUDA_IDS[2]),
         ("unprompted", 0, 1, CUDA_IDS[3]),
     )
-    assignments = all_assignments[:3] if args.prompted_only else all_assignments
+    assignments = (
+        tuple(
+            ("prompted", shard, args.prompted_shards, CUDA_IDS[shard])
+            for shard in range(args.prompted_shards)
+        )
+        if args.prompted_only
+        else all_assignments
+    )
     with open(log_path, "a", buffering=1) as stream:
         stream.write(
             "\n[launcher] exact/no-projection first-order next Traj; "
@@ -90,7 +107,7 @@ def main():
                 time.sleep(1)
 
         merge_families = (
-            (("prompted", 3),)
+            (("prompted", args.prompted_shards),)
             if args.prompted_only
             else (("prompted", 3), ("unprompted", 1))
         )
