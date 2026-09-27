@@ -15,14 +15,29 @@ if str(ROOT) not in sys.path:
 from dataset_config import _prompt_tag
 
 
-TARGETS = ("endpoint_contarfactual", "traj_contarfactual", "simple_loss")
+TARGETS = (
+    "endpoint_contarfactual",
+    "traj_contarfactual",
+    "simple_loss",
+    "noise_trajectory",
+)
+DISPLAY = {
+    "endpoint_contarfactual": "ENDPOINT",
+    "traj_contarfactual": "TRAJ-CF",
+    "simple_loss": "SIMPLE",
+    "noise_trajectory": "NOISE",
+}
 
 
-def load_values(experiment: str, namespace: str, sign: str):
-    records = json.loads((ROOT / "queries_seed_0_9.json").read_text())["queries"]
+def parse_ints(text: str) -> list[int]:
+    return [int(value) for value in text.replace(",", " ").split() if value.strip()]
+
+
+def load_values(experiment: str, namespace: str, sign: str, records, query_ids):
     name = "das" if not namespace else f"das_{namespace}"
     values = {}
-    for q, record in enumerate(records):
+    for q in query_ids:
+        record = records[q]
         lds_root = (
             ROOT / "result" / experiment / "eval" / "prompted_solo"
             / f"query_{_prompt_tag(str(record['prompt']))}"
@@ -42,75 +57,91 @@ def load_values(experiment: str, namespace: str, sign: str):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--experiment", default="experiment1")
+    parser.add_argument("--query-file", type=Path, default=ROOT / "queries_seed_0_9.json")
+    parser.add_argument("--query-ids", default="0,1,2,3,4,5,6,7,8,9")
     parser.add_argument("--original-namespace", default="factorized_mc4_original100x1")
     parser.add_argument(
         "--reference-namespace",
         default="factorized_mc4_generation_reference100x1",
     )
     parser.add_argument("--prediction-sign", choices=("p1", "m1"), default="m1")
+    parser.add_argument(
+        "--summary-only",
+        action="store_true",
+        help="print one aggregate comparison row per lambda instead of every query",
+    )
     args = parser.parse_args()
 
-    original = load_values(args.experiment, args.original_namespace, args.prediction_sign)
-    reference = load_values(args.experiment, args.reference_namespace, args.prediction_sign)
+    records = json.loads(args.query_file.read_text())["queries"]
+    query_ids = parse_ints(args.query_ids)
+    bad = [q for q in query_ids if q < 0 or q >= len(records)]
+    if bad:
+        raise ValueError(f"query ids outside manifest range: {bad}")
+    original = load_values(
+        args.experiment, args.original_namespace, args.prediction_sign, records, query_ids
+    )
+    reference = load_values(
+        args.experiment, args.reference_namespace, args.prediction_sign, records, query_ids
+    )
     lambdas = sorted(
         set(key[0] for key in original) & set(key[0] for key in reference)
     )
     if not lambdas:
         raise RuntimeError("No common original/reference DAS lambdas found")
 
+    print(
+        f"DAS GENERATION-TRAJECTORY MINUS ORIGINAL | queries={len(query_ids)} | "
+        f"sign={args.prediction_sign}"
+    )
+    print(
+        f"{'LAMBDA':>8s} {'TARGET':>9s} {'ORIGINAL':>11s} {'TRAJ-XT':>11s} "
+        f"{'DELTA':>11s} {'XT-WINS':>9s}"
+    )
+    print("-" * 66)
     for damping in lambdas:
-        print(f"\nLAMBDA={damping:g} — REFERENCE MINUS ORIGINAL")
-        print(
-            f"{'Q':>2s} {'END-ORIG':>10s} {'END-REF':>10s} {'END-DELTA':>11s} "
-            f"{'TRAJ-ORIG':>11s} {'TRAJ-REF':>10s} {'TRAJ-DELTA':>12s} "
-            f"{'SIMPLE-ORIG':>12s} {'SIMPLE-REF':>11s} {'SIMPLE-DELTA':>13s}"
-        )
-        print("-" * 123)
-        end_original = []
-        end_reference = []
-        end_delta = []
-        traj_original = []
-        traj_reference = []
-        traj_delta = []
-        simple_original = []
-        simple_reference = []
-        simple_delta = []
-        for q in range(10):
-            keys = [
-                (damping, q, "endpoint_contarfactual"),
-                (damping, q, "traj_contarfactual"),
-                (damping, q, "simple_loss"),
-            ]
-            if not all(key in original and key in reference for key in keys):
-                raise RuntimeError(f"Incomplete LDS at lambda={damping:g}, query={q}")
-            eo, to, so = (original[key] for key in keys)
-            er, tr, sr = (reference[key] for key in keys)
-            de, dt, ds = er - eo, tr - to, sr - so
-            end_original.append(eo)
-            end_reference.append(er)
-            end_delta.append(de)
-            traj_original.append(to)
-            traj_reference.append(tr)
-            traj_delta.append(dt)
-            simple_original.append(so)
-            simple_reference.append(sr)
-            simple_delta.append(ds)
+        target_values = {}
+        for target in TARGETS:
+            original_values = []
+            reference_values = []
+            for q in query_ids:
+                key = (damping, q, target)
+                if key not in original or key not in reference:
+                    raise RuntimeError(
+                        f"Incomplete LDS at lambda={damping:g}, query={q}, target={target}"
+                    )
+                original_values.append(original[key])
+                reference_values.append(reference[key])
+            deltas = [new - old for old, new in zip(original_values, reference_values)]
+            target_values[target] = (original_values, reference_values, deltas)
             print(
-                f"{q:2d} {eo:+9.3f}% {er:+9.3f}% {de:+10.3f}% "
-                f"{to:+10.3f}% {tr:+9.3f}% {dt:+11.3f}% "
-                f"{so:+11.3f}% {sr:+10.3f}% {ds:+12.3f}%"
+                f"{damping:8g} {DISPLAY[target]:>9s} "
+                f"{statistics.fmean(original_values):+10.3f}% "
+                f"{statistics.fmean(reference_values):+10.3f}% "
+                f"{statistics.fmean(deltas):+10.3f}% "
+                f"{sum(delta > 0 for delta in deltas):3d}/{len(deltas):<3d}"
             )
+
+        if args.summary_only:
+            continue
+        print(f"\nLAMBDA={damping:g} — PER QUERY")
         print(
-            f"MEAN {statistics.fmean(end_original):+9.3f}% "
-            f"{statistics.fmean(end_reference):+9.3f}% "
-            f"{statistics.fmean(end_delta):+10.3f}% "
-            f"{statistics.fmean(traj_original):+10.3f}% "
-            f"{statistics.fmean(traj_reference):+9.3f}% "
-            f"{statistics.fmean(traj_delta):+11.3f}% "
-            f"{statistics.fmean(simple_original):+11.3f}% "
-            f"{statistics.fmean(simple_reference):+10.3f}% "
-            f"{statistics.fmean(simple_delta):+12.3f}%"
+            f"{'Q':>3s} "
+            + " ".join(
+                f"{DISPLAY[target] + '-O':>11s} {DISPLAY[target] + '-XT':>11s} {DISPLAY[target] + '-D':>11s}"
+                for target in TARGETS
+            )
         )
+        print("-" * 151)
+        for position, q in enumerate(query_ids):
+            cells = []
+            for target in TARGETS:
+                original_values, reference_values, deltas = target_values[target]
+                cells.append(
+                    f"{original_values[position]:+10.3f}% "
+                    f"{reference_values[position]:+10.3f}% "
+                    f"{deltas[position]:+10.3f}%"
+                )
+            print(f"{q:3d} " + " ".join(cells))
 
 
 if __name__ == "__main__":
