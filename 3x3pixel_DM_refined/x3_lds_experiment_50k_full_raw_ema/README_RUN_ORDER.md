@@ -571,3 +571,29 @@ The main comparison files are `per_query_results.csv`,
 `paired_comparison.csv`, and `summary.json`. Since method tags sort as DAS then
 MUCS, each paired `delta_*` is MUCS minus DAS; positive values mean MUCS
 removal caused a larger trajectory or endpoint change.
+
+## First-order raw timestamp-sum-squared top-1000 removal (q00-q09)
+
+The LDS result
+`traj_projected_first_raw_timestamp_sum_squared_traj_ref_raw.json` maps to the
+50k-dimensional attribution files under
+`attribution/traj_projected_first_raw_timestamp_sum_squared/qXX/scores.npy`.
+The following command removes the 1,000 largest saved scores for q00-q09 and
+trains ten 49k-example models on four GPUs:
+
+```bash
+python -u 41_launch_timestamp_square_topk_removal_4gpu.py \
+  --gpus 0,1,2,3 2>&1 | \
+  tee x3_lds_exp_50k/logs/topk_removal_timestamp_square_4gpu.log
+```
+
+Outputs are stored under:
+
+```text
+x3_lds_exp_50k/topk_removal_traj_first_raw_timestamp_square_q00_q09/
+```
+
+The launcher writes `per_query_results.csv` and `summary.json`. If all ten DAS
+removal evaluations from the preceding joint-MUCS-vs-DAS experiment exist, it
+also writes `paired_with_existing_das.csv` without retraining those identical
+DAS models. Its deltas are timestamp-square minus DAS.
