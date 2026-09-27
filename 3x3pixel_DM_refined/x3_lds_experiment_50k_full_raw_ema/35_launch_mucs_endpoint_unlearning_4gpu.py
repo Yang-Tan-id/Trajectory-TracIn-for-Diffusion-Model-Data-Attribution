@@ -51,6 +51,8 @@ def verify_inputs():
     print(
         f"[verified] q00-q09 final raw -> AdamW joint FT-GA "
         f"lambda={MUCS_LAMBDA:g} lr={MUCS_UNLEARNING_LR:.3e}; "
+        f"fresh optimizer; retain batch={MUCS_FT_BATCH_SIZE}; "
+        f"query MC={MUCS_ENDPOINT_MC}; "
         f"null=epoch{MUCS_NULL_EPOCH}; target={MUCS_NULL_GAP_FRACTION:.0%} gap",
         flush=True,
     )

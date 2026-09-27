@@ -21,13 +21,15 @@ MUCS_TRAIN_MC_SEED = 927100
 MUCS_FT_SHUFFLE_SEED_BASE = 927200
 MUCS_FT_DIFFUSION_SEED_BASE = 927300
 MUCS_LAMBDA = 1.0
-MUCS_FT_BATCH_SIZE = BATCH_SIZE
+# Original MUCS uses one retain minibatch with the same size as the query MC
+# bank: 100 distinct training examples, one diffusion draw per example.
+MUCS_FT_BATCH_SIZE = MUCS_ENDPOINT_MC
 
 # Keep the original, query-ascent-only name reserved so old results cannot be
 # mistaken for the true joint MUCS objective.
 MUCS_GA_ONLY_METHOD = "mucs_endpoint_mc100_adamw_lr0p1_nullgap95_raw_q00_q09"
 MUCS_METHOD = (
-    "mucs_joint_ft_ga_endpoint_mc100_adamw_lambda1_"
+    "mucs_joint_ft_ga_endpoint_mc100_retain100_freshadamw_lambda1_"
     "lr0p1_nullgap95_raw_q00_q09"
 )
 MUCS_ROOT = ROOT / "mucs_endpoint_unlearning" / MUCS_METHOD

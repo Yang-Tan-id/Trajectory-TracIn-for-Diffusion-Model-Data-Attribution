@@ -466,28 +466,31 @@ stopping target recovers 95% of the final-to-null loss gap:
 target = L_final + 0.95 * (L_null - L_final)
 ```
 
-The query-specific `F2` is copied from final `F1` and loads epoch 200's own
-AdamW first/second moments and step count. Every continuation step draws one
-deterministically shuffled original training batch of size 256 and optimizes
-the true joint objective:
+The query-specific `F2` copies final `F1`'s raw parameters, then creates a
+fresh AdamW optimizer (`m=0`, `v=0`, step 0). Every continuation step draws
+one deterministically shuffled retain batch containing 100 distinct training
+datapoints, with one diffusion draw per datapoint, and optimizes the true joint
+objective:
 
 ```text
 L_joint = L_FT - lambda * L_GA, lambda=1
 ```
 
-`L_FT` is the normal prompted diffusion training loss and `L_GA` is the fixed
-query-endpoint MC100 loss. Both terms participate in one backward and one
-AdamW step. The run keeps the original AdamW hyperparameters and global clip
-norm 1, and replaces the near-zero final scheduled LR with the requested
-constant `0.1 * PEAK_LR = 1e-5`. It stops immediately when the endpoint target
-is met. If `L_null <= L_final`, the job fails explicitly because ascent toward
-the null loss is not defined by this criterion.
+`L_FT` is the normal prompted diffusion training loss. `L_GA` uses 100 fixed
+diffusion draws of the same query endpoint and caps each draw's loss at the
+corresponding epoch-4 null-model loss. Both terms participate in one backward
+and one AdamW step. The run keeps the original AdamW hyperparameters and global
+clip norm 1, and replaces the near-zero final scheduled LR with the requested
+constant `0.1 * PEAK_LR = 1e-5`. It stops immediately when the uncapped mean
+endpoint loss reaches the target. If `L_null <= L_final`, the job fails
+explicitly because ascent toward the null loss is not defined by this
+criterion.
 
 The older method name
 `mucs_endpoint_mc100_adamw_lr0p1_nullgap95_raw_q00_q09` is reserved for the
 GA-only ablation and is not overwritten. The launcher now writes the true
 joint method
-`mucs_joint_ft_ga_endpoint_mc100_adamw_lambda1_lr0p1_nullgap95_raw_q00_q09`.
+`mucs_joint_ft_ga_endpoint_mc100_retain100_freshadamw_lambda1_lr0p1_nullgap95_raw_q00_q09`.
 
 After stopping, every one of the 50,000 training points is evaluated with 100
 paired MC draws under the original final raw model `theta` and the unlearned
@@ -510,6 +513,14 @@ AdamW unlearning checkpoints/history are saved under
 `x3_lds_exp_50k/mucs_endpoint_unlearning/`. Scores, baseline MC100 means, and
 unlearned MC100 means are saved under the normal attribution directory. LDS is
 run automatically for q00-q09 and both score signs.
+
+The joint MUCS update starts from the epoch-200 raw parameters but initializes
+a fresh AdamW state. Each update uses 100 distinct retain datapoints with one
+diffusion draw each, plus 100 fixed diffusion draws of the same generated
+endpoint. Its objective is `L_FT - lambda * L_GA`; each per-draw query loss is
+capped by the corresponding epoch-4 null-model loss. The learning rate is
+`PEAK_LR / 10 = 1e-5` and the toy model's original AdamW hyperparameters are
+retained.
 
 After MUCS LDS, the launcher also compares against original `DAS EMA,
 lambda=10` on exactly q00-q09. It reports both LDS signs for both methods,
