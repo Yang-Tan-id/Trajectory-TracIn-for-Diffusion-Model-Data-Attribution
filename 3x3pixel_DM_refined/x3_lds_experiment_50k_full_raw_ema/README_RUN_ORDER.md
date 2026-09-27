@@ -510,3 +510,19 @@ AdamW unlearning checkpoints/history are saved under
 `x3_lds_exp_50k/mucs_endpoint_unlearning/`. Scores, baseline MC100 means, and
 unlearned MC100 means are saved under the normal attribution directory. LDS is
 run automatically for q00-q09 and both score signs.
+
+After MUCS LDS, the launcher also compares against original `DAS EMA,
+lambda=10` on exactly q00-q09. It reports both LDS signs for both methods,
+marks the existing DAS convention `-(membership @ score)` as canonical, and
+computes direct 50k-score Spearman plus top-1000 overlap. Outputs:
+
+```text
+x3_lds_exp_50k/lds/joint_mucs_vs_original_das_lambda10_q00_q09.json
+x3_lds_exp_50k/lds/joint_mucs_vs_original_das_lambda10_q00_q09.csv
+```
+
+If MUCS scores already exist, the comparison alone can be rerun with:
+
+```bash
+python 36_compare_mucs_vs_original_das.py
+```

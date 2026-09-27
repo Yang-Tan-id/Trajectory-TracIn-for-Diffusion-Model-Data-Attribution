@@ -90,7 +90,14 @@ def main():
         [sys.executable, "34_eval_mucs_endpoint_unlearning_lds.py"],
         check=True,
     )
-    print("[done] endpoint-unlearning MUCS scores and LDS complete", flush=True)
+    subprocess.run(
+        [sys.executable, "36_compare_mucs_vs_original_das.py"],
+        check=True,
+    )
+    print(
+        "[done] joint MUCS scores, LDS, and original-DAS comparison complete",
+        flush=True,
+    )
 
 
 if __name__ == "__main__":
