@@ -133,6 +133,11 @@ def main() -> None:
     parser.add_argument("--partition-seed", type=int, default=0)
     parser.add_argument("--train-artifact-namespace", default="factorized_mc4_reference100x1")
     parser.add_argument("--query-artifact-namespace", default="")
+    parser.add_argument(
+        "--source-score-namespace",
+        default="factorized_mc4_indist100q_original100x1",
+        help="Existing DAS score namespace whose manifest identifies the exact baseline query artifact.",
+    )
     parser.add_argument("--score-namespace-prefix", default="factorized_mc4_indist100q_original100x1_localgram_mix")
     parser.add_argument(
         "--lambdas",
@@ -204,11 +209,33 @@ def main() -> None:
         prompt = str(record["prompt"])
         seed = int(record["initial_seed"])
         prompt_tag = _prompt_tag(prompt)
-        query_path = (
+        constructed_query_path = (
             result_root / "sample_ddim_eta0_1000" / "cifar" / f"prompt_{prompt_tag}"
             / f"model_prompted_solo__ckpt_{checkpoint.stem}"
             / f"seed_{seed:06d}_{query_suffix}" / das_query_name / "query_gradient_artifact.npz"
         )
+        baseline_manifest = (
+            result_root / "attribution_score" / "prompted_solo"
+            / f"train_seed_{args.train_seed}" / f"query_{prompt_tag}"
+            / f"initial_seed_{seed}" / f"das_{args.source_score_namespace.strip('_/')}"
+            / "score" / "lambda_1" / "score_artifact_manifest.json"
+        )
+        query_path = constructed_query_path
+        if baseline_manifest.is_file():
+            manifest = json.loads(baseline_manifest.read_text())
+            manifest_query_dir = Path(str(manifest.get("query_artifact_dir", "")))
+            manifest_query_path = manifest_query_dir / "query_gradient_artifact.npz"
+            if manifest_query_path.is_file():
+                query_path = manifest_query_path
+                print(
+                    f"[query] Q{query_id} resolved from baseline score manifest: {query_path}",
+                    flush=True,
+                )
+        if not query_path.is_file():
+            raise FileNotFoundError(
+                f"Q{query_id} query artifact not found. Tried constructed path "
+                f"{constructed_query_path}; baseline manifest={baseline_manifest}"
+            )
         payload = load_npz(
             query_path,
             keys=(
