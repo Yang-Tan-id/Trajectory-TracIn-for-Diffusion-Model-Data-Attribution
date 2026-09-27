@@ -40,15 +40,33 @@ FLA_UNLEARN_METHOD_RAW = "trajectory_unlearning_raw_sgd_4step_50ckpt_1000t_4even
 FLA_UNLEARN_METHOD_NORMALIZED = (
     "trajectory_unlearning_normalized_sgd_4step_50ckpt_1000t_4event"
 )
+FLA_UNLEARN_ALPHAS = (1.0, 0.25, 0.0625, 0.015625)
+
+
+def unlearn_alpha_tag(alpha):
+    return str(float(alpha)).replace(".", "p")
+
+
+def unlearn_method_name(update, alpha, normalization):
+    if update == "raw":
+        base = FLA_UNLEARN_METHOD_RAW
+    elif update == "normalized":
+        base = FLA_UNLEARN_METHOD_NORMALIZED
+    else:
+        raise ValueError(update)
+    # Preserve the original alpha=1 artifact name for backward compatibility.
+    if float(alpha) != 1.0:
+        base += f"_alpha_{unlearn_alpha_tag(alpha)}"
+    if normalization != "absolute":
+        base += f"_{normalization}"
+    return base
+
+
 FLA_UNLEARN_METHOD_BY_VARIANT = {
-    ("raw", "absolute"): FLA_UNLEARN_METHOD_RAW,
-    ("raw", "log_relative"): FLA_UNLEARN_METHOD_RAW + "_log_relative",
-    ("raw", "loss_conditioned_robust"): FLA_UNLEARN_METHOD_RAW + "_loss_conditioned_robust",
-    ("normalized", "absolute"): FLA_UNLEARN_METHOD_NORMALIZED,
-    ("normalized", "log_relative"): FLA_UNLEARN_METHOD_NORMALIZED + "_log_relative",
-    ("normalized", "loss_conditioned_robust"): (
-        FLA_UNLEARN_METHOD_NORMALIZED + "_loss_conditioned_robust"
-    ),
+    (update, alpha, normalization): unlearn_method_name(update, alpha, normalization)
+    for update in ("raw", "normalized")
+    for alpha in FLA_UNLEARN_ALPHAS
+    for normalization in ("absolute", "log_relative", "loss_conditioned_robust")
 }
 FLA_UNLEARN_METHODS = tuple(FLA_UNLEARN_METHOD_BY_VARIANT.values())
 FLA_UNLEARN_STEPS = 4

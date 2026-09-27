@@ -82,8 +82,8 @@ def query_gradient(model, query_data, device):
 
 
 @torch.no_grad()
-def ascent_step(model, gradients, learning_rate, normalize):
-    scale = float(learning_rate)
+def ascent_step(model, gradients, learning_rate, alpha, normalize):
+    scale = float(learning_rate) * float(alpha)
     if normalize:
         norm_sq = sum(torch.sum(gradient.double() ** 2) for gradient in gradients.values())
         scale /= max(float(torch.sqrt(norm_sq).item()), FLA_NORMALIZE_EPS)
@@ -106,56 +106,67 @@ def epoch_end_learning_rates(checkpoint_epoch):
     return epochs, rates
 
 
+def variant_label(update, alpha):
+    return f"{update}_alpha_{unlearn_alpha_tag(alpha)}"
+
+
 def build_unlearned_variants(checkpoint, checkpoint_epoch, ds, query_data, device):
     initial = make_model(ds, checkpoint["model_state"], device)
     epochs, rates = epoch_end_learning_rates(checkpoint_epoch)
 
     # Step one has the same gradient for both paths, so compute it once.
     gradients, gradient_norm, query_loss = query_gradient(initial, query_data, device)
-    raw_model = copy.deepcopy(initial).to(device).eval()
-    normalized_model = copy.deepcopy(initial).to(device).eval()
-    raw_model.zero_grad(set_to_none=True)
-    normalized_model.zero_grad(set_to_none=True)
-    ascent_step(raw_model, gradients, rates[0], normalize=False)
-    ascent_step(normalized_model, gradients, rates[0], normalize=True)
-    step_stats = [
-        {
-            "step": 1,
-            "epoch": epochs[0],
-            "lr": rates[0],
-            "raw_query_loss": query_loss,
-            "normalized_query_loss": query_loss,
-            "raw_grad_norm": gradient_norm,
-            "normalized_grad_norm": gradient_norm,
-        }
-    ]
+    models = {}
+    step_stats = {}
+    for update in ("raw", "normalized"):
+        for alpha in FLA_UNLEARN_ALPHAS:
+            key = (update, alpha)
+            model = copy.deepcopy(initial).to(device).eval()
+            model.zero_grad(set_to_none=True)
+            ascent_step(
+                model,
+                gradients,
+                rates[0],
+                alpha=alpha,
+                normalize=(update == "normalized"),
+            )
+            models[key] = model
+            step_stats[key] = [
+                {
+                    "step": 1,
+                    "epoch": epochs[0],
+                    "lr": rates[0],
+                    "alpha": alpha,
+                    "query_loss": query_loss,
+                    "grad_norm": gradient_norm,
+                }
+            ]
     del initial, gradients
 
     for step_index in range(1, FLA_UNLEARN_STEPS):
-        raw_gradients, raw_norm, raw_loss = query_gradient(raw_model, query_data, device)
-        normalized_gradients, normalized_norm, normalized_loss = query_gradient(
-            normalized_model, query_data, device
-        )
-        ascent_step(raw_model, raw_gradients, rates[step_index], normalize=False)
-        ascent_step(
-            normalized_model,
-            normalized_gradients,
-            rates[step_index],
-            normalize=True,
-        )
-        step_stats.append(
-            {
-                "step": step_index + 1,
-                "epoch": epochs[step_index],
-                "lr": rates[step_index],
-                "raw_query_loss": raw_loss,
-                "normalized_query_loss": normalized_loss,
-                "raw_grad_norm": raw_norm,
-                "normalized_grad_norm": normalized_norm,
-            }
-        )
-        del raw_gradients, normalized_gradients
-    return raw_model, normalized_model, step_stats
+        for (update, alpha), model in models.items():
+            step_gradients, step_norm, step_loss = query_gradient(
+                model, query_data, device
+            )
+            ascent_step(
+                model,
+                step_gradients,
+                rates[step_index],
+                alpha=alpha,
+                normalize=(update == "normalized"),
+            )
+            step_stats[(update, alpha)].append(
+                {
+                    "step": step_index + 1,
+                    "epoch": epochs[step_index],
+                    "lr": rates[step_index],
+                    "alpha": alpha,
+                    "query_loss": step_loss,
+                    "grad_norm": step_norm,
+                }
+            )
+            del step_gradients
+    return models, step_stats
 
 
 @torch.no_grad()
@@ -213,7 +224,7 @@ def score_query(
     query_data = load_query_data(qid, ds, device)
     partial_dir = FLA_PARTIAL_DIR / "trajectory_unlearning_4step" / f"q{qid:02d}"
     partial_dir.mkdir(parents=True, exist_ok=True)
-    partial_path = partial_dir / "state_v1.npz"
+    partial_path = partial_dir / "state_alpha_sweep_v2.npz"
     score_sums = {
         method: np.zeros(N_TRAIN, dtype=np.float64)
         for method in FLA_UNLEARN_METHODS
@@ -230,28 +241,31 @@ def score_query(
     for checkpoint_index in range(next_checkpoint, len(FLA_CHECKPOINT_EPOCHS)):
         epoch = FLA_CHECKPOINT_EPOCHS[checkpoint_index]
         checkpoint = load_checkpoint(checkpoint_path(epoch))
-        raw_model, normalized_model, step_stats = build_unlearned_variants(
+        models, step_stats = build_unlearned_variants(
             checkpoint, epoch, ds, query_data, device
         )
-        parameter_variants = {
-            "raw": {
-                name: parameter.detach()
-                for name, parameter in raw_model.named_parameters()
-            },
-            "normalized": {
-                name: parameter.detach()
-                for name, parameter in normalized_model.named_parameters()
-            },
+        labels = {
+            variant_label(update, alpha): (update, alpha)
+            for update, alpha in models
         }
+        parameter_variants = {
+            label: {
+                name: parameter.detach()
+                for name, parameter in models[key].named_parameters()
+            }
+            for label, key in labels.items()
+        }
+        evaluation_model = next(iter(models.values()))
         after_losses = changed_event_losses(
-            raw_model, parameter_variants, checkpoint_index, images, conds,
+            evaluation_model, parameter_variants, checkpoint_index, images, conds,
             t_cache, noise_cache, schedule, device,
         )
         baseline_checkpoint = np.asarray(
             baseline_events[checkpoint_index], dtype=np.float64
         )
         checkpoint_stats = []
-        for update_name, changed_events in after_losses.items():
+        for label, changed_events in after_losses.items():
+            update_name, alpha = labels[label]
             contributions = score_contributions(
                 baseline_checkpoint,
                 changed_events,
@@ -259,13 +273,15 @@ def score_query(
                 direction="increase",
             )
             for normalization, values in contributions.items():
-                method = FLA_UNLEARN_METHOD_BY_VARIANT[(update_name, normalization)]
+                method = FLA_UNLEARN_METHOD_BY_VARIANT[
+                    (update_name, alpha, normalization)
+                ]
                 score_sums[method] += values
             checkpoint_stats.append(
-                f"{update_name}:growth={np.median(contributions['absolute']):.2e},"
+                f"{label}:growth={np.median(contributions['absolute']):.2e},"
                 f"log={np.median(contributions['log_relative']):.2e}"
             )
-        temporary_path = partial_dir / "state_v1.tmp.npz"
+        temporary_path = partial_dir / "state_alpha_sweep_v2.tmp.npz"
         np.savez(
             temporary_path,
             next_checkpoint=np.asarray(checkpoint_index + 1, dtype=np.int64),
@@ -279,7 +295,8 @@ def score_query(
         completed = checkpoint_index - next_checkpoint + 1
         remaining = len(FLA_CHECKPOINT_EPOCHS) - checkpoint_index - 1
         eta = elapsed / completed * remaining
-        lr_text = ",".join(f"{item['lr']:.2e}" for item in step_stats)
+        first_stats = next(iter(step_stats.values()))
+        lr_text = ",".join(f"{item['lr']:.2e}" for item in first_stats)
         print(
             f"[gpu {gpu} q{qid:02d}] checkpoint={checkpoint_index + 1:02d}/"
             f"{len(FLA_CHECKPOINT_EPOCHS)} epoch={epoch:03d} reverse_lrs=[{lr_text}] "
@@ -287,7 +304,7 @@ def score_query(
             f"eta={eta / 60:.1f}m",
             flush=True,
         )
-        del raw_model, normalized_model, parameter_variants, after_losses
+        del models, parameter_variants, after_losses, evaluation_model
         torch.cuda.empty_cache()
 
     metadata = {
@@ -295,6 +312,7 @@ def score_query(
         "family": FLA_FAMILY,
         "checkpoint_epochs": list(FLA_CHECKPOINT_EPOCHS),
         "unlearning_steps_per_checkpoint": FLA_UNLEARN_STEPS,
+        "step_scale_alphas": list(FLA_UNLEARN_ALPHAS),
         "learning_rate_definition": (
             "last real optimizer-step LR of each epoch, reverse chronological order c,c-1,c-2,c-3"
         ),
@@ -313,8 +331,12 @@ def score_query(
         },
     }
     reverse_variants = {
-        method: {"update": update, "normalization": normalization}
-        for (update, normalization), method in FLA_UNLEARN_METHOD_BY_VARIANT.items()
+        method: {
+            "update": update,
+            "alpha": alpha,
+            "normalization": normalization,
+        }
+        for (update, alpha, normalization), method in FLA_UNLEARN_METHOD_BY_VARIANT.items()
     }
     for method in FLA_UNLEARN_METHODS:
         scores = score_sums[method] / float(len(FLA_CHECKPOINT_EPOCHS))

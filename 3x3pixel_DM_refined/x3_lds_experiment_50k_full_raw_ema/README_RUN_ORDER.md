@@ -393,9 +393,17 @@ optimizer reversal.
 
 After four steps, each datapoint's four realized events from the matching
 four-epoch interval are evaluated. Positive score means loss growth after
-unlearning. The same two update forms (raw and global-gradient-normalized) and
-three score normalizations (absolute, log-relative, loss-conditioned robust)
-produce six methods without repeating the datapoint forwards.
+unlearning. Four step-size multipliers are evaluated:
+
+```text
+alpha = 1, 1/4, 1/16, 1/64
+```
+
+Every alpha follows its own nonlinear four-step path and recomputes the
+1000-timestamp gradient after each update; this is not a post-hoc rescaling of
+the alpha-1 parameter delta. The two update forms (raw and
+global-gradient-normalized), four alphas, and three score normalizations
+(absolute, log-relative, loss-conditioned robust) produce 24 methods.
 
 It reuses all caches from script 24:
 
@@ -404,11 +412,14 @@ python -u 30_launch_trajectory_unlearning_4step_4gpu.py \
   2>&1 | tee x3_lds_exp_50k/logs/trajectory_unlearning_4step_4gpu.log
 ```
 
-The launcher runs LDS automatically. The six-method combined result is:
+The launcher runs LDS automatically. The 24-method combined result is:
 
 ```text
 x3_lds_exp_50k/lds/trajectory_unlearning_4step_all_normalizations_q00_q49.json
 ```
 
 The scorer uses its own checkpoint-resumable partials under
-`forward_loss_alignment/partials/trajectory_unlearning_4step/`.
+`forward_loss_alignment/partials/trajectory_unlearning_4step/`. Alpha 1 keeps
+the original artifact names; smaller alphas add suffixes such as
+`_alpha_0p25`, `_alpha_0p0625`, and `_alpha_0p015625`. The alpha sweep uses a
+new v2 partial file, so earlier alpha-1-only progress is not mixed in.
