@@ -12,10 +12,16 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--batch-size", type=int, default=TRACIN_DAS_BATCH_SIZE)
     parser.add_argument("--noise-mode", choices=TRACIN_DAS_NOISE_MODES, default="checkpoint")
+    parser.add_argument(
+        "--parameter-projection",
+        choices=TRACIN_DAS_PARAMETER_PROJECTIONS,
+        default="exact",
+    )
     args = parser.parse_args()
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     mode_tag = args.noise_mode.replace("-", "_")
-    log_path = LOG_DIR / f"tracin_das_{mode_tag}_q00_q09_4gpu.log"
+    projection_tag = args.parameter_projection
+    log_path = LOG_DIR / f"tracin_das_{mode_tag}_{projection_tag}_q00_q09_4gpu.log"
     active = []
     with open(log_path, "a", buffering=1) as stream:
         stream.write("\n[launcher] TracIn-DAS q00-q09 four-GPU run\n")
@@ -25,6 +31,7 @@ def main():
                 "--gpu", str(gpu), "--timestamp-shard-index", str(shard_index),
                 "--timestamp-shard-count", "4", "--batch-size", str(args.batch_size),
                 "--noise-mode", args.noise_mode,
+                "--parameter-projection", args.parameter_projection,
             ]
             process = subprocess.Popen(command, stdout=stream, stderr=subprocess.STDOUT)
             active.append((shard_index, process))
@@ -48,6 +55,7 @@ def main():
             [
                 sys.executable, "-u", "74_merge_tracin_das_shards.py",
                 "--noise-mode", args.noise_mode,
+                "--parameter-projection", args.parameter_projection,
             ],
             stdout=stream, stderr=subprocess.STDOUT, check=True,
         )

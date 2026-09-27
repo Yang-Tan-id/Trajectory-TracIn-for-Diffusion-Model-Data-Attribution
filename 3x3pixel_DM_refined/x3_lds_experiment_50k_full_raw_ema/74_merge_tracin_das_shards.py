@@ -21,8 +21,13 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--timestamp-shard-count", type=int, default=4)
     parser.add_argument("--noise-mode", choices=TRACIN_DAS_NOISE_MODES, default="checkpoint")
+    parser.add_argument(
+        "--parameter-projection",
+        choices=TRACIN_DAS_PARAMETER_PROJECTIONS,
+        default="exact",
+    )
     args = parser.parse_args()
-    methods = tracin_das_methods(args.noise_mode)
+    methods = tracin_das_methods(args.noise_mode, args.parameter_projection)
     totals = {
         contraction: np.zeros((len(TRACIN_DAS_QUERY_IDS), N_TRAIN), dtype=np.float64)
         for contraction in methods
@@ -31,7 +36,10 @@ def main():
     metadata = []
     for shard_index in range(args.timestamp_shard_count):
         root = tracin_das_shard_root(
-            shard_index, args.timestamp_shard_count, args.noise_mode
+            shard_index,
+            args.timestamp_shard_count,
+            args.noise_mode,
+            args.parameter_projection,
         )
         with open(root / "done.json") as handle:
             info = json.load(handle)
@@ -40,6 +48,8 @@ def main():
             raise ValueError(f"query mismatch in {root}")
         if info.get("noise_mode", "checkpoint") != args.noise_mode:
             raise ValueError(f"noise mode mismatch in {root}")
+        if info.get("parameter_projection", "exact") != args.parameter_projection:
+            raise ValueError(f"parameter projection mismatch in {root}")
         covered.extend(int(value) for value in info["timestamp_indices"])
         for contraction in methods:
             values = np.load(root / f"{contraction}.npy")
@@ -69,13 +79,18 @@ def main():
                     "endpoint_source": "cached final-EMA query endpoint",
                     "timestamps": [int(value) for value in DAS_TIMESTEPS],
                     "noise_mode": args.noise_mode,
+                    "parameter_projection": args.parameter_projection,
+                    "parameter_projection_dim": (
+                        TRACIN_PROJ_DIM
+                        if args.parameter_projection == "projected4096"
+                        else None
+                    ),
                     "noise_alignment": (
                         "one independent noise per checkpoint/timestamp"
                         if args.noise_mode == "checkpoint"
                         else "one noise per timestamp shared across all checkpoint transitions"
                     ) + "; query and train loss share the term noise",
                     "query_scalar": "dot(epsilon_current, normalize(epsilon_next-epsilon_current))",
-                    "parameter_projection": None,
                     "lr_weighted": TRACIN_USE_LR_WEIGHTS,
                     "timestamp_weight": 1.0 / len(DAS_TIMESTEPS),
                     "timestamp_shards": args.timestamp_shard_count,

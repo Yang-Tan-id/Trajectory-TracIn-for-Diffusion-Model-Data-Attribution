@@ -12,11 +12,22 @@ import torch
 from torch.func import functional_call, grad, vmap
 
 import x3pixel_DM_training as base
-from attribution_one_query import build_model, cond_for, model_paths, preload_dataset, tracin_lr_weight
+from attribution_one_query import (
+    _project_batched_grads,
+    _project_gradient_tuple,
+    build_model,
+    cond_for,
+    model_paths,
+    preload_dataset,
+    tracin_lr_weight,
+)
 from dataset_loader import ColorGridDataset
 from run_exact_traj_next_bank import flatten_batched_gradients, flatten_gradient_tuple
 from tracin_das_config import *
-from x3_endpoint_das_jax_logic_pytorch import make_torch_generator
+from x3_endpoint_das_jax_logic_pytorch import (
+    build_countsketch_specs,
+    make_torch_generator,
+)
 
 
 CONTRACT_VERSION = 2
@@ -45,6 +56,11 @@ def main():
     parser.add_argument("--timestamp-shard-count", type=int, default=4)
     parser.add_argument("--batch-size", type=int, default=TRACIN_DAS_BATCH_SIZE)
     parser.add_argument("--noise-mode", choices=TRACIN_DAS_NOISE_MODES, default="checkpoint")
+    parser.add_argument(
+        "--parameter-projection",
+        choices=TRACIN_DAS_PARAMETER_PROJECTIONS,
+        default="exact",
+    )
     args = parser.parse_args()
     if not 0 <= args.timestamp_shard_index < args.timestamp_shard_count:
         raise ValueError("invalid timestamp shard")
@@ -75,9 +91,12 @@ def main():
     conditions = [cond_for(record, dataset, device) for record in records]
     timestamps = tuple(int(value) for value in DAS_TIMESTEPS)
     selected = list(range(args.timestamp_shard_index, len(timestamps), args.timestamp_shard_count))
-    methods = tracin_das_methods(args.noise_mode)
+    methods = tracin_das_methods(args.noise_mode, args.parameter_projection)
     shard_root = tracin_das_shard_root(
-        args.timestamp_shard_index, args.timestamp_shard_count, args.noise_mode
+        args.timestamp_shard_index,
+        args.timestamp_shard_count,
+        args.noise_mode,
+        args.parameter_projection,
     )
     done_path = shard_root / "done.json"
     if done_path.is_file():
@@ -100,6 +119,8 @@ def main():
             raise ValueError("partial shard batch size differs; move shard aside before restarting")
         if progress.get("noise_mode", "checkpoint") != args.noise_mode:
             raise ValueError("partial shard noise mode differs")
+        if progress.get("parameter_projection", "exact") != args.parameter_projection:
+            raise ValueError("partial shard parameter projection differs")
         completed_timestamps = [int(value) for value in progress["completed_timestamps"]]
         scores = {
             contraction: torch.from_numpy(np.load(path)).to(device=device, dtype=torch.float64)
@@ -121,7 +142,8 @@ def main():
     completed_terms = 0
     started = time.perf_counter()
     print(
-        f"[tracin-das gpu={args.gpu}] q00-q09 exact_parameter_dot=true "
+        f"[tracin-das gpu={args.gpu}] q00-q09 "
+        f"parameter_projection={args.parameter_projection} "
         f"timestamps={len(selected)}/100 transitions=49 batch={args.batch_size} "
         f"noise_mode={args.noise_mode} "
         "term_internal_alignment=true output_delta_normalized=true",
@@ -167,6 +189,20 @@ def main():
             named = dict(model.named_parameters())
             names = tuple(named)
             parameters = tuple(named.values())
+            projection_specs = (
+                build_countsketch_specs(
+                    list(parameters),
+                    TRACIN_PROJ_DIM,
+                    device=device,
+                    seed_parts=(
+                        TRAIN_SEED,
+                        "tracin_das_parameter_projection",
+                        checkpoint_index,
+                    ),
+                )
+                if args.parameter_projection == "projected4096"
+                else None
+            )
             query_vectors = []
             delta_norms = []
             for xt, condition in zip(query_xt, conditions):
@@ -178,7 +214,15 @@ def main():
                     direction = direction / delta_norm.clamp_min(TRACIN_DAS_DIRECTION_EPS)
                 projected_prediction = (current_prediction * direction).sum()
                 query_gradient = torch.autograd.grad(projected_prediction, parameters)
-                query_vectors.append(flatten_gradient_tuple(query_gradient))
+                query_vectors.append(
+                    _project_gradient_tuple(
+                        query_gradient,
+                        projection_specs,
+                        TRACIN_PROJ_DIM,
+                    )
+                    if projection_specs is not None
+                    else flatten_gradient_tuple(query_gradient)
+                )
                 delta_norms.append(float(delta_norm))
             query_matrix = torch.stack(query_vectors).detach().to(torch.float32)
 
@@ -196,7 +240,18 @@ def main():
             for batch_position, start in enumerate(range(0, N_TRAIN, args.batch_size), start=1):
                 end = min(start + args.batch_size, N_TRAIN)
                 gradients = batched_gradient(named, x_all[start:end], cond_all[start:end])
-                train_matrix = flatten_batched_gradients(gradients, names).detach()
+                train_matrix = (
+                    _project_batched_grads(
+                        gradients,
+                        names,
+                        projection_specs,
+                        TRACIN_PROJ_DIM,
+                        False,
+                        1e-8,
+                    )
+                    if projection_specs is not None
+                    else flatten_batched_gradients(gradients, names)
+                ).detach()
                 dots = (train_matrix @ query_matrix.T).T.to(torch.float64)
                 scores["linear"][:, start:end] += weight * dots
                 scores["termwise_squared"][:, start:end] += weight * dots.square()
@@ -219,6 +274,7 @@ def main():
                 flush=True,
             )
             del model, target, named, parameters, query_vectors, query_matrix
+            del projection_specs
             del current_prediction, next_prediction, direction, projected_prediction, query_gradient
             del batched_gradient, gradients, train_matrix, dots, shared_noise, query_xt
             if torch.cuda.is_available():
@@ -235,6 +291,7 @@ def main():
                 "contract_version": CONTRACT_VERSION,
                 "batch_size": args.batch_size,
                 "noise_mode": args.noise_mode,
+                "parameter_projection": args.parameter_projection,
                 "query_ids": list(TRACIN_DAS_QUERY_IDS),
                 "completed_timestamps": completed_timestamps,
             },
@@ -255,6 +312,12 @@ def main():
             "parameter_source": "raw",
             "endpoint_source": "cached final-EMA query endpoint",
             "noise_mode": args.noise_mode,
+            "parameter_projection": args.parameter_projection,
+            "parameter_projection_dim": (
+                TRACIN_PROJ_DIM
+                if args.parameter_projection == "projected4096"
+                else None
+            ),
             "endpoint_noising": (
                 "one independent noise per checkpoint/timestamp"
                 if args.noise_mode == "checkpoint"
@@ -262,7 +325,6 @@ def main():
             ),
             "train_loss_noise": "same term noise as query endpoint",
             "query_scalar": "dot(epsilon_current, normalize(epsilon_next-epsilon_current))",
-            "parameter_projection": None,
             "lr_weighted": TRACIN_USE_LR_WEIGHTS,
             "timestamp_weight": snapshot_weight,
             "batch_size": args.batch_size,

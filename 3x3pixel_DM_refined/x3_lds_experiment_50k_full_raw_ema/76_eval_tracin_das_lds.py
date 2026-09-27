@@ -12,8 +12,13 @@ from tracin_das_config import *
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--noise-mode", choices=TRACIN_DAS_NOISE_MODES, default="checkpoint")
+    parser.add_argument(
+        "--parameter-projection",
+        choices=TRACIN_DAS_PARAMETER_PROJECTIONS,
+        default="exact",
+    )
     args = parser.parse_args()
-    methods = tracin_das_methods(args.noise_mode)
+    methods = tracin_das_methods(args.noise_mode, args.parameter_projection)
     membership = np.load(MASK_DIR / "membership.npy").astype(np.float64)
     output = {"methods": {}}
     for contraction, method in methods.items():
@@ -46,7 +51,10 @@ def main():
         output["methods"][method] = method_result
     LDS_DIR.mkdir(parents=True, exist_ok=True)
     mode_tag = args.noise_mode.replace("-", "_")
-    path = LDS_DIR / f"tracin_das_endpoint_next_delta_{mode_tag}_q00_q09.json"
+    projection_tag = args.parameter_projection
+    path = LDS_DIR / (
+        f"tracin_das_endpoint_next_delta_{mode_tag}_{projection_tag}_q00_q09.json"
+    )
     with open(path, "w") as handle:
         json.dump(output, handle, indent=2)
     print(f"[saved] {path}", flush=True)

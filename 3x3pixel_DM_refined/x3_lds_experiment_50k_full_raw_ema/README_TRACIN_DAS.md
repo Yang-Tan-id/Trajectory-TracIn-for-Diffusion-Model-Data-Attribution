@@ -17,6 +17,10 @@ direction. Its exact full-parameter gradient is dotted with each training
 point's diffusion-loss gradient at the same timestamp and with the same noise.
 No CountSketch parameter projection is used.
 
+An optional `projected4096` mode applies one checkpoint-specific CountSketch
+map to both query and training gradients before their parameter-space dot
+product. It does not normalize either projected gradient.
+
 Run on four GPUs:
 
 ```bash
@@ -33,6 +37,22 @@ python -u 75_launch_tracin_das_4gpu.py \
 
 This second mode still uses a different noise for every timestamp and still
 shares the term noise between the query and training-loss sides.
+
+Run the two 4096-dimensional projected variants with:
+
+```bash
+# Different noise for each checkpoint/timestamp pair.
+python -u 75_launch_tracin_das_4gpu.py \
+  --noise-mode checkpoint \
+  --parameter-projection projected4096 \
+  --batch-size 128
+
+# One noise shared across checkpoints within each timestamp.
+python -u 75_launch_tracin_das_4gpu.py \
+  --noise-mode timestamp-shared \
+  --parameter-projection projected4096 \
+  --batch-size 128
+```
 
 The launcher automatically merges three contractions:
 
@@ -53,6 +73,9 @@ Evaluate the timestamp-shared variant with:
 ```bash
 python -u 76_eval_tracin_das_lds.py --noise-mode timestamp-shared
 ```
+
+Add `--parameter-projection projected4096` to evaluate either projected
+variant.
 
 The LDS summary is saved at
 `x3_lds_exp_50k/lds/tracin_das_endpoint_next_delta_checkpoint_noise_q00_q09.json`.
