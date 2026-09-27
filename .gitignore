@@ -1,6 +1,7 @@
 # Legacy top-level model outputs. Dataset result checkpoints are handled by
 # diffusion_jax_refined/.gitignore without hiding neighboring metadata.
 /models/
+3x3pixel_DM_refined/x3_lds_experiment_50k_full_raw_ema/x3_staged_lds_exp_50k/
 
 # macOS filesystem metadata
 .DS_Store
