@@ -761,6 +761,16 @@ Run all three contractions on four GPUs and evaluate LDS automatically:
 python -u 51_launch_exact_traj_next_three_4gpu.py --batch-size 16
 ```
 
+To skip the slower unprompted q75-q99 bank and evaluate only prompted
+q00-q74, use the three restart-compatible prompted shards:
+
+```bash
+python -u 51_launch_exact_traj_next_three_4gpu.py \
+  --batch-size 16 --prompted-only
+```
+
+This prompted-only mode does not overwrite the full 100-query LDS files.
+
 The three attribution namespaces are:
 
 ```text
