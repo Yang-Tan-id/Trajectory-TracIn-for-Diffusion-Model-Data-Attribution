@@ -661,3 +661,52 @@ outputs are:
 x3_lds_exp_50k/lds/traj_probe12_q00_q19_both_signs.json
 x3_lds_exp_50k/lds/traj_probe12_q00_q19_both_signs.csv
 ```
+
+## Previous-checkpoint Traj and signed next/previous alpha sweep
+
+The original forward methods use checkpoint pairs `(c,c+1)` for the first 49
+checkpoints, so the final checkpoint is excluded because it has no next model.
+The backward/previous methods use `(c,c-1)` for checkpoints 2 through 50, so
+they exclude the first checkpoint and include the final checkpoint. Previous
+scores are saved under:
+
+```text
+traj_projected_backward_first_raw_termwise_squared
+traj_projected_backward_first_raw_timestamp_sum_squared
+```
+
+After previous scoring, fixed global alphas are evaluated with next as the
+base:
+
+```text
+combined(alpha) = (1-alpha) * next + alpha * previous
+alpha = -1, -0.5, -0.25, -0.1, 0, 0.1, 0.25, 0.5, 1
+```
+
+Positive alpha between zero and one is a convex interpolation. Negative alpha
+is an affine extrapolation that subtracts the previous direction. Alpha is
+shared by all queries; it is never selected separately per query. Each alpha's
+50k attribution is saved as float32 under a method namespace such as:
+
+```text
+traj_next_previous_affine_timestamp_sum_squared_alpha_p0p25/q00/scores.npy
+traj_next_previous_affine_timestamp_sum_squared_alpha_m0p25/q00/scores.npy
+```
+
+Run previous scoring and the alpha sweep on four GPUs:
+
+```bash
+python -u 48_launch_previous_and_alpha_4gpu.py
+```
+
+The sweep uses the existing LDS convention
+`-(membership @ combined_score)`, evaluates all 100 queries and all existing
+LDS targets, and reports positive-alpha versus negative-alpha improvement over
+the next-only alpha-zero baseline. The primary printed target is
+`traj_ref_raw`, matching
+`traj_projected_first_raw_timestamp_sum_squared_traj_ref_raw.json`. Outputs:
+
+```text
+x3_lds_exp_50k/lds/traj_next_previous_alpha_sweep.json
+x3_lds_exp_50k/lds/traj_next_previous_alpha_sweep_per_query.csv
+```
