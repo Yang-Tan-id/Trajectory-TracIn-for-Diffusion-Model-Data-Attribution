@@ -454,3 +454,44 @@ The main outputs are `summary.json`, `per_query_results.csv`,
 `paired_comparison.csv`, and `method_overlap.json`. In the paired summary,
 `right_minus_left` is unlearning minus DAS because the method tags sort as
 `das_...` then `unlearning_...`.
+
+## Endpoint-MC100 AdamW unlearning + MUCS score (q00-q09)
+
+This pilot starts from the epoch-200 raw model and treats the epoch-4 raw model
+as the null model. For each query's saved final-EMA endpoint, it fixes 100
+`(t, noise)` draws and measures endpoint diffusion loss under both models. The
+stopping target recovers 95% of the final-to-null loss gap:
+
+```text
+target = L_final + 0.95 * (L_null - L_final)
+```
+
+The query-specific model loads epoch 200's own AdamW first/second moments and
+step count. It performs gradient ascent on the fixed endpoint MC100 loss by
+backpropagating `-loss`, keeps the original AdamW hyperparameters and global
+clip norm 1, and replaces the near-zero final scheduled LR with the requested
+constant `0.1 * PEAK_LR = 1e-5`. It stops immediately when the target is met.
+If `L_null <= L_final`, the job fails explicitly because ascent toward the null
+loss is not defined by this criterion.
+
+After stopping, every one of the 50,000 training points is evaluated with 100
+paired MC draws under the original final raw model `theta` and the unlearned
+model `theta_prime`. The saved score is exactly:
+
+```text
+mean_m ((L_i,m(theta_prime) - L_i,m(theta)) /
+        (L_i,m(theta_prime) + L_i,m(theta) + eps))
+```
+
+The training-point condition is its own dataset condition; only the endpoint
+unlearning objective uses the query prompt. Run on four GPUs:
+
+```bash
+python -u 35_launch_mucs_endpoint_unlearning_4gpu.py \
+  2>&1 | tee x3_lds_exp_50k/logs/mucs_endpoint_unlearning_4gpu.log
+```
+
+AdamW unlearning checkpoints/history are saved under
+`x3_lds_exp_50k/mucs_endpoint_unlearning/`. Scores, baseline MC100 means, and
+unlearned MC100 means are saved under the normal attribution directory. LDS is
+run automatically for q00-q09 and both score signs.
