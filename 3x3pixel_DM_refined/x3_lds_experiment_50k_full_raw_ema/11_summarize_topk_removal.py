@@ -1,5 +1,6 @@
 """Summarize endpoint and trajectory changes for all removal models."""
 
+import argparse
 import csv
 import json
 from collections import defaultdict
@@ -10,7 +11,7 @@ import numpy as np
 from exp_config import ROOT
 
 
-OUT_ROOT = ROOT / "topk_removal_retrain"
+DEFAULT_OUT_ROOT = ROOT / "topk_removal_retrain"
 METRICS = (
     "trajectory_mse", "trajectory_rmse", "trajectory_max_abs",
     "endpoint_mse", "endpoint_rmse", "endpoint_l2", "endpoint_max_abs",
@@ -18,7 +19,12 @@ METRICS = (
 
 
 def main():
-    with open(OUT_ROOT / "jobs.json") as handle:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--out-root", default=str(DEFAULT_OUT_ROOT))
+    args = parser.parse_args()
+    out_root = Path(args.out_root)
+
+    with open(out_root / "jobs.json") as handle:
         jobs = json.load(handle)
     rows = []
     missing = []
@@ -96,7 +102,7 @@ def main():
         }
     summary["paired_comparison"] = paired_summary
 
-    overlap_path = OUT_ROOT / "method_overlap.json"
+    overlap_path = out_root / "method_overlap.json"
     if overlap_path.is_file():
         with open(overlap_path) as handle:
             overlap_rows = json.load(handle)
@@ -111,13 +117,13 @@ def main():
             "max_count": int(overlap_counts.max()),
         }
 
-    with open(OUT_ROOT / "summary.json", "w") as handle:
+    with open(out_root / "summary.json", "w") as handle:
         json.dump(summary, handle, indent=2)
     fieldnames = [
         "job_id", "query_id", "family", "method_tag", "method", "lambda",
         "score_param_source", "eval_param_source", "topk", "initial_seed", *METRICS,
     ]
-    with open(OUT_ROOT / "per_query_results.csv", "w", newline="") as handle:
+    with open(out_root / "per_query_results.csv", "w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(sorted(rows, key=lambda row: (row["method_tag"], row["query_id"])))
@@ -131,15 +137,15 @@ def main():
                 f"delta_{metric}",
             ]
         )
-    with open(OUT_ROOT / "paired_comparison.csv", "w", newline="") as handle:
+    with open(out_root / "paired_comparison.csv", "w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=paired_fields)
         writer.writeheader()
         writer.writerows(paired_rows)
 
     print(json.dumps(summary, indent=2), flush=True)
-    print(f"[saved] {OUT_ROOT / 'summary.json'}", flush=True)
-    print(f"[saved] {OUT_ROOT / 'per_query_results.csv'}", flush=True)
-    print(f"[saved] {OUT_ROOT / 'paired_comparison.csv'}", flush=True)
+    print(f"[saved] {out_root / 'summary.json'}", flush=True)
+    print(f"[saved] {out_root / 'per_query_results.csv'}", flush=True)
+    print(f"[saved] {out_root / 'paired_comparison.csv'}", flush=True)
 
 
 if __name__ == "__main__":

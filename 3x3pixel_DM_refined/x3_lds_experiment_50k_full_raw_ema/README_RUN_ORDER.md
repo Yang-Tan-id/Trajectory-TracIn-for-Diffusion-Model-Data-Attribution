@@ -423,3 +423,34 @@ The scorer uses its own checkpoint-resumable partials under
 the original artifact names; smaller alphas add suffixes such as
 `_alpha_0p25`, `_alpha_0p0625`, and `_alpha_0p015625`. The alpha sweep uses a
 new v2 partial file, so earlier alpha-1-only progress is not mixed in.
+
+## q00-q09 top-1000 removal: normalized unlearning alpha=.25 vs DAS
+
+This comparison uses the first ten queries from the same original 100-query
+bank. All ten are prompted, and their saved initial noise and prompt are reused.
+For each query it removes the 1000 largest saved scores from:
+
+- `trajectory_unlearning_normalized_sgd_4step_50ckpt_1000t_4event_alpha_0p25`
+  (absolute loss-growth score);
+- `das_ema/lambda_10p0`.
+
+No LDS sign is applied to the ranking. Each 49k model is retrained from the
+same training seed for 200 epochs, then its final EMA trajectory is compared
+with the saved base-EMA query trajectory. This is 10 queries x 2 methods = 20
+models on four GPUs. Training has 10-epoch resume checkpoints.
+
+```bash
+python -u 32_launch_unlearning_vs_das_topk_removal_4gpu.py \
+  2>&1 | tee x3_lds_exp_50k/logs/topk_unlearning_alpha_0p25_vs_das.log
+```
+
+Artifacts and the paired trajectory/endpoint comparison are saved under:
+
+```text
+x3_lds_exp_50k/topk_removal_unlearning_alpha_0p25_vs_das_q00_q09/
+```
+
+The main outputs are `summary.json`, `per_query_results.csv`,
+`paired_comparison.csv`, and `method_overlap.json`. In the paired summary,
+`right_minus_left` is unlearning minus DAS because the method tags sort as
+`das_...` then `unlearning_...`.
