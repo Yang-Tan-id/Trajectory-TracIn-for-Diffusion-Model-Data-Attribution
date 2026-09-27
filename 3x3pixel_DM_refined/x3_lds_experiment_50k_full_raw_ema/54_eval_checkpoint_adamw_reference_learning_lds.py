@@ -1,4 +1,4 @@
-"""Evaluate four checkpoint-AdamW reference-learning scores on q00-q49."""
+"""Evaluate four checkpoint-AdamW reference-learning scores on q00-q09."""
 
 import argparse
 import json
@@ -62,14 +62,14 @@ def main():
                 f"[LDS] {method} {metric}: {best_sign}={best['mean']:+.6f}",
                 flush=True,
             )
-        output_path = LDS_DIR / f"{method}_both_signs_q00_q49.json"
+        output_path = LDS_DIR / f"{method}_both_signs.json"
         with open(output_path, "w") as handle:
             json.dump(method_output, handle, indent=2)
         methods[method] = method_output
 
     combined_path = (
         LDS_DIR
-        / "checkpoint_adamw_reference_learning_four_scores_both_signs_q00_q49.json"
+        / "checkpoint_adamw_reference_learning_four_scores_both_signs_q00_q09.json"
     )
     with open(combined_path, "w") as handle:
         json.dump(

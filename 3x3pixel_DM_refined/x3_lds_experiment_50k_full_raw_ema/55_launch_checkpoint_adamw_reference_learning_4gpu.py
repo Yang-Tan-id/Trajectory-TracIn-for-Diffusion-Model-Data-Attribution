@@ -1,4 +1,4 @@
-"""Launch q00-q49 checkpoint-AdamW reference learning on four GPUs."""
+"""Launch q00-q09 checkpoint-AdamW reference learning on four GPUs."""
 
 import argparse
 import os

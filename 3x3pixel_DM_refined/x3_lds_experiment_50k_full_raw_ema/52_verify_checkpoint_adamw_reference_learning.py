@@ -67,7 +67,10 @@ def main():
                 raise ValueError(f"incomplete AdamW moments in {path}")
         learning_rates.append(float(payload["learning_rate_at_checkpoint"]))
 
-    print(f"queries = q00-q49 ({len(CARL_QUERY_IDS)} prompted)")
+    print(
+        f"queries = q{CARL_QUERY_IDS[0]:02d}-q{CARL_QUERY_IDS[-1]:02d} "
+        f"({len(CARL_QUERY_IDS)} prompted)"
+    )
     print(f"checkpoints = {len(CARL_CHECKPOINT_EPOCHS)}")
     print("reference updates/checkpoint = 4 AdamW steps over consecutive 250-state batches")
     print("optimizer = checkpoint m/v/step/param-groups; checkpoint LR; original clipping")

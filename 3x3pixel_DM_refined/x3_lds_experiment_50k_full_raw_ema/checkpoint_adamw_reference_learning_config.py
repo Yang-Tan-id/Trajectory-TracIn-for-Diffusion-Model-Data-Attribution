@@ -4,7 +4,7 @@ from exp_config import *
 from forward_loss_alignment_config import FLA_QUERY_DIR
 
 
-CARL_QUERY_IDS = tuple(range(50))
+CARL_QUERY_IDS = tuple(range(10))
 CARL_FAMILY = "prompted"
 CARL_CHECKPOINT_EPOCHS = tuple(
     range(BASE_SAVE_EVERY_EPOCHS, EPOCHS + 1, BASE_SAVE_EVERY_EPOCHS)
@@ -22,7 +22,7 @@ CARL_PARTIAL_DIR = CARL_ROOT / "partials"
 def method_name(score_form, checkpoint_weighting):
     return (
         "checkpoint_adamw_reference_learning_4step_1000t_mc100_"
-        f"{score_form}_{checkpoint_weighting}"
+        f"{score_form}_{checkpoint_weighting}_q00_q09"
     )
 
 

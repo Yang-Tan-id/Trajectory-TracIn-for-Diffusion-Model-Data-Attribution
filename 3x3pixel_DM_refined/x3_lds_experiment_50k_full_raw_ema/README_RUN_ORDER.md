@@ -424,7 +424,7 @@ the original artifact names; smaller alphas add suffixes such as
 `_alpha_0p25`, `_alpha_0p0625`, and `_alpha_0p015625`. The alpha sweep uses a
 new v2 partial file, so earlier alpha-1-only progress is not mixed in.
 
-## Checkpoint-AdamW reference learning with paired MC100 (q00-q49)
+## Checkpoint-AdamW reference learning with paired MC100 (q00-q09)
 
 This variant restores each of the 50 raw checkpoints together with its saved
 AdamW first moment, second moment, step, and parameter groups. The fixed
@@ -452,11 +452,12 @@ python 52_verify_checkpoint_adamw_reference_learning.py
 python -u 55_launch_checkpoint_adamw_reference_learning_4gpu.py
 ```
 
-Each query resumes after its last completed checkpoint. LDS evaluates both
+The first ten prompted queries are distributed over four GPUs. Each query
+resumes after its last completed checkpoint. LDS evaluates both
 score signs and writes the combined result to:
 
 ```text
-x3_lds_exp_50k/lds/checkpoint_adamw_reference_learning_four_scores_both_signs_q00_q49.json
+x3_lds_exp_50k/lds/checkpoint_adamw_reference_learning_four_scores_both_signs_q00_q09.json
 ```
 
 ## q00-q09 top-1000 removal: normalized unlearning alpha=.25 vs DAS
