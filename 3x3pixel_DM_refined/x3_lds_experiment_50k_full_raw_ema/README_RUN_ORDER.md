@@ -542,3 +542,32 @@ If MUCS scores already exist, the comparison alone can be rerun with:
 ```bash
 python 36_compare_mucs_vs_original_das.py
 ```
+
+## Joint MUCS vs original DAS top-1000 removal (q00-q09)
+
+This launches 20 independent 49k-example retraining jobs: ten remove each
+query's 1,000 largest joint-MUCS saved scores, and ten remove each query's
+1,000 largest original DAS EMA lambda-10 saved scores. No LDS sign is applied
+to the ranking. All jobs use the same training seed and full original 3x3
+training recipe. Evaluation uses each query's identical cached `x_T`, prompt,
+and base EMA reference trajectory; removal models are evaluated with EMA.
+
+Run on exactly four GPUs with:
+
+```bash
+python -u 38_launch_mucs_vs_das_topk_removal_4gpu.py \
+  --gpus 0,1,2,3 2>&1 | \
+  tee x3_lds_exp_50k/logs/topk_removal_joint_mucs_vs_das_4gpu.log
+```
+
+The launcher is resumable and automatically prepares, trains, evaluates, and
+summarizes the 20 jobs. Outputs are under:
+
+```text
+x3_lds_exp_50k/topk_removal_joint_mucs_vs_original_das_q00_q09/
+```
+
+The main comparison files are `per_query_results.csv`,
+`paired_comparison.csv`, and `summary.json`. Since method tags sort as DAS then
+MUCS, each paired `delta_*` is MUCS minus DAS; positive values mean MUCS
+removal caused a larger trajectory or endpoint change.
