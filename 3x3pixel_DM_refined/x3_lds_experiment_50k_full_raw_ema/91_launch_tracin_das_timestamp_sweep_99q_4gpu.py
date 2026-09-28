@@ -5,19 +5,19 @@ import subprocess
 import sys
 import time
 
-from tracin_das_config import CUDA_IDS, LOG_DIR, TRACIN_DAS_BATCH_SIZE
+from tracin_das_config import CUDA_IDS, LOG_DIR
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--batch-size", type=int, default=TRACIN_DAS_BATCH_SIZE)
+    parser.add_argument("--batch-size", type=int, default=500)
     args = parser.parse_args()
     if args.batch_size <= 0:
         raise ValueError("--batch-size must be positive")
     if len(CUDA_IDS) < 4:
         raise ValueError("four CUDA_IDS are required")
     LOG_DIR.mkdir(parents=True, exist_ok=True)
-    log_path = LOG_DIR / "tracin_das_interval_mean_lr_99q_timestamp_sweep_4gpu.log"
+    log_path = LOG_DIR / "tracin_das_checkpoint_lr_99q_timestamp_sweep_4gpu.log"
     assignments = (
         ("prompted", 0, CUDA_IDS[0]),
         ("prompted", 1, CUDA_IDS[1]),
@@ -28,7 +28,7 @@ def main():
     with open(log_path, "a", buffering=1) as stream:
         stream.write(
             "\n[launcher] q00-q98 aligned checkpoint-noise projected4096; "
-            "interval-mean LR; timestamp counts 100/90/.../10\n"
+            "source-checkpoint saved LR; timestamp counts 100/90/.../10\n"
         )
         for family, shard, gpu in assignments:
             label = f"{family}-timestamp-shard-{shard}"

@@ -73,7 +73,7 @@ def main():
         action="store_true",
         help=(
             "simultaneously save the 100/90/.../10 evenly spaced timestamp "
-            "banks with exact interval-mean learning-rate weights"
+            "banks with the source checkpoint's saved learning-rate weight"
         ),
     )
     parser.add_argument("--noise-mode", choices=TRACIN_DAS_NOISE_MODES, default="checkpoint")
@@ -94,10 +94,10 @@ def main():
         raise ValueError("batch size must be positive")
     if args.avg_pair_lr_multi and args.timestamp_count_multi:
         raise ValueError("checkpoint-count and timestamp-count multi modes conflict")
-    interval_mean_lr_multi = (
+    multi_sweep = (
         args.avg_pair_lr_multi or args.timestamp_count_multi
     )
-    if interval_mean_lr_multi and (
+    if multi_sweep and (
         args.query_scope != "first99"
         or args.noise_mode != "checkpoint"
         or args.parameter_projection != "projected4096"
@@ -167,7 +167,7 @@ def main():
         }
     elif args.timestamp_count_multi:
         methods_by_group = {
-            str(count): tracin_das_interval_mean_lr_timestamp_methods(count)
+            str(count): tracin_das_checkpoint_lr_timestamp_methods(count)
             for count in TRACIN_DAS_TIMESTAMP_COUNTS
         }
         pair_indices_by_group = {
@@ -435,7 +435,7 @@ def main():
                 batched_gradient = vmap(
                     grad(train_loss), in_dims=(None, 0, 0, 0)
                 )
-            if interval_mean_lr_multi:
+            if args.avg_pair_lr_multi:
                 checkpoint_lr = float(
                     tracin_interval_mean_lr(checkpoint, target_checkpoint)
                 )
@@ -642,8 +642,8 @@ def main():
             "lr_weighted": TRACIN_USE_LR_WEIGHTS,
             "learning_rate_source": (
                 "exact mean scheduled LR over [current global_step, next global_step)"
-                if interval_mean_lr_multi
-                else "current_checkpoint"
+                if args.avg_pair_lr_multi
+                else "source checkpoint saved eta"
             ),
             "timestamp_weight_by_group": snapshot_weight_by_group,
             "batch_size": args.batch_size,

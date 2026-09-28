@@ -99,13 +99,13 @@ def tracin_das_avg_pair_lr_shard_root(family, shard_index, shard_count):
     )
 
 
-def tracin_das_interval_mean_lr_timestamp_methods(timestamp_count):
+def tracin_das_checkpoint_lr_timestamp_methods(timestamp_count):
     timestamp_count = int(timestamp_count)
     if timestamp_count not in TRACIN_DAS_TIMESTAMP_COUNTS:
         raise ValueError(f"unsupported timestamp_count={timestamp_count}")
     stem = (
         "tracin_das_endpoint_next_delta_checkpoint_noise_projected4096_"
-        f"interval_mean_lr_50ckpt_{timestamp_count}timestamp"
+        f"checkpoint_lr_50ckpt_{timestamp_count}timestamp"
     )
     return {
         "linear": f"{stem}_linear",
@@ -132,7 +132,7 @@ def tracin_das_timestamp_sweep_shard_root(family, shard_index, shard_count):
         raise ValueError(f"unknown family={family!r}")
     return (
         ATTR_DIR
-        / "_tracin_das_checkpoint_noise_projected4096_interval_mean_lr_99q_timestamp_sweep_shards"
+        / "_tracin_das_checkpoint_noise_projected4096_checkpoint_lr_99q_timestamp_sweep_shards"
         / family
         / f"shard_{int(shard_index):02d}_of_{int(shard_count):02d}"
     )

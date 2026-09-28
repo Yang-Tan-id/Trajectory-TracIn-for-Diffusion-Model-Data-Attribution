@@ -70,7 +70,7 @@ def main():
 
     for count in TRACIN_DAS_TIMESTAMP_COUNTS:
         group = str(count)
-        methods = tracin_das_interval_mean_lr_timestamp_methods(count)
+        methods = tracin_das_checkpoint_lr_timestamp_methods(count)
         selected_indices = list(tracin_das_timestamp_indices(count))
         for contraction, method in methods.items():
             for query_position, query_id in enumerate(query_ids):
@@ -99,10 +99,7 @@ def main():
                         "parameter_projection_dim": TRACIN_PROJ_DIM,
                         "train_noise_mode": "aligned",
                         "train_mc": 1,
-                        "learning_rate_source": (
-                            "exact mean scheduled LR over "
-                            "[current global_step, next global_step)"
-                        ),
+                        "learning_rate_source": "source checkpoint saved eta",
                         "timestamp_weight": 1.0 / count,
                         "timestamp_shards": args.timestamp_shard_count,
                     },
