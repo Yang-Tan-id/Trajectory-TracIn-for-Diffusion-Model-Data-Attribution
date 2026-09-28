@@ -12,9 +12,13 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--epsilon", type=float, default=REF_MC4_DEFAULT_EPSILON)
     parser.add_argument("--batch-size", type=int, default=REF_MC4_BATCH_SIZE)
+    parser.add_argument("--train-mc", type=int, default=REF_MC4_DEFAULT_TRAIN_MC)
     args = parser.parse_args()
     LOG_DIR.mkdir(parents=True, exist_ok=True)
-    log_path = LOG_DIR / f"reference_traj_mc4_eps_{epsilon_tag(args.epsilon)}_4gpu.log"
+    log_path = LOG_DIR / (
+        f"reference_traj_mc4_eps_{epsilon_tag(args.epsilon)}_"
+        f"train_mc{args.train_mc}_4gpu.log"
+    )
     active = []
     with open(log_path, "a", buffering=1) as stream:
         for shard_index, gpu in enumerate(CUDA_IDS[:4]):
@@ -25,6 +29,7 @@ def main():
                 "--timestamp-shard-count", "4",
                 "--epsilon", str(args.epsilon),
                 "--batch-size", str(args.batch_size),
+                "--train-mc", str(args.train_mc),
             ]
             process = subprocess.Popen(command, stdout=stream, stderr=subprocess.STDOUT)
             active.append((shard_index, process))
@@ -48,6 +53,7 @@ def main():
             [
                 sys.executable, "-u", "78_merge_reference_traj_mc4.py",
                 "--epsilon", str(args.epsilon),
+                "--train-mc", str(args.train_mc),
             ],
             stdout=stream, stderr=subprocess.STDOUT, check=True,
         )

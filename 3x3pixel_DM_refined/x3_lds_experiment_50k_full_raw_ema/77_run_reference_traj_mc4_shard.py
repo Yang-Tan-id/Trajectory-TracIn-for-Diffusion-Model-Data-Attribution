@@ -70,9 +70,12 @@ def main():
     parser.add_argument("--timestamp-shard-count", type=int, default=4)
     parser.add_argument("--batch-size", type=int, default=REF_MC4_BATCH_SIZE)
     parser.add_argument("--epsilon", type=float, default=REF_MC4_DEFAULT_EPSILON)
+    parser.add_argument("--train-mc", type=int, default=REF_MC4_DEFAULT_TRAIN_MC)
     args = parser.parse_args()
     if args.epsilon <= 0:
         raise ValueError("epsilon must be positive")
+    if args.train_mc <= 0:
+        raise ValueError("train MC must be positive")
     if not 0 <= args.timestamp_shard_index < args.timestamp_shard_count:
         raise ValueError("invalid timestamp shard")
     device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
@@ -102,12 +105,17 @@ def main():
     schedule = base.make_linear_schedule(T, device=device)
     x_all, cond_all = preload_dataset(dataset, REF_MC4_FAMILY, device)
     selected = list(range(args.timestamp_shard_index, len(t_seq), args.timestamp_shard_count))
-    root = ref_mc4_shard_root(args.timestamp_shard_index, args.timestamp_shard_count, args.epsilon)
+    root = ref_mc4_shard_root(
+        args.timestamp_shard_index,
+        args.timestamp_shard_count,
+        args.epsilon,
+        args.train_mc,
+    )
     done_path = root / "done.json"
     if done_path.is_file():
         print(f"[skip] {done_path}", flush=True)
         return
-    methods = ref_mc4_methods(args.epsilon)
+    methods = ref_mc4_methods(args.epsilon, args.train_mc)
     partial_paths = {name: root / f"partial_{name}.npy" for name in methods}
     progress_path = root / "progress.json"
     shape = (len(records), N_TRAIN)
@@ -119,6 +127,8 @@ def main():
             raise ValueError("partial contract differs")
         if int(progress["batch_size"]) != args.batch_size:
             raise ValueError("partial batch size differs")
+        if int(progress.get("train_mc", -1)) != args.train_mc:
+            raise ValueError("partial train MC differs")
         completed = [int(value) for value in progress["completed_timestamps"]]
         scores = {
             name: torch.from_numpy(np.load(path)).to(device=device, dtype=torch.float64)
@@ -131,7 +141,7 @@ def main():
     remaining = [index for index in selected if index not in set(completed)]
     timestamp_weight = 1.0 / len(t_seq)
     mc_weight = 1.0 / REF_MC4_COUNT
-    train_mc = int(TRACIN_TRAIN_MC)
+    train_mc = int(args.train_mc)
     started = time.perf_counter()
     total_terms = len(remaining) * len(transitions)
     finished_terms = 0
@@ -212,7 +222,7 @@ def main():
             for batch_position, start in enumerate(range(0, N_TRAIN, args.batch_size), start=1):
                 end = min(start + args.batch_size, N_TRAIN)
                 noise_generator = make_torch_generator(
-                    device, TRAIN_SEED, "reference_traj_mc4_train_mc10",
+                    device, TRAIN_SEED, "reference_traj_mc4_random_train_noise",
                     checkpoint_index, timestamp_index, start, train_mc,
                 )
                 noises = torch.randn(
@@ -262,6 +272,7 @@ def main():
                 "contract_version": CONTRACT_VERSION,
                 "batch_size": args.batch_size,
                 "epsilon": args.epsilon,
+                "train_mc": train_mc,
                 "completed_timestamps": completed,
             },
         )

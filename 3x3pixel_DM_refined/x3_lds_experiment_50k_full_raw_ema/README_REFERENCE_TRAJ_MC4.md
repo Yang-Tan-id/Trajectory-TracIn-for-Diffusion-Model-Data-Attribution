@@ -14,22 +14,22 @@ onto the normalized next-minus-current predicted-noise direction. Each of the
 four resulting query gradients is CountSketch-projected to 4096 dimensions and
 paired separately with the same timestamp-aligned training-loss gradient.
 
-The training gradient averages ten independent diffusion-loss noises per
-datapoint before differentiation. Query perturbations and training noises are
-independent.
+The training gradient uses one independent random diffusion-loss noise per
+datapoint by default (`--train-mc 1`). Query perturbations and training noises
+are independent. Larger train-MC values remain available as an option.
 
 Run with the default L2 perturbation radius 0.01:
 
 ```bash
 python -u 79_launch_reference_traj_mc4_4gpu.py \
-  --epsilon 0.01 --batch-size 128
+  --epsilon 0.01 --train-mc 1 --batch-size 128
 ```
 
 Then evaluate linear, termwise-square, and timestamp-sum-square against all
 eight LDS response metrics:
 
 ```bash
-python -u 80_eval_reference_traj_mc4_lds.py --epsilon 0.01
+python -u 80_eval_reference_traj_mc4_lds.py --epsilon 0.01 --train-mc 1
 ```
 
 Every epsilon value gets a separate shard, method, and LDS-summary namespace.
