@@ -202,3 +202,14 @@ both score signs:
 ```text
 x3_lds_exp_50k/lds/tracin_das_checkpoint_lr_99q_timestamp_sweep.json
 ```
+
+Write a readable per-query endpoint comparison against the globally selected
+original DAS lambda/sign:
+
+```bash
+python -u 93_compare_timestamp_sweep_vs_das_per_query.py
+```
+
+Use `--das-method das_ema_aligned_noise` after the aligned-noise DAS run to
+compare against that variant instead. The report uses one global sign per
+timestamp count and one global DAS lambda/sign; it never selects per query.
