@@ -31,6 +31,12 @@ SCHEME_GROUPS = {
             "traj_tracin_raw_mc10_aligned10x10_squared_previous_lr",
         ),
     ),
+    "raw_next_timestamp_square_ref100q": (
+        (
+            "raw_next_timestamp_square_ref100q",
+            "traj_tracin_raw_mc10_aligned10x10_timestamp_sum_squared_previous_lr_ref100q",
+        ),
+    ),
     "original": (
         ("residual", "traj_tracin_adamw_residual_aligned10x10"),
         ("full", "traj_tracin_adamw_full_aligned10x10"),
@@ -290,6 +296,7 @@ def main() -> None:
         "--scheme-group",
         choices=(
             "raw_loss",
+            "raw_next_timestamp_square_ref100q",
             "original",
             "squared",
             "squared_previous_lr",

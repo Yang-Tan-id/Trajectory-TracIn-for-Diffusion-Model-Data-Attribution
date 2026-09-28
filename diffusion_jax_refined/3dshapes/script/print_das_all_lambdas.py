@@ -71,11 +71,19 @@ def main() -> None:
         default=None,
         help="print per-query trajectory LDS at this fixed lambda",
     )
+    parser.add_argument(
+        "--fixed-all-targets-lambda",
+        type=float,
+        default=None,
+        help="print every requested query and all four targets at one fixed lambda",
+    )
     args = parser.parse_args()
     if (args.fixed_endpoint_lambda is None) != (args.fixed_trajectory_lambda is None):
         parser.error(
             "--fixed-endpoint-lambda and --fixed-trajectory-lambda must be provided together"
         )
+    if args.fixed_all_targets_lambda is not None and args.fixed_endpoint_lambda is not None:
+        parser.error("--fixed-all-targets-lambda cannot be combined with fixed endpoint/trajectory lambdas")
 
     records = json.loads(args.query_file.read_text())["queries"]
     query_ids = parse_ints(args.query_ids)
@@ -115,6 +123,30 @@ def main() -> None:
             f"No LDS summaries found for {das_name}, sign={args.prediction_sign}, "
             f"experiment={args.experiment}."
         )
+
+    if args.fixed_all_targets_lambda is not None:
+        damping = float(args.fixed_all_targets_lambda)
+        if damping not in values:
+            raise RuntimeError(f"No DAS results found for lambda={damping:g}")
+        missing = {
+            target: [q for q in query_ids if q not in values[damping].get(target, {})]
+            for target in TARGETS
+        }
+        missing = {target: ids for target, ids in missing.items() if ids}
+        if missing:
+            raise RuntimeError(f"Missing fixed-lambda results: {missing}")
+        print(f"DAS FIXED LAMBDA={damping:g}: {das_name}, sign={args.prediction_sign}")
+        print(f"{'Q':>3s} {'ENDPOINT':>10s} {'TRAJ-CF':>10s} {'SIMPLE':>10s} {'NOISE':>10s}")
+        print("-" * 57)
+        for query_id in query_ids:
+            row = [values[damping][target][query_id] for target in TARGETS]
+            print(f"Q{query_id:<2d} " + " ".join(f"{value:+9.3f}%" for value in row))
+        means = [
+            statistics.fmean(values[damping][target][query_id] for query_id in query_ids)
+            for target in TARGETS
+        ]
+        print("MEAN " + " ".join(f"{value:+9.3f}%" for value in means))
+        return
 
     if args.fixed_endpoint_lambda is not None:
         endpoint_lambda = float(args.fixed_endpoint_lambda)
