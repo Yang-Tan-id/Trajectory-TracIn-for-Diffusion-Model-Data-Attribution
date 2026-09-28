@@ -119,9 +119,11 @@ def main():
     if not records or any(record["family"] != args.family for record in records):
         raise ValueError(f"invalid query bank for family={args.family}")
     dataset = ColorGridDataset(str(BASE_CSV), grid_size=3)
-    paths = model_paths(args.family)
-    if len(paths) != 50:
-        raise ValueError(f"expected 50 old-experiment checkpoints, found {len(paths)}")
+    checkpoint_paths = model_paths(args.family)
+    if len(checkpoint_paths) != 50:
+        raise ValueError(
+            f"expected 50 old-experiment checkpoints, found {len(checkpoint_paths)}"
+        )
     schedule = base.make_linear_schedule(T, device=device)
     x_all, cond_all = preload_dataset(dataset, args.family, device)
     endpoints = [
@@ -186,7 +188,9 @@ def main():
     completed_timestamps = []
     expected_shape = (len(records), N_TRAIN)
     all_partial_paths = [
-        path for paths in partial_paths.values() for path in paths.values()
+        path
+        for group_paths in partial_paths.values()
+        for path in group_paths.values()
     ]
     if all(path.is_file() for path in all_partial_paths) and progress_path.is_file():
         with open(progress_path) as handle:
@@ -215,9 +219,9 @@ def main():
                 contraction: torch.from_numpy(np.load(path)).to(
                     device=device, dtype=torch.float64
                 )
-                for contraction, path in paths.items()
+                for contraction, path in group_paths.items()
             }
-            for group, paths in partial_paths.items()
+            for group, group_paths in partial_paths.items()
         }
         if any(
             value.shape != expected_shape
@@ -237,7 +241,9 @@ def main():
             for group in methods_by_group
         }
 
-    transitions = [(index, index + 1) for index in range(len(paths) - 1)]
+    transitions = [
+        (index, index + 1) for index in range(len(checkpoint_paths) - 1)
+    ]
     remaining = [index for index in selected if index not in set(completed_timestamps)]
     snapshot_weight = 1.0 / len(timestamps)
     total_terms = len(remaining) * len(transitions)
@@ -300,9 +306,11 @@ def main():
                 base.q_sample(endpoint, t_query, shared_noise, schedule)
                 for endpoint in endpoints
             ]
-            model, _, checkpoint = build_model(paths[checkpoint_index], "raw", device)
+            model, _, checkpoint = build_model(
+                checkpoint_paths[checkpoint_index], "raw", device
+            )
             target, _, target_checkpoint = build_model(
-                paths[target_index], "raw", device
+                checkpoint_paths[target_index], "raw", device
             )
             named = dict(model.named_parameters())
             names = tuple(named)
@@ -488,8 +496,8 @@ def main():
             or len(completed_timestamps) == len(selected)
         )
         if should_checkpoint:
-            for group, paths in partial_paths.items():
-                for contraction, path in paths.items():
+            for group, group_paths in partial_paths.items():
+                for contraction, path in group_paths.items():
                     atomic_numpy(path, scores[group][contraction].cpu().numpy())
             atomic_json(
                 progress_path,
