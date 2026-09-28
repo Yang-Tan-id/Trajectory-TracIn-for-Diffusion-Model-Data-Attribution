@@ -4,6 +4,7 @@ from exp_config import *
 
 
 TRACIN_DAS_QUERY_IDS = tuple(range(10))
+TRACIN_DAS_ALL_QUERY_IDS = tuple(range(100))
 TRACIN_DAS_FAMILY = "prompted"
 TRACIN_DAS_BATCH_SIZE = 128
 TRACIN_DAS_NOISE_SEED = 7367
@@ -60,6 +61,8 @@ def tracin_das_shard_root(
     noise_mode="checkpoint",
     parameter_projection="exact",
     train_noise_mode="aligned",
+    family=None,
+    query_scope="ten",
 ):
     noise_tag = (
         "checkpoint_noise" if noise_mode == "checkpoint"
@@ -71,7 +74,11 @@ def tracin_das_shard_root(
         f"_tracin_das_endpoint_delta_{noise_tag}{projection_tag}"
         f"{train_tag}_shards"
     )
-    return (
-        ATTR_DIR / namespace
-        / f"shard_{int(shard_index):02d}_of_{int(shard_count):02d}"
-    )
+    root = ATTR_DIR / namespace
+    if query_scope == "all":
+        if family not in FAMILIES:
+            raise ValueError("family is required for the all-query shard bank")
+        root = root / "q00_q99" / str(family)
+    elif query_scope != "ten":
+        raise ValueError(f"unknown query_scope={query_scope!r}")
+    return root / f"shard_{int(shard_index):02d}_of_{int(shard_count):02d}"

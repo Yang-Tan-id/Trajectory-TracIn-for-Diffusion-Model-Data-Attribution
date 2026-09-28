@@ -55,6 +55,8 @@ def main():
     parser.add_argument("--timestamp-shard-index", type=int, required=True)
     parser.add_argument("--timestamp-shard-count", type=int, default=4)
     parser.add_argument("--batch-size", type=int, default=TRACIN_DAS_BATCH_SIZE)
+    parser.add_argument("--family", choices=FAMILIES, default=TRACIN_DAS_FAMILY)
+    parser.add_argument("--query-scope", choices=("ten", "all"), default="ten")
     parser.add_argument("--noise-mode", choices=TRACIN_DAS_NOISE_MODES, default="checkpoint")
     parser.add_argument(
         "--parameter-projection",
@@ -78,15 +80,25 @@ def main():
     with open(QUERY_DIR / "manifest.json") as handle:
         manifest = json.load(handle)
     by_id = {int(record["query_id"]): record for record in manifest}
-    records = [by_id[qid] for qid in TRACIN_DAS_QUERY_IDS]
-    if any(record["family"] != TRACIN_DAS_FAMILY for record in records):
-        raise ValueError("q00-q09 must be prompted queries")
+    if args.query_scope == "all":
+        records = [
+            by_id[qid]
+            for qid in TRACIN_DAS_ALL_QUERY_IDS
+            if by_id[qid]["family"] == args.family
+        ]
+    else:
+        if args.family != TRACIN_DAS_FAMILY:
+            raise ValueError("the legacy ten-query scope only supports prompted")
+        records = [by_id[qid] for qid in TRACIN_DAS_QUERY_IDS]
+    query_ids = [int(record["query_id"]) for record in records]
+    if not records or any(record["family"] != args.family for record in records):
+        raise ValueError(f"invalid query bank for family={args.family}")
     dataset = ColorGridDataset(str(BASE_CSV), grid_size=3)
-    paths = model_paths(TRACIN_DAS_FAMILY)
+    paths = model_paths(args.family)
     if len(paths) != 50:
         raise ValueError(f"expected 50 old-experiment checkpoints, found {len(paths)}")
     schedule = base.make_linear_schedule(T, device=device)
-    x_all, cond_all = preload_dataset(dataset, TRACIN_DAS_FAMILY, device)
+    x_all, cond_all = preload_dataset(dataset, args.family, device)
     endpoints = [
         torch.from_numpy(np.load(Path(record["dir"]) / "final_state.npy")).to(
             device=device, dtype=torch.float32
@@ -107,6 +119,8 @@ def main():
         args.noise_mode,
         args.parameter_projection,
         args.train_noise_mode,
+        args.family,
+        args.query_scope,
     )
     done_path = shard_root / "done.json"
     if done_path.is_file():
@@ -133,6 +147,12 @@ def main():
             raise ValueError("partial shard parameter projection differs")
         if progress.get("train_noise_mode", "aligned") != args.train_noise_mode:
             raise ValueError("partial shard train-noise mode differs")
+        if progress.get("family", TRACIN_DAS_FAMILY) != args.family:
+            raise ValueError("partial shard family differs")
+        if progress.get("query_scope", "ten") != args.query_scope:
+            raise ValueError("partial shard query scope differs")
+        if progress.get("query_ids", list(TRACIN_DAS_QUERY_IDS)) != query_ids:
+            raise ValueError("partial shard query IDs differ")
         completed_timestamps = [int(value) for value in progress["completed_timestamps"]]
         scores = {
             contraction: torch.from_numpy(np.load(path)).to(device=device, dtype=torch.float64)
@@ -154,7 +174,8 @@ def main():
     completed_terms = 0
     started = time.perf_counter()
     print(
-        f"[tracin-das gpu={args.gpu}] q00-q09 "
+        f"[tracin-das gpu={args.gpu}] family={args.family} "
+        f"queries={query_ids[0]}..{query_ids[-1]} ({len(query_ids)}) "
         f"parameter_projection={args.parameter_projection} "
         f"timestamps={len(selected)}/100 transitions=49 batch={args.batch_size} "
         f"noise_mode={args.noise_mode} "
@@ -375,7 +396,9 @@ def main():
                 "noise_mode": args.noise_mode,
                 "parameter_projection": args.parameter_projection,
                 "train_noise_mode": args.train_noise_mode,
-                "query_ids": list(TRACIN_DAS_QUERY_IDS),
+                "query_ids": query_ids,
+                "family": args.family,
+                "query_scope": args.query_scope,
                 "completed_timestamps": completed_timestamps,
             },
         )
@@ -387,8 +410,9 @@ def main():
         done_path,
         {
             "methods": methods,
-            "query_ids": list(TRACIN_DAS_QUERY_IDS),
-            "family": TRACIN_DAS_FAMILY,
+            "query_ids": query_ids,
+            "family": args.family,
+            "query_scope": args.query_scope,
             "timestamp_indices": selected,
             "timestamps": [timestamps[index] for index in selected],
             "checkpoint_transitions": 49,

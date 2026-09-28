@@ -20,6 +20,8 @@ def atomic_json(path, payload):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--timestamp-shard-count", type=int, default=4)
+    parser.add_argument("--family", choices=FAMILIES, default=TRACIN_DAS_FAMILY)
+    parser.add_argument("--query-scope", choices=("ten", "all"), default="ten")
     parser.add_argument("--noise-mode", choices=TRACIN_DAS_NOISE_MODES, default="checkpoint")
     parser.add_argument(
         "--parameter-projection",
@@ -37,8 +39,21 @@ def main():
         args.parameter_projection,
         args.train_noise_mode,
     )
+    with open(QUERY_DIR / "manifest.json") as handle:
+        manifest = json.load(handle)
+    by_id = {int(record["query_id"]): record for record in manifest}
+    query_ids = (
+        [
+            qid for qid in TRACIN_DAS_ALL_QUERY_IDS
+            if by_id[qid]["family"] == args.family
+        ]
+        if args.query_scope == "all"
+        else list(TRACIN_DAS_QUERY_IDS)
+    )
+    if args.query_scope == "ten" and args.family != TRACIN_DAS_FAMILY:
+        raise ValueError("the legacy ten-query scope only supports prompted")
     totals = {
-        contraction: np.zeros((len(TRACIN_DAS_QUERY_IDS), N_TRAIN), dtype=np.float64)
+        contraction: np.zeros((len(query_ids), N_TRAIN), dtype=np.float64)
         for contraction in methods
     }
     covered = []
@@ -50,12 +65,18 @@ def main():
             args.noise_mode,
             args.parameter_projection,
             args.train_noise_mode,
+            args.family,
+            args.query_scope,
         )
         with open(root / "done.json") as handle:
             info = json.load(handle)
         metadata.append(info)
-        if info["query_ids"] != list(TRACIN_DAS_QUERY_IDS):
+        if info["query_ids"] != query_ids:
             raise ValueError(f"query mismatch in {root}")
+        if info.get("family", TRACIN_DAS_FAMILY) != args.family:
+            raise ValueError(f"family mismatch in {root}")
+        if info.get("query_scope", "ten") != args.query_scope:
+            raise ValueError(f"query-scope mismatch in {root}")
         if info.get("noise_mode", "checkpoint") != args.noise_mode:
             raise ValueError(f"noise mode mismatch in {root}")
         if info.get("parameter_projection", "exact") != args.parameter_projection:
@@ -71,11 +92,8 @@ def main():
     if sorted(covered) != list(range(len(DAS_TIMESTEPS))):
         raise ValueError("timestamp shards do not cover all 100 timestamps exactly")
 
-    with open(QUERY_DIR / "manifest.json") as handle:
-        manifest = json.load(handle)
-    by_id = {int(record["query_id"]): record for record in manifest}
     for contraction, method in methods.items():
-        for query_position, query_id in enumerate(TRACIN_DAS_QUERY_IDS):
+        for query_position, query_id in enumerate(query_ids):
             output = ATTR_DIR / method / f"q{query_id:02d}"
             output.mkdir(parents=True, exist_ok=True)
             np.save(output / "scores.npy", totals[contraction][query_position])
@@ -83,6 +101,7 @@ def main():
                 output / "info.json",
                 {
                     "query": by_id[query_id],
+                    "query_scope": args.query_scope,
                     "method": method,
                     "contraction": contraction,
                     "checkpoint_target": "next",
@@ -118,7 +137,11 @@ def main():
                     "timestamp_shards": args.timestamp_shard_count,
                 },
             )
-        print(f"[saved] {method} q00-q09", flush=True)
+        print(
+            f"[saved] {method} family={args.family} "
+            f"q{query_ids[0]:02d}-q{query_ids[-1]:02d}",
+            flush=True,
+        )
 
 
 if __name__ == "__main__":

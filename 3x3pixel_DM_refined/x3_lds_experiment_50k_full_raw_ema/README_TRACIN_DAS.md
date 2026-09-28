@@ -107,3 +107,22 @@ LDS-summary namespaces.
 
 The LDS summary is saved at
 `x3_lds_exp_50k/lds/tracin_das_endpoint_next_delta_checkpoint_noise_q00_q09.json`.
+
+## Stable aligned projected4096 run on all 100 queries
+
+The all-query launcher keeps the checkpoint-specific random noise and reuses
+that exact `(timestamp, noise)` on the query and training-loss sides. It uses
+the same checkpoint-specific CountSketch4096 map for both parameter gradients.
+It runs prompted q00-q74 and unprompted q75-q99 as separate family banks on
+four GPUs, without sharing or overwriting partial shards from the q00-q09 run:
+
+```bash
+python -u 81_launch_tracin_das_aligned_projected4096_100q_4gpu.py \
+  --batch-size 128
+python -u 82_eval_tracin_das_aligned_projected4096_100q_lds.py
+```
+
+The launcher saves all three contractions (`linear`, `termwise_squared`, and
+`timestamp_sum_squared`) under their existing projected4096 method names for
+q00-q99. The LDS summary is saved as
+`x3_lds_exp_50k/lds/tracin_das_endpoint_next_delta_checkpoint_noise_projected4096_aligned_q00_q99.json`.
