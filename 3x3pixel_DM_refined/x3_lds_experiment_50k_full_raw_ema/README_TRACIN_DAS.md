@@ -158,3 +158,25 @@ EMA and raw observed variants. The combined summary is:
 ```text
 x3_lds_exp_50k/lds/tracin_das_interval_mean_lr_99q_checkpoint_sweep.json
 ```
+
+## Final-EMA DAS with aligned query/train noise (q00-q98)
+
+The original DAS samples independent train-side MC10 noise inside each query
+term. This comparison instead uses one shared noise draw for each
+`(timestamp, MC)` term on both sides: every query endpoint and every training
+point feature/residual use that same draw. Ten aligned terms per timestamp
+still provide effective MC10, but there is no independent train-side MC loop.
+Projection remains CountSketch4096 and all configured lambdas are saved.
+
+Run four timestamp/family shards, merge, and evaluate LDS automatically:
+
+```bash
+python -u 88_launch_das_aligned_noise_99q_4gpu.py --batch-size 64
+```
+
+The method namespace is `das_ema_aligned_noise`. LDS covers the four target
+families with both EMA/raw observed variants and both score signs:
+
+```text
+x3_lds_exp_50k/lds/das_ema_aligned_noise_99q_lambda_sweep.json
+```
