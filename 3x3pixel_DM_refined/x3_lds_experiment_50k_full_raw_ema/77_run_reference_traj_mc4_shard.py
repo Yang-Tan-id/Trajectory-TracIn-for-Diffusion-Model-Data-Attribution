@@ -45,7 +45,7 @@ def atomic_json(path, value):
     os.replace(temporary, path)
 
 
-def perturbation_bank(query_id, timestamp_index, shape, device):
+def perturbation_bank(query_id, timestamp_index, shape, device, query_mc):
     generator = make_torch_generator(
         device,
         REF_MC4_DIRECTION_SEED,
@@ -54,12 +54,12 @@ def perturbation_bank(query_id, timestamp_index, shape, device):
         int(timestamp_index),
     )
     directions = torch.randn(
-        (REF_MC4_COUNT, *shape), generator=generator,
+        (query_mc, *shape), generator=generator,
         device=device, dtype=torch.float32,
     )
-    norms = directions.reshape(REF_MC4_COUNT, -1).norm(dim=1)
+    norms = directions.reshape(query_mc, -1).norm(dim=1)
     return directions / norms.clamp_min(REF_MC4_DIRECTION_EPS).view(
-        REF_MC4_COUNT, *([1] * len(shape))
+        query_mc, *([1] * len(shape))
     )
 
 
@@ -71,11 +71,14 @@ def main():
     parser.add_argument("--batch-size", type=int, default=REF_MC4_BATCH_SIZE)
     parser.add_argument("--epsilon", type=float, default=REF_MC4_DEFAULT_EPSILON)
     parser.add_argument("--train-mc", type=int, default=REF_MC4_DEFAULT_TRAIN_MC)
+    parser.add_argument("--query-mc", type=int, default=REF_MC4_COUNT)
     args = parser.parse_args()
     if args.epsilon <= 0:
         raise ValueError("epsilon must be positive")
     if args.train_mc <= 0:
         raise ValueError("train MC must be positive")
+    if args.query_mc <= 0:
+        raise ValueError("query MC must be positive")
     if not 0 <= args.timestamp_shard_index < args.timestamp_shard_count:
         raise ValueError("invalid timestamp shard")
     device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
@@ -110,12 +113,13 @@ def main():
         args.timestamp_shard_count,
         args.epsilon,
         args.train_mc,
+        args.query_mc,
     )
     done_path = root / "done.json"
     if done_path.is_file():
         print(f"[skip] {done_path}", flush=True)
         return
-    methods = ref_mc4_methods(args.epsilon, args.train_mc)
+    methods = ref_mc4_methods(args.epsilon, args.train_mc, args.query_mc)
     partial_paths = {name: root / f"partial_{name}.npy" for name in methods}
     progress_path = root / "progress.json"
     shape = (len(records), N_TRAIN)
@@ -129,6 +133,8 @@ def main():
             raise ValueError("partial batch size differs")
         if int(progress.get("train_mc", -1)) != args.train_mc:
             raise ValueError("partial train MC differs")
+        if int(progress.get("query_mc", REF_MC4_COUNT)) != args.query_mc:
+            raise ValueError("partial query MC differs")
         completed = [int(value) for value in progress["completed_timestamps"]]
         scores = {
             name: torch.from_numpy(np.load(path)).to(device=device, dtype=torch.float64)
@@ -140,14 +146,14 @@ def main():
     transitions = [(index, index + 1) for index in range(49)]
     remaining = [index for index in selected if index not in set(completed)]
     timestamp_weight = 1.0 / len(t_seq)
-    mc_weight = 1.0 / REF_MC4_COUNT
+    mc_weight = 1.0 / args.query_mc
     train_mc = int(args.train_mc)
     started = time.perf_counter()
     total_terms = len(remaining) * len(transitions)
     finished_terms = 0
     print(
         f"[ref-mc4 gpu={args.gpu}] q00-q09 epsilon={args.epsilon:g} "
-        f"timestamps={len(selected)}/100 transitions=49 query_mc=4 "
+        f"timestamps={len(selected)}/100 transitions=49 query_mc={args.query_mc} "
         f"train_mc={train_mc} projection={TRACIN_PROJ_DIM} batch={args.batch_size}",
         flush=True,
     )
@@ -162,7 +168,7 @@ def main():
             )
             directions = perturbation_bank(
                 int(record["query_id"]), timestamp_index,
-                tuple(reference_state.shape), device,
+                tuple(reference_state.shape), device, args.query_mc,
             )
             perturbed_states.append(
                 reference_state.unsqueeze(0) + args.epsilon * directions
@@ -183,7 +189,7 @@ def main():
             delta_norms = []
             for states, condition in zip(perturbed_states, conditions):
                 per_query = []
-                for mc_index in range(REF_MC4_COUNT):
+                for mc_index in range(args.query_mc):
                     state = states[mc_index]
                     current = model(state, t_query, condition)
                     with torch.no_grad():
@@ -201,7 +207,7 @@ def main():
                     delta_norms.append(float(delta_norm))
                 query_features.append(torch.stack(per_query))
             query_matrix = torch.stack(query_features).reshape(
-                len(records) * REF_MC4_COUNT, TRACIN_PROJ_DIM
+                len(records) * args.query_mc, TRACIN_PROJ_DIM
             ).detach()
             train_timesteps = torch.full(
                 (train_mc,), timestep, device=device, dtype=torch.long
@@ -236,7 +242,7 @@ def main():
                     gradients, names, specs, TRACIN_PROJ_DIM, False, 1e-8
                 )
                 dots = (train_features @ query_matrix.T).T.reshape(
-                    len(records), REF_MC4_COUNT, end-start
+                    len(records), args.query_mc, end-start
                 ).to(torch.float64)
                 scores["linear"][:, start:end] += weight * dots.sum(dim=1)
                 scores["termwise_squared"][:, start:end] += weight * dots.square().sum(dim=1)
@@ -273,6 +279,7 @@ def main():
                 "batch_size": args.batch_size,
                 "epsilon": args.epsilon,
                 "train_mc": train_mc,
+                "query_mc": args.query_mc,
                 "completed_timestamps": completed,
             },
         )
@@ -286,7 +293,7 @@ def main():
             "query_ids": list(REF_MC4_QUERY_IDS),
             "timestamp_indices": selected,
             "epsilon": args.epsilon,
-            "query_mc": REF_MC4_COUNT,
+            "query_mc": args.query_mc,
             "query_perturbation": "unit-L2 Gaussian directions around cached reference trajectory state",
             "perturbation_sharing": "fixed across checkpoints; independent by query/timestamp/mc",
             "train_mc": train_mc,

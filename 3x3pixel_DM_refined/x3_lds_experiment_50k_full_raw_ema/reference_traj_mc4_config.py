@@ -17,9 +17,13 @@ def epsilon_tag(epsilon):
     return format(float(epsilon), ".8g").replace("-", "m").replace(".", "p")
 
 
-def ref_mc4_methods(epsilon, train_mc=REF_MC4_DEFAULT_TRAIN_MC):
+def ref_mc4_methods(
+    epsilon,
+    train_mc=REF_MC4_DEFAULT_TRAIN_MC,
+    query_mc=REF_MC4_COUNT,
+):
     prefix = (
-        f"tracin_das_reference_traj_mc4_eps_{epsilon_tag(epsilon)}_"
+        f"tracin_das_reference_traj_mc{int(query_mc)}_eps_{epsilon_tag(epsilon)}_"
         f"projected4096_train_mc{int(train_mc)}"
     )
     return {
@@ -34,11 +38,12 @@ def ref_mc4_shard_root(
     shard_count,
     epsilon,
     train_mc=REF_MC4_DEFAULT_TRAIN_MC,
+    query_mc=REF_MC4_COUNT,
 ):
     return (
         ATTR_DIR
         / (
-            f"_tracin_das_reference_traj_mc4_eps_{epsilon_tag(epsilon)}_"
+            f"_tracin_das_reference_traj_mc{int(query_mc)}_eps_{epsilon_tag(epsilon)}_"
             f"projected4096_train_mc{int(train_mc)}_shards"
         )
         / f"shard_{int(shard_index):02d}_of_{int(shard_count):02d}"

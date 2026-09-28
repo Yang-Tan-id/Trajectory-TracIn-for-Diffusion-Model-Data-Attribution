@@ -13,8 +13,9 @@ def main():
     parser.add_argument("--epsilon", type=float, default=REF_MC4_DEFAULT_EPSILON)
     parser.add_argument("--timestamp-shard-count", type=int, default=4)
     parser.add_argument("--train-mc", type=int, default=REF_MC4_DEFAULT_TRAIN_MC)
+    parser.add_argument("--query-mc", type=int, default=REF_MC4_COUNT)
     args = parser.parse_args()
-    methods = ref_mc4_methods(args.epsilon, args.train_mc)
+    methods = ref_mc4_methods(args.epsilon, args.train_mc, args.query_mc)
     totals = {
         name: np.zeros((len(REF_MC4_QUERY_IDS), N_TRAIN), dtype=np.float64)
         for name in methods
@@ -23,7 +24,8 @@ def main():
     metadata = []
     for shard_index in range(args.timestamp_shard_count):
         root = ref_mc4_shard_root(
-            shard_index, args.timestamp_shard_count, args.epsilon, args.train_mc
+            shard_index, args.timestamp_shard_count, args.epsilon, args.train_mc,
+            args.query_mc,
         )
         with open(root / "done.json") as handle:
             info = json.load(handle)
@@ -34,6 +36,8 @@ def main():
             raise ValueError(f"epsilon differs in {root}")
         if int(info["train_mc"]) != int(args.train_mc):
             raise ValueError(f"train MC differs in {root}")
+        if int(info["query_mc"]) != int(args.query_mc):
+            raise ValueError(f"query MC differs in {root}")
         covered.extend(int(value) for value in info["timestamp_indices"])
         for name in methods:
             values = np.load(root / f"{name}.npy")
@@ -57,9 +61,11 @@ def main():
                         "method": method,
                         "contraction": contraction,
                         "epsilon": args.epsilon,
-                        "query_mc": REF_MC4_COUNT,
+                        "query_mc": args.query_mc,
                         "query_state_source": "cached final-EMA reference trajectory",
-                        "query_perturbation": "four unit-L2 Gaussian directions",
+                        "query_perturbation": (
+                            f"{args.query_mc} unit-L2 Gaussian directions"
+                        ),
                         "train_mc": args.train_mc,
                         "train_noise": "independent from query perturbations",
                         "parameter_source": "raw",

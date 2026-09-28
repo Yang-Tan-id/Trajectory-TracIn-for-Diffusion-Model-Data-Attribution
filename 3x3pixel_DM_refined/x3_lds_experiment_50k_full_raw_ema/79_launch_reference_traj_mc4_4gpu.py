@@ -13,10 +13,11 @@ def main():
     parser.add_argument("--epsilon", type=float, default=REF_MC4_DEFAULT_EPSILON)
     parser.add_argument("--batch-size", type=int, default=REF_MC4_BATCH_SIZE)
     parser.add_argument("--train-mc", type=int, default=REF_MC4_DEFAULT_TRAIN_MC)
+    parser.add_argument("--query-mc", type=int, default=REF_MC4_COUNT)
     args = parser.parse_args()
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     log_path = LOG_DIR / (
-        f"reference_traj_mc4_eps_{epsilon_tag(args.epsilon)}_"
+        f"reference_traj_mc{args.query_mc}_eps_{epsilon_tag(args.epsilon)}_"
         f"train_mc{args.train_mc}_4gpu.log"
     )
     active = []
@@ -30,6 +31,7 @@ def main():
                 "--epsilon", str(args.epsilon),
                 "--batch-size", str(args.batch_size),
                 "--train-mc", str(args.train_mc),
+                "--query-mc", str(args.query_mc),
             ]
             process = subprocess.Popen(command, stdout=stream, stderr=subprocess.STDOUT)
             active.append((shard_index, process))
@@ -54,10 +56,14 @@ def main():
                 sys.executable, "-u", "78_merge_reference_traj_mc4.py",
                 "--epsilon", str(args.epsilon),
                 "--train-mc", str(args.train_mc),
+                "--query-mc", str(args.query_mc),
             ],
             stdout=stream, stderr=subprocess.STDOUT, check=True,
         )
-    print("[done] reference-trajectory MC4 scores merged", flush=True)
+    print(
+        f"[done] reference-trajectory MC{args.query_mc} scores merged",
+        flush=True,
+    )
 
 
 if __name__ == "__main__":

@@ -13,10 +13,16 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--epsilon", type=float, default=REF_MC4_DEFAULT_EPSILON)
     parser.add_argument("--train-mc", type=int, default=REF_MC4_DEFAULT_TRAIN_MC)
+    parser.add_argument("--query-mc", type=int, default=REF_MC4_COUNT)
     args = parser.parse_args()
     membership = np.load(MASK_DIR / "membership.npy").astype(np.float64)
-    methods = ref_mc4_methods(args.epsilon, args.train_mc)
-    result = {"epsilon": args.epsilon, "train_mc": args.train_mc, "methods": {}}
+    methods = ref_mc4_methods(args.epsilon, args.train_mc, args.query_mc)
+    result = {
+        "epsilon": args.epsilon,
+        "train_mc": args.train_mc,
+        "query_mc": args.query_mc,
+        "methods": {},
+    }
     for contraction, method in methods.items():
         scores = [
             np.load(ATTR_DIR / method / f"q{qid:02d}" / "scores.npy").astype(np.float64)
@@ -48,7 +54,7 @@ def main():
             )
         result["methods"][method] = method_result
     path = LDS_DIR / (
-        f"reference_traj_mc4_eps_{epsilon_tag(args.epsilon)}_"
+        f"reference_traj_mc{args.query_mc}_eps_{epsilon_tag(args.epsilon)}_"
         f"train_mc{args.train_mc}_q00_q09.json"
     )
     with open(path, "w") as handle:
