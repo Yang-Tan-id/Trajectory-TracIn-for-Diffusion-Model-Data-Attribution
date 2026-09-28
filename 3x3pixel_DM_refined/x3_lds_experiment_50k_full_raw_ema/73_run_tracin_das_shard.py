@@ -61,6 +61,11 @@ def main():
         choices=TRACIN_DAS_PARAMETER_PROJECTIONS,
         default="exact",
     )
+    parser.add_argument(
+        "--train-noise-mode",
+        choices=TRACIN_DAS_TRAIN_NOISE_MODES,
+        default="aligned",
+    )
     args = parser.parse_args()
     if not 0 <= args.timestamp_shard_index < args.timestamp_shard_count:
         raise ValueError("invalid timestamp shard")
@@ -91,12 +96,17 @@ def main():
     conditions = [cond_for(record, dataset, device) for record in records]
     timestamps = tuple(int(value) for value in DAS_TIMESTEPS)
     selected = list(range(args.timestamp_shard_index, len(timestamps), args.timestamp_shard_count))
-    methods = tracin_das_methods(args.noise_mode, args.parameter_projection)
+    methods = tracin_das_methods(
+        args.noise_mode,
+        args.parameter_projection,
+        args.train_noise_mode,
+    )
     shard_root = tracin_das_shard_root(
         args.timestamp_shard_index,
         args.timestamp_shard_count,
         args.noise_mode,
         args.parameter_projection,
+        args.train_noise_mode,
     )
     done_path = shard_root / "done.json"
     if done_path.is_file():
@@ -121,6 +131,8 @@ def main():
             raise ValueError("partial shard noise mode differs")
         if progress.get("parameter_projection", "exact") != args.parameter_projection:
             raise ValueError("partial shard parameter projection differs")
+        if progress.get("train_noise_mode", "aligned") != args.train_noise_mode:
+            raise ValueError("partial shard train-noise mode differs")
         completed_timestamps = [int(value) for value in progress["completed_timestamps"]]
         scores = {
             contraction: torch.from_numpy(np.load(path)).to(device=device, dtype=torch.float64)
@@ -146,7 +158,9 @@ def main():
         f"parameter_projection={args.parameter_projection} "
         f"timestamps={len(selected)}/100 transitions=49 batch={args.batch_size} "
         f"noise_mode={args.noise_mode} "
-        "term_internal_alignment=true output_delta_normalized=true",
+        f"train_noise_mode={args.train_noise_mode} "
+        f"query_train_noise_aligned={args.train_noise_mode == 'aligned'} "
+        "output_delta_normalized=true",
         flush=True,
     )
 
@@ -226,20 +240,87 @@ def main():
                 delta_norms.append(float(delta_norm))
             query_matrix = torch.stack(query_vectors).detach().to(torch.float32)
 
-            def aligned_loss(parameter_dict, x0, condition):
-                xt = base.q_sample(x0.unsqueeze(0), t_query, shared_noise, schedule)
-                prediction = functional_call(
-                    model, parameter_dict, (xt, t_query, condition.unsqueeze(0))
-                )
-                return (prediction - shared_noise).square().mean()
+            if args.train_noise_mode == "aligned":
+                def train_loss(parameter_dict, x0, condition):
+                    xt = base.q_sample(
+                        x0.unsqueeze(0), t_query, shared_noise, schedule
+                    )
+                    prediction = functional_call(
+                        model,
+                        parameter_dict,
+                        (xt, t_query, condition.unsqueeze(0)),
+                    )
+                    return (prediction - shared_noise).square().mean()
 
-            batched_gradient = vmap(grad(aligned_loss), in_dims=(None, 0, 0))
+                batched_gradient = vmap(
+                    grad(train_loss), in_dims=(None, 0, 0)
+                )
+            else:
+                train_mc = int(TRACIN_TRAIN_MC)
+                train_timesteps = torch.full(
+                    (train_mc,), timestep, device=device, dtype=torch.long
+                )
+
+                def train_loss(parameter_dict, x0, condition, noises):
+                    x_mc = x0.unsqueeze(0).expand(train_mc, *x0.shape)
+                    condition_mc = condition.unsqueeze(0).expand(
+                        train_mc, condition.shape[-1]
+                    )
+                    xt = base.q_sample(
+                        x_mc, train_timesteps, noises, schedule
+                    )
+                    prediction = functional_call(
+                        model,
+                        parameter_dict,
+                        (xt, train_timesteps, condition_mc),
+                    )
+                    return (prediction - noises).square().reshape(
+                        train_mc, -1
+                    ).mean(dim=1).mean()
+
+                batched_gradient = vmap(
+                    grad(train_loss), in_dims=(None, 0, 0, 0)
+                )
             weight = float(tracin_lr_weight(checkpoint)) * snapshot_weight
             num_batches = math.ceil(N_TRAIN / args.batch_size)
             progress_every = max(1, num_batches // 5)
             for batch_position, start in enumerate(range(0, N_TRAIN, args.batch_size), start=1):
                 end = min(start + args.batch_size, N_TRAIN)
-                gradients = batched_gradient(named, x_all[start:end], cond_all[start:end])
+                train_noises = None
+                if args.train_noise_mode == "independent-mc10":
+                    train_noise_generator = make_torch_generator(
+                        device,
+                        TRAIN_SEED,
+                        "tracin_das_independent_train_mc10",
+                        checkpoint_index,
+                        timestamp_index,
+                        start,
+                        train_mc,
+                    )
+                    train_noises = torch.randn(
+                        (
+                            end - start,
+                            train_mc,
+                            *x_all.shape[1:],
+                        ),
+                        generator=train_noise_generator,
+                        device=device,
+                        dtype=x_all.dtype,
+                    )
+                gradients = (
+                    batched_gradient(
+                        named,
+                        x_all[start:end],
+                        cond_all[start:end],
+                    )
+                    if args.train_noise_mode == "aligned"
+                    else batched_gradient(
+                        named,
+                        x_all[start:end],
+                        cond_all[start:end],
+                        train_noises,
+                    )
+                )
                 train_matrix = (
                     _project_batched_grads(
                         gradients,
@@ -277,6 +358,7 @@ def main():
             del projection_specs
             del current_prediction, next_prediction, direction, projected_prediction, query_gradient
             del batched_gradient, gradients, train_matrix, dots, shared_noise, query_xt
+            del train_loss, train_noises
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
@@ -292,6 +374,7 @@ def main():
                 "batch_size": args.batch_size,
                 "noise_mode": args.noise_mode,
                 "parameter_projection": args.parameter_projection,
+                "train_noise_mode": args.train_noise_mode,
                 "query_ids": list(TRACIN_DAS_QUERY_IDS),
                 "completed_timestamps": completed_timestamps,
             },
@@ -313,6 +396,12 @@ def main():
             "endpoint_source": "cached final-EMA query endpoint",
             "noise_mode": args.noise_mode,
             "parameter_projection": args.parameter_projection,
+            "train_noise_mode": args.train_noise_mode,
+            "train_mc": (
+                1
+                if args.train_noise_mode == "aligned"
+                else int(TRACIN_TRAIN_MC)
+            ),
             "parameter_projection_dim": (
                 TRACIN_PROJ_DIM
                 if args.parameter_projection == "projected4096"
@@ -323,7 +412,11 @@ def main():
                 if args.noise_mode == "checkpoint"
                 else "one noise per timestamp shared across all checkpoint transitions"
             ),
-            "train_loss_noise": "same term noise as query endpoint",
+            "train_loss_noise": (
+                "same term noise as query endpoint"
+                if args.train_noise_mode == "aligned"
+                else "independent per-datapoint MC10 noises"
+            ),
             "query_scalar": "dot(epsilon_current, normalize(epsilon_next-epsilon_current))",
             "lr_weighted": TRACIN_USE_LR_WEIGHTS,
             "timestamp_weight": snapshot_weight,

@@ -17,8 +17,17 @@ def main():
         choices=TRACIN_DAS_PARAMETER_PROJECTIONS,
         default="exact",
     )
+    parser.add_argument(
+        "--train-noise-mode",
+        choices=TRACIN_DAS_TRAIN_NOISE_MODES,
+        default="aligned",
+    )
     args = parser.parse_args()
-    methods = tracin_das_methods(args.noise_mode, args.parameter_projection)
+    methods = tracin_das_methods(
+        args.noise_mode,
+        args.parameter_projection,
+        args.train_noise_mode,
+    )
     membership = np.load(MASK_DIR / "membership.npy").astype(np.float64)
     output = {"methods": {}}
     for contraction, method in methods.items():
@@ -52,8 +61,10 @@ def main():
     LDS_DIR.mkdir(parents=True, exist_ok=True)
     mode_tag = args.noise_mode.replace("-", "_")
     projection_tag = args.parameter_projection
+    train_tag = args.train_noise_mode.replace("-", "_")
     path = LDS_DIR / (
-        f"tracin_das_endpoint_next_delta_{mode_tag}_{projection_tag}_q00_q09.json"
+        f"tracin_das_endpoint_next_delta_{mode_tag}_{projection_tag}_"
+        f"{train_tag}_q00_q09.json"
     )
     with open(path, "w") as handle:
         json.dump(output, handle, indent=2)

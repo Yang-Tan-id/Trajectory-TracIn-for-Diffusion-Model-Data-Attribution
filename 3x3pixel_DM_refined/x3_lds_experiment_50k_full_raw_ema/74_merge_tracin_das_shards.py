@@ -26,8 +26,17 @@ def main():
         choices=TRACIN_DAS_PARAMETER_PROJECTIONS,
         default="exact",
     )
+    parser.add_argument(
+        "--train-noise-mode",
+        choices=TRACIN_DAS_TRAIN_NOISE_MODES,
+        default="aligned",
+    )
     args = parser.parse_args()
-    methods = tracin_das_methods(args.noise_mode, args.parameter_projection)
+    methods = tracin_das_methods(
+        args.noise_mode,
+        args.parameter_projection,
+        args.train_noise_mode,
+    )
     totals = {
         contraction: np.zeros((len(TRACIN_DAS_QUERY_IDS), N_TRAIN), dtype=np.float64)
         for contraction in methods
@@ -40,6 +49,7 @@ def main():
             args.timestamp_shard_count,
             args.noise_mode,
             args.parameter_projection,
+            args.train_noise_mode,
         )
         with open(root / "done.json") as handle:
             info = json.load(handle)
@@ -50,6 +60,8 @@ def main():
             raise ValueError(f"noise mode mismatch in {root}")
         if info.get("parameter_projection", "exact") != args.parameter_projection:
             raise ValueError(f"parameter projection mismatch in {root}")
+        if info.get("train_noise_mode", "aligned") != args.train_noise_mode:
+            raise ValueError(f"train-noise mode mismatch in {root}")
         covered.extend(int(value) for value in info["timestamp_indices"])
         for contraction in methods:
             values = np.load(root / f"{contraction}.npy")
@@ -80,6 +92,12 @@ def main():
                     "timestamps": [int(value) for value in DAS_TIMESTEPS],
                     "noise_mode": args.noise_mode,
                     "parameter_projection": args.parameter_projection,
+                    "train_noise_mode": args.train_noise_mode,
+                    "train_mc": (
+                        1
+                        if args.train_noise_mode == "aligned"
+                        else int(TRACIN_TRAIN_MC)
+                    ),
                     "parameter_projection_dim": (
                         TRACIN_PROJ_DIM
                         if args.parameter_projection == "projected4096"
@@ -89,7 +107,11 @@ def main():
                         "one independent noise per checkpoint/timestamp"
                         if args.noise_mode == "checkpoint"
                         else "one noise per timestamp shared across all checkpoint transitions"
-                    ) + "; query and train loss share the term noise",
+                    ) + (
+                        "; query and train loss share the term noise"
+                        if args.train_noise_mode == "aligned"
+                        else "; train loss uses independent per-point MC10 noise"
+                    ),
                     "query_scalar": "dot(epsilon_current, normalize(epsilon_next-epsilon_current))",
                     "lr_weighted": TRACIN_USE_LR_WEIGHTS,
                     "timestamp_weight": 1.0 / len(DAS_TIMESTEPS),

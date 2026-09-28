@@ -77,5 +77,33 @@ python -u 76_eval_tracin_das_lds.py --noise-mode timestamp-shared
 Add `--parameter-projection projected4096` to evaluate either projected
 variant.
 
+## Independent MC10 training loss
+
+To keep checkpoint/timestamp alignment but stop forcing the training loss to
+reuse the query noise, add `--train-noise-mode independent-mc10`. Each training
+point then receives ten independent noises, the ten losses are averaged, and
+one gradient of that mean loss is computed. For example, the projected4096
+timestamp-shared query-noise variant is:
+
+```bash
+python -u 75_launch_tracin_das_4gpu.py \
+  --noise-mode timestamp-shared \
+  --parameter-projection projected4096 \
+  --train-noise-mode independent-mc10 \
+  --batch-size 128
+```
+
+Evaluate it with the same three switches:
+
+```bash
+python -u 76_eval_tracin_das_lds.py \
+  --noise-mode timestamp-shared \
+  --parameter-projection projected4096 \
+  --train-noise-mode independent-mc10
+```
+
+All aligned and independent-MC10 variants use separate shard, score, log, and
+LDS-summary namespaces.
+
 The LDS summary is saved at
 `x3_lds_exp_50k/lds/tracin_das_endpoint_next_delta_checkpoint_noise_q00_q09.json`.
