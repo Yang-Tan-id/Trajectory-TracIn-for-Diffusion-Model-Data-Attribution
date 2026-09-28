@@ -51,6 +51,7 @@ def main():
                         "method": method,
                         "contraction": contraction,
                         "checkpoint_count": 50,
+                        "checkpoint_transition_count": 49,
                         "reference_timestamp_count": 100,
                         "delta_t": REF_FORWARD10_DELTA_T,
                         "loss_timestep": "reference timestep + 10",
@@ -58,8 +59,10 @@ def main():
                         "maximum_one_based_timestep": T + REF_FORWARD10_DELTA_T,
                         "query_train_noise_aligned": True,
                         "query_scalar": (
-                            "dot(predicted_noise_at_t_plus_10, unit(aligned_noise))"
+                            "dot(epsilon_current, normalize(epsilon_next-"
+                            "epsilon_current)) at the same reference-forward-10 state"
                         ),
+                        "checkpoint_target": "next",
                         "query_uses_loss": False,
                         "train_uses_diffusion_loss": True,
                         "parameter_source": "raw",

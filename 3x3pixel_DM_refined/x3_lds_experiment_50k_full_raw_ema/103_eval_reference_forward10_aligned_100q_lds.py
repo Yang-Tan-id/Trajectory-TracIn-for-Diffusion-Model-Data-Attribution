@@ -14,13 +14,16 @@ def main():
         "query_ids": list(range(100)),
         "query_count": 100,
         "checkpoint_count": 50,
+        "checkpoint_transition_count": 49,
         "reference_timestamp_count": 100,
         "delta_t": REF_FORWARD10_DELTA_T,
         "maximum_one_based_loss_timestep": T + REF_FORWARD10_DELTA_T,
         "query_train_noise_aligned": True,
         "query_scalar": (
-            "dot(predicted_noise_at_t_plus_10, unit(aligned_noise))"
+            "dot(epsilon_current, normalize(epsilon_next-epsilon_current)) "
+            "at the same reference-forward-10 state"
         ),
+        "checkpoint_target": "next",
         "query_uses_loss": False,
         "train_uses_diffusion_loss": True,
         "methods": {},
@@ -60,7 +63,7 @@ def main():
                 flush=True,
             )
         output["methods"][method] = method_result
-    path = LDS_DIR / "reference_forward10_prednoise_aligned_loss_100q.json"
+    path = LDS_DIR / "reference_forward10_next_delta_aligned_loss_100q.json"
     with open(path, "w") as handle:
         json.dump(output, handle, indent=2)
     print(f"[saved] {path}", flush=True)

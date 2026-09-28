@@ -9,17 +9,23 @@ x_{t->t+10} = sqrt(alpha_bar[t+10] / alpha_bar[t]) * x_t
               + sqrt(1 - alpha_bar[t+10] / alpha_bar[t]) * noise
 ```
 
-The query side is predicted noise, not a query loss:
+The query side is predicted noise projected onto the next-checkpoint delta
+direction at exactly the same forward-noised reference state; it is not a query
+loss:
 
 ```text
-g_query = grad_theta dot(model(x_{t->t+10}, t+10, query_cond), unit(noise))
+direction = unit(model_{c+1}(x_{t->t+10}, t+10, query_cond)
+                 - model_c(x_{t->t+10}, t+10, query_cond))
+g_query = grad_theta dot(model_c(x_{t->t+10}, t+10, query_cond), direction)
 ```
 
-The train side is the diffusion-loss gradient at `t+10`, using exactly the
-same noise. The first zero-based reference timestep is 999, so its target is
+The train side is the current-checkpoint diffusion-loss gradient at `t+10`,
+using exactly the same noise that constructs the query state. The first
+zero-based reference timestep is 999, so its target is
 1009 (one-based timestep 1010). The original linear beta formula is extended
-for exactly ten indices. The experiment uses all 50 raw checkpoints, their
-saved learning rates, CountSketch4096, all 100 queries, and emits linear,
+for exactly ten indices. The experiment uses all 49 next pairs formed by the
+50 raw checkpoints (including the final checkpoint as the last target), their
+saved source-checkpoint learning rates, CountSketch4096, all 100 queries, and emits linear,
 termwise-square, and timestamp-sum-square scores.
 
 Run on four GPUs:

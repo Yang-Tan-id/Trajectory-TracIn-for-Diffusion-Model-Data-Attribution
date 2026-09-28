@@ -152,13 +152,17 @@ def main():
 
     remaining = [index for index in selected if index not in set(completed)]
     timestamp_weight = 1.0 / len(t_seq)
-    total_terms = len(remaining) * len(checkpoint_paths)
+    transitions = [
+        (index, index + 1) for index in range(len(checkpoint_paths) - 1)
+    ]
+    total_terms = len(remaining) * len(transitions)
     finished_terms = 0
     started = time.perf_counter()
     print(
         f"[ref-forward10 gpu={args.gpu}] family={args.family} "
         f"queries={query_ids[0]}..{query_ids[-1]} timestamps={len(selected)}/100 "
-        f"checkpoints=50 delta_t=10 aligned_noise=true projection=4096 "
+        f"checkpoints=50 transitions=49 delta_t=10 aligned_noise=true "
+        f"projection=4096 "
         f"batch={args.batch_size}",
         flush=True,
     )
@@ -181,7 +185,6 @@ def main():
             device=device,
             dtype=torch.float32,
         )
-        output_direction = aligned_noise / aligned_noise.norm().clamp_min(1e-12)
         query_states = [
             forward_from_reference(
                 torch.from_numpy(trajectory[timestamp_index]).to(
@@ -196,9 +199,16 @@ def main():
         ]
         timestamp_accumulator = torch.zeros(shape, device=device, dtype=torch.float64)
 
-        for checkpoint_position, checkpoint_path in enumerate(checkpoint_paths, start=1):
+        for transition_position, (checkpoint_index, target_index) in enumerate(
+            transitions, start=1
+        ):
             term_started = time.perf_counter()
-            model, _, checkpoint = build_model(checkpoint_path, "raw", device)
+            model, _, checkpoint = build_model(
+                checkpoint_paths[checkpoint_index], "raw", device
+            )
+            target, _, _ = build_model(
+                checkpoint_paths[target_index], "raw", device
+            )
             named = dict(model.named_parameters())
             names = tuple(named)
             parameters = tuple(named.values())
@@ -209,19 +219,26 @@ def main():
                 seed_parts=(
                     TRAIN_SEED,
                     "reference_forward10_parameter_projection",
-                    checkpoint_position - 1,
+                    checkpoint_index,
                 ),
             )
             query_vectors = []
+            delta_norms = []
             for state, condition in zip(query_states, conditions):
-                prediction = model(state, t_target, condition)
-                projected_prediction = (prediction * output_direction).sum()
+                current_prediction = model(state, t_target, condition)
+                with torch.no_grad():
+                    next_prediction = target(state, t_target, condition)
+                    direction = next_prediction - current_prediction.detach()
+                    delta_norm = direction.norm()
+                    direction = direction / delta_norm.clamp_min(1e-12)
+                projected_prediction = (current_prediction * direction).sum()
                 query_gradient = torch.autograd.grad(
                     projected_prediction, parameters
                 )
                 query_vectors.append(
                     _project_gradient_tuple(query_gradient, specs, TRACIN_PROJ_DIM)
                 )
+                delta_norms.append(float(delta_norm))
             query_matrix = torch.stack(query_vectors).detach().to(torch.float32)
 
             def train_loss(parameter_dict, x0, condition):
@@ -267,7 +284,7 @@ def main():
                         f"[ref-forward10 gpu={args.gpu}] "
                         f"timestamp={timestamp_position}/{len(remaining)} "
                         f"global_t={timestamp_index + 1}/100 current={current_t} "
-                        f"target={target_t} checkpoint={checkpoint_position}/50 "
+                        f"target={target_t} pair={transition_position}/49 "
                         f"batch={batch_position}/{num_batches}",
                         flush=True,
                     )
@@ -276,12 +293,14 @@ def main():
             eta = elapsed / finished_terms * (total_terms - finished_terms)
             print(
                 f"[ref-forward10 gpu={args.gpu}] term={finished_terms}/{total_terms} "
+                f"delta_norm=[{min(delta_norms):.3e},{max(delta_norms):.3e}] "
                 f"term_elapsed={(time.perf_counter() - term_started) / 60:.1f}m "
                 f"eta={eta / 3600:.2f}h",
                 flush=True,
             )
-            del model, checkpoint, named, parameters, specs
-            del query_vectors, query_matrix, prediction, projected_prediction
+            del model, target, checkpoint, named, parameters, specs
+            del query_vectors, query_matrix, current_prediction, next_prediction
+            del direction, delta_norm, delta_norms, projected_prediction
             del query_gradient
             del batched_gradient, gradients, train_matrix, dots, train_loss
             if torch.cuda.is_available():
@@ -318,12 +337,15 @@ def main():
             ],
             "delta_t": REF_FORWARD10_DELTA_T,
             "checkpoint_count": len(checkpoint_paths),
+            "checkpoint_transition_count": len(transitions),
             "parameter_source": "raw",
             "query_state_source": "cached final-EMA reference trajectory",
             "query_forward_noise": "conditional q(x_{t+10}|x_t)",
             "query_scalar": (
-                "dot(predicted_noise_at_t_plus_10, unit(aligned_noise))"
+                "dot(epsilon_current, normalize(epsilon_next-epsilon_current)) "
+                "at the same reference-forward-10 state"
             ),
+            "checkpoint_target": "next",
             "query_uses_loss": False,
             "train_uses_diffusion_loss": True,
             "query_train_noise_aligned": True,

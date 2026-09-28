@@ -17,7 +17,7 @@ def main():
     if len(CUDA_IDS) < 4:
         raise ValueError("four CUDA_IDS are required")
     LOG_DIR.mkdir(parents=True, exist_ok=True)
-    log_path = LOG_DIR / "reference_forward10_prednoise_aligned_loss_100q_4gpu.log"
+    log_path = LOG_DIR / "reference_forward10_next_delta_aligned_loss_100q_4gpu.log"
     assignments = (
         ("prompted", 0, CUDA_IDS[0]),
         ("prompted", 1, CUDA_IDS[1]),
@@ -27,8 +27,8 @@ def main():
     active = {}
     with open(log_path, "a", buffering=1) as stream:
         stream.write(
-            "\n[launcher] q00-q99 reference forward-10 predicted-noise versus "
-            "aligned train-loss TracIn; "
+            "\n[launcher] q00-q99 reference forward-10 next-checkpoint-delta "
+            "predicted-noise versus aligned train-loss TracIn; "
             "50 checkpoints, 100 timestamps, CountSketch4096\n"
         )
         for family, shard, gpu in assignments:
@@ -86,7 +86,7 @@ def main():
                 check=True,
             )
     print(
-        "[done] merged reference-forward-10 prednoise/aligned-loss q00-q99",
+        "[done] merged reference-forward-10 next-delta/aligned-loss q00-q99",
         flush=True,
     )
 
