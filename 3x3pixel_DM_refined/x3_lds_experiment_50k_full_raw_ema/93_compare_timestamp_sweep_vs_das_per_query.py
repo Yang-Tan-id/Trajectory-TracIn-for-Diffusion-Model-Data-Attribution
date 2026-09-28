@@ -61,6 +61,7 @@ def select_global_das(membership, observed, method):
                     "sign_name": sign_name,
                     "sign": sign,
                     "mean": float(np.nanmean(values)),
+                    "std": float(np.nanstd(values)),
                     "per_query": values,
                 }
             )
@@ -120,6 +121,8 @@ def main():
         )
         for count in TRACIN_DAS_TIMESTAMP_COUNTS
     }
+    for item in ours.values():
+        item["std"] = float(np.nanstd(item["per_query"]))
 
     output = args.output or (
         LDS_DIR
@@ -137,18 +140,22 @@ def main():
         f"DAS lambda   : {das['lambda']:g}",
         f"DAS sign     : {das['sign_name']}",
         f"DAS mean LDS : {das['mean']:+.6f}",
+        f"DAS std LDS  : {das['std']:.6f}",
         "Selection    : global across q00-q98; never per-query",
         "Improvement  : ours - DAS",
         "",
         "SUMMARY",
-        "timestamps  sign       ours_mean    DAS_mean    improvement",
+        "timestamps  sign       ours_mean   ours_std    DAS_mean    DAS_std     imp_mean     imp_std",
     ]
     for count in TRACIN_DAS_TIMESTAMP_COUNTS:
         item = ours[count]
+        improvements = item["per_query"] - das["per_query"]
         lines.append(
             f"{count:10d}  {item['sign_name']:<8s}  "
-            f"{item['mean']:+.6f}  {das['mean']:+.6f}  "
-            f"{item['mean'] - das['mean']:+.6f}"
+            f"{item['mean']:+.6f}  {item['std']:.6f}  "
+            f"{das['mean']:+.6f}  {das['std']:.6f}  "
+            f"{float(np.nanmean(improvements)):+.6f}  "
+            f"{float(np.nanstd(improvements)):.6f}"
         )
 
     for count in TRACIN_DAS_TIMESTAMP_COUNTS:
@@ -174,7 +181,11 @@ def main():
             )
         lines.append(
             f"MEAN    {das['mean']:+10.6f}  {item['mean']:+10.6f}  "
-            f"{item['mean'] - das['mean']:+11.6f}"
+            f"{float(np.nanmean(improvements)):+11.6f}"
+        )
+        lines.append(
+            f"STD     {das['std']:10.6f}  {item['std']:10.6f}  "
+            f"{float(np.nanstd(improvements)):11.6f}"
         )
         lines.append(
             f"better queries: {int(np.sum(improvements > 0))}/99 | "
