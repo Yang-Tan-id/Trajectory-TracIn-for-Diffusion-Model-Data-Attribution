@@ -180,3 +180,25 @@ families with both EMA/raw observed variants and both score signs:
 ```text
 x3_lds_exp_50k/lds/das_ema_aligned_noise_99q_lambda_sweep.json
 ```
+
+## q00-q98 timestamp-count sweep from 100 to 10
+
+This sweep fixes the complete 50-model/49-transition bank and simultaneously
+accumulates `100,90,80,...,10` evenly spaced timestamp budgets. Each budget
+uses `round(linspace(0,99,count))`, so timestamp positions 0 and 99 are always
+included. All other settings match the stable TracIn-DAS variant: raw next
+checkpoint transitions, exact interval-mean LR weights, checkpoint-specific
+aligned noise, CountSketch4096, and q00-q98.
+
+Run all three contractions, merge, and LDS automatically:
+
+```bash
+python -u 91_launch_tracin_das_timestamp_sweep_99q_4gpu.py --batch-size 128
+```
+
+The LDS summary covers four target families, EMA/raw observed variants, and
+both score signs:
+
+```text
+x3_lds_exp_50k/lds/tracin_das_interval_mean_lr_99q_timestamp_sweep.json
+```

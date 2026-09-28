@@ -37,6 +37,7 @@ TRACIN_DAS_METHODS_BY_VARIANT = {
 }
 TRACIN_DAS_METHODS = TRACIN_DAS_METHODS_BY_VARIANT[("checkpoint", "exact")]
 TRACIN_DAS_AVG_LR_CHECKPOINT_COUNTS = (50, 40, 25, 20, 15, 10, 5)
+TRACIN_DAS_TIMESTAMP_COUNTS = tuple(range(100, 0, -10))
 
 
 def tracin_das_methods(
@@ -93,6 +94,45 @@ def tracin_das_avg_pair_lr_shard_root(family, shard_index, shard_count):
     return (
         ATTR_DIR
         / "_tracin_das_checkpoint_noise_projected4096_interval_mean_lr_99q_multi_ckpt_shards"
+        / family
+        / f"shard_{int(shard_index):02d}_of_{int(shard_count):02d}"
+    )
+
+
+def tracin_das_interval_mean_lr_timestamp_methods(timestamp_count):
+    timestamp_count = int(timestamp_count)
+    if timestamp_count not in TRACIN_DAS_TIMESTAMP_COUNTS:
+        raise ValueError(f"unsupported timestamp_count={timestamp_count}")
+    stem = (
+        "tracin_das_endpoint_next_delta_checkpoint_noise_projected4096_"
+        f"interval_mean_lr_50ckpt_{timestamp_count}timestamp"
+    )
+    return {
+        "linear": f"{stem}_linear",
+        "termwise_squared": f"{stem}_termwise_squared",
+        "timestamp_sum_squared": f"{stem}_timestamp_sum_squared",
+    }
+
+
+def tracin_das_timestamp_indices(timestamp_count):
+    """Even positions among 100 timestamps, including positions 0 and 99."""
+    timestamp_count = int(timestamp_count)
+    if timestamp_count == 100:
+        return tuple(range(100))
+    if timestamp_count not in TRACIN_DAS_TIMESTAMP_COUNTS:
+        raise ValueError(f"unsupported timestamp_count={timestamp_count}")
+    return tuple(
+        int(round(position * 99.0 / (timestamp_count - 1)))
+        for position in range(timestamp_count)
+    )
+
+
+def tracin_das_timestamp_sweep_shard_root(family, shard_index, shard_count):
+    if family not in FAMILIES:
+        raise ValueError(f"unknown family={family!r}")
+    return (
+        ATTR_DIR
+        / "_tracin_das_checkpoint_noise_projected4096_interval_mean_lr_99q_timestamp_sweep_shards"
         / family
         / f"shard_{int(shard_index):02d}_of_{int(shard_count):02d}"
     )

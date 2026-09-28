@@ -68,6 +68,14 @@ def main():
             "with exact interval-mean learning-rate weights"
         ),
     )
+    parser.add_argument(
+        "--timestamp-count-multi",
+        action="store_true",
+        help=(
+            "simultaneously save the 100/90/.../10 evenly spaced timestamp "
+            "banks with exact interval-mean learning-rate weights"
+        ),
+    )
     parser.add_argument("--noise-mode", choices=TRACIN_DAS_NOISE_MODES, default="checkpoint")
     parser.add_argument(
         "--parameter-projection",
@@ -84,14 +92,19 @@ def main():
         raise ValueError("invalid timestamp shard")
     if args.batch_size <= 0:
         raise ValueError("batch size must be positive")
-    if args.avg_pair_lr_multi and (
+    if args.avg_pair_lr_multi and args.timestamp_count_multi:
+        raise ValueError("checkpoint-count and timestamp-count multi modes conflict")
+    interval_mean_lr_multi = (
+        args.avg_pair_lr_multi or args.timestamp_count_multi
+    )
+    if interval_mean_lr_multi and (
         args.query_scope != "first99"
         or args.noise_mode != "checkpoint"
         or args.parameter_projection != "projected4096"
         or args.train_noise_mode != "aligned"
     ):
         raise ValueError(
-            "--avg-pair-lr-multi requires first99/checkpoint/projected4096/aligned"
+            "multi sweep requires first99/checkpoint/projected4096/aligned"
         )
     device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
     if torch.cuda.is_available():
@@ -149,6 +162,26 @@ def main():
             args.timestamp_shard_index,
             args.timestamp_shard_count,
         )
+        timestamp_indices_by_group = {
+            group: set(range(len(timestamps))) for group in methods_by_group
+        }
+    elif args.timestamp_count_multi:
+        methods_by_group = {
+            str(count): tracin_das_interval_mean_lr_timestamp_methods(count)
+            for count in TRACIN_DAS_TIMESTAMP_COUNTS
+        }
+        pair_indices_by_group = {
+            group: set(range(49)) for group in methods_by_group
+        }
+        timestamp_indices_by_group = {
+            str(count): set(tracin_das_timestamp_indices(count))
+            for count in TRACIN_DAS_TIMESTAMP_COUNTS
+        }
+        shard_root = tracin_das_timestamp_sweep_shard_root(
+            args.family,
+            args.timestamp_shard_index,
+            args.timestamp_shard_count,
+        )
     else:
         methods_by_group = {
             "legacy": tracin_das_methods(
@@ -158,6 +191,7 @@ def main():
             )
         }
         pair_indices_by_group = {"legacy": set(range(49))}
+        timestamp_indices_by_group = {"legacy": set(range(len(timestamps)))}
         shard_root = tracin_das_shard_root(
             args.timestamp_shard_index,
             args.timestamp_shard_count,
@@ -168,6 +202,11 @@ def main():
             args.query_scope,
         )
     contractions = ("linear", "termwise_squared", "timestamp_sum_squared")
+    snapshot_weight_by_group = (
+        {group: 1.0 / float(group) for group in methods_by_group}
+        if args.timestamp_count_multi
+        else {group: 1.0 / len(timestamps) for group in methods_by_group}
+    )
     done_path = shard_root / "done.json"
     if done_path.is_file():
         print(f"[skip] {done_path}", flush=True)
@@ -213,6 +252,8 @@ def main():
             raise ValueError("partial shard query IDs differ")
         if bool(progress.get("avg_pair_lr_multi", False)) != args.avg_pair_lr_multi:
             raise ValueError("partial shard learning-rate/checkpoint mode differs")
+        if bool(progress.get("timestamp_count_multi", False)) != args.timestamp_count_multi:
+            raise ValueError("partial shard timestamp-count mode differs")
         completed_timestamps = [int(value) for value in progress["completed_timestamps"]]
         scores = {
             group: {
@@ -245,7 +286,6 @@ def main():
         (index, index + 1) for index in range(len(checkpoint_paths) - 1)
     ]
     remaining = [index for index in selected if index not in set(completed_timestamps)]
-    snapshot_weight = 1.0 / len(timestamps)
     total_terms = len(remaining) * len(transitions)
     completed_terms = 0
     started = time.perf_counter()
@@ -257,6 +297,7 @@ def main():
         f"noise_mode={args.noise_mode} "
         f"train_noise_mode={args.train_noise_mode} "
         f"avg_pair_lr_multi={args.avg_pair_lr_multi} "
+        f"timestamp_count_multi={args.timestamp_count_multi} "
         f"query_train_noise_aligned={args.train_noise_mode == 'aligned'} "
         "output_delta_normalized=true",
         flush=True,
@@ -275,6 +316,7 @@ def main():
                 group
                 for group, pair_indices in pair_indices_by_group.items()
                 if checkpoint_index in pair_indices
+                and timestamp_index in timestamp_indices_by_group[group]
             ]
             if not active_groups:
                 continue
@@ -393,13 +435,12 @@ def main():
                 batched_gradient = vmap(
                     grad(train_loss), in_dims=(None, 0, 0, 0)
                 )
-            if args.avg_pair_lr_multi:
+            if interval_mean_lr_multi:
                 checkpoint_lr = float(
                     tracin_interval_mean_lr(checkpoint, target_checkpoint)
                 )
             else:
                 checkpoint_lr = float(tracin_lr_weight(checkpoint))
-            weight = checkpoint_lr * snapshot_weight
             num_batches = math.ceil(N_TRAIN / args.batch_size)
             progress_every = max(1, num_batches // 5)
             for batch_position, start in enumerate(range(0, N_TRAIN, args.batch_size), start=1):
@@ -453,6 +494,7 @@ def main():
                 ).detach()
                 dots = (train_matrix @ query_matrix.T).T.to(torch.float64)
                 for group in active_groups:
+                    weight = checkpoint_lr * snapshot_weight_by_group[group]
                     scores[group]["linear"][:, start:end] += weight * dots
                     scores[group]["termwise_squared"][:, start:end] += (
                         weight * dots.square()
@@ -490,7 +532,13 @@ def main():
             )
         completed_timestamps.append(timestamp_index)
         completed_timestamps.sort()
-        checkpoint_every = 5 if args.avg_pair_lr_multi else 1
+        checkpoint_every = (
+            10
+            if args.timestamp_count_multi
+            else 5
+            if args.avg_pair_lr_multi
+            else 1
+        )
         should_checkpoint = (
             len(completed_timestamps) % checkpoint_every == 0
             or len(completed_timestamps) == len(selected)
@@ -511,9 +559,15 @@ def main():
                     "family": args.family,
                     "query_scope": args.query_scope,
                     "avg_pair_lr_multi": args.avg_pair_lr_multi,
+                    "timestamp_count_multi": args.timestamp_count_multi,
                     "checkpoint_counts": (
                         list(TRACIN_DAS_AVG_LR_CHECKPOINT_COUNTS)
                         if args.avg_pair_lr_multi
+                        else None
+                    ),
+                    "timestamp_counts": (
+                        list(TRACIN_DAS_TIMESTAMP_COUNTS)
+                        if args.timestamp_count_multi
                         else None
                     ),
                     "completed_timestamps": completed_timestamps,
@@ -547,9 +601,14 @@ def main():
             "family": args.family,
             "query_scope": args.query_scope,
             "avg_pair_lr_multi": args.avg_pair_lr_multi,
+            "timestamp_count_multi": args.timestamp_count_multi,
             "checkpoint_pair_indices": {
                 group: sorted(indices)
                 for group, indices in pair_indices_by_group.items()
+            },
+            "selected_timestamp_indices_by_group": {
+                group: sorted(indices)
+                for group, indices in timestamp_indices_by_group.items()
             },
             "timestamp_indices": selected,
             "timestamps": [timestamps[index] for index in selected],
@@ -583,10 +642,10 @@ def main():
             "lr_weighted": TRACIN_USE_LR_WEIGHTS,
             "learning_rate_source": (
                 "exact mean scheduled LR over [current global_step, next global_step)"
-                if args.avg_pair_lr_multi
+                if interval_mean_lr_multi
                 else "current_checkpoint"
             ),
-            "timestamp_weight": snapshot_weight,
+            "timestamp_weight_by_group": snapshot_weight_by_group,
             "batch_size": args.batch_size,
             "contract_version": CONTRACT_VERSION,
         },
