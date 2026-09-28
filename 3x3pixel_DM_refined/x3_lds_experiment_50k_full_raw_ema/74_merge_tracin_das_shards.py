@@ -33,11 +33,13 @@ def main():
         choices=TRACIN_DAS_TRAIN_NOISE_MODES,
         default="aligned",
     )
+    parser.add_argument("--query-mc", type=int, default=1)
     args = parser.parse_args()
     methods = tracin_das_methods(
         args.noise_mode,
         args.parameter_projection,
         args.train_noise_mode,
+        args.query_mc,
     )
     with open(QUERY_DIR / "manifest.json") as handle:
         manifest = json.load(handle)
@@ -67,6 +69,7 @@ def main():
             args.train_noise_mode,
             args.family,
             args.query_scope,
+            args.query_mc,
         )
         with open(root / "done.json") as handle:
             info = json.load(handle)
@@ -83,6 +86,8 @@ def main():
             raise ValueError(f"parameter projection mismatch in {root}")
         if info.get("train_noise_mode", "aligned") != args.train_noise_mode:
             raise ValueError(f"train-noise mode mismatch in {root}")
+        if int(info.get("query_mc", 1)) != args.query_mc:
+            raise ValueError(f"query MC mismatch in {root}")
         covered.extend(int(value) for value in info["timestamp_indices"])
         for contraction in methods:
             values = np.load(root / f"{contraction}.npy")
@@ -112,9 +117,10 @@ def main():
                     "noise_mode": args.noise_mode,
                     "parameter_projection": args.parameter_projection,
                     "train_noise_mode": args.train_noise_mode,
+                    "query_mc": args.query_mc,
                     "train_mc": (
                         1
-                        if args.train_noise_mode == "aligned"
+                        if args.train_noise_mode in ("aligned", "independent-mc1")
                         else int(TRACIN_TRAIN_MC)
                     ),
                     "parameter_projection_dim": (
@@ -123,15 +129,26 @@ def main():
                         else None
                     ),
                     "noise_alignment": (
-                        "one independent noise per checkpoint/timestamp"
+                        f"{args.query_mc} independent noises per checkpoint/timestamp"
                         if args.noise_mode == "checkpoint"
-                        else "one noise per timestamp shared across all checkpoint transitions"
+                        else (
+                            f"{args.query_mc} noises per timestamp shared across all "
+                            "checkpoint transitions"
+                        )
                     ) + (
                         "; query and train loss share the term noise"
                         if args.train_noise_mode == "aligned"
-                        else "; train loss uses independent per-point MC10 noise"
+                        else "; train loss uses independent per-point "
+                        f"MC{1 if args.train_noise_mode == 'independent-mc1' else TRACIN_TRAIN_MC} noise"
                     ),
                     "query_scalar": "dot(epsilon_current, normalize(epsilon_next-epsilon_current))",
+                    "query_mc_reduction": {
+                        "linear": "mean_m(dot_m)",
+                        "termwise_squared": "mean_m(dot_m^2)",
+                        "timestamp_sum_squared": (
+                            "sum_t (sum_checkpoint eta * mean_m(dot_m))^2"
+                        ),
+                    },
                     "lr_weighted": TRACIN_USE_LR_WEIGHTS,
                     "timestamp_weight": 1.0 / len(DAS_TIMESTEPS),
                     "timestamp_shards": args.timestamp_shard_count,

@@ -87,11 +87,21 @@ def main():
         choices=TRACIN_DAS_TRAIN_NOISE_MODES,
         default="aligned",
     )
+    parser.add_argument("--query-mc", type=int, default=1)
     args = parser.parse_args()
     if not 0 <= args.timestamp_shard_index < args.timestamp_shard_count:
         raise ValueError("invalid timestamp shard")
     if args.batch_size <= 0:
         raise ValueError("batch size must be positive")
+    if args.query_mc <= 0:
+        raise ValueError("query MC must be positive")
+    if args.train_noise_mode == "aligned" and args.query_mc != 1:
+        raise ValueError("query MC > 1 requires independent train noise")
+    train_mc_count = (
+        1
+        if args.train_noise_mode in ("aligned", "independent-mc1")
+        else int(TRACIN_TRAIN_MC)
+    )
     if args.avg_pair_lr_multi and args.timestamp_count_multi:
         raise ValueError("checkpoint-count and timestamp-count multi modes conflict")
     multi_sweep = (
@@ -102,6 +112,7 @@ def main():
         or args.noise_mode != "checkpoint"
         or args.parameter_projection != "projected4096"
         or args.train_noise_mode != "aligned"
+        or args.query_mc != 1
     ):
         raise ValueError(
             "multi sweep requires first99/checkpoint/projected4096/aligned"
@@ -188,6 +199,7 @@ def main():
                 args.noise_mode,
                 args.parameter_projection,
                 args.train_noise_mode,
+                args.query_mc,
             )
         }
         pair_indices_by_group = {"legacy": set(range(49))}
@@ -200,6 +212,7 @@ def main():
             args.train_noise_mode,
             args.family,
             args.query_scope,
+            args.query_mc,
         )
     contractions = ("linear", "termwise_squared", "timestamp_sum_squared")
     snapshot_weight_by_group = (
@@ -244,6 +257,8 @@ def main():
             raise ValueError("partial shard parameter projection differs")
         if progress.get("train_noise_mode", "aligned") != args.train_noise_mode:
             raise ValueError("partial shard train-noise mode differs")
+        if int(progress.get("query_mc", 1)) != args.query_mc:
+            raise ValueError("partial shard query MC differs")
         if progress.get("family", TRACIN_DAS_FAMILY) != args.family:
             raise ValueError("partial shard family differs")
         if progress.get("query_scope", "ten") != args.query_scope:
@@ -296,6 +311,7 @@ def main():
         f"timestamps={len(selected)}/100 transitions=49 batch={args.batch_size} "
         f"noise_mode={args.noise_mode} "
         f"train_noise_mode={args.train_noise_mode} "
+        f"query_mc={args.query_mc} "
         f"avg_pair_lr_multi={args.avg_pair_lr_multi} "
         f"timestamp_count_multi={args.timestamp_count_multi} "
         f"query_train_noise_aligned={args.train_noise_mode == 'aligned'} "
@@ -338,14 +354,17 @@ def main():
                 )
             )
             noise_generator = make_torch_generator(device, *noise_seed_parts)
-            shared_noise = torch.randn(
-                endpoints[0].shape,
+            query_noises = torch.randn(
+                (args.query_mc, *endpoints[0].shape),
                 generator=noise_generator,
                 device=device,
                 dtype=endpoints[0].dtype,
             )
             query_xt = [
-                base.q_sample(endpoint, t_query, shared_noise, schedule)
+                [
+                    base.q_sample(endpoint, t_query, query_noises[mc_index], schedule)
+                    for mc_index in range(args.query_mc)
+                ]
                 for endpoint in endpoints
             ]
             model, _, checkpoint = build_model(
@@ -373,44 +392,49 @@ def main():
             )
             query_vectors = []
             delta_norms = []
-            for xt, condition in zip(query_xt, conditions):
-                current_prediction = model(xt, t_query, condition)
-                with torch.no_grad():
-                    next_prediction = target(xt, t_query, condition)
-                    direction = next_prediction - current_prediction.detach()
-                    delta_norm = direction.norm()
-                    direction = direction / delta_norm.clamp_min(TRACIN_DAS_DIRECTION_EPS)
-                projected_prediction = (current_prediction * direction).sum()
-                query_gradient = torch.autograd.grad(projected_prediction, parameters)
-                query_vectors.append(
-                    _project_gradient_tuple(
-                        query_gradient,
-                        projection_specs,
-                        TRACIN_PROJ_DIM,
+            for xt_bank, condition in zip(query_xt, conditions):
+                for xt in xt_bank:
+                    current_prediction = model(xt, t_query, condition)
+                    with torch.no_grad():
+                        next_prediction = target(xt, t_query, condition)
+                        direction = next_prediction - current_prediction.detach()
+                        delta_norm = direction.norm()
+                        direction = direction / delta_norm.clamp_min(
+                            TRACIN_DAS_DIRECTION_EPS
+                        )
+                    projected_prediction = (current_prediction * direction).sum()
+                    query_gradient = torch.autograd.grad(
+                        projected_prediction, parameters
                     )
-                    if projection_specs is not None
-                    else flatten_gradient_tuple(query_gradient)
-                )
-                delta_norms.append(float(delta_norm))
+                    query_vectors.append(
+                        _project_gradient_tuple(
+                            query_gradient,
+                            projection_specs,
+                            TRACIN_PROJ_DIM,
+                        )
+                        if projection_specs is not None
+                        else flatten_gradient_tuple(query_gradient)
+                    )
+                    delta_norms.append(float(delta_norm))
             query_matrix = torch.stack(query_vectors).detach().to(torch.float32)
 
             if args.train_noise_mode == "aligned":
                 def train_loss(parameter_dict, x0, condition):
                     xt = base.q_sample(
-                        x0.unsqueeze(0), t_query, shared_noise, schedule
+                        x0.unsqueeze(0), t_query, query_noises[0], schedule
                     )
                     prediction = functional_call(
                         model,
                         parameter_dict,
                         (xt, t_query, condition.unsqueeze(0)),
                     )
-                    return (prediction - shared_noise).square().mean()
+                    return (prediction - query_noises[0]).square().mean()
 
                 batched_gradient = vmap(
                     grad(train_loss), in_dims=(None, 0, 0)
                 )
             else:
-                train_mc = int(TRACIN_TRAIN_MC)
+                train_mc = train_mc_count
                 train_timesteps = torch.full(
                     (train_mc,), timestep, device=device, dtype=torch.long
                 )
@@ -446,11 +470,11 @@ def main():
             for batch_position, start in enumerate(range(0, N_TRAIN, args.batch_size), start=1):
                 end = min(start + args.batch_size, N_TRAIN)
                 train_noises = None
-                if args.train_noise_mode == "independent-mc10":
+                if args.train_noise_mode != "aligned":
                     train_noise_generator = make_torch_generator(
                         device,
                         TRAIN_SEED,
-                        "tracin_das_independent_train_mc10",
+                        f"tracin_das_{args.train_noise_mode}",
                         checkpoint_index,
                         timestamp_index,
                         start,
@@ -492,14 +516,20 @@ def main():
                     if projection_specs is not None
                     else flatten_batched_gradients(gradients, names)
                 ).detach()
-                dots = (train_matrix @ query_matrix.T).T.to(torch.float64)
+                dots = (train_matrix @ query_matrix.T).T.reshape(
+                    len(records), args.query_mc, end - start
+                ).to(torch.float64)
+                linear_dots = dots.mean(dim=1)
+                squared_dots = dots.square().mean(dim=1)
                 for group in active_groups:
                     weight = checkpoint_lr * snapshot_weight_by_group[group]
-                    scores[group]["linear"][:, start:end] += weight * dots
+                    scores[group]["linear"][:, start:end] += weight * linear_dots
                     scores[group]["termwise_squared"][:, start:end] += (
-                        weight * dots.square()
+                        weight * squared_dots
                     )
-                    timestamp_accumulators[group][:, start:end] += weight * dots
+                    timestamp_accumulators[group][:, start:end] += (
+                        weight * linear_dots
+                    )
                 if batch_position == 1 or batch_position % progress_every == 0 or batch_position == num_batches:
                     print(
                         f"[tracin-das gpu={args.gpu}] timestamp={shard_timestamp_position}/{len(remaining)} "
@@ -521,7 +551,8 @@ def main():
             del named, parameters, query_vectors, query_matrix
             del projection_specs
             del current_prediction, next_prediction, direction, projected_prediction, query_gradient
-            del batched_gradient, gradients, train_matrix, dots, shared_noise, query_xt
+            del batched_gradient, gradients, train_matrix, dots, query_noises, query_xt
+            del linear_dots, squared_dots
             del train_loss, train_noises
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
@@ -555,6 +586,7 @@ def main():
                     "noise_mode": args.noise_mode,
                     "parameter_projection": args.parameter_projection,
                     "train_noise_mode": args.train_noise_mode,
+                    "query_mc": args.query_mc,
                     "query_ids": query_ids,
                     "family": args.family,
                     "query_scope": args.query_scope,
@@ -618,10 +650,9 @@ def main():
             "noise_mode": args.noise_mode,
             "parameter_projection": args.parameter_projection,
             "train_noise_mode": args.train_noise_mode,
+            "query_mc": args.query_mc,
             "train_mc": (
-                1
-                if args.train_noise_mode == "aligned"
-                else int(TRACIN_TRAIN_MC)
+                train_mc_count
             ),
             "parameter_projection_dim": (
                 TRACIN_PROJ_DIM
@@ -629,16 +660,26 @@ def main():
                 else None
             ),
             "endpoint_noising": (
-                "one independent noise per checkpoint/timestamp"
+                f"{args.query_mc} independent noises per checkpoint/timestamp"
                 if args.noise_mode == "checkpoint"
-                else "one noise per timestamp shared across all checkpoint transitions"
+                else (
+                    f"{args.query_mc} noises per timestamp shared across all "
+                    "checkpoint transitions"
+                )
             ),
             "train_loss_noise": (
                 "same term noise as query endpoint"
                 if args.train_noise_mode == "aligned"
-                else "independent per-datapoint MC10 noises"
+                else f"independent per-datapoint MC{train_mc_count} noises"
             ),
             "query_scalar": "dot(epsilon_current, normalize(epsilon_next-epsilon_current))",
+            "query_mc_reduction": {
+                "linear": "mean_m(dot_m)",
+                "termwise_squared": "mean_m(dot_m^2)",
+                "timestamp_sum_squared": (
+                    "sum_t (sum_checkpoint eta * mean_m(dot_m))^2"
+                ),
+            },
             "lr_weighted": TRACIN_USE_LR_WEIGHTS,
             "learning_rate_source": (
                 "exact mean scheduled LR over [current global_step, next global_step)"

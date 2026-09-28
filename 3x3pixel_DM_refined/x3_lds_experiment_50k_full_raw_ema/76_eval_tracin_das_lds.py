@@ -22,14 +22,20 @@ def main():
         choices=TRACIN_DAS_TRAIN_NOISE_MODES,
         default="aligned",
     )
+    parser.add_argument("--query-mc", type=int, default=1)
     args = parser.parse_args()
     methods = tracin_das_methods(
         args.noise_mode,
         args.parameter_projection,
         args.train_noise_mode,
+        args.query_mc,
     )
     membership = np.load(MASK_DIR / "membership.npy").astype(np.float64)
-    output = {"methods": {}}
+    output = {
+        "query_mc": args.query_mc,
+        "train_noise_mode": args.train_noise_mode,
+        "methods": {},
+    }
     for contraction, method in methods.items():
         method_result = {"contraction": contraction, "metrics": {}}
         scores = [
@@ -62,8 +68,10 @@ def main():
     mode_tag = args.noise_mode.replace("-", "_")
     projection_tag = args.parameter_projection
     train_tag = args.train_noise_mode.replace("-", "_")
+    query_tag = "" if args.query_mc == 1 else f"query_mc{args.query_mc}_"
     path = LDS_DIR / (
         f"tracin_das_endpoint_next_delta_{mode_tag}_{projection_tag}_"
+        f"{query_tag}"
         f"{train_tag}_q00_q09.json"
     )
     with open(path, "w") as handle:

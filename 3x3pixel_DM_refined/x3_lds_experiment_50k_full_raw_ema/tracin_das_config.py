@@ -12,7 +12,11 @@ TRACIN_DAS_NOISE_SEED = 7367
 TRACIN_DAS_DIRECTION_EPS = 1e-12
 TRACIN_DAS_NOISE_MODES = ("checkpoint", "timestamp-shared")
 TRACIN_DAS_PARAMETER_PROJECTIONS = ("exact", "projected4096")
-TRACIN_DAS_TRAIN_NOISE_MODES = ("aligned", "independent-mc10")
+TRACIN_DAS_TRAIN_NOISE_MODES = (
+    "aligned",
+    "independent-mc1",
+    "independent-mc10",
+)
 TRACIN_DAS_METHODS_BY_VARIANT = {
     ("checkpoint", "exact"): {
         "linear": "tracin_das_endpoint_next_delta_checkpoint_noise_linear",
@@ -44,15 +48,25 @@ def tracin_das_methods(
     noise_mode,
     parameter_projection="exact",
     train_noise_mode="aligned",
+    query_mc=1,
 ):
     methods = TRACIN_DAS_METHODS_BY_VARIANT[
         (str(noise_mode), str(parameter_projection))
     ]
-    if train_noise_mode == "aligned":
+    query_mc = int(query_mc)
+    if query_mc <= 0:
+        raise ValueError("query_mc must be positive")
+    train_tag = {
+        "aligned": "",
+        "independent-mc1": "train_mc1_",
+        "independent-mc10": "train_mc10_",
+    }[train_noise_mode]
+    query_tag = "" if query_mc == 1 else f"query_mc{query_mc}_"
+    if not train_tag and not query_tag:
         return methods
     return {
         contraction: (
-            method[: -len(contraction)] + "train_mc10_" + contraction
+            method[: -len(contraction)] + query_tag + train_tag + contraction
         )
         for contraction, method in methods.items()
     }
@@ -146,16 +160,22 @@ def tracin_das_shard_root(
     train_noise_mode="aligned",
     family=None,
     query_scope="ten",
+    query_mc=1,
 ):
     noise_tag = (
         "checkpoint_noise" if noise_mode == "checkpoint"
         else "timestamp_shared_noise"
     )
     projection_tag = "" if parameter_projection == "exact" else "_projected4096"
-    train_tag = "" if train_noise_mode == "aligned" else "_train_mc10"
+    train_tag = {
+        "aligned": "",
+        "independent-mc1": "_train_mc1",
+        "independent-mc10": "_train_mc10",
+    }[train_noise_mode]
+    query_tag = "" if int(query_mc) == 1 else f"_query_mc{int(query_mc)}"
     namespace = (
         f"_tracin_das_endpoint_delta_{noise_tag}{projection_tag}"
-        f"{train_tag}_shards"
+        f"{query_tag}{train_tag}_shards"
     )
     root = ATTR_DIR / namespace
     if query_scope == "all":

@@ -22,13 +22,16 @@ def main():
         choices=TRACIN_DAS_TRAIN_NOISE_MODES,
         default="aligned",
     )
+    parser.add_argument("--query-mc", type=int, default=1)
     args = parser.parse_args()
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     mode_tag = args.noise_mode.replace("-", "_")
     projection_tag = args.parameter_projection
     train_tag = args.train_noise_mode.replace("-", "_")
+    query_tag = "" if args.query_mc == 1 else f"_query_mc{args.query_mc}"
     log_path = LOG_DIR / (
-        f"tracin_das_{mode_tag}_{projection_tag}_{train_tag}_q00_q09_4gpu.log"
+        f"tracin_das_{mode_tag}_{projection_tag}{query_tag}_"
+        f"{train_tag}_q00_q09_4gpu.log"
     )
     active = []
     with open(log_path, "a", buffering=1) as stream:
@@ -41,6 +44,7 @@ def main():
                 "--noise-mode", args.noise_mode,
                 "--parameter-projection", args.parameter_projection,
                 "--train-noise-mode", args.train_noise_mode,
+                "--query-mc", str(args.query_mc),
             ]
             process = subprocess.Popen(command, stdout=stream, stderr=subprocess.STDOUT)
             active.append((shard_index, process))
@@ -66,6 +70,7 @@ def main():
                 "--noise-mode", args.noise_mode,
                 "--parameter-projection", args.parameter_projection,
                 "--train-noise-mode", args.train_noise_mode,
+                "--query-mc", str(args.query_mc),
             ],
             stdout=stream, stderr=subprocess.STDOUT, check=True,
         )

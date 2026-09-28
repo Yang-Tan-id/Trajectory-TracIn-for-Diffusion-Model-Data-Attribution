@@ -127,6 +127,35 @@ The launcher saves all three contractions (`linear`, `termwise_squared`, and
 q00-q99. The LDS summary is saved as
 `x3_lds_exp_50k/lds/tracin_das_endpoint_next_delta_checkpoint_noise_projected4096_aligned_q00_q99.json`.
 
+## Independent endpoint-noise query MC5 / train MC1
+
+This variant uses the cached final-EMA query endpoint rather than perturbing a
+reference trajectory state. For every one of the 49 raw-checkpoint transitions
+and every one of the 100 diffusion timestamps, it draws five query-side noises.
+The training gradient uses one separately drawn noise per datapoint, so query
+and train noise are deliberately not aligned. The five query terms are averaged
+before the linear and timestamp-sum-square contractions; their five squares are
+averaged for termwise-square.
+
+```bash
+python -u 75_launch_tracin_das_4gpu.py \
+  --noise-mode checkpoint \
+  --parameter-projection projected4096 \
+  --query-mc 5 \
+  --train-noise-mode independent-mc1 \
+  --batch-size 128
+
+python -u 76_eval_tracin_das_lds.py \
+  --noise-mode checkpoint \
+  --parameter-projection projected4096 \
+  --query-mc 5 \
+  --train-noise-mode independent-mc1
+```
+
+This q00-q09 run writes three attribution banks under the
+`tracin_das_endpoint_next_delta_checkpoint_noise_projected4096_query_mc5_train_mc1_*`
+method names.
+
 ## q00-q98 interval-mean-LR checkpoint-count sweep
 
 This variant keeps checkpoint-specific query noise, exact query/train loss-noise
