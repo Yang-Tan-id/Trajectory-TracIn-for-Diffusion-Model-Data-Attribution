@@ -70,6 +70,35 @@ def tracin_lr_weight(ck):
     return 0.5 * PEAK_LR * (1.0 + math.cos(math.pi * p))
 
 
+def tracin_interval_mean_lr(left_checkpoint, right_checkpoint):
+    """Exact mean scheduled LR for updates after left through right."""
+    if not TRACIN_USE_LR_WEIGHTS:
+        return 1.0
+    if "global_step" not in left_checkpoint or "global_step" not in right_checkpoint:
+        return 0.5 * (
+            float(tracin_lr_weight(left_checkpoint))
+            + float(tracin_lr_weight(right_checkpoint))
+        )
+    start = int(left_checkpoint["global_step"])
+    stop = int(right_checkpoint["global_step"])
+    if stop <= start:
+        raise ValueError(f"invalid checkpoint step interval [{start}, {stop})")
+    steps_per_epoch = math.ceil(N_TRAIN / BATCH_SIZE)
+    total_steps = EPOCHS * steps_per_epoch
+    warm = int(math.ceil(total_steps * WARMUP_RATIO))
+
+    def scheduled_lr(step):
+        if warm > 0 and step < warm:
+            return PEAK_LR * float(step + 1) / float(warm)
+        if total_steps <= warm:
+            return PEAK_LR
+        progress = (step - warm) / max(1, total_steps - warm)
+        progress = min(max(progress, 0.0), 1.0)
+        return 0.5 * PEAK_LR * (1.0 + math.cos(math.pi * progress))
+
+    return sum(scheduled_lr(step) for step in range(start, stop)) / (stop - start)
+
+
 def preload_dataset(ds, family, device):
     xs, cs = [], []
     for i in range(len(ds)):

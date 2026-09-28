@@ -5,6 +5,7 @@ from exp_config import *
 
 TRACIN_DAS_QUERY_IDS = tuple(range(10))
 TRACIN_DAS_ALL_QUERY_IDS = tuple(range(100))
+TRACIN_DAS_FIRST99_QUERY_IDS = tuple(range(99))
 TRACIN_DAS_FAMILY = "prompted"
 TRACIN_DAS_BATCH_SIZE = 128
 TRACIN_DAS_NOISE_SEED = 7367
@@ -35,6 +36,7 @@ TRACIN_DAS_METHODS_BY_VARIANT = {
     },
 }
 TRACIN_DAS_METHODS = TRACIN_DAS_METHODS_BY_VARIANT[("checkpoint", "exact")]
+TRACIN_DAS_AVG_LR_CHECKPOINT_COUNTS = (50, 40, 25, 20, 15, 10, 5)
 
 
 def tracin_das_methods(
@@ -53,6 +55,47 @@ def tracin_das_methods(
         )
         for contraction, method in methods.items()
     }
+
+
+def tracin_das_avg_pair_lr_methods(checkpoint_count):
+    checkpoint_count = int(checkpoint_count)
+    if checkpoint_count not in TRACIN_DAS_AVG_LR_CHECKPOINT_COUNTS:
+        raise ValueError(f"unsupported checkpoint_count={checkpoint_count}")
+    stem = (
+        "tracin_das_endpoint_next_delta_checkpoint_noise_projected4096_"
+        f"interval_mean_lr_{checkpoint_count}ckpt"
+    )
+    return {
+        "linear": f"{stem}_linear",
+        "termwise_squared": f"{stem}_termwise_squared",
+        "timestamp_sum_squared": f"{stem}_timestamp_sum_squared",
+    }
+
+
+def tracin_das_checkpoint_pair_indices(checkpoint_count):
+    """Even source-transition positions, always including position 48."""
+    checkpoint_count = int(checkpoint_count)
+    if checkpoint_count == 50:
+        return tuple(range(49))
+    if checkpoint_count not in TRACIN_DAS_AVG_LR_CHECKPOINT_COUNTS:
+        raise ValueError(f"unsupported checkpoint_count={checkpoint_count}")
+    # This matches the existing 10-interval contract exactly:
+    # (0, 5, 11, 16, 21, 27, 32, 37, 43, 48).
+    return tuple(
+        int(round(position * 48.0 / (checkpoint_count - 1)))
+        for position in range(checkpoint_count)
+    )
+
+
+def tracin_das_avg_pair_lr_shard_root(family, shard_index, shard_count):
+    if family not in FAMILIES:
+        raise ValueError(f"unknown family={family!r}")
+    return (
+        ATTR_DIR
+        / "_tracin_das_checkpoint_noise_projected4096_interval_mean_lr_99q_multi_ckpt_shards"
+        / family
+        / f"shard_{int(shard_index):02d}_of_{int(shard_count):02d}"
+    )
 
 
 def tracin_das_shard_root(

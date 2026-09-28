@@ -126,3 +126,35 @@ The launcher saves all three contractions (`linear`, `termwise_squared`, and
 `timestamp_sum_squared`) under their existing projected4096 method names for
 q00-q99. The LDS summary is saved as
 `x3_lds_exp_50k/lds/tracin_das_endpoint_next_delta_checkpoint_noise_projected4096_aligned_q00_q99.json`.
+
+## q00-q98 interval-mean-LR checkpoint-count sweep
+
+This variant keeps checkpoint-specific query noise, exact query/train loss-noise
+alignment, and checkpoint-specific CountSketch4096 projection. Its transition
+weight is the exact mean of every scheduled optimizer learning rate between the
+two checkpoint global steps:
+
+```text
+mean(eta_k for global_step_c <= k < global_step_{c+1}) / 100 timestamps
+```
+
+One run simultaneously accumulates checkpoint-bank counts
+`50,40,25,20,15,10,5`. The 50-checkpoint label means the complete 50-model
+bank and therefore all 49 available next transitions. Every smaller bank uses
+`round(linspace(0,48,count))`; all include source position 48, the penultimate
+checkpoint whose target is the final checkpoint. The query bank is q00-q98.
+
+Run attribution, merge, and LDS evaluation on four GPUs with:
+
+```bash
+python -u 84_launch_tracin_das_avg_pair_lr_99q_4gpu.py --batch-size 128
+```
+
+The launcher saves all three contractions for every checkpoint count and then
+evaluates both LDS signs against four target families (`simple_loss`,
+`traj_ref`, `endpoint_deviation`, and `trajectory_state_mse`), retaining both
+EMA and raw observed variants. The combined summary is:
+
+```text
+x3_lds_exp_50k/lds/tracin_das_interval_mean_lr_99q_checkpoint_sweep.json
+```

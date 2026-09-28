@@ -19,6 +19,7 @@ from attribution_one_query import (
     cond_for,
     model_paths,
     preload_dataset,
+    tracin_interval_mean_lr,
     tracin_lr_weight,
 )
 from dataset_loader import ColorGridDataset
@@ -56,7 +57,17 @@ def main():
     parser.add_argument("--timestamp-shard-count", type=int, default=4)
     parser.add_argument("--batch-size", type=int, default=TRACIN_DAS_BATCH_SIZE)
     parser.add_argument("--family", choices=FAMILIES, default=TRACIN_DAS_FAMILY)
-    parser.add_argument("--query-scope", choices=("ten", "all"), default="ten")
+    parser.add_argument(
+        "--query-scope", choices=("ten", "all", "first99"), default="ten"
+    )
+    parser.add_argument(
+        "--avg-pair-lr-multi",
+        action="store_true",
+        help=(
+            "simultaneously save the 50/40/25/20/15/10/5 checkpoint banks "
+            "with exact interval-mean learning-rate weights"
+        ),
+    )
     parser.add_argument("--noise-mode", choices=TRACIN_DAS_NOISE_MODES, default="checkpoint")
     parser.add_argument(
         "--parameter-projection",
@@ -73,6 +84,15 @@ def main():
         raise ValueError("invalid timestamp shard")
     if args.batch_size <= 0:
         raise ValueError("batch size must be positive")
+    if args.avg_pair_lr_multi and (
+        args.query_scope != "first99"
+        or args.noise_mode != "checkpoint"
+        or args.parameter_projection != "projected4096"
+        or args.train_noise_mode != "aligned"
+    ):
+        raise ValueError(
+            "--avg-pair-lr-multi requires first99/checkpoint/projected4096/aligned"
+        )
     device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
     if torch.cuda.is_available():
         torch.cuda.set_device(device)
@@ -80,10 +100,15 @@ def main():
     with open(QUERY_DIR / "manifest.json") as handle:
         manifest = json.load(handle)
     by_id = {int(record["query_id"]): record for record in manifest}
-    if args.query_scope == "all":
+    if args.query_scope in ("all", "first99"):
+        requested_ids = (
+            TRACIN_DAS_ALL_QUERY_IDS
+            if args.query_scope == "all"
+            else TRACIN_DAS_FIRST99_QUERY_IDS
+        )
         records = [
             by_id[qid]
-            for qid in TRACIN_DAS_ALL_QUERY_IDS
+            for qid in requested_ids
             if by_id[qid]["family"] == args.family
         ]
     else:
@@ -108,33 +133,62 @@ def main():
     conditions = [cond_for(record, dataset, device) for record in records]
     timestamps = tuple(int(value) for value in DAS_TIMESTEPS)
     selected = list(range(args.timestamp_shard_index, len(timestamps), args.timestamp_shard_count))
-    methods = tracin_das_methods(
-        args.noise_mode,
-        args.parameter_projection,
-        args.train_noise_mode,
-    )
-    shard_root = tracin_das_shard_root(
-        args.timestamp_shard_index,
-        args.timestamp_shard_count,
-        args.noise_mode,
-        args.parameter_projection,
-        args.train_noise_mode,
-        args.family,
-        args.query_scope,
-    )
+    if args.avg_pair_lr_multi:
+        methods_by_group = {
+            str(count): tracin_das_avg_pair_lr_methods(count)
+            for count in TRACIN_DAS_AVG_LR_CHECKPOINT_COUNTS
+        }
+        pair_indices_by_group = {
+            str(count): set(tracin_das_checkpoint_pair_indices(count))
+            for count in TRACIN_DAS_AVG_LR_CHECKPOINT_COUNTS
+        }
+        shard_root = tracin_das_avg_pair_lr_shard_root(
+            args.family,
+            args.timestamp_shard_index,
+            args.timestamp_shard_count,
+        )
+    else:
+        methods_by_group = {
+            "legacy": tracin_das_methods(
+                args.noise_mode,
+                args.parameter_projection,
+                args.train_noise_mode,
+            )
+        }
+        pair_indices_by_group = {"legacy": set(range(49))}
+        shard_root = tracin_das_shard_root(
+            args.timestamp_shard_index,
+            args.timestamp_shard_count,
+            args.noise_mode,
+            args.parameter_projection,
+            args.train_noise_mode,
+            args.family,
+            args.query_scope,
+        )
+    contractions = ("linear", "termwise_squared", "timestamp_sum_squared")
     done_path = shard_root / "done.json"
     if done_path.is_file():
         print(f"[skip] {done_path}", flush=True)
         return
 
     partial_paths = {
-        contraction: shard_root / f"partial_{contraction}.npy"
-        for contraction in methods
+        group: {
+            contraction: shard_root / (
+                f"partial_{contraction}.npy"
+                if group == "legacy"
+                else f"partial_{group}_{contraction}.npy"
+            )
+            for contraction in contractions
+        }
+        for group in methods_by_group
     }
     progress_path = shard_root / "progress.json"
     completed_timestamps = []
     expected_shape = (len(records), N_TRAIN)
-    if all(path.is_file() for path in partial_paths.values()) and progress_path.is_file():
+    all_partial_paths = [
+        path for paths in partial_paths.values() for path in paths.values()
+    ]
+    if all(path.is_file() for path in all_partial_paths) and progress_path.is_file():
         with open(progress_path) as handle:
             progress = json.load(handle)
         if int(progress["contract_version"]) != CONTRACT_VERSION:
@@ -153,18 +207,34 @@ def main():
             raise ValueError("partial shard query scope differs")
         if progress.get("query_ids", list(TRACIN_DAS_QUERY_IDS)) != query_ids:
             raise ValueError("partial shard query IDs differ")
+        if bool(progress.get("avg_pair_lr_multi", False)) != args.avg_pair_lr_multi:
+            raise ValueError("partial shard learning-rate/checkpoint mode differs")
         completed_timestamps = [int(value) for value in progress["completed_timestamps"]]
         scores = {
-            contraction: torch.from_numpy(np.load(path)).to(device=device, dtype=torch.float64)
-            for contraction, path in partial_paths.items()
+            group: {
+                contraction: torch.from_numpy(np.load(path)).to(
+                    device=device, dtype=torch.float64
+                )
+                for contraction, path in paths.items()
+            }
+            for group, paths in partial_paths.items()
         }
-        if any(value.shape != expected_shape for value in scores.values()):
+        if any(
+            value.shape != expected_shape
+            for values in scores.values()
+            for value in values.values()
+        ):
             raise ValueError("partial score shape mismatch")
         print(f"[resume] timestamps={len(completed_timestamps)}/{len(selected)}", flush=True)
     else:
         scores = {
-            contraction: torch.zeros(expected_shape, device=device, dtype=torch.float64)
-            for contraction in methods
+            group: {
+                contraction: torch.zeros(
+                    expected_shape, device=device, dtype=torch.float64
+                )
+                for contraction in contractions
+            }
+            for group in methods_by_group
         }
 
     transitions = [(index, index + 1) for index in range(len(paths) - 1)]
@@ -180,6 +250,7 @@ def main():
         f"timestamps={len(selected)}/100 transitions=49 batch={args.batch_size} "
         f"noise_mode={args.noise_mode} "
         f"train_noise_mode={args.train_noise_mode} "
+        f"avg_pair_lr_multi={args.avg_pair_lr_multi} "
         f"query_train_noise_aligned={args.train_noise_mode == 'aligned'} "
         "output_delta_normalized=true",
         flush=True,
@@ -188,9 +259,19 @@ def main():
     for shard_timestamp_position, timestamp_index in enumerate(remaining, start=1):
         timestep = timestamps[timestamp_index]
         t_query = torch.tensor([timestep], device=device, dtype=torch.long)
-        timestamp_accumulator = torch.zeros(expected_shape, device=device, dtype=torch.float64)
+        timestamp_accumulators = {
+            group: torch.zeros(expected_shape, device=device, dtype=torch.float64)
+            for group in methods_by_group
+        }
 
         for transition_position, (checkpoint_index, target_index) in enumerate(transitions, start=1):
+            active_groups = [
+                group
+                for group, pair_indices in pair_indices_by_group.items()
+                if checkpoint_index in pair_indices
+            ]
+            if not active_groups:
+                continue
             term_started = time.perf_counter()
             noise_seed_parts = (
                 (
@@ -220,7 +301,9 @@ def main():
                 for endpoint in endpoints
             ]
             model, _, checkpoint = build_model(paths[checkpoint_index], "raw", device)
-            target, _, _ = build_model(paths[target_index], "raw", device)
+            target, _, target_checkpoint = build_model(
+                paths[target_index], "raw", device
+            )
             named = dict(model.named_parameters())
             names = tuple(named)
             parameters = tuple(named.values())
@@ -302,7 +385,13 @@ def main():
                 batched_gradient = vmap(
                     grad(train_loss), in_dims=(None, 0, 0, 0)
                 )
-            weight = float(tracin_lr_weight(checkpoint)) * snapshot_weight
+            if args.avg_pair_lr_multi:
+                checkpoint_lr = float(
+                    tracin_interval_mean_lr(checkpoint, target_checkpoint)
+                )
+            else:
+                checkpoint_lr = float(tracin_lr_weight(checkpoint))
+            weight = checkpoint_lr * snapshot_weight
             num_batches = math.ceil(N_TRAIN / args.batch_size)
             progress_every = max(1, num_batches // 5)
             for batch_position, start in enumerate(range(0, N_TRAIN, args.batch_size), start=1):
@@ -355,9 +444,12 @@ def main():
                     else flatten_batched_gradients(gradients, names)
                 ).detach()
                 dots = (train_matrix @ query_matrix.T).T.to(torch.float64)
-                scores["linear"][:, start:end] += weight * dots
-                scores["termwise_squared"][:, start:end] += weight * dots.square()
-                timestamp_accumulator[:, start:end] += weight * dots
+                for group in active_groups:
+                    scores[group]["linear"][:, start:end] += weight * dots
+                    scores[group]["termwise_squared"][:, start:end] += (
+                        weight * dots.square()
+                    )
+                    timestamp_accumulators[group][:, start:end] += weight * dots
                 if batch_position == 1 or batch_position % progress_every == 0 or batch_position == num_batches:
                     print(
                         f"[tracin-das gpu={args.gpu}] timestamp={shard_timestamp_position}/{len(remaining)} "
@@ -375,7 +467,8 @@ def main():
                 f"eta={eta/3600:.2f}h",
                 flush=True,
             )
-            del model, target, named, parameters, query_vectors, query_matrix
+            del model, target, checkpoint, target_checkpoint
+            del named, parameters, query_vectors, query_matrix
             del projection_specs
             del current_prediction, next_prediction, direction, projected_prediction, query_gradient
             del batched_gradient, gradients, train_matrix, dots, shared_noise, query_xt
@@ -383,36 +476,73 @@ def main():
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
-        scores["timestamp_sum_squared"] += timestamp_accumulator.square()
+        for group in methods_by_group:
+            scores[group]["timestamp_sum_squared"] += (
+                timestamp_accumulators[group].square()
+            )
         completed_timestamps.append(timestamp_index)
         completed_timestamps.sort()
-        for contraction, path in partial_paths.items():
-            atomic_numpy(path, scores[contraction].cpu().numpy())
-        atomic_json(
-            progress_path,
-            {
-                "contract_version": CONTRACT_VERSION,
-                "batch_size": args.batch_size,
-                "noise_mode": args.noise_mode,
-                "parameter_projection": args.parameter_projection,
-                "train_noise_mode": args.train_noise_mode,
-                "query_ids": query_ids,
-                "family": args.family,
-                "query_scope": args.query_scope,
-                "completed_timestamps": completed_timestamps,
-            },
+        checkpoint_every = 5 if args.avg_pair_lr_multi else 1
+        should_checkpoint = (
+            len(completed_timestamps) % checkpoint_every == 0
+            or len(completed_timestamps) == len(selected)
         )
-        print(f"[checkpoint] timestamps={len(completed_timestamps)}/{len(selected)}", flush=True)
+        if should_checkpoint:
+            for group, paths in partial_paths.items():
+                for contraction, path in paths.items():
+                    atomic_numpy(path, scores[group][contraction].cpu().numpy())
+            atomic_json(
+                progress_path,
+                {
+                    "contract_version": CONTRACT_VERSION,
+                    "batch_size": args.batch_size,
+                    "noise_mode": args.noise_mode,
+                    "parameter_projection": args.parameter_projection,
+                    "train_noise_mode": args.train_noise_mode,
+                    "query_ids": query_ids,
+                    "family": args.family,
+                    "query_scope": args.query_scope,
+                    "avg_pair_lr_multi": args.avg_pair_lr_multi,
+                    "checkpoint_counts": (
+                        list(TRACIN_DAS_AVG_LR_CHECKPOINT_COUNTS)
+                        if args.avg_pair_lr_multi
+                        else None
+                    ),
+                    "completed_timestamps": completed_timestamps,
+                },
+            )
+            print(
+                f"[checkpoint] timestamps={len(completed_timestamps)}/{len(selected)}",
+                flush=True,
+            )
 
-    for contraction, value in scores.items():
-        atomic_numpy(shard_root / f"{contraction}.npy", value.cpu().numpy())
+    for group, values in scores.items():
+        for contraction, value in values.items():
+            atomic_numpy(
+                shard_root / (
+                    f"{contraction}.npy"
+                    if group == "legacy"
+                    else f"{group}_{contraction}.npy"
+                ),
+                value.cpu().numpy(),
+            )
     atomic_json(
         done_path,
         {
-            "methods": methods,
+            "methods": (
+                methods_by_group["legacy"]
+                if "legacy" in methods_by_group
+                else None
+            ),
+            "methods_by_group": methods_by_group,
             "query_ids": query_ids,
             "family": args.family,
             "query_scope": args.query_scope,
+            "avg_pair_lr_multi": args.avg_pair_lr_multi,
+            "checkpoint_pair_indices": {
+                group: sorted(indices)
+                for group, indices in pair_indices_by_group.items()
+            },
             "timestamp_indices": selected,
             "timestamps": [timestamps[index] for index in selected],
             "checkpoint_transitions": 49,
@@ -443,6 +573,11 @@ def main():
             ),
             "query_scalar": "dot(epsilon_current, normalize(epsilon_next-epsilon_current))",
             "lr_weighted": TRACIN_USE_LR_WEIGHTS,
+            "learning_rate_source": (
+                "exact mean scheduled LR over [current global_step, next global_step)"
+                if args.avg_pair_lr_multi
+                else "current_checkpoint"
+            ),
             "timestamp_weight": snapshot_weight,
             "batch_size": args.batch_size,
             "contract_version": CONTRACT_VERSION,
