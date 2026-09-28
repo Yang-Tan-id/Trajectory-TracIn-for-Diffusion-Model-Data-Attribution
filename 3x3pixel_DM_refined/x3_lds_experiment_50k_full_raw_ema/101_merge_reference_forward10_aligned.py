@@ -11,9 +11,19 @@ from reference_forward10_config import *
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--family", choices=FAMILIES, required=True)
+    parser.add_argument("--query-scope", choices=("ten", "all"), default="all")
     parser.add_argument("--timestamp-shard-count", type=int, default=2)
     args = parser.parse_args()
-    query_ids = list(range(75)) if args.family == "prompted" else list(range(75, 100))
+    if args.query_scope == "ten":
+        if args.family != "prompted":
+            raise ValueError("ten-query scope is q00-q09 prompted only")
+        query_ids = list(range(10))
+    else:
+        query_ids = (
+            list(range(75))
+            if args.family == "prompted"
+            else list(range(75, 100))
+        )
     totals = {
         name: np.zeros((len(query_ids), N_TRAIN), dtype=np.float64)
         for name in REF_FORWARD10_METHODS
@@ -21,12 +31,17 @@ def main():
     covered = []
     for shard_index in range(args.timestamp_shard_count):
         root = ref_forward10_shard_root(
-            args.family, shard_index, args.timestamp_shard_count
+            args.family,
+            shard_index,
+            args.timestamp_shard_count,
+            args.query_scope,
         )
         with open(root / "done.json") as handle:
             info = json.load(handle)
         if info["query_ids"] != query_ids or info["family"] != args.family:
             raise ValueError(f"query/family mismatch in {root}")
+        if info.get("query_scope", "all") != args.query_scope:
+            raise ValueError(f"query-scope mismatch in {root}")
         covered.extend(int(value) for value in info["timestamp_indices"])
         for contraction in REF_FORWARD10_METHODS:
             values = np.load(root / f"{contraction}.npy")
@@ -48,6 +63,7 @@ def main():
                 json.dump(
                     {
                         "query": by_id[query_id],
+                        "query_scope": args.query_scope,
                         "method": method,
                         "contraction": contraction,
                         "checkpoint_count": 50,

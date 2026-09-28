@@ -21,15 +21,24 @@ REF_FORWARD10_METHODS = {
 }
 
 
-def ref_forward10_shard_root(family, shard_index, shard_count):
+def ref_forward10_shard_root(
+    family,
+    shard_index,
+    shard_count,
+    query_scope="all",
+):
     if family not in FAMILIES:
         raise ValueError(f"unknown family={family!r}")
+    if query_scope not in ("ten", "all"):
+        raise ValueError(f"unknown query_scope={query_scope!r}")
+    scope_tag = "q00_q09" if query_scope == "ten" else "q00_q99"
     return (
         ATTR_DIR
         / (
             "_traj_tracin_reference_forward10_next_delta_aligned_loss_"
             "projected4096_shards"
         )
+        / scope_tag
         / family
         / f"shard_{int(shard_index):02d}_of_{int(shard_count):02d}"
     )

@@ -77,6 +77,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--gpu", type=int, required=True)
     parser.add_argument("--family", choices=FAMILIES, required=True)
+    parser.add_argument("--query-scope", choices=("ten", "all"), default="all")
     parser.add_argument("--timestamp-shard-index", type=int, required=True)
     parser.add_argument("--timestamp-shard-count", type=int, default=2)
     parser.add_argument("--batch-size", type=int, default=REF_FORWARD10_BATCH_SIZE)
@@ -91,9 +92,22 @@ def main():
 
     with open(QUERY_DIR / "manifest.json") as handle:
         manifest = json.load(handle)
-    records = [record for record in manifest if record["family"] == args.family]
+    if args.query_scope == "ten":
+        if args.family != "prompted":
+            raise ValueError("ten-query scope is q00-q09 prompted only")
+        records = [
+            record for record in manifest if int(record["query_id"]) in range(10)
+        ]
+    else:
+        records = [record for record in manifest if record["family"] == args.family]
     query_ids = [int(record["query_id"]) for record in records]
-    expected_ids = list(range(75)) if args.family == "prompted" else list(range(75, 100))
+    expected_ids = (
+        list(range(10))
+        if args.query_scope == "ten"
+        else list(range(75))
+        if args.family == "prompted"
+        else list(range(75, 100))
+    )
     if query_ids != expected_ids:
         raise ValueError(f"unexpected {args.family} query IDs: {query_ids}")
     dataset = ColorGridDataset(str(BASE_CSV), grid_size=3)
@@ -118,7 +132,10 @@ def main():
         range(args.timestamp_shard_index, len(t_seq), args.timestamp_shard_count)
     )
     root = ref_forward10_shard_root(
-        args.family, args.timestamp_shard_index, args.timestamp_shard_count
+        args.family,
+        args.timestamp_shard_index,
+        args.timestamp_shard_count,
+        args.query_scope,
     )
     done_path = root / "done.json"
     if done_path.is_file():
@@ -316,6 +333,7 @@ def main():
             {
                 "contract_version": CONTRACT_VERSION,
                 "family": args.family,
+                "query_scope": args.query_scope,
                 "query_ids": query_ids,
                 "batch_size": args.batch_size,
                 "completed_timestamps": completed,
@@ -329,6 +347,7 @@ def main():
         {
             "methods": REF_FORWARD10_METHODS,
             "family": args.family,
+            "query_scope": args.query_scope,
             "query_ids": query_ids,
             "timestamp_indices": selected,
             "reference_timesteps": [int(t_seq[index]) for index in selected],

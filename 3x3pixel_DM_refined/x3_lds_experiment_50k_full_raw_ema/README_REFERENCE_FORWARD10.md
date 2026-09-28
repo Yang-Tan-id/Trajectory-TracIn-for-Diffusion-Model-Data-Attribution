@@ -28,15 +28,15 @@ for exactly ten indices. The experiment uses all 49 next pairs formed by the
 saved source-checkpoint learning rates, CountSketch4096, all 100 queries, and emits linear,
 termwise-square, and timestamp-sum-square scores.
 
-Run on four GPUs:
+Run q00-q09 on four timestamp shards:
 
 ```bash
-python -u 102_launch_reference_forward10_aligned_100q_4gpu.py \
+python -u 104_launch_reference_forward10_next_delta_10q_4gpu.py \
   --batch-size 5120
 ```
 
 Then evaluate all LDS targets and both signs:
 
 ```bash
-python -u 103_eval_reference_forward10_aligned_100q_lds.py
+python -u 105_eval_reference_forward10_next_delta_10q_lds.py
 ```
