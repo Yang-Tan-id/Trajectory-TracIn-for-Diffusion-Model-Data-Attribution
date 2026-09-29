@@ -2,9 +2,10 @@
 
 For q00-q09, differentiate through the complete deterministic 1000-step DDIM
 sampler at the final prompted EMA parameters. At each of 100 saved reference
-trajectory states, nine projected output-basis gradients are cached. By
-linearity, combining those nine gradients with the current loss-side probe is
-exactly equal to directly differentiating the scalar `<x_t, probe> / sqrt(9)`;
+trajectory states, 27 projected RGB output-basis gradients are cached (3 color
+channels x 3 x 3 pixels). By linearity, combining those 27 gradients with the
+current loss-side probe is exactly equal to directly differentiating the scalar
+`<x_t, probe> / sqrt(27)`;
 this avoids repeating the full unroll for every loss term. The full chain rule
 through all preceding denoising steps is retained.
 

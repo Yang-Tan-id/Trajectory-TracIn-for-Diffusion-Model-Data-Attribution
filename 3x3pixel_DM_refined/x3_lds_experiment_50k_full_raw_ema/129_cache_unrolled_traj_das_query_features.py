@@ -1,4 +1,4 @@
-"""Cache nine projected output-basis VJPs per unrolled trajectory state."""
+"""Cache 27 projected RGB output-basis VJPs per unrolled trajectory state."""
 
 import argparse
 import json
@@ -296,7 +296,7 @@ def main():
                 "trajectory_timesteps": common_timesteps,
                 "query_output_dimension": int(UNROLLED_TRAJ_DAS_OUTPUT_DIM),
                 "query_feature_basis": (
-                    "nine projected output-basis gradients; each loss probe "
+                    "27 projected RGB output-basis gradients; each loss probe "
                     "is combined linearly to equal one direct scalar VJP"
                 ),
                 "projection_dim": int(UNROLLED_TRAJ_DAS_PROJECTION_DIM),
