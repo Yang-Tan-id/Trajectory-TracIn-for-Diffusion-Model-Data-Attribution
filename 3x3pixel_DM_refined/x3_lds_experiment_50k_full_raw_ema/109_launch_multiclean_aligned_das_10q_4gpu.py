@@ -11,17 +11,25 @@ from multiclean_das_config import *
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--batch-size", type=int, default=DAS_FEATURE_BATCH_SIZE)
+    parser.add_argument("--gpus", default=",".join(str(value) for value in CUDA_IDS[:4]))
     args = parser.parse_args()
+    gpus = [int(value.strip()) for value in args.gpus.split(",") if value.strip()]
     if args.batch_size <= 0:
         raise ValueError("batch size must be positive")
-    if len(CUDA_IDS) < 4:
-        raise ValueError("four CUDA_IDS are required")
+    if len(gpus) != 4 or len(set(gpus)) != 4:
+        raise ValueError("--gpus must contain exactly four distinct GPU ids")
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     log_path = LOG_DIR / "multiclean_aligned_das_10q_4gpu.log"
     active = {}
     with open(log_path, "a", buffering=1) as stream:
         subprocess.run(
-            [sys.executable, "-u", "106_build_predicted_clean_10anchors.py"],
+            [
+                sys.executable,
+                "-u",
+                "106_build_predicted_clean_10anchors.py",
+                "--gpu",
+                str(gpus[0]),
+            ],
             stdout=stream,
             stderr=subprocess.STDOUT,
             check=True,
@@ -30,7 +38,10 @@ def main():
             "\n[launcher] q00-q09 predicted-clean 10-anchor aligned DAS; "
             "100 DAS timestamps, MC10, all lambdas, train pass reused\n"
         )
-        for shard_index, gpu in enumerate(CUDA_IDS[:4]):
+        stream.write(
+            f"[launcher] gpus={gpus} feature_batch_size={args.batch_size}\n"
+        )
+        for shard_index, gpu in enumerate(gpus):
             label = f"timestamp-shard-{shard_index}"
             command = [
                 sys.executable,

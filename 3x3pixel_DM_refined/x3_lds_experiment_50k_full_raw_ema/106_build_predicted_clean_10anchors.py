@@ -1,5 +1,6 @@
 """Build ten x0 predictions from evenly spaced reference-trajectory states."""
 
+import argparse
 import json
 import os
 from pathlib import Path
@@ -22,7 +23,12 @@ def atomic_numpy(path, value):
 
 
 def main():
-    device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--gpu", type=int, default=0)
+    args = parser.parse_args()
+    device = torch.device(
+        f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu"
+    )
     if torch.cuda.is_available():
         torch.cuda.set_device(device)
     with open(QUERY_DIR / "manifest.json") as handle:
