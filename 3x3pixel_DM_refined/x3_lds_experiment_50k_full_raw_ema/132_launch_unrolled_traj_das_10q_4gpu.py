@@ -19,6 +19,11 @@ def main():
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     log_path = LOG_DIR / "unrolled_trajectory_das_probe4_10q_4gpu.log"
     active = {}
+    print(
+        f"[launcher] caching fully-unrolled q00-q09 query features on "
+        f"gpu={gpus[0]} log={log_path}",
+        flush=True,
+    )
     with open(log_path, "a", buffering=1) as stream:
         subprocess.run(
             [
