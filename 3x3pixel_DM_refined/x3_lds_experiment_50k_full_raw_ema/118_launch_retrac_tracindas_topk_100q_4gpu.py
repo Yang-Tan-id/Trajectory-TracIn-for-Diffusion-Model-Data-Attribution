@@ -31,11 +31,19 @@ def run_logged(command, log_path):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--gpus", default="0,1,2,3")
+    parser.add_argument(
+        "--workers-per-gpu",
+        type=int,
+        default=1,
+        help="independent train/eval subprocesses allowed concurrently on each GPU",
+    )
     parser.add_argument("--skip-prepare", action="store_true")
     args = parser.parse_args()
     gpus = [int(value) for value in args.gpus.split(",") if value.strip()]
     if not gpus:
         raise ValueError("at least one GPU is required")
+    if args.workers_per_gpu <= 0:
+        raise ValueError("--workers-per-gpu must be positive")
     prepare = load_prepare_module()
     if not args.skip_prepare:
         subprocess.run(
@@ -54,7 +62,7 @@ def main():
     state = {"done": 0, "failed": []}
     started = time.perf_counter()
 
-    def worker(gpu):
+    def worker(gpu, slot):
         while True:
             try:
                 job = pending.get_nowait()
@@ -73,7 +81,7 @@ def main():
                 / f"q{int(job['query_id']):02d}.log"
             )
             try:
-                print(f"[gpu {gpu}] START {label}", flush=True)
+                print(f"[gpu {gpu} slot {slot}] START {label}", flush=True)
                 code = run_logged(
                     [
                         sys.executable,
@@ -110,7 +118,8 @@ def main():
                     elapsed = time.perf_counter() - started
                     eta = elapsed / max(finished, 1) * (len(jobs) - finished)
                     print(
-                        f"[overall] {'FAIL' if code else 'DONE'} {label} "
+                        f"[overall] {'FAIL' if code else 'DONE'} "
+                        f"gpu={gpu} slot={slot} {label} "
                         f"finished={finished}/900 successful={state['done']} "
                         f"elapsed={elapsed/3600:.2f}h eta≈{eta/3600:.2f}h",
                         flush=True,
@@ -118,7 +127,16 @@ def main():
             finally:
                 pending.task_done()
 
-    threads = [threading.Thread(target=worker, args=(gpu,)) for gpu in gpus]
+    threads = [
+        threading.Thread(target=worker, args=(gpu, slot))
+        for gpu in gpus
+        for slot in range(args.workers_per_gpu)
+    ]
+    print(
+        f"[launcher] GPUs={gpus} workers_per_gpu={args.workers_per_gpu} "
+        f"concurrent_models={len(threads)} train_batch_size=256",
+        flush=True,
+    )
     for thread in threads:
         thread.start()
     for thread in threads:

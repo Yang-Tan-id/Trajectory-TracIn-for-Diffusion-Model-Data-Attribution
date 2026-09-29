@@ -18,8 +18,14 @@ After the three 100-query attribution banks exist, run:
 
 ```bash
 python -u 118_launch_retrac_tracindas_topk_100q_4gpu.py \
-  --gpus 0,1,2,3
+  --gpus 0,1,2,3 \
+  --workers-per-gpu 3
 ```
+
+Each model retains the original training batch size of 256.  The
+`--workers-per-gpu` option controls how many independent models are trained at
+the same time on each GPU; it does not change model hyperparameters.  Start at
+3 on a 24 GiB A5000 and reduce it if memory use is too high.
 
 The run is resumable: completed final checkpoints/evaluations are skipped and
 incomplete training jobs resume from their latest ten-epoch checkpoint.
