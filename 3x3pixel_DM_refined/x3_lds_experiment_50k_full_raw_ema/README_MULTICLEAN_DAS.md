@@ -1,22 +1,20 @@
-# Ten-anchor triangular predicted-clean aligned DAS
+# Trajectory-state relative-forward aligned DAS
 
-For q00-q99, select ten evenly spaced snapshots in increasing diffusion-time
-order (approximately `t=0,111,...,888,999`) from each 100-state cached final-EMA
-reference trajectory. At each anchor `k`, make one predicted clean
-image from the current predicted noise:
+For q00-q99, take the cached reference-trajectory states at approximately
+`t=888,777,...,111,0`. The initial `t=999` state is deliberately skipped.
+For anchor state `x_t`, choose `10,20,...,90` target levels evenly over
+`[t,999]` and forward-noise directly from `x_t` to each target `s`:
 
 ```text
-x0_hat[k] = (x_k - sqrt(1-alpha_bar[k]) * eps_ema(x_k,k))
-             / sqrt(alpha_bar[k])
+x_s = sqrt(alpha_bar_s / alpha_bar_t) * x_t
+      + sqrt(1 - alpha_bar_s / alpha_bar_t) * noise
 ```
 
-Anchor `j=1..10` runs aligned final-EMA DAS on the first `10*j` of the 100 DAS
-timestamps with MC10. Thus the `t≈888` ninth anchor uses 90 timestamps and the
-last `t≈999` anchor uses all 100. Each anchor is averaged over its own timestamp
-count and MC10, then the ten squared DAS scores are summed. For a fixed
-`(DAS timestamp, MC)` term, the projected training features, Gram matrix,
-residuals, and linear solves are computed once and reused by every eligible
-anchor. All configured damping lambdas are retained.
+Thus the `t≈888` anchor uses ten targets covering approximately `888..999`.
+At every `(anchor,target,MC)` term, query relative-forward noise and training
+loss noise are identical. Each anchor is averaged over its own target count and
+MC10; the nine independently squared DAS scores are then summed. The final EMA
+model, projection dimension 4096, and all configured damping lambdas are used.
 
 ```bash
 python -u 127_launch_multiclean_aligned_das_100q_4gpu.py \

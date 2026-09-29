@@ -1,4 +1,4 @@
-"""Merge ten-anchor predicted-clean aligned-DAS timestamp shards."""
+"""Merge trajectory-state relative-forward aligned-DAS shards."""
 
 import argparse
 import json
@@ -41,7 +41,7 @@ def main():
             ):
                 raise ValueError(f"anchor DAS timestamp counts differ in {root}")
             covered_by_family[family].extend(
-                int(value) for value in info["timestamp_indices"]
+                int(value) for value in info["selected_pair_indices"]
             )
             term_count_by_family[family] += int(info["term_count"])
             for lam in DAS_LAMBDAS:
@@ -52,10 +52,13 @@ def main():
                         f"score shape={values.shape}, expected={expected_shape} in {root}"
                     )
                 totals[float(lam)][list(query_ids)] += values
-    expected_terms = len(DAS_TIMESTEPS) * int(DAS_NUM_MC)
+    expected_pairs = sum(MULTICLEAN_ANCHOR_DAS_COUNTS)
+    expected_terms = expected_pairs * int(DAS_NUM_MC)
     for family in MULTICLEAN_FAMILIES:
-        if sorted(covered_by_family[family]) != list(range(len(DAS_TIMESTEPS))):
-            raise ValueError(f"{family} shards do not cover timestamps 0..99 exactly")
+        if sorted(covered_by_family[family]) != list(range(expected_pairs)):
+            raise ValueError(
+                f"{family} shards do not cover relative-forward pairs exactly"
+            )
         if term_count_by_family[family] != expected_terms:
             raise ValueError(
                 f"{family} term_count={term_count_by_family[family]}, "
@@ -87,26 +90,29 @@ def main():
                         ),
                         "anchor_count": MULTICLEAN_ANCHOR_COUNT,
                         "anchor_reduction": (
-                            "sum of independently timestamp-and-MC-averaged "
+                            "sum of independently target-and-MC-averaged "
                             "per-anchor squared DAS scores"
                         ),
-                        "clean_definition": (
-                            "x0_hat=(x_k-sqrt(1-alpha_bar_k)*eps_ema(x_k,k))"
-                            "/sqrt(alpha_bar_k)"
-                        ),
+                        "anchor_timesteps": metadata[0]["anchor_timesteps"],
+                        "anchor_target_timesteps": metadata[0][
+                            "anchor_target_timesteps"
+                        ],
+                        "query_definition": "cached reference trajectory state x_t",
+                        "initial_t999_anchor": "skipped",
                         "parameter_source": "final EMA",
                         "projection_dim": int(DAS_PROJ_DIM),
-                        "das_timestamps": [int(value) for value in DAS_TIMESTEPS],
                         "anchor_timestamp_rule": (
-                            "anchor j=1..10 uses DAS timestamp indices "
-                            "0..(10*j-1)"
+                            "anchor x_t uses its configured number of evenly "
+                            "spaced targets s in [t,999]"
                         ),
                         "num_mc": int(DAS_NUM_MC),
                         "normalize_projected_grads": bool(
                             DAS_NORMALIZE_PROJECTED_GRADS
                         ),
                         "noise_alignment": metadata[0]["noise_alignment"],
-                        "train_feature_reuse": metadata[0]["train_feature_reuse"],
+                        "relative_forward_formula": metadata[0][
+                            "relative_forward_formula"
+                        ],
                         "family": by_id[query_id]["family"],
                         "timestamp_shards_per_family": args.timestamp_shard_count,
                     },

@@ -1,4 +1,4 @@
-"""Evaluate ten-anchor predicted-clean aligned DAS on q00-q99."""
+"""Evaluate trajectory-state relative-forward aligned DAS on q00-q99."""
 
 import json
 
@@ -18,10 +18,10 @@ def main():
         "anchor_das_timestamp_counts": list(MULTICLEAN_ANCHOR_DAS_COUNTS),
         "anchor_count": MULTICLEAN_ANCHOR_COUNT,
         "anchor_reduction": (
-            "sum of independently timestamp-and-MC-averaged per-anchor squared "
+            "sum of independently target-and-MC-averaged per-anchor squared "
             "DAS scores"
         ),
-        "das_timestamp_count": len(DAS_TIMESTEPS),
+        "relative_forward_pair_count": sum(MULTICLEAN_ANCHOR_DAS_COUNTS),
         "das_mc": int(DAS_NUM_MC),
         "lambdas": [float(value) for value in DAS_LAMBDAS],
         "results": {},
@@ -66,7 +66,7 @@ def main():
                 flush=True,
             )
         output["results"][lambda_tag(lam)] = lambda_result
-    path = LDS_DIR / "multiclean_triangular_aligned_das_100q_lambda_sweep.json"
+    path = LDS_DIR / "trajectory_state_relative_forward_das_100q_lambda_sweep.json"
     with open(path, "w") as handle:
         json.dump(output, handle, indent=2)
     print(f"[saved] {path}", flush=True)

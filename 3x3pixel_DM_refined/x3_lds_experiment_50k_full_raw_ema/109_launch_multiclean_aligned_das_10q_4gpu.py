@@ -1,4 +1,4 @@
-"""Build ten clean estimates, run aligned DAS on four GPUs, and merge."""
+"""Run trajectory-state relative-forward aligned DAS on four GPUs."""
 
 import argparse
 import subprocess
@@ -19,7 +19,7 @@ def main():
     if len(gpus) != 4 or len(set(gpus)) != 4:
         raise ValueError("--gpus must contain exactly four distinct GPU ids")
     LOG_DIR.mkdir(parents=True, exist_ok=True)
-    log_path = LOG_DIR / "multiclean_triangular_aligned_das_100q_4gpu.log"
+    log_path = LOG_DIR / "trajectory_state_relative_forward_das_100q_4gpu.log"
     active = {}
     with open(log_path, "a", buffering=1) as stream:
         subprocess.run(
@@ -35,9 +35,9 @@ def main():
             check=True,
         )
         stream.write(
-            "\n[launcher] q00-q99 predicted-clean 10-anchor triangular aligned DAS; "
-            "anchors use 10,20,...,100 timestamps, MC10, all lambdas, "
-            "train pass reused\n"
+            "\n[launcher] q00-q99 trajectory-state relative-forward aligned DAS; "
+            "t999 anchor skipped, remaining anchors use 10,20,...,90 targets "
+            "up to t999, MC10, all lambdas\n"
         )
         stream.write(
             f"[launcher] gpus={gpus} feature_batch_size={args.batch_size}\n"
@@ -100,7 +100,7 @@ def main():
             check=True,
         )
     print(
-        "[done] predicted-clean 10-anchor triangular aligned DAS q00-q99",
+        "[done] trajectory-state relative-forward aligned DAS q00-q99",
         flush=True,
     )
 
