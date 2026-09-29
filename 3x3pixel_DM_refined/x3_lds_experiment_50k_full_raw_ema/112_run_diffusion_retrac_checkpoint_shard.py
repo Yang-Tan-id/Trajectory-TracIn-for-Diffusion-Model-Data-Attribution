@@ -70,6 +70,7 @@ def project_gradient_batch(grads, names, specs, dimension, *, normalize):
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--family", choices=RETRAC_FAMILIES, required=True)
     parser.add_argument("--gpu", type=int, required=True)
     parser.add_argument("--checkpoint-shard-index", type=int, required=True)
     parser.add_argument("--checkpoint-shard-count", type=int, default=4)
@@ -84,7 +85,8 @@ def main():
     if torch.cuda.is_available():
         torch.cuda.set_device(device)
 
-    checkpoint_paths = model_paths(RETRAC_FAMILY)
+    family_query_ids = retrac_query_ids(args.family)
+    checkpoint_paths = model_paths(args.family)
     selected_checkpoints = list(
         range(
             args.checkpoint_shard_index,
@@ -93,7 +95,7 @@ def main():
         )
     )
     root = retrac_shard_root(
-        args.checkpoint_shard_index, args.checkpoint_shard_count
+        args.family, args.checkpoint_shard_index, args.checkpoint_shard_count
     )
     done_path = root / "done.json"
     if done_path.is_file():
@@ -102,13 +104,13 @@ def main():
 
     with open(QUERY_DIR / "manifest.json") as handle:
         by_id = {int(item["query_id"]): item for item in json.load(handle)}
-    records = [by_id[query_id] for query_id in RETRAC_QUERY_IDS]
+    records = [by_id[query_id] for query_id in family_query_ids]
     endpoints = torch.cat(
         [
             torch.from_numpy(
                 np.load(QUERY_DIR / f"q{query_id:02d}" / "final_state.npy")
             )
-            for query_id in RETRAC_QUERY_IDS
+            for query_id in family_query_ids
         ],
         dim=0,
     ).to(device=device, dtype=torch.float32)
@@ -117,16 +119,18 @@ def main():
     bootstrap_model, dataset, _ = build_model(
         checkpoint_paths[selected_checkpoints[0]], RETRAC_PARAM_SOURCE, device
     )
-    x_all, cond_all = preload_dataset(dataset, RETRAC_FAMILY, device)
+    x_all, cond_all = preload_dataset(dataset, args.family, device)
     query_conditions = torch.cat(
         [cond_for(record, dataset, device) for record in records], dim=0
     )
+    if args.family == "unprompted":
+        query_conditions.zero_()
     del bootstrap_model
     schedule = base.make_linear_schedule(T, device=device)
     replay_t = np.load(replay_t_path(), mmap_mode="r")
     replay_noise = np.load(replay_noise_path(), mmap_mode="r")
 
-    query_count = len(RETRAC_QUERY_IDS)
+    query_count = len(family_query_ids)
     scores_tracin = torch.zeros(
         (query_count, N_TRAIN), device=device, dtype=torch.float64
     )
@@ -147,7 +151,9 @@ def main():
 
     started = time.perf_counter()
     print(
-        f"[retrac gpu={args.gpu}] shard={args.checkpoint_shard_index}/"
+        f"[retrac gpu={args.gpu}] family={args.family} "
+        f"queries=q{family_query_ids[0]:02d}-q{family_query_ids[-1]:02d} "
+        f"shard={args.checkpoint_shard_index}/"
         f"{args.checkpoint_shard_count} checkpoints={selected_checkpoints} "
         f"queries={query_count} timesteps={len(RETRAC_TIMESTEPS)} "
         f"query_mc={RETRAC_QUERY_MC} train_events=4 train_batch={args.batch_size} "
@@ -315,6 +321,8 @@ def main():
             progress_path,
             {
                 "contract_version": CONTRACT_VERSION,
+                "family": args.family,
+                "query_ids": list(family_query_ids),
                 "checkpoint_shard_index": args.checkpoint_shard_index,
                 "checkpoint_shard_count": args.checkpoint_shard_count,
                 "selected_checkpoints": selected_checkpoints,
@@ -338,10 +346,11 @@ def main():
         done_path,
         {
             "contract_version": CONTRACT_VERSION,
+            "family": args.family,
             "checkpoint_shard_index": args.checkpoint_shard_index,
             "checkpoint_shard_count": args.checkpoint_shard_count,
             "checkpoint_indices": selected_checkpoints,
-            "query_ids": list(RETRAC_QUERY_IDS),
+            "query_ids": list(family_query_ids),
             "query_timesteps": list(RETRAC_TIMESTEPS),
             "query_mc": RETRAC_QUERY_MC,
             "train_events_per_checkpoint": RETRAC_EVENTS_PER_CHECKPOINT,

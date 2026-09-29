@@ -3,8 +3,8 @@
 from exp_config import *
 
 
-RETRAC_QUERY_IDS = tuple(range(10))
-RETRAC_FAMILY = "prompted"
+RETRAC_QUERY_IDS = tuple(range(100))
+RETRAC_FAMILIES = ("prompted", "unprompted")
 RETRAC_PARAM_SOURCE = "raw"
 RETRAC_TIMESTEPS = tuple(
     int(round(1 + position * (T - 2) / 99.0)) for position in range(100)
@@ -24,12 +24,21 @@ RETRAC_METHODS = {
     "diffusion_tracin": RETRAC_TRACIN_METHOD,
     "diffusion_retrac": RETRAC_METHOD,
 }
-RETRAC_SHARD_NAMESPACE = "_diffusion_retrac_replayed_raw_10q_shards"
+RETRAC_SHARD_NAMESPACE = "_diffusion_retrac_replayed_raw_100q_shards"
 
 
-def retrac_shard_root(shard_index, shard_count):
+def retrac_query_ids(family):
+    if family == "prompted":
+        return tuple(range(75))
+    if family == "unprompted":
+        return tuple(range(75, 100))
+    raise ValueError(family)
+
+
+def retrac_shard_root(family, shard_index, shard_count):
     return (
         ATTR_DIR
         / RETRAC_SHARD_NAMESPACE
+        / family
         / f"shard_{int(shard_index):02d}_of_{int(shard_count):02d}"
     )

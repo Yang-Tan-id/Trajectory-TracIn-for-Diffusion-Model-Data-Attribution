@@ -4,7 +4,7 @@ This experiment implements the practical checkpoint form from Xie et al.,
 *Data Attribution for Diffusion Models: Timestep-induced Bias in Influence
 Estimation*.
 
-For each of the 50 raw prompted checkpoints, the query side uses the simple
+For each of the 50 raw checkpoints in the query's family, the query side uses the simple
 diffusion loss on generated endpoint queries, 100 evenly spaced diffusion
 timesteps, and MC10 query noise.  The train side does **not** use query-aligned
 noise: it replays the four exact `t_train` and `epsilon_train` events realized
@@ -28,13 +28,13 @@ projection.
 Run from this experiment directory:
 
 ```bash
-python -u 115_launch_diffusion_retrac_10q_4gpu.py \
+python -u 116_launch_diffusion_retrac_100q_4gpu.py \
   --batch-size 8 \
   --query-batch-size 2
 ```
 
 The launcher verifies inputs, runs four checkpoint shards, resumes at completed
-checkpoint boundaries, merges q00-q09 scores, and evaluates all eight existing
+checkpoint boundaries, merges q00-q99 scores, and evaluates all eight existing
 LDS response targets with both signs.
 
 If the exact training-event replay cache is absent, first run:
@@ -49,5 +49,5 @@ Outputs:
 
 - `x3_lds_exp_50k/attribution/diffusion_tracin_replayed_raw_50ckpt_100t_mc10_projected4096/qXX/scores.npy`
 - `x3_lds_exp_50k/attribution/diffusion_retrac_replayed_raw_50ckpt_100t_mc10_projected4096/qXX/scores.npy`
-- `x3_lds_exp_50k/lds/diffusion_tracin_vs_retrac_replayed_10q.json`
-- `x3_lds_exp_50k/logs/diffusion_retrac_10q_gpu{0,1,2,3}.log`
+- `x3_lds_exp_50k/lds/diffusion_tracin_vs_retrac_replayed_100q.json`
+- `x3_lds_exp_50k/logs/diffusion_retrac_100q_{prompted,unprompted}_gpu*.log`

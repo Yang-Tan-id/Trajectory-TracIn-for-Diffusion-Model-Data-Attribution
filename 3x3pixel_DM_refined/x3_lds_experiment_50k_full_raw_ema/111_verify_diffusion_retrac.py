@@ -10,16 +10,18 @@ from forward_loss_alignment_config import replay_noise_path, replay_t_path
 
 
 def main():
-    paths = model_paths(RETRAC_FAMILY)
-    if len(paths) != 50:
-        raise ValueError(f"expected 50 prompted checkpoints, found {len(paths)}")
+    for family in RETRAC_FAMILIES:
+        paths = model_paths(family)
+        if len(paths) != 50:
+            raise ValueError(f"expected 50 {family} checkpoints, found {len(paths)}")
     with open(QUERY_DIR / "manifest.json") as handle:
         records = {int(item["query_id"]): item for item in json.load(handle)}
     for query_id in RETRAC_QUERY_IDS:
         if query_id not in records:
             raise FileNotFoundError(f"missing q{query_id:02d} manifest record")
-        if records[query_id]["family"] != RETRAC_FAMILY:
-            raise ValueError(f"q{query_id:02d} is not {RETRAC_FAMILY}")
+        expected_family = "prompted" if query_id < 75 else "unprompted"
+        if records[query_id]["family"] != expected_family:
+            raise ValueError(f"q{query_id:02d} is not {expected_family}")
         endpoint = QUERY_DIR / f"q{query_id:02d}" / "final_state.npy"
         if not endpoint.is_file():
             raise FileNotFoundError(endpoint)
@@ -38,8 +40,9 @@ def main():
             f"replay cache shape mismatch: t={t_shape}, noise={noise_shape}, "
             f"expected={expected_t}/{expected_noise}"
         )
-    print(f"queries = q00-q09 ({len(RETRAC_QUERY_IDS)})")
-    print(f"checkpoints = {len(paths)} raw prompted checkpoints")
+    print(f"queries = q00-q99 ({len(RETRAC_QUERY_IDS)})")
+    print("families = q00-q74 prompted; q75-q99 unprompted")
+    print("checkpoints = 50 raw checkpoints per family")
     print(f"query timesteps = {len(RETRAC_TIMESTEPS)} evenly spaced in [1, 999]")
     print(f"query noise MC = {RETRAC_QUERY_MC}")
     print("train L = four replayed training events/checkpoint/datapoint")
