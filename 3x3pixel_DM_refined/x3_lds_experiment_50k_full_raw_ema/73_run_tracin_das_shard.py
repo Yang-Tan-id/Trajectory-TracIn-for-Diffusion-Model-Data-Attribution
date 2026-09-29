@@ -34,6 +34,38 @@ from x3_endpoint_das_jax_logic_pytorch import (
 CONTRACT_VERSION = 2
 
 
+def sample_trajectory_cone_noises(
+    axes, query_mc, generator, max_angle_degrees
+):
+    """Keep Gaussian radii while sampling directions inside a trajectory cone."""
+    flat_axes = axes.reshape(axes.shape[0], -1)
+    flat_axes = flat_axes / flat_axes.norm(dim=1, keepdim=True).clamp_min(
+        TRACIN_DAS_DIRECTION_EPS
+    )
+    shape = (axes.shape[0], int(query_mc), flat_axes.shape[1])
+    gaussian = torch.randn(
+        shape, generator=generator, device=axes.device, dtype=axes.dtype
+    )
+    radii = gaussian.norm(dim=2, keepdim=True)
+    axis_bank = flat_axes[:, None, :]
+    orthogonal = gaussian - (gaussian * axis_bank).sum(
+        dim=2, keepdim=True
+    ) * axis_bank
+    orthogonal = orthogonal / orthogonal.norm(dim=2, keepdim=True).clamp_min(
+        TRACIN_DAS_DIRECTION_EPS
+    )
+    angles = torch.rand(
+        (axes.shape[0], int(query_mc), 1),
+        generator=generator,
+        device=axes.device,
+        dtype=axes.dtype,
+    ) * math.radians(float(max_angle_degrees))
+    directions = torch.cos(angles) * axis_bank + torch.sin(angles) * orthogonal
+    return (radii * directions).reshape(
+        axes.shape[0], int(query_mc), *axes.shape[1:]
+    )
+
+
 def atomic_numpy(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(path.suffix + ".tmp")
@@ -97,6 +129,14 @@ def main():
         raise ValueError("query MC must be positive")
     if args.train_noise_mode == "aligned" and args.query_mc != 1:
         raise ValueError("query MC > 1 requires independent train noise")
+    if (
+        args.noise_mode == "trajectory-cone60"
+        and args.train_noise_mode == "aligned"
+    ):
+        raise ValueError(
+            "trajectory-cone60 is query-dependent and requires independent "
+            "train noise"
+        )
     train_mc_count = (
         1
         if args.train_noise_mode in ("aligned", "independent-mc1")
@@ -156,6 +196,24 @@ def main():
         )
         for record in records
     ]
+    trajectory_axes = None
+    if args.noise_mode == "trajectory-cone60":
+        initial_states = [
+            torch.from_numpy(
+                np.load(
+                    Path(record["dir"]) / "trajectory_xt.npy", mmap_mode="r"
+                )[0].copy()
+            ).to(device=device, dtype=torch.float32)
+            for record in records
+        ]
+        trajectory_axes = torch.stack(
+            [initial - endpoint for initial, endpoint in zip(initial_states, endpoints)]
+        )
+        if torch.any(
+            trajectory_axes.reshape(len(records), -1).norm(dim=1)
+            <= TRACIN_DAS_DIRECTION_EPS
+        ):
+            raise ValueError("zero endpoint-to-initial trajectory axis")
     conditions = [cond_for(record, dataset, device) for record in records]
     timestamps = tuple(int(value) for value in DAS_TIMESTEPS)
     selected = list(range(args.timestamp_shard_index, len(timestamps), args.timestamp_shard_count))
@@ -348,24 +406,48 @@ def main():
                 if args.noise_mode == "checkpoint"
                 else (
                     TRACIN_DAS_NOISE_SEED,
+                    "tracin_das_trajectory_cone60_noise",
+                    checkpoint_index,
+                    timestamp_index,
+                    timestep,
+                )
+                if args.noise_mode == "trajectory-cone60"
+                else (
+                    TRACIN_DAS_NOISE_SEED,
                     "tracin_das_timestamp_shared_noise",
                     timestamp_index,
                     timestep,
                 )
             )
             noise_generator = make_torch_generator(device, *noise_seed_parts)
-            query_noises = torch.randn(
-                (args.query_mc, *endpoints[0].shape),
-                generator=noise_generator,
-                device=device,
-                dtype=endpoints[0].dtype,
-            )
+            if args.noise_mode == "trajectory-cone60":
+                query_noises = sample_trajectory_cone_noises(
+                    trajectory_axes,
+                    args.query_mc,
+                    noise_generator,
+                    TRACIN_DAS_TRAJECTORY_CONE_DEGREES,
+                )
+            else:
+                shared_noises = torch.randn(
+                    (args.query_mc, *endpoints[0].shape),
+                    generator=noise_generator,
+                    device=device,
+                    dtype=endpoints[0].dtype,
+                )
+                query_noises = shared_noises.unsqueeze(0).expand(
+                    len(records), *shared_noises.shape
+                )
             query_xt = [
                 [
-                    base.q_sample(endpoint, t_query, query_noises[mc_index], schedule)
+                    base.q_sample(
+                        endpoint,
+                        t_query,
+                        query_noises[query_position, mc_index],
+                        schedule,
+                    )
                     for mc_index in range(args.query_mc)
                 ]
-                for endpoint in endpoints
+                for query_position, endpoint in enumerate(endpoints)
             ]
             model, _, checkpoint = build_model(
                 checkpoint_paths[checkpoint_index], "raw", device
@@ -421,14 +503,14 @@ def main():
             if args.train_noise_mode == "aligned":
                 def train_loss(parameter_dict, x0, condition):
                     xt = base.q_sample(
-                        x0.unsqueeze(0), t_query, query_noises[0], schedule
+                        x0.unsqueeze(0), t_query, query_noises[0, 0], schedule
                     )
                     prediction = functional_call(
                         model,
                         parameter_dict,
                         (xt, t_query, condition.unsqueeze(0)),
                     )
-                    return (prediction - query_noises[0]).square().mean()
+                    return (prediction - query_noises[0, 0]).square().mean()
 
                 batched_gradient = vmap(
                     grad(train_loss), in_dims=(None, 0, 0)
@@ -552,6 +634,8 @@ def main():
             del projection_specs
             del current_prediction, next_prediction, direction, projected_prediction, query_gradient
             del batched_gradient, gradients, train_matrix, dots, query_noises, query_xt
+            if args.noise_mode != "trajectory-cone60":
+                del shared_noises
             del linear_dots, squared_dots
             del train_loss, train_noises
             if torch.cuda.is_available():
@@ -659,13 +743,8 @@ def main():
                 if args.parameter_projection == "projected4096"
                 else None
             ),
-            "endpoint_noising": (
-                f"{args.query_mc} independent noises per checkpoint/timestamp"
-                if args.noise_mode == "checkpoint"
-                else (
-                    f"{args.query_mc} noises per timestamp shared across all "
-                    "checkpoint transitions"
-                )
+            "endpoint_noising": tracin_das_endpoint_noising_description(
+                args.noise_mode, args.query_mc
             ),
             "train_loss_noise": (
                 "same term noise as query endpoint"

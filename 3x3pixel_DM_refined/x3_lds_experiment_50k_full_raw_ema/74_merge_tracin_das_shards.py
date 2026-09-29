@@ -128,13 +128,8 @@ def main():
                         if args.parameter_projection == "projected4096"
                         else None
                     ),
-                    "noise_alignment": (
-                        f"{args.query_mc} independent noises per checkpoint/timestamp"
-                        if args.noise_mode == "checkpoint"
-                        else (
-                            f"{args.query_mc} noises per timestamp shared across all "
-                            "checkpoint transitions"
-                        )
+                    "noise_alignment": tracin_das_endpoint_noising_description(
+                        args.noise_mode, args.query_mc
                     ) + (
                         "; query and train loss share the term noise"
                         if args.train_noise_mode == "aligned"

@@ -10,7 +10,12 @@ TRACIN_DAS_FAMILY = "prompted"
 TRACIN_DAS_BATCH_SIZE = 128
 TRACIN_DAS_NOISE_SEED = 7367
 TRACIN_DAS_DIRECTION_EPS = 1e-12
-TRACIN_DAS_NOISE_MODES = ("checkpoint", "timestamp-shared")
+TRACIN_DAS_TRAJECTORY_CONE_DEGREES = 60.0
+TRACIN_DAS_NOISE_MODES = (
+    "checkpoint",
+    "timestamp-shared",
+    "trajectory-cone60",
+)
 TRACIN_DAS_PARAMETER_PROJECTIONS = ("exact", "projected4096")
 TRACIN_DAS_TRAIN_NOISE_MODES = (
     "aligned",
@@ -38,10 +43,37 @@ TRACIN_DAS_METHODS_BY_VARIANT = {
         "termwise_squared": "tracin_das_endpoint_next_delta_timestamp_shared_noise_projected4096_termwise_squared",
         "timestamp_sum_squared": "tracin_das_endpoint_next_delta_timestamp_shared_noise_projected4096_timestamp_sum_squared",
     },
+    ("trajectory-cone60", "exact"): {
+        "linear": "tracin_das_endpoint_next_delta_trajectory_cone60_noise_linear",
+        "termwise_squared": "tracin_das_endpoint_next_delta_trajectory_cone60_noise_termwise_squared",
+        "timestamp_sum_squared": "tracin_das_endpoint_next_delta_trajectory_cone60_noise_timestamp_sum_squared",
+    },
+    ("trajectory-cone60", "projected4096"): {
+        "linear": "tracin_das_endpoint_next_delta_trajectory_cone60_noise_projected4096_linear",
+        "termwise_squared": "tracin_das_endpoint_next_delta_trajectory_cone60_noise_projected4096_termwise_squared",
+        "timestamp_sum_squared": "tracin_das_endpoint_next_delta_trajectory_cone60_noise_projected4096_timestamp_sum_squared",
+    },
 }
 TRACIN_DAS_METHODS = TRACIN_DAS_METHODS_BY_VARIANT[("checkpoint", "exact")]
 TRACIN_DAS_AVG_LR_CHECKPOINT_COUNTS = (50, 40, 25, 20, 15, 10, 5)
 TRACIN_DAS_TIMESTAMP_COUNTS = tuple(range(100, 0, -10))
+
+
+def tracin_das_endpoint_noising_description(noise_mode, query_mc):
+    if noise_mode == "checkpoint":
+        return f"{query_mc} independent noises per checkpoint/timestamp"
+    if noise_mode == "timestamp-shared":
+        return (
+            f"{query_mc} noises per timestamp shared across all checkpoint "
+            "transitions"
+        )
+    if noise_mode == "trajectory-cone60":
+        return (
+            f"{query_mc} query-dependent noises per checkpoint/timestamp; "
+            "Gaussian radius and direction within 60 degrees of the cached "
+            "endpoint-to-initial trajectory axis"
+        )
+    raise ValueError(noise_mode)
 
 
 def tracin_das_methods(
@@ -162,10 +194,11 @@ def tracin_das_shard_root(
     query_scope="ten",
     query_mc=1,
 ):
-    noise_tag = (
-        "checkpoint_noise" if noise_mode == "checkpoint"
-        else "timestamp_shared_noise"
-    )
+    noise_tag = {
+        "checkpoint": "checkpoint_noise",
+        "timestamp-shared": "timestamp_shared_noise",
+        "trajectory-cone60": "trajectory_cone60_noise",
+    }[noise_mode]
     projection_tag = "" if parameter_projection == "exact" else "_projected4096"
     train_tag = {
         "aligned": "",

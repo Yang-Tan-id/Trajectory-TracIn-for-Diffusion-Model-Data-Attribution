@@ -55,3 +55,13 @@ The 100-query LDS output is:
 ```text
 x3_lds_exp_50k/lds/trajectory_inverse_noise_das_100q_lambda_sweep.json
 ```
+
+## Trajectory-cone endpoint TracIn-DAS
+
+The endpoint TracIn-DAS runner supports `--noise-mode trajectory-cone60`.
+For every query, the fixed cone axis points from its cached final endpoint to
+its cached initial trajectory state. Each checkpoint/timestamp query noise
+keeps a Gaussian radius and samples an angle uniformly from 0 to 60 degrees
+around that axis. Because these noises are query-dependent, this mode must be
+used with `--train-noise-mode independent-mc1`; each training point then uses
+one independent loss-noise draw.
