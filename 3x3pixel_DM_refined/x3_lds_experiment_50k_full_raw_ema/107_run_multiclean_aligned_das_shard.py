@@ -16,7 +16,6 @@ from dataset_loader import ColorGridDataset
 from multiclean_das_config import *
 from x3_endpoint_das_jax_logic_pytorch import (
     build_countsketch_specs,
-    compute_projected_eps_feature,
     make_torch_generator,
     sample_noise,
     sample_output_probe,
@@ -44,9 +43,10 @@ def atomic_json(path, value):
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--family", choices=MULTICLEAN_FAMILIES, required=True)
     parser.add_argument("--gpu", type=int, required=True)
     parser.add_argument("--timestamp-shard-index", type=int, required=True)
-    parser.add_argument("--timestamp-shard-count", type=int, default=4)
+    parser.add_argument("--timestamp-shard-count", type=int, default=2)
     parser.add_argument("--batch-size", type=int, default=DAS_FEATURE_BATCH_SIZE)
     args = parser.parse_args()
     if not 0 <= args.timestamp_shard_index < args.timestamp_shard_count:
@@ -60,15 +60,19 @@ def main():
     with open(QUERY_DIR / "manifest.json") as handle:
         manifest = json.load(handle)
     by_id = {int(record["query_id"]): record for record in manifest}
-    records = [by_id[query_id] for query_id in MULTICLEAN_QUERY_IDS]
+    query_ids = multiclean_query_ids(args.family)
+    records = [by_id[query_id] for query_id in query_ids]
     dataset = ColorGridDataset(str(BASE_CSV), grid_size=3)
-    model, _, _ = build_model(model_paths(MULTICLEAN_FAMILY)[-1], "ema", device)
+    model, _, _ = build_model(model_paths(args.family)[-1], "ema", device)
     named = dict(model.named_parameters())
     names = tuple(named)
     active = tuple(named.values())
     schedule = base.make_linear_schedule(T, device=device)
-    x_all, cond_all = preload_dataset(dataset, MULTICLEAN_FAMILY, device)
+    x_all, cond_all = preload_dataset(dataset, args.family, device)
     conditions = [cond_for(record, dataset, device) for record in records]
+    if args.family == "unprompted":
+        conditions = [torch.zeros_like(value) for value in conditions]
+    condition_bank = torch.cat(conditions, dim=0)
     clean_np = np.load(MULTICLEAN_CACHE_DIR / "predicted_clean.npy")
     expected_shape = (
         MULTICLEAN_ANCHOR_COUNT,
@@ -86,7 +90,7 @@ def main():
         )
     )
     root = multiclean_shard_root(
-        args.timestamp_shard_index, args.timestamp_shard_count
+        args.family, args.timestamp_shard_index, args.timestamp_shard_count
     )
     done_path = root / "done.json"
     if done_path.is_file():
@@ -94,7 +98,7 @@ def main():
         return
     scores = {
         float(lam): torch.zeros(
-            (len(MULTICLEAN_QUERY_IDS), N_TRAIN),
+            (len(query_ids), N_TRAIN),
             device=device,
             dtype=torch.float64,
         )
@@ -107,7 +111,8 @@ def main():
     completed_terms = 0
     started = time.perf_counter()
     print(
-        f"[multiclean-das gpu={args.gpu}] q00-q09 anchors=10 "
+        f"[multiclean-das gpu={args.gpu}] family={args.family} "
+        f"queries=q{query_ids[0]:02d}-q{query_ids[-1]:02d} anchors=10 "
         f"timestamps={len(selected)}/100 mc={DAS_NUM_MC} batch={args.batch_size} "
         f"projection={dimension} aligned=true train_reused_across_anchors=true",
         flush=True,
@@ -127,7 +132,7 @@ def main():
                 device, 808, "pdas_output_probe", 0, timestep, mc_index
             )
             output_probe = sample_output_probe(
-                tuple(clean[0, 0].unsqueeze(0).shape),
+                tuple(clean[0, query_ids[0]].unsqueeze(0).shape),
                 device=device,
                 rng=probe_generator,
             )
@@ -135,29 +140,8 @@ def main():
                 device, 808, "pdas_q", 0, timestep, mc_index
             )
             aligned_noise = sample_noise(
-                clean[0, 0].unsqueeze(0), rng=noise_generator
+                clean[0, query_ids[0]].unsqueeze(0), rng=noise_generator
             )
-
-            query_features = []
-            for anchor_index in range(MULTICLEAN_ANCHOR_COUNT):
-                for query_position, condition in enumerate(conditions):
-                    _, feature = compute_projected_eps_feature(
-                        model=model,
-                        active=list(active),
-                        sched=schedule,
-                        x0=clean[anchor_index, query_position].unsqueeze(0),
-                        cond=condition,
-                        t=t_query,
-                        noise=aligned_noise,
-                        output_probe=output_probe,
-                        projection_specs=specs,
-                        proj_dim=dimension,
-                        device=device,
-                        normalize_projected_grads=normalize,
-                        normalize_eps=normalize_eps,
-                    )
-                    query_features.append(feature.to(torch.float32).detach())
-            query_features = torch.stack(query_features)
 
             probe_single = output_probe[0]
             scalar_denominator = math.sqrt(float(probe_single.numel()))
@@ -174,6 +158,31 @@ def main():
                 return (prediction * probe_single).sum() / scalar_denominator
 
             batched_gradient = vmap(grad(single_scalar), in_dims=(None, 0, 0))
+            query_x = clean[:, list(query_ids)].reshape(
+                MULTICLEAN_ANCHOR_COUNT * len(query_ids), *clean.shape[2:]
+            )
+            query_c = condition_bank.unsqueeze(0).expand(
+                MULTICLEAN_ANCHOR_COUNT, len(query_ids), condition_bank.shape[-1]
+            ).reshape(-1, condition_bank.shape[-1])
+            query_feature_parts = []
+            for query_start in range(0, query_x.shape[0], 25):
+                query_end = min(query_start + 25, query_x.shape[0])
+                query_gradients = batched_gradient(
+                    named,
+                    query_x[query_start:query_end],
+                    query_c[query_start:query_end],
+                )
+                query_feature_parts.append(
+                    _project_batched_grads(
+                        query_gradients,
+                        names,
+                        specs,
+                        dimension,
+                        normalize,
+                        normalize_eps,
+                    )
+                )
+            query_features = torch.cat(query_feature_parts, dim=0)
             feature_cache = torch.empty(
                 (N_TRAIN, dimension), device=device, dtype=torch.float32
             )
@@ -254,7 +263,7 @@ def main():
                     raw /= denominator.unsqueeze(1)
                 per_anchor = raw.T.reshape(
                     MULTICLEAN_ANCHOR_COUNT,
-                    len(MULTICLEAN_QUERY_IDS),
+                    len(query_ids),
                     N_TRAIN,
                 )
                 scores[lam] += per_anchor.square().sum(dim=0)
@@ -268,6 +277,7 @@ def main():
                 flush=True,
             )
             del specs, output_probe, aligned_noise, query_features
+            del query_x, query_c, query_feature_parts, query_gradients
             del feature_cache, residual_cache, gram, eye, solved_queries, raw
             del per_anchor, gradients, features, batched_gradient
             if DAS_USE_SM_DENOMINATOR:
@@ -282,7 +292,8 @@ def main():
         {
             "contract_version": CONTRACT_VERSION,
             "method": MULTICLEAN_METHOD,
-            "query_ids": list(MULTICLEAN_QUERY_IDS),
+            "family": args.family,
+            "query_ids": list(query_ids),
             "anchor_indices": list(MULTICLEAN_ANCHOR_INDICES),
             "anchor_count": MULTICLEAN_ANCHOR_COUNT,
             "anchor_reduction": "sum of per-anchor squared DAS scores",

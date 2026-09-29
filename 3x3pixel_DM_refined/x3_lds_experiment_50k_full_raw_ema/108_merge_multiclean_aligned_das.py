@@ -10,7 +10,7 @@ from multiclean_das_config import *
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--timestamp-shard-count", type=int, default=4)
+    parser.add_argument("--timestamp-shard-count", type=int, default=2)
     args = parser.parse_args()
     totals = {
         float(lam): np.zeros(
@@ -18,29 +18,45 @@ def main():
         )
         for lam in DAS_LAMBDAS
     }
-    covered = []
-    term_count = 0
+    covered_by_family = {family: [] for family in MULTICLEAN_FAMILIES}
+    term_count_by_family = {family: 0 for family in MULTICLEAN_FAMILIES}
     metadata = []
-    for shard_index in range(args.timestamp_shard_count):
-        root = multiclean_shard_root(shard_index, args.timestamp_shard_count)
-        with open(root / "done.json") as handle:
-            info = json.load(handle)
-        metadata.append(info)
-        if info["query_ids"] != list(MULTICLEAN_QUERY_IDS):
-            raise ValueError(f"query IDs differ in {root}")
-        if info["anchor_indices"] != list(MULTICLEAN_ANCHOR_INDICES):
-            raise ValueError(f"anchor indices differ in {root}")
-        covered.extend(int(value) for value in info["timestamp_indices"])
-        term_count += int(info["term_count"])
-        for lam in DAS_LAMBDAS:
-            totals[float(lam)] += np.load(
-                root / f"lambda_{lambda_tag(lam)}.npy"
+    for family in MULTICLEAN_FAMILIES:
+        query_ids = multiclean_query_ids(family)
+        for shard_index in range(args.timestamp_shard_count):
+            root = multiclean_shard_root(
+                family, shard_index, args.timestamp_shard_count
             )
-    if sorted(covered) != list(range(len(DAS_TIMESTEPS))):
-        raise ValueError("timestamp shards do not cover 0..99 exactly")
+            with open(root / "done.json") as handle:
+                info = json.load(handle)
+            metadata.append(info)
+            if info["family"] != family:
+                raise ValueError(f"family differs in {root}")
+            if info["query_ids"] != list(query_ids):
+                raise ValueError(f"query IDs differ in {root}")
+            if info["anchor_indices"] != list(MULTICLEAN_ANCHOR_INDICES):
+                raise ValueError(f"anchor indices differ in {root}")
+            covered_by_family[family].extend(
+                int(value) for value in info["timestamp_indices"]
+            )
+            term_count_by_family[family] += int(info["term_count"])
+            for lam in DAS_LAMBDAS:
+                values = np.load(root / f"lambda_{lambda_tag(lam)}.npy")
+                expected_shape = (len(query_ids), N_TRAIN)
+                if values.shape != expected_shape:
+                    raise ValueError(
+                        f"score shape={values.shape}, expected={expected_shape} in {root}"
+                    )
+                totals[float(lam)][list(query_ids)] += values
     expected_terms = len(DAS_TIMESTEPS) * int(DAS_NUM_MC)
-    if term_count != expected_terms:
-        raise ValueError(f"term_count={term_count}, expected={expected_terms}")
+    for family in MULTICLEAN_FAMILIES:
+        if sorted(covered_by_family[family]) != list(range(len(DAS_TIMESTEPS))):
+            raise ValueError(f"{family} shards do not cover timestamps 0..99 exactly")
+        if term_count_by_family[family] != expected_terms:
+            raise ValueError(
+                f"{family} term_count={term_count_by_family[family]}, "
+                f"expected={expected_terms}"
+            )
 
     with open(QUERY_DIR / "manifest.json") as handle:
         manifest = json.load(handle)
@@ -77,12 +93,13 @@ def main():
                         ),
                         "noise_alignment": metadata[0]["noise_alignment"],
                         "train_feature_reuse": metadata[0]["train_feature_reuse"],
-                        "timestamp_shards": args.timestamp_shard_count,
+                        "family": by_id[query_id]["family"],
+                        "timestamp_shards_per_family": args.timestamp_shard_count,
                     },
                     handle,
                     indent=2,
                 )
-    print(f"[saved] {MULTICLEAN_METHOD} q00-q09 all lambdas", flush=True)
+    print(f"[saved] {MULTICLEAN_METHOD} q00-q99 all lambdas", flush=True)
 
 
 if __name__ == "__main__":

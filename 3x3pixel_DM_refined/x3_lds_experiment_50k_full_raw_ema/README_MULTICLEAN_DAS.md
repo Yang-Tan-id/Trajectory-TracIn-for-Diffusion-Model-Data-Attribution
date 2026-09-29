@@ -1,6 +1,6 @@
 # Ten-anchor predicted-clean aligned DAS
 
-For q00-q09, select ten evenly spaced snapshots from each 100-state cached
+For q00-q99, select ten evenly spaced snapshots from each 100-state cached
 final-EMA reference trajectory. At each anchor `k`, make one predicted clean
 image from the current predicted noise:
 
@@ -16,6 +16,8 @@ reused for all ten clean anchors. The final attribution is the sum of the ten
 per-anchor squared DAS scores. All configured damping lambdas are retained.
 
 ```bash
-python -u 109_launch_multiclean_aligned_das_10q_4gpu.py --batch-size 64
-python -u 110_eval_multiclean_aligned_das_10q_lds.py
+python -u 127_launch_multiclean_aligned_das_100q_4gpu.py \
+  --gpus 4,5,6,7 \
+  --batch-size 2560
+python -u 128_eval_multiclean_aligned_das_100q_lds.py
 ```

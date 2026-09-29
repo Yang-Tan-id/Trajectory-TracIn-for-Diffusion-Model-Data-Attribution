@@ -1,4 +1,4 @@
-"""Evaluate ten-anchor predicted-clean aligned DAS on q00-q09."""
+"""Evaluate ten-anchor predicted-clean aligned DAS on q00-q99."""
 
 import json
 
@@ -62,7 +62,7 @@ def main():
                 flush=True,
             )
         output["results"][lambda_tag(lam)] = lambda_result
-    path = LDS_DIR / "multiclean_aligned_das_10q_lambda_sweep.json"
+    path = LDS_DIR / "multiclean_aligned_das_100q_lambda_sweep.json"
     with open(path, "w") as handle:
         json.dump(output, handle, indent=2)
     print(f"[saved] {path}", flush=True)
