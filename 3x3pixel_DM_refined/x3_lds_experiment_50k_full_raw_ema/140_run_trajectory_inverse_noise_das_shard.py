@@ -52,10 +52,16 @@ def main():
     parser.add_argument("--gpu", type=int, required=True)
     parser.add_argument("--timestamp-shard-index", type=int, required=True)
     parser.add_argument("--timestamp-shard-count", type=int, default=4)
+    parser.add_argument("--query-scope", choices=("ten", "family"), default="ten")
+    parser.add_argument("--family", choices=FAMILIES, default="prompted")
+    parser.add_argument("--query-shard-index", type=int, default=0)
+    parser.add_argument("--query-shard-count", type=int, default=1)
     parser.add_argument("--condition-batch-size", type=int, default=64)
     args = parser.parse_args()
     if not 0 <= args.timestamp_shard_index < args.timestamp_shard_count:
         raise ValueError("invalid timestamp shard")
+    if not 0 <= args.query_shard_index < args.query_shard_count:
+        raise ValueError("invalid query shard")
     if args.condition_batch_size <= 0:
         raise ValueError("condition batch size must be positive")
     device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
@@ -64,20 +70,29 @@ def main():
 
     with open(QUERY_DIR / "manifest.json") as handle:
         by_id = {int(record["query_id"]): record for record in json.load(handle)}
-    records = [by_id[query_id] for query_id in TRAJECTORY_INVERSE_DAS_QUERY_IDS]
-    if any(record["family"] != TRAJECTORY_INVERSE_DAS_FAMILY for record in records):
-        raise ValueError("q00-q09 must all be prompted queries")
+    if args.query_scope == "ten":
+        query_ids = TRAJECTORY_INVERSE_DAS_QUERY_IDS
+        family = TRAJECTORY_INVERSE_DAS_FAMILY
+    else:
+        family = args.family
+        family_ids = trajectory_inverse_das_family_query_ids(family)
+        query_ids = family_ids[
+            args.query_shard_index :: args.query_shard_count
+        ]
+    records = [by_id[query_id] for query_id in query_ids]
+    if not records or any(record["family"] != family for record in records):
+        raise ValueError(f"invalid query bank for family={family}")
 
     dataset = ColorGridDataset(str(BASE_CSV), grid_size=3)
     model, _, checkpoint = build_model(
-        model_paths(TRAJECTORY_INVERSE_DAS_FAMILY)[-1], "ema", device
+        model_paths(family)[-1], "ema", device
     )
     named = dict(model.named_parameters())
     names = tuple(named)
     active = tuple(named.values())
     schedule = base.make_linear_schedule(T, device=device)
     x_all, cond_all = preload_dataset(
-        dataset, TRAJECTORY_INVERSE_DAS_FAMILY, device
+        dataset, family, device
     )
     unique_conditions, condition_inverse, condition_counts = torch.unique(
         cond_all,
@@ -101,12 +116,27 @@ def main():
         raise ValueError("q00-q09 trajectory timestamp banks differ")
 
     included_timestamp_indices = list(range(99))
-    selected = included_timestamp_indices[
-        args.timestamp_shard_index :: args.timestamp_shard_count
-    ]
+    selected = (
+        included_timestamp_indices[
+            args.timestamp_shard_index :: args.timestamp_shard_count
+        ]
+        if args.query_scope == "ten"
+        else included_timestamp_indices
+    )
     term_weight = 1.0 / (len(included_timestamp_indices) * int(DAS_NUM_MC))
-    root = trajectory_inverse_das_shard_root(
-        args.timestamp_shard_index, args.timestamp_shard_count
+    root = (
+        trajectory_inverse_das_shard_root(
+            args.timestamp_shard_index, args.timestamp_shard_count
+        )
+        if args.query_scope == "ten"
+        else trajectory_inverse_das_100q_shard_root(
+            family, args.query_shard_index, args.query_shard_count
+        )
+    )
+    method = (
+        TRAJECTORY_INVERSE_DAS_METHOD
+        if args.query_scope == "ten"
+        else TRAJECTORY_INVERSE_DAS_100Q_METHOD
     )
     done_path = root / "done.json"
     if done_path.is_file():
@@ -157,7 +187,8 @@ def main():
     completed_terms = 0
     started = time.perf_counter()
     print(
-        f"[inverse-das gpu={args.gpu}] q00-q09 timestamps={len(selected)}/99 "
+        f"[inverse-das gpu={args.gpu}] family={family} query_ids="
+        f"{list(query_ids)} timestamps={len(selected)}/99 "
         f"outer_probes={DAS_NUM_MC} unique_conditions={len(unique_conditions)} "
         f"condition_batch={args.condition_batch_size} projection={dimension} "
         f"final_ema=True endpoint_excluded=True",
@@ -350,7 +381,9 @@ def main():
             {
                 "contract_version": CONTRACT_VERSION,
                 "condition_batch_size": args.condition_batch_size,
-                "query_ids": list(TRAJECTORY_INVERSE_DAS_QUERY_IDS),
+                "query_ids": list(query_ids),
+                "query_scope": args.query_scope,
+                "family": family,
                 "completed_timestamps": completed_timestamps,
                 "included_timestamp_indices": included_timestamp_indices,
                 "endpoint_excluded": True,
@@ -367,8 +400,10 @@ def main():
         done_path,
         {
             "contract_version": CONTRACT_VERSION,
-            "method": TRAJECTORY_INVERSE_DAS_METHOD,
-            "query_ids": list(TRAJECTORY_INVERSE_DAS_QUERY_IDS),
+            "method": method,
+            "query_ids": list(query_ids),
+            "query_scope": args.query_scope,
+            "family": family,
             "timestamp_indices": selected,
             "included_timestamp_indices": included_timestamp_indices,
             "trajectory_timesteps": list(trajectory_timesteps),

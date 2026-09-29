@@ -40,3 +40,18 @@ The launcher merges all lambdas and evaluates all LDS targets. Output:
 ```text
 x3_lds_exp_50k/lds/trajectory_inverse_noise_das_q00_q09_lambda_sweep.json
 ```
+
+For all 100 queries, three GPUs each receive 25 prompted queries and one GPU
+receives the 25 unprompted queries. Every worker covers all 99 timestamps:
+
+```bash
+python -u 146_launch_trajectory_inverse_noise_das_100q_4gpu.py \
+  --gpus 0,1,2,3 \
+  --condition-batch-size 64
+```
+
+The 100-query LDS output is:
+
+```text
+x3_lds_exp_50k/lds/trajectory_inverse_noise_das_100q_lambda_sweep.json
+```
