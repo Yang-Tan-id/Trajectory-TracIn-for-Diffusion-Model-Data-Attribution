@@ -1,4 +1,4 @@
-"""Merge fully-unrolled trajectory DAS timestamp/MC shards."""
+"""Merge higher-noise-aligned fully-unrolled trajectory DAS shards."""
 
 import argparse
 import json
@@ -38,6 +38,18 @@ def main():
     expected_terms = len(DAS_TIMESTEPS) * int(DAS_NUM_MC)
     if sorted(covered) != list(range(expected_terms)):
         raise ValueError("shards do not cover all timestamp/MC terms exactly")
+    trajectory_timesteps = metadata[0]["trajectory_timesteps"]
+    higher_noise_counts = metadata[0][
+        "higher_noise_training_timestamp_counts"
+    ]
+    for info in metadata[1:]:
+        if info["trajectory_timesteps"] != trajectory_timesteps:
+            raise ValueError("trajectory timesteps differ across shards")
+        if (
+            info["higher_noise_training_timestamp_counts"]
+            != higher_noise_counts
+        ):
+            raise ValueError("higher-noise timestamp counts differ across shards")
 
     with open(QUERY_DIR / "manifest.json") as handle:
         manifest = json.load(handle)
@@ -66,8 +78,15 @@ def main():
                         "trajectory_snapshots": int(TRAJ_SNAPSHOTS),
                         "trajectory_probe_count": int(UNROLLED_TRAJ_DAS_PROBES),
                         "trajectory_response": (
-                            "Hutchinson estimate of mean_t ||J_t delta_theta_i||^2"
+                            "per-state Hutchinson response; each state t is "
+                            "averaged over training-loss timestamps s>=t, then "
+                            "the 100 state responses are averaged"
                         ),
+                        "trajectory_timesteps": trajectory_timesteps,
+                        "higher_noise_training_timestamp_counts": (
+                            higher_noise_counts
+                        ),
+                        "timestamp_alignment": "training loss timestamp s >= trajectory state timestamp t",
                         "das_timestamp_count": len(DAS_TIMESTEPS),
                         "das_outer_mc": int(DAS_NUM_MC),
                         "train_gradient_mc": int(DAS_TRAIN_GRAD_MC),

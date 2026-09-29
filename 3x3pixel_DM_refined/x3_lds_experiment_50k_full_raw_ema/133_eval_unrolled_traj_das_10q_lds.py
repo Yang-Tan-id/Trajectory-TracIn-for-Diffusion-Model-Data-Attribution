@@ -1,4 +1,4 @@
-"""Evaluate fully-unrolled trajectory DAS on q00-q09."""
+"""Evaluate higher-noise-aligned fully-unrolled trajectory DAS on q00-q09."""
 
 import json
 
@@ -19,6 +19,7 @@ def main():
         "das_timestamp_count": len(DAS_TIMESTEPS),
         "das_outer_mc": int(DAS_NUM_MC),
         "train_gradient_mc": int(DAS_TRAIN_GRAD_MC),
+        "timestamp_alignment": "for each trajectory state t, average over training loss timestamps s>=t",
         "lambdas": [float(value) for value in DAS_LAMBDAS],
         "results": {},
     }
@@ -66,7 +67,9 @@ def main():
                 flush=True,
             )
         output["results"][lambda_tag(lam)] = lambda_result
-    path = LDS_DIR / "unrolled_trajectory_das_probe4_10q_lambda_sweep.json"
+    path = LDS_DIR / (
+        "unrolled_trajectory_higher_noise_avg_probe4_10q_lambda_sweep.json"
+    )
     with open(path, "w") as handle:
         json.dump(output, handle, indent=2)
     print(f"[saved] {path}", flush=True)

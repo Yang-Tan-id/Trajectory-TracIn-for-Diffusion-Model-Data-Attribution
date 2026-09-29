@@ -1,4 +1,4 @@
-"""Cache full-unroll query features and run trajectory DAS on four GPUs."""
+"""Cache per-state unrolled features and run higher-noise DAS on four GPUs."""
 
 import argparse
 import subprocess
@@ -17,7 +17,7 @@ def main():
     if len(gpus) != 4 or len(set(gpus)) != 4:
         raise ValueError("--gpus must contain exactly four distinct GPU ids")
     LOG_DIR.mkdir(parents=True, exist_ok=True)
-    log_path = LOG_DIR / "unrolled_trajectory_das_probe4_10q_4gpu.log"
+    log_path = LOG_DIR / "unrolled_trajectory_higher_noise_avg_probe4_10q_4gpu.log"
     active = {}
     print(
         f"[launcher] caching fully-unrolled q00-q09 query features on "
@@ -38,8 +38,9 @@ def main():
             check=True,
         )
         stream.write(
-            "\n[launcher] fully-unrolled trajectory DAS q00-q09; final EMA, "
-            "probe4, projected4096, DAS 100x10, train-gradient MC10\n"
+            "\n[launcher] fully-unrolled higher-noise DAS q00-q09; final EMA, "
+            "per-state probe4, projected4096, each state matches s>=t, "
+            "DAS 100x10, train-gradient MC10\n"
         )
         for shard_index, gpu in enumerate(gpus):
             label = f"term-shard-{shard_index}"
@@ -90,7 +91,7 @@ def main():
             stderr=subprocess.STDOUT,
             check=True,
         )
-    print("[done] fully-unrolled trajectory DAS q00-q09", flush=True)
+    print("[done] fully-unrolled higher-noise DAS q00-q09", flush=True)
 
 
 if __name__ == "__main__":

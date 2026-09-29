@@ -1,4 +1,4 @@
-"""Score one timestamp/MC shard for fully-unrolled trajectory DAS."""
+"""Score a higher-noise timestamp/MC shard for fully-unrolled trajectory DAS."""
 
 import argparse
 import json
@@ -70,6 +70,7 @@ def main():
         raise ValueError("query-feature projection seed mismatch")
     expected_query_shape = (
         len(UNROLLED_TRAJ_DAS_QUERY_IDS),
+        TRAJ_SNAPSHOTS,
         UNROLLED_TRAJ_DAS_PROBES,
         UNROLLED_TRAJ_DAS_PROJECTION_DIM,
     )
@@ -80,7 +81,20 @@ def main():
         )
     query_features = torch.from_numpy(query_features_np).to(
         device=device, dtype=torch.float32
-    ).reshape(-1, UNROLLED_TRAJ_DAS_PROJECTION_DIM)
+    )
+    trajectory_timesteps = tuple(
+        int(value) for value in query_info["trajectory_timesteps"]
+    )
+    if len(trajectory_timesteps) != TRAJ_SNAPSHOTS:
+        raise ValueError("trajectory timestamp count mismatch")
+    higher_noise_counts = tuple(
+        sum(int(das_timestep) >= trajectory_timestep for das_timestep in DAS_TIMESTEPS)
+        for trajectory_timestep in trajectory_timesteps
+    )
+    if any(value <= 0 for value in higher_noise_counts):
+        raise ValueError(
+            f"invalid higher-noise timestamp counts: {higher_noise_counts}"
+        )
 
     all_terms = tuple(
         (timestamp_index, mc_index)
@@ -103,7 +117,6 @@ def main():
     }
     dimension = int(UNROLLED_TRAJ_DAS_PROJECTION_DIM)
     train_mc = int(DAS_TRAIN_GRAD_MC)
-    total_global_terms = len(all_terms)
     completed = 0
     started = time.perf_counter()
     print(
@@ -118,6 +131,29 @@ def main():
     for term_index in selected_indices:
         timestamp_index, mc_index = all_terms[term_index]
         timestep = int(DAS_TIMESTEPS[timestamp_index])
+        eligible_state_indices = [
+            state_index
+            for state_index, trajectory_timestep in enumerate(trajectory_timesteps)
+            if timestep >= trajectory_timestep
+        ]
+        if not eligible_state_indices:
+            raise RuntimeError(f"no trajectory state eligible for training t={timestep}")
+        eligible_query_features = query_features[
+            :, eligible_state_indices, :, :
+        ].reshape(-1, dimension)
+        state_weights = torch.tensor(
+            [
+                1.0
+                / (
+                    float(TRAJ_SNAPSHOTS)
+                    * float(higher_noise_counts[state_index])
+                    * float(DAS_NUM_MC)
+                )
+                for state_index in eligible_state_indices
+            ],
+            device=device,
+            dtype=torch.float32,
+        )
         t_mc = torch.full(
             (train_mc,), timestep, device=device, dtype=torch.long
         )
@@ -233,10 +269,10 @@ def main():
         for lam_raw in DAS_LAMBDAS:
             lam = float(lam_raw)
             solved_queries = torch.linalg.solve(
-                gram + lam * eye, query_features.T
+                gram + lam * eye, eligible_query_features.T
             )
-            raw = (feature_cache @ solved_queries).to(torch.float64)
-            raw *= residual_cache.to(torch.float64).unsqueeze(1)
+            raw = feature_cache @ solved_queries
+            raw *= residual_cache.unsqueeze(1)
             if DAS_USE_SM_DENOMINATOR:
                 solved_train = torch.linalg.solve(
                     gram + lam * eye, feature_cache.T
@@ -249,14 +285,19 @@ def main():
                     denominator.sign() * 1e-6,
                     denominator,
                 )
-                raw /= denominator.unsqueeze(1)
-            per_query_probe = raw.reshape(
+                raw /= denominator.to(raw.dtype).unsqueeze(1)
+            per_query_state_probe = raw.reshape(
                 N_TRAIN,
                 len(UNROLLED_TRAJ_DAS_QUERY_IDS),
+                len(eligible_state_indices),
                 UNROLLED_TRAJ_DAS_PROBES,
             )
+            per_query_state = per_query_state_probe.square().mean(dim=3)
             scores[lam] += (
-                per_query_probe.square().mean(dim=2).T / total_global_terms
+                (per_query_state * state_weights.view(1, 1, -1))
+                .sum(dim=2)
+                .T
+                .to(torch.float64)
             )
 
         completed += 1
@@ -269,7 +310,9 @@ def main():
             flush=True,
         )
         del output_probe, feature_cache, residual_cache, gram, eye
-        del gradients, features, noises, solved_queries, raw, per_query_probe
+        del gradients, features, noises, solved_queries, raw
+        del per_query_state_probe, per_query_state
+        del eligible_query_features, state_weights
         del batched_gradient
         if DAS_USE_SM_DENOMINATOR:
             del solved_train, denominator
@@ -286,11 +329,19 @@ def main():
                 "query_ids": list(UNROLLED_TRAJ_DAS_QUERY_IDS),
                 "selected_term_indices": selected_indices,
                 "term_count": len(selected_indices),
-                "global_term_count": total_global_terms,
+                "global_term_count": len(all_terms),
                 "das_timestamps": [int(value) for value in DAS_TIMESTEPS],
                 "das_outer_mc": int(DAS_NUM_MC),
                 "train_gradient_mc": train_mc,
                 "trajectory_probe_count": int(UNROLLED_TRAJ_DAS_PROBES),
+                "trajectory_timesteps": list(trajectory_timesteps),
+                "higher_noise_training_timestamp_counts": list(
+                    higher_noise_counts
+                ),
+                "timestamp_contraction": (
+                    "for each trajectory state t, average squared response over "
+                    "all training-loss timestamps s>=t, then average states"
+                ),
                 "projection_dim": dimension,
                 "global_projection": True,
                 "projection_seed": list(UNROLLED_TRAJ_DAS_PROJECTION_SEED),

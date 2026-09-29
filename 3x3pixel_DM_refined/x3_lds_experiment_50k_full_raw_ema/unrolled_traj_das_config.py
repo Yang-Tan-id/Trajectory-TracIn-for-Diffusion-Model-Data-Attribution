@@ -9,13 +9,13 @@ UNROLLED_TRAJ_DAS_PROBES = 4
 UNROLLED_TRAJ_DAS_PROJECTION_DIM = 4096
 UNROLLED_TRAJ_DAS_PROJECTION_SEED = (811, "unrolled_traj_global_projection")
 UNROLLED_TRAJ_DAS_METHOD = (
-    "das_ema_unrolled_trajectory_gauss_newton_probe4_projected4096_100t_mc10"
+    "das_ema_unrolled_trajectory_higher_noise_avg_probe4_projected4096_100t_mc10"
 )
 UNROLLED_TRAJ_DAS_CACHE_DIR = (
-    ROOT / "query_variants" / "unrolled_trajectory_query_features_probe4_10q"
+    ROOT / "query_variants" / "unrolled_trajectory_per_state_features_probe4_10q"
 )
 UNROLLED_TRAJ_DAS_SHARD_DIR = (
-    ATTR_DIR / "_unrolled_trajectory_das_probe4_10q_shards"
+    ATTR_DIR / "_unrolled_trajectory_higher_noise_avg_probe4_10q_shards"
 )
 
 
