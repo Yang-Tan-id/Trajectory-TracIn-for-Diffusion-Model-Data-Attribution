@@ -27,6 +27,10 @@ DAS normalization. Each training gradient internally averages MC10 noise draws,
 and each timestamp also has 10 outer DAS Monte Carlo terms. All configured
 damping lambdas and all LDS targets are evaluated.
 
+The launcher shards q00-q09 across all four requested GPUs during the unroll
+cache phase, merges the four query shards, and then reuses the same four GPUs
+for DAS timestamp/MC shards. Completed query shards are restartable.
+
 ```bash
 python -u 132_launch_unrolled_traj_das_10q_4gpu.py \
   --gpus 0,1,2,3 \

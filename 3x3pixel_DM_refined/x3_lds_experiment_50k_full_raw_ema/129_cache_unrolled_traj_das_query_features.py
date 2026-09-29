@@ -23,6 +23,85 @@ def atomic_numpy(path, value):
     os.replace(temporary, path)
 
 
+def query_shard_root(shard_index, shard_count):
+    return UNROLLED_TRAJ_DAS_CACHE_DIR / "_query_shards" / (
+        f"shard_{int(shard_index):02d}_of_{int(shard_count):02d}"
+    )
+
+
+def merge_query_shards(shard_count):
+    merged = np.empty(
+        (
+            len(UNROLLED_TRAJ_DAS_QUERY_IDS),
+            TRAJ_SNAPSHOTS,
+            UNROLLED_TRAJ_DAS_PROBES,
+            UNROLLED_TRAJ_DAS_PROJECTION_DIM,
+        ),
+        dtype=np.float32,
+    )
+    query_position = {
+        query_id: position
+        for position, query_id in enumerate(UNROLLED_TRAJ_DAS_QUERY_IDS)
+    }
+    covered = []
+    common_info = None
+    for shard_index in range(shard_count):
+        root = query_shard_root(shard_index, shard_count)
+        with open(root / "info.json") as handle:
+            info = json.load(handle)
+        values = np.load(root / "query_features.npy")
+        shard_query_ids = [int(value) for value in info["query_ids"]]
+        expected_shape = (
+            len(shard_query_ids),
+            TRAJ_SNAPSHOTS,
+            UNROLLED_TRAJ_DAS_PROBES,
+            UNROLLED_TRAJ_DAS_PROJECTION_DIM,
+        )
+        if values.shape != expected_shape:
+            raise ValueError(f"invalid query shard shape in {root}: {values.shape}")
+        if info["method"] != UNROLLED_TRAJ_DAS_METHOD:
+            raise ValueError(f"query shard method mismatch in {root}")
+        if common_info is None:
+            common_info = info
+        else:
+            for key in (
+                "family",
+                "parameter_source",
+                "checkpoint_epoch",
+                "ddim_steps",
+                "trajectory_snapshots",
+                "trajectory_timesteps",
+                "probe_count_per_state",
+                "probe_distribution",
+                "projection_dim",
+                "projection_seed",
+                "normalize_query_features",
+                "initial_state_feature",
+            ):
+                if info[key] != common_info[key]:
+                    raise ValueError(f"query shard {key} mismatch in {root}")
+        for local_position, query_id in enumerate(shard_query_ids):
+            if query_id not in query_position:
+                raise ValueError(f"unexpected q{query_id:02d} in {root}")
+            merged[query_position[query_id]] = values[local_position]
+            covered.append(query_id)
+    if sorted(covered) != sorted(UNROLLED_TRAJ_DAS_QUERY_IDS):
+        raise ValueError(f"query shards do not cover q00-q09 exactly: {covered}")
+    output_info = dict(common_info)
+    output_info.pop("query_shard_index", None)
+    output_info["query_ids"] = list(UNROLLED_TRAJ_DAS_QUERY_IDS)
+    output_info["query_shard_count"] = int(shard_count)
+    output_info["shape"] = list(merged.shape)
+    UNROLLED_TRAJ_DAS_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    atomic_numpy(UNROLLED_TRAJ_DAS_CACHE_DIR / "query_features.npy", merged)
+    with open(UNROLLED_TRAJ_DAS_CACHE_DIR / "info.json", "w") as handle:
+        json.dump(output_info, handle, indent=2)
+    print(
+        f"[merged] {shard_count} query shards -> {UNROLLED_TRAJ_DAS_CACHE_DIR}",
+        flush=True,
+    )
+
+
 def differentiable_ddim_trajectory(model, schedule, condition, initial_state):
     ddim_timesteps = torch.linspace(
         T - 1, 0, DDIM_STEPS, device=initial_state.device
@@ -64,12 +143,28 @@ def differentiable_ddim_trajectory(model, schedule, condition, initial_state):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--gpu", type=int, default=0)
+    parser.add_argument("--query-shard-index", type=int, default=0)
+    parser.add_argument("--query-shard-count", type=int, default=1)
+    parser.add_argument("--merge-shards", action="store_true")
     parser.add_argument("--force", action="store_true")
     args = parser.parse_args()
-    feature_path = UNROLLED_TRAJ_DAS_CACHE_DIR / "query_features.npy"
-    info_path = UNROLLED_TRAJ_DAS_CACHE_DIR / "info.json"
+    if args.query_shard_count <= 0:
+        raise ValueError("query shard count must be positive")
+    if args.merge_shards:
+        merge_query_shards(args.query_shard_count)
+        return
+    if not 0 <= args.query_shard_index < args.query_shard_count:
+        raise ValueError("invalid query shard index")
+    if args.query_shard_count == 1:
+        output_root = UNROLLED_TRAJ_DAS_CACHE_DIR
+    else:
+        output_root = query_shard_root(
+            args.query_shard_index, args.query_shard_count
+        )
+    feature_path = output_root / "query_features.npy"
+    info_path = output_root / "info.json"
     if feature_path.is_file() and info_path.is_file() and not args.force:
-        print(f"[skip] existing query-feature cache {UNROLLED_TRAJ_DAS_CACHE_DIR}")
+        print(f"[skip] existing query-feature cache {output_root}")
         return
     device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
     if torch.cuda.is_available():
@@ -78,7 +173,10 @@ def main():
     with open(QUERY_DIR / "manifest.json") as handle:
         manifest = json.load(handle)
     by_id = {int(record["query_id"]): record for record in manifest}
-    records = [by_id[query_id] for query_id in UNROLLED_TRAJ_DAS_QUERY_IDS]
+    selected_query_ids = UNROLLED_TRAJ_DAS_QUERY_IDS[
+        args.query_shard_index :: args.query_shard_count
+    ]
+    records = [by_id[query_id] for query_id in selected_query_ids]
     if any(record["family"] != UNROLLED_TRAJ_DAS_FAMILY for record in records):
         raise ValueError("unrolled trajectory DAS q00-q09 must be prompted")
     dataset = ColorGridDataset(str(BASE_CSV), grid_size=3)
@@ -97,7 +195,7 @@ def main():
     schedule = base.make_linear_schedule(T, device=device)
     features = np.zeros(
         (
-            len(UNROLLED_TRAJ_DAS_QUERY_IDS),
+            len(selected_query_ids),
             TRAJ_SNAPSHOTS,
             UNROLLED_TRAJ_DAS_PROBES,
             UNROLLED_TRAJ_DAS_PROJECTION_DIM,
@@ -195,13 +293,15 @@ def main():
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-    UNROLLED_TRAJ_DAS_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    output_root.mkdir(parents=True, exist_ok=True)
     atomic_numpy(feature_path, features)
     with open(info_path, "w") as handle:
         json.dump(
             {
                 "method": UNROLLED_TRAJ_DAS_METHOD,
-                "query_ids": list(UNROLLED_TRAJ_DAS_QUERY_IDS),
+                "query_ids": list(selected_query_ids),
+                "query_shard_index": int(args.query_shard_index),
+                "query_shard_count": int(args.query_shard_count),
                 "family": UNROLLED_TRAJ_DAS_FAMILY,
                 "parameter_source": "final EMA",
                 "checkpoint_epoch": int(checkpoint.get("epoch", EPOCHS)),
@@ -219,7 +319,7 @@ def main():
             handle,
             indent=2,
         )
-    print(f"[saved] {UNROLLED_TRAJ_DAS_CACHE_DIR}", flush=True)
+    print(f"[saved] {output_root}", flush=True)
 
 
 if __name__ == "__main__":

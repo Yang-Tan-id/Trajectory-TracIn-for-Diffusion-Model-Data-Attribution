@@ -1,6 +1,7 @@
 """Cache per-state unrolled features and run higher-noise DAS on four GPUs."""
 
 import argparse
+import json
 import subprocess
 import sys
 import time
@@ -19,24 +20,75 @@ def main():
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     log_path = LOG_DIR / "unrolled_trajectory_higher_noise_avg_probe4_10q_4gpu.log"
     active = {}
-    print(
-        f"[launcher] caching fully-unrolled q00-q09 query features on "
-        f"gpu={gpus[0]} log={log_path}",
-        flush=True,
-    )
     with open(log_path, "a", buffering=1) as stream:
-        subprocess.run(
-            [
-                sys.executable,
-                "-u",
-                "129_cache_unrolled_traj_das_query_features.py",
-                "--gpu",
-                str(gpus[0]),
-            ],
-            stdout=stream,
-            stderr=subprocess.STDOUT,
-            check=True,
-        )
+        cache_info_path = UNROLLED_TRAJ_DAS_CACHE_DIR / "info.json"
+        cache_complete = False
+        if cache_info_path.is_file() and (
+            UNROLLED_TRAJ_DAS_CACHE_DIR / "query_features.npy"
+        ).is_file():
+            with open(cache_info_path) as handle:
+                cache_complete = (
+                    json.load(handle).get("method") == UNROLLED_TRAJ_DAS_METHOD
+                )
+        if cache_complete:
+            print(
+                f"[launcher] query cache already complete: "
+                f"{UNROLLED_TRAJ_DAS_CACHE_DIR}",
+                flush=True,
+            )
+        else:
+            print(
+                f"[launcher] caching fully-unrolled q00-q09 query features "
+                f"across gpus={gpus} log={log_path}",
+                flush=True,
+            )
+            for shard_index, gpu in enumerate(gpus):
+                label = f"query-shard-{shard_index}"
+                command = [
+                    sys.executable,
+                    "-u",
+                    "129_cache_unrolled_traj_das_query_features.py",
+                    "--gpu",
+                    str(gpu),
+                    "--query-shard-index",
+                    str(shard_index),
+                    "--query-shard-count",
+                    "4",
+                ]
+                stream.write(f"[launcher] {label}: {' '.join(command)}\n")
+                process = subprocess.Popen(
+                    command, stdout=stream, stderr=subprocess.STDOUT
+                )
+                active[label] = process
+                print(f"[launcher] started {label} pid={process.pid}", flush=True)
+            while active:
+                for label, process in list(active.items()):
+                    code = process.poll()
+                    if code is None:
+                        continue
+                    del active[label]
+                    print(f"[launcher] {label} exited code={code}", flush=True)
+                    if code:
+                        for other in active.values():
+                            other.terminate()
+                        for other in active.values():
+                            other.wait()
+                        raise SystemExit(code)
+                if active:
+                    time.sleep(2)
+            subprocess.run(
+                [
+                    sys.executable,
+                    "-u",
+                    "129_cache_unrolled_traj_das_query_features.py",
+                    "--query-shard-count",
+                    "4",
+                    "--merge-shards",
+                ],
+                stdout=stream,
+                stderr=subprocess.STDOUT,
+                check=True,
+            )
         stream.write(
             "\n[launcher] fully-unrolled higher-noise DAS q00-q09; final EMA, "
             "per-state probe4, projected4096, each state matches s>=t, "
