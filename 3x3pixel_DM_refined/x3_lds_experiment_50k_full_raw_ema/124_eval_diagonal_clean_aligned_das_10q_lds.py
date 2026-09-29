@@ -1,5 +1,6 @@
 """Evaluate the timestamp-diagonal predicted-clean DAS lambda sweep."""
 
+import argparse
 import json
 
 import numpy as np
@@ -9,12 +10,16 @@ from diagonal_clean_das_config import *
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--timestamp-count", type=int, choices=(10, 100), default=100)
+    args = parser.parse_args()
+    method = diagonal_clean_method(args.timestamp_count)
     membership = np.load(MASK_DIR / "membership.npy").astype(np.float64)
     output = {
-        "method": DIAGONAL_CLEAN_METHOD,
+        "method": method,
         "query_ids": list(DIAGONAL_CLEAN_QUERY_IDS),
         "query_count": len(DIAGONAL_CLEAN_QUERY_IDS),
-        "timestamp_count": 100,
+        "timestamp_count": args.timestamp_count,
         "timestamp_endpoint_pairing": "diagonal",
         "das_mc": int(DAS_NUM_MC),
         "lambdas": [float(value) for value in DAS_LAMBDAS],
@@ -25,7 +30,7 @@ def main():
         scores = [
             np.load(
                 ATTR_DIR
-                / DIAGONAL_CLEAN_METHOD
+                / method
                 / f"q{query_id:02d}"
                 / f"lambda_{lambda_tag(lam)}"
                 / "scores.npy"
@@ -60,7 +65,10 @@ def main():
                 flush=True,
             )
         output["results"][lambda_tag(lam)] = lambda_result
-    path = LDS_DIR / "diagonal_clean_aligned_das_100q_lambda_sweep.json"
+    path = LDS_DIR / (
+        f"diagonal_clean_aligned_das_100q_{args.timestamp_count}timestamp_"
+        "lambda_sweep.json"
+    )
     with open(path, "w") as handle:
         json.dump(output, handle, indent=2)
     print(f"[saved] {path}", flush=True)

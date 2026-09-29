@@ -47,6 +47,7 @@ def main():
     parser.add_argument("--gpu", type=int, required=True)
     parser.add_argument("--timestamp-shard-index", type=int, required=True)
     parser.add_argument("--timestamp-shard-count", type=int, default=4)
+    parser.add_argument("--timestamp-count", type=int, choices=(10, 100), default=100)
     parser.add_argument("--batch-size", type=int, default=DAS_FEATURE_BATCH_SIZE)
     args = parser.parse_args()
     if not 0 <= args.timestamp_shard_index < args.timestamp_shard_count:
@@ -84,11 +85,13 @@ def main():
             f"expected={expected_shape}/(100,)"
         )
     clean = torch.from_numpy(clean_np).to(device=device, dtype=torch.float32)
-    selected = list(
-        range(args.timestamp_shard_index, 100, args.timestamp_shard_count)
-    )
+    all_selected = diagonal_clean_indices(args.timestamp_count)
+    selected = list(all_selected[args.timestamp_shard_index::args.timestamp_shard_count])
     root = diagonal_clean_shard_root(
-        args.family, args.timestamp_shard_index, args.timestamp_shard_count
+        args.family,
+        args.timestamp_shard_index,
+        args.timestamp_shard_count,
+        args.timestamp_count,
     )
     done_path = root / "done.json"
     if done_path.is_file():
@@ -111,7 +114,7 @@ def main():
     print(
         f"[diagonal-clean-das gpu={args.gpu}] family={args.family} "
         f"queries=q{query_ids[0]:02d}-q{query_ids[-1]:02d} timestamps="
-        f"{len(selected)}/100 mc={DAS_NUM_MC} batch={args.batch_size} "
+        f"{len(selected)}/{args.timestamp_count} mc={DAS_NUM_MC} batch={args.batch_size} "
         f"projection={dimension} aligned=true one_endpoint_per_noise_level=true",
         flush=True,
     )
@@ -282,10 +285,11 @@ def main():
         done_path,
         {
             "contract_version": CONTRACT_VERSION,
-            "method": DIAGONAL_CLEAN_METHOD,
+            "method": diagonal_clean_method(args.timestamp_count),
             "family": args.family,
             "query_ids": list(query_ids),
             "snapshot_indices": selected,
+            "timestamp_count": args.timestamp_count,
             "timestamps": [int(timestamps[index]) for index in selected],
             "num_mc_per_timestamp": int(DAS_NUM_MC),
             "term_count": total_terms,

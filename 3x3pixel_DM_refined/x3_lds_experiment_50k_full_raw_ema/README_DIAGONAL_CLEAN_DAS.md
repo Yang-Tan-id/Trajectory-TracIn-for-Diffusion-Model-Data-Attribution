@@ -30,5 +30,15 @@ python -u 126_eval_diagonal_clean_aligned_das_100q_lds.py
 The LDS sweep is saved to:
 
 ```text
-x3_lds_exp_50k/lds/diagonal_clean_aligned_das_100q_lambda_sweep.json
+x3_lds_exp_50k/lds/diagonal_clean_aligned_das_100q_100timestamp_lambda_sweep.json
+```
+
+For the cheaper ten-timestamp one-to-one version, run:
+
+```bash
+python -u 127_launch_diagonal_clean_aligned_das_10timestamp_100q_4gpu.py \
+  --gpus 4,5,6,7 \
+  --batch-size 2560
+
+python -u 128_eval_diagonal_clean_aligned_das_10timestamp_100q_lds.py
 ```

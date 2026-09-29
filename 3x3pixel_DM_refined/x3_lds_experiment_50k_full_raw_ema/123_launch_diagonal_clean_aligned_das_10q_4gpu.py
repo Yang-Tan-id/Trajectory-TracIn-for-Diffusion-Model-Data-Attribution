@@ -12,6 +12,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--gpus", default=",".join(str(value) for value in CUDA_IDS[:4]))
+    parser.add_argument("--timestamp-count", type=int, choices=(10, 100), default=100)
     args = parser.parse_args()
     gpus = [int(value.strip()) for value in args.gpus.split(",") if value.strip()]
     if args.batch_size <= 0:
@@ -19,7 +20,9 @@ def main():
     if len(gpus) != 4 or len(set(gpus)) != 4:
         raise ValueError("--gpus must contain exactly four distinct GPU ids")
     LOG_DIR.mkdir(parents=True, exist_ok=True)
-    log_path = LOG_DIR / "diagonal_clean_aligned_das_10q_4gpu.log"
+    log_path = LOG_DIR / (
+        f"diagonal_clean_aligned_das_100q_{args.timestamp_count}timestamps_4gpu.log"
+    )
     active = {}
     with open(log_path, "a", buffering=1) as stream:
         subprocess.run(
@@ -35,8 +38,8 @@ def main():
             check=True,
         )
         stream.write(
-            "\n[launcher] q00-q99 predicted-clean 100-timestamp diagonal aligned "
-            "DAS; MC10; all lambdas\n"
+            f"\n[launcher] q00-q99 predicted-clean {args.timestamp_count}-timestamp "
+            "diagonal aligned DAS; MC10; all lambdas\n"
         )
         stream.write(
             f"[launcher] gpus={gpus} feature_batch_size={args.batch_size}\n"
@@ -61,6 +64,8 @@ def main():
                 str(shard_index),
                 "--timestamp-shard-count",
                 "2",
+                "--timestamp-count",
+                str(args.timestamp_count),
                 "--batch-size",
                 str(args.batch_size),
             ]
@@ -93,12 +98,17 @@ def main():
                 "122_merge_diagonal_clean_aligned_das.py",
                 "--timestamp-shard-count",
                 "2",
+                "--timestamp-count",
+                str(args.timestamp_count),
             ],
             stdout=stream,
             stderr=subprocess.STDOUT,
             check=True,
         )
-    print("[done] timestamp-diagonal predicted-clean DAS q00-q99", flush=True)
+    print(
+        f"[done] {args.timestamp_count}-timestamp diagonal predicted-clean DAS q00-q99",
+        flush=True,
+    )
 
 
 if __name__ == "__main__":
