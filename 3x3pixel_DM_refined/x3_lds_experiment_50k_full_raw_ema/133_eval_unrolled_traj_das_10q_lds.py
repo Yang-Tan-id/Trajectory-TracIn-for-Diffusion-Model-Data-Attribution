@@ -14,7 +14,8 @@ def main():
         "method": UNROLLED_TRAJ_DAS_METHOD,
         "query_ids": list(UNROLLED_TRAJ_DAS_QUERY_IDS),
         "query_count": len(UNROLLED_TRAJ_DAS_QUERY_IDS),
-        "trajectory_probe_count": int(UNROLLED_TRAJ_DAS_PROBES),
+        "query_output_dimension": int(UNROLLED_TRAJ_DAS_OUTPUT_DIM),
+        "shared_output_probe": True,
         "projection_dim": int(UNROLLED_TRAJ_DAS_PROJECTION_DIM),
         "das_timestamp_count": len(DAS_TIMESTEPS),
         "das_outer_mc": int(DAS_NUM_MC),
@@ -68,7 +69,7 @@ def main():
             )
         output["results"][lambda_tag(lam)] = lambda_result
     path = LDS_DIR / (
-        "unrolled_trajectory_higher_noise_avg_probe4_10q_lambda_sweep.json"
+        "unrolled_trajectory_higher_noise_avg_shared_probe_10q_lambda_sweep.json"
     )
     with open(path, "w") as handle:
         json.dump(output, handle, indent=2)

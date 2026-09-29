@@ -5,17 +5,17 @@ from exp_config import *
 
 UNROLLED_TRAJ_DAS_QUERY_IDS = tuple(range(10))
 UNROLLED_TRAJ_DAS_FAMILY = "prompted"
-UNROLLED_TRAJ_DAS_PROBES = 4
+UNROLLED_TRAJ_DAS_OUTPUT_DIM = 9
 UNROLLED_TRAJ_DAS_PROJECTION_DIM = 4096
 UNROLLED_TRAJ_DAS_PROJECTION_SEED = (811, "unrolled_traj_global_projection")
 UNROLLED_TRAJ_DAS_METHOD = (
-    "das_ema_unrolled_trajectory_higher_noise_avg_probe4_projected4096_100t_mc10"
+    "das_ema_unrolled_trajectory_higher_noise_avg_shared_probe_projected4096_100t_mc10"
 )
 UNROLLED_TRAJ_DAS_CACHE_DIR = (
-    ROOT / "query_variants" / "unrolled_trajectory_per_state_features_probe4_10q"
+    ROOT / "query_variants" / "unrolled_trajectory_state_output_basis_vjp9_10q"
 )
 UNROLLED_TRAJ_DAS_SHARD_DIR = (
-    ATTR_DIR / "_unrolled_trajectory_higher_noise_avg_probe4_10q_shards"
+    ATTR_DIR / "_unrolled_trajectory_higher_noise_avg_shared_probe_10q_shards"
 )
 
 

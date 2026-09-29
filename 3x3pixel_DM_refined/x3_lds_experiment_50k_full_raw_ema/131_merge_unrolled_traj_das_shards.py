@@ -76,9 +76,16 @@ def main():
                             "the cached initial noise"
                         ),
                         "trajectory_snapshots": int(TRAJ_SNAPSHOTS),
-                        "trajectory_probe_count": int(UNROLLED_TRAJ_DAS_PROBES),
+                        "query_output_dimension": int(
+                            UNROLLED_TRAJ_DAS_OUTPUT_DIM
+                        ),
+                        "shared_output_probe": True,
+                        "output_probe_role": (
+                            "the same Gaussian output probe is used for the "
+                            "training gradient, residual, and aligned query VJP"
+                        ),
                         "trajectory_response": (
-                            "per-state Hutchinson response; each state t is "
+                            "per-state shared-probe squared response; each state t is "
                             "averaged over training-loss timestamps s>=t, then "
                             "the 100 state responses are averaged"
                         ),

@@ -1,4 +1,4 @@
-"""Cache one fully-unrolled projected Jacobian feature per trajectory state."""
+"""Cache nine projected output-basis VJPs per unrolled trajectory state."""
 
 import argparse
 import json
@@ -12,7 +12,7 @@ import x3pixel_DM_training as base
 from attribution_one_query import _project_batched_grads, build_model, cond_for, model_paths
 from dataset_loader import ColorGridDataset
 from unrolled_traj_das_config import *
-from x3_endpoint_das_jax_logic_pytorch import build_countsketch_specs, make_torch_generator
+from x3_endpoint_das_jax_logic_pytorch import build_countsketch_specs
 
 
 def atomic_numpy(path, value):
@@ -34,7 +34,7 @@ def merge_query_shards(shard_count):
         (
             len(UNROLLED_TRAJ_DAS_QUERY_IDS),
             TRAJ_SNAPSHOTS,
-            UNROLLED_TRAJ_DAS_PROBES,
+            UNROLLED_TRAJ_DAS_OUTPUT_DIM,
             UNROLLED_TRAJ_DAS_PROJECTION_DIM,
         ),
         dtype=np.float32,
@@ -54,7 +54,7 @@ def merge_query_shards(shard_count):
         expected_shape = (
             len(shard_query_ids),
             TRAJ_SNAPSHOTS,
-            UNROLLED_TRAJ_DAS_PROBES,
+            UNROLLED_TRAJ_DAS_OUTPUT_DIM,
             UNROLLED_TRAJ_DAS_PROJECTION_DIM,
         )
         if values.shape != expected_shape:
@@ -71,8 +71,8 @@ def merge_query_shards(shard_count):
                 "ddim_steps",
                 "trajectory_snapshots",
                 "trajectory_timesteps",
-                "probe_count_per_state",
-                "probe_distribution",
+                "query_output_dimension",
+                "query_feature_basis",
                 "projection_dim",
                 "projection_seed",
                 "normalize_query_features",
@@ -197,7 +197,7 @@ def main():
         (
             len(selected_query_ids),
             TRAJ_SNAPSHOTS,
-            UNROLLED_TRAJ_DAS_PROBES,
+            UNROLLED_TRAJ_DAS_OUTPUT_DIM,
             UNROLLED_TRAJ_DAS_PROJECTION_DIM,
         ),
         dtype=np.float32,
@@ -225,6 +225,11 @@ def main():
                 f"q{record['query_id']:02d} differentiable DDIM endpoint mismatch "
                 f"{endpoint_error:.6e}"
             )
+        if states[-1].numel() != UNROLLED_TRAJ_DAS_OUTPUT_DIM:
+            raise ValueError(
+                f"query state output dimension={states[-1].numel()}, "
+                f"expected={UNROLLED_TRAJ_DAS_OUTPUT_DIM}"
+            )
 
         for state_index, state in enumerate(states):
             if not state.requires_grad:
@@ -235,31 +240,11 @@ def main():
                     flush=True,
                 )
                 continue
-            for probe_index in range(UNROLLED_TRAJ_DAS_PROBES):
-                generator = make_torch_generator(
-                    device,
-                    811,
-                    "unrolled_trajectory_state_probe",
-                    int(record["query_id"]),
-                    state_index,
-                    probe_index,
-                )
-                probe = (
-                    torch.randint(
-                        0,
-                        2,
-                        state.shape,
-                        generator=generator,
-                        device=device,
-                        dtype=torch.int64,
-                    ).to(torch.float32)
-                    * 2.0
-                    - 1.0
-                )
-                scalar = (state * probe).sum()
+            for output_index in range(UNROLLED_TRAJ_DAS_OUTPUT_DIM):
+                scalar = state.reshape(-1)[output_index]
                 is_last = (
                     state_index == TRAJ_SNAPSHOTS - 1
-                    and probe_index == UNROLLED_TRAJ_DAS_PROBES - 1
+                    and output_index == UNROLLED_TRAJ_DAS_OUTPUT_DIM - 1
                 )
                 gradient_values = torch.autograd.grad(
                     scalar, active, retain_graph=not is_last
@@ -277,17 +262,18 @@ def main():
                     1e-8,
                 )[0]
                 features[
-                    query_position, state_index, probe_index
+                    query_position, state_index, output_index
                 ] = projected.detach().cpu().numpy()
                 print(
                     f"[unrolled-query] q{record['query_id']:02d} "
                     f"state={state_index + 1}/{TRAJ_SNAPSHOTS} "
                     f"t={trajectory_timesteps[state_index]} "
-                    f"probe={probe_index + 1}/{UNROLLED_TRAJ_DAS_PROBES} "
+                    f"jacobian_row={output_index + 1}/"
+                    f"{UNROLLED_TRAJ_DAS_OUTPUT_DIM} "
                     f"norm={projected.norm().item():.6e}",
                     flush=True,
                 )
-                del probe, scalar, gradient_values, gradients
+                del scalar, gradient_values, gradients
                 del batched_gradients, projected
         del states
         if torch.cuda.is_available():
@@ -308,8 +294,11 @@ def main():
                 "ddim_steps": int(DDIM_STEPS),
                 "trajectory_snapshots": int(TRAJ_SNAPSHOTS),
                 "trajectory_timesteps": common_timesteps,
-                "probe_count_per_state": int(UNROLLED_TRAJ_DAS_PROBES),
-                "probe_distribution": "independent Rademacher per state/pixel",
+                "query_output_dimension": int(UNROLLED_TRAJ_DAS_OUTPUT_DIM),
+                "query_feature_basis": (
+                    "nine projected output-basis gradients; each loss probe "
+                    "is combined linearly to equal one direct scalar VJP"
+                ),
                 "projection_dim": int(UNROLLED_TRAJ_DAS_PROJECTION_DIM),
                 "projection_seed": list(UNROLLED_TRAJ_DAS_PROJECTION_SEED),
                 "normalize_query_features": False,

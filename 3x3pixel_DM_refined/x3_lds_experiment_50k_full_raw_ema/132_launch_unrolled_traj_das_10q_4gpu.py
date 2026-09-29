@@ -18,7 +18,9 @@ def main():
     if len(gpus) != 4 or len(set(gpus)) != 4:
         raise ValueError("--gpus must contain exactly four distinct GPU ids")
     LOG_DIR.mkdir(parents=True, exist_ok=True)
-    log_path = LOG_DIR / "unrolled_trajectory_higher_noise_avg_probe4_10q_4gpu.log"
+    log_path = LOG_DIR / (
+        "unrolled_trajectory_higher_noise_avg_shared_probe_10q_4gpu.log"
+    )
     active = {}
     with open(log_path, "a", buffering=1) as stream:
         cache_info_path = UNROLLED_TRAJ_DAS_CACHE_DIR / "info.json"
@@ -91,7 +93,8 @@ def main():
             )
         stream.write(
             "\n[launcher] fully-unrolled higher-noise DAS q00-q09; final EMA, "
-            "per-state probe4, projected4096, each state matches s>=t, "
+            "shared train/query Gaussian probe, projected4096, "
+            "each state matches s>=t, "
             "DAS 100x10, train-gradient MC10\n"
         )
         for shard_index, gpu in enumerate(gpus):

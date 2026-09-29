@@ -71,7 +71,7 @@ def main():
     expected_query_shape = (
         len(UNROLLED_TRAJ_DAS_QUERY_IDS),
         TRAJ_SNAPSHOTS,
-        UNROLLED_TRAJ_DAS_PROBES,
+        UNROLLED_TRAJ_DAS_OUTPUT_DIM,
         UNROLLED_TRAJ_DAS_PROJECTION_DIM,
     )
     if query_features_np.shape != expected_query_shape:
@@ -122,8 +122,9 @@ def main():
     print(
         f"[unrolled-traj-das gpu={args.gpu}] shard={args.shard_index}/"
         f"{args.shard_count} terms={len(selected_indices)}/{len(all_terms)} "
-        f"queries={len(UNROLLED_TRAJ_DAS_QUERY_IDS)} probes="
-        f"{UNROLLED_TRAJ_DAS_PROBES} train_mc={train_mc} "
+        f"queries={len(UNROLLED_TRAJ_DAS_QUERY_IDS)} shared_probe=True "
+        f"query_output_basis_vjps={UNROLLED_TRAJ_DAS_OUTPUT_DIM} "
+        f"train_mc={train_mc} "
         f"batch={args.batch_size} projection={dimension}",
         flush=True,
     )
@@ -138,9 +139,6 @@ def main():
         ]
         if not eligible_state_indices:
             raise RuntimeError(f"no trajectory state eligible for training t={timestep}")
-        eligible_query_features = query_features[
-            :, eligible_state_indices, :, :
-        ].reshape(-1, dimension)
         state_weights = torch.tensor(
             [
                 1.0
@@ -164,6 +162,17 @@ def main():
             (1, *x_all.shape[1:]), device=device, rng=probe_generator
         )[0]
         scalar_denominator = math.sqrt(float(output_probe.numel()))
+        if output_probe.numel() != UNROLLED_TRAJ_DAS_OUTPUT_DIM:
+            raise ValueError(
+                f"loss probe dimension={output_probe.numel()}, "
+                f"expected={UNROLLED_TRAJ_DAS_OUTPUT_DIM}"
+            )
+        normalized_probe = output_probe.reshape(-1) / scalar_denominator
+        eligible_query_features = torch.einsum(
+            "qerd,r->qed",
+            query_features[:, eligible_state_indices, :, :],
+            normalized_probe,
+        ).reshape(-1, dimension)
 
         def single_scalar(parameter_dict, x0, condition, noises):
             x_mc = x0.unsqueeze(0).expand(train_mc, *x0.shape)
@@ -286,15 +295,13 @@ def main():
                     denominator,
                 )
                 raw /= denominator.to(raw.dtype).unsqueeze(1)
-            per_query_state_probe = raw.reshape(
+            per_query_state = raw.reshape(
                 N_TRAIN,
                 len(UNROLLED_TRAJ_DAS_QUERY_IDS),
                 len(eligible_state_indices),
-                UNROLLED_TRAJ_DAS_PROBES,
             )
-            per_query_state = per_query_state_probe.square().mean(dim=3)
             scores[lam] += (
-                (per_query_state * state_weights.view(1, 1, -1))
+                (per_query_state.square() * state_weights.view(1, 1, -1))
                 .sum(dim=2)
                 .T
                 .to(torch.float64)
@@ -311,8 +318,9 @@ def main():
         )
         del output_probe, feature_cache, residual_cache, gram, eye
         del gradients, features, noises, solved_queries, raw
-        del per_query_state_probe, per_query_state
+        del per_query_state
         del eligible_query_features, state_weights
+        del normalized_probe
         del batched_gradient
         if DAS_USE_SM_DENOMINATOR:
             del solved_train, denominator
@@ -333,7 +341,12 @@ def main():
                 "das_timestamps": [int(value) for value in DAS_TIMESTEPS],
                 "das_outer_mc": int(DAS_NUM_MC),
                 "train_gradient_mc": train_mc,
-                "trajectory_probe_count": int(UNROLLED_TRAJ_DAS_PROBES),
+                "query_output_dimension": int(UNROLLED_TRAJ_DAS_OUTPUT_DIM),
+                "shared_output_probe": True,
+                "output_probe_role": (
+                    "the same Gaussian output probe is used for the training "
+                    "gradient, residual, and every aligned query-state VJP"
+                ),
                 "trajectory_timesteps": list(trajectory_timesteps),
                 "higher_noise_training_timestamp_counts": list(
                     higher_noise_counts
