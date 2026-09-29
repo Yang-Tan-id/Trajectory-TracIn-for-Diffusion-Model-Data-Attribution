@@ -1,4 +1,4 @@
-"""Build 100 clean estimates and run timestamp-diagonal DAS on four GPUs."""
+"""Build 100-query clean estimates and run diagonal DAS on four GPUs."""
 
 import argparse
 import subprocess
@@ -35,24 +35,32 @@ def main():
             check=True,
         )
         stream.write(
-            "\n[launcher] q00-q09 predicted-clean 100-timestamp diagonal aligned "
+            "\n[launcher] q00-q99 predicted-clean 100-timestamp diagonal aligned "
             "DAS; MC10; all lambdas\n"
         )
         stream.write(
             f"[launcher] gpus={gpus} feature_batch_size={args.batch_size}\n"
         )
-        for shard_index, gpu in enumerate(gpus):
-            label = f"timestamp-shard-{shard_index}"
+        assignments = (
+            ("prompted", 0, gpus[0]),
+            ("prompted", 1, gpus[1]),
+            ("unprompted", 0, gpus[2]),
+            ("unprompted", 1, gpus[3]),
+        )
+        for family, shard_index, gpu in assignments:
+            label = f"{family}-timestamp-shard-{shard_index}"
             command = [
                 sys.executable,
                 "-u",
                 "121_run_diagonal_clean_aligned_das_shard.py",
+                "--family",
+                family,
                 "--gpu",
                 str(gpu),
                 "--timestamp-shard-index",
                 str(shard_index),
                 "--timestamp-shard-count",
-                "4",
+                "2",
                 "--batch-size",
                 str(args.batch_size),
             ]
@@ -84,13 +92,13 @@ def main():
                 "-u",
                 "122_merge_diagonal_clean_aligned_das.py",
                 "--timestamp-shard-count",
-                "4",
+                "2",
             ],
             stdout=stream,
             stderr=subprocess.STDOUT,
             check=True,
         )
-    print("[done] timestamp-diagonal predicted-clean DAS q00-q09", flush=True)
+    print("[done] timestamp-diagonal predicted-clean DAS q00-q99", flush=True)
 
 
 if __name__ == "__main__":

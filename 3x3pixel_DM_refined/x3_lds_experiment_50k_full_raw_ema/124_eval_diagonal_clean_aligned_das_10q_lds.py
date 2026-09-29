@@ -60,7 +60,7 @@ def main():
                 flush=True,
             )
         output["results"][lambda_tag(lam)] = lambda_result
-    path = LDS_DIR / "diagonal_clean_aligned_das_10q_lambda_sweep.json"
+    path = LDS_DIR / "diagonal_clean_aligned_das_100q_lambda_sweep.json"
     with open(path, "w") as handle:
         json.dump(output, handle, indent=2)
     print(f"[saved] {path}", flush=True)

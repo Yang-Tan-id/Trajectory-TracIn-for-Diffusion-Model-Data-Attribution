@@ -16,7 +16,6 @@ from dataset_loader import ColorGridDataset
 from diagonal_clean_das_config import *
 from x3_endpoint_das_jax_logic_pytorch import (
     build_countsketch_specs,
-    compute_projected_eps_feature,
     make_torch_generator,
     sample_noise,
     sample_output_probe,
@@ -44,6 +43,7 @@ def atomic_json(path, value):
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--family", choices=DIAGONAL_CLEAN_FAMILIES, required=True)
     parser.add_argument("--gpu", type=int, required=True)
     parser.add_argument("--timestamp-shard-index", type=int, required=True)
     parser.add_argument("--timestamp-shard-count", type=int, default=4)
@@ -60,17 +60,21 @@ def main():
     with open(QUERY_DIR / "manifest.json") as handle:
         manifest = json.load(handle)
     by_id = {int(record["query_id"]): record for record in manifest}
-    records = [by_id[query_id] for query_id in DIAGONAL_CLEAN_QUERY_IDS]
+    query_ids = diagonal_clean_query_ids(args.family)
+    records = [by_id[query_id] for query_id in query_ids]
     dataset = ColorGridDataset(str(BASE_CSV), grid_size=3)
     model, _, _ = build_model(
-        model_paths(DIAGONAL_CLEAN_FAMILY)[-1], "ema", device
+        model_paths(args.family)[-1], "ema", device
     )
     named = dict(model.named_parameters())
     names = tuple(named)
     active = tuple(named.values())
     schedule = base.make_linear_schedule(T, device=device)
-    x_all, cond_all = preload_dataset(dataset, DIAGONAL_CLEAN_FAMILY, device)
+    x_all, cond_all = preload_dataset(dataset, args.family, device)
     conditions = [cond_for(record, dataset, device) for record in records]
+    if args.family == "unprompted":
+        conditions = [torch.zeros_like(value) for value in conditions]
+    condition_bank = torch.cat(conditions, dim=0)
     clean_np = np.load(DIAGONAL_CLEAN_CACHE_DIR / "predicted_clean.npy")
     timestamps = np.load(DIAGONAL_CLEAN_CACHE_DIR / "trajectory_t.npy")
     expected_shape = (100, len(DIAGONAL_CLEAN_QUERY_IDS), *x_all.shape[1:])
@@ -84,7 +88,7 @@ def main():
         range(args.timestamp_shard_index, 100, args.timestamp_shard_count)
     )
     root = diagonal_clean_shard_root(
-        args.timestamp_shard_index, args.timestamp_shard_count
+        args.family, args.timestamp_shard_index, args.timestamp_shard_count
     )
     done_path = root / "done.json"
     if done_path.is_file():
@@ -92,7 +96,7 @@ def main():
         return
     scores = {
         float(lam): torch.zeros(
-            (len(DIAGONAL_CLEAN_QUERY_IDS), N_TRAIN),
+            (len(query_ids), N_TRAIN),
             device=device,
             dtype=torch.float64,
         )
@@ -105,7 +109,8 @@ def main():
     completed_terms = 0
     started = time.perf_counter()
     print(
-        f"[diagonal-clean-das gpu={args.gpu}] q00-q09 timestamps="
+        f"[diagonal-clean-das gpu={args.gpu}] family={args.family} "
+        f"queries=q{query_ids[0]:02d}-q{query_ids[-1]:02d} timestamps="
         f"{len(selected)}/100 mc={DAS_NUM_MC} batch={args.batch_size} "
         f"projection={dimension} aligned=true one_endpoint_per_noise_level=true",
         flush=True,
@@ -125,7 +130,7 @@ def main():
                 device, 809, "diagonal_clean_output_probe", timestep, mc_index
             )
             output_probe = sample_output_probe(
-                tuple(clean[snapshot_index, 0].unsqueeze(0).shape),
+                tuple(clean[snapshot_index, query_ids[0]].unsqueeze(0).shape),
                 device=device,
                 rng=probe_generator,
             )
@@ -133,28 +138,8 @@ def main():
                 device, 809, "diagonal_clean_aligned_noise", timestep, mc_index
             )
             aligned_noise = sample_noise(
-                clean[snapshot_index, 0].unsqueeze(0), rng=noise_generator
+                clean[snapshot_index, query_ids[0]].unsqueeze(0), rng=noise_generator
             )
-            query_features = []
-            for query_position, condition in enumerate(conditions):
-                _, feature = compute_projected_eps_feature(
-                    model=model,
-                    active=list(active),
-                    sched=schedule,
-                    x0=clean[snapshot_index, query_position].unsqueeze(0),
-                    cond=condition,
-                    t=t_query,
-                    noise=aligned_noise,
-                    output_probe=output_probe,
-                    projection_specs=specs,
-                    proj_dim=dimension,
-                    device=device,
-                    normalize_projected_grads=normalize,
-                    normalize_eps=normalize_eps,
-                )
-                query_features.append(feature.to(torch.float32).detach())
-            query_features = torch.stack(query_features)
-
             probe_single = output_probe[0]
             scalar_denominator = math.sqrt(float(probe_single.numel()))
 
@@ -168,6 +153,28 @@ def main():
                 return (prediction * probe_single).sum() / scalar_denominator
 
             batched_gradient = vmap(grad(single_scalar), in_dims=(None, 0, 0))
+            query_feature_parts = []
+            for query_start in range(0, len(query_ids), 25):
+                query_end = min(query_start + 25, len(query_ids))
+                query_gradients = batched_gradient(
+                    named,
+                    clean[
+                        snapshot_index,
+                        list(query_ids[query_start:query_end]),
+                    ],
+                    condition_bank[query_start:query_end],
+                )
+                query_feature_parts.append(
+                    _project_batched_grads(
+                        query_gradients,
+                        names,
+                        specs,
+                        dimension,
+                        normalize,
+                        normalize_eps,
+                    )
+                )
+            query_features = torch.cat(query_feature_parts, dim=0)
             feature_cache = torch.empty(
                 (N_TRAIN, dimension), device=device, dtype=torch.float32
             )
@@ -261,6 +268,7 @@ def main():
                 flush=True,
             )
             del specs, output_probe, aligned_noise, query_features
+            del query_feature_parts, query_gradients
             del feature_cache, residual_cache, gram, eye, solved_queries, raw
             del gradients, features, batched_gradient
             if DAS_USE_SM_DENOMINATOR:
@@ -275,7 +283,8 @@ def main():
         {
             "contract_version": CONTRACT_VERSION,
             "method": DIAGONAL_CLEAN_METHOD,
-            "query_ids": list(DIAGONAL_CLEAN_QUERY_IDS),
+            "family": args.family,
+            "query_ids": list(query_ids),
             "snapshot_indices": selected,
             "timestamps": [int(timestamps[index]) for index in selected],
             "num_mc_per_timestamp": int(DAS_NUM_MC),

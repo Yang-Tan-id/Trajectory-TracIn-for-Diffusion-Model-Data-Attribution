@@ -32,22 +32,11 @@ def main():
     with open(QUERY_DIR / "manifest.json") as handle:
         manifest = json.load(handle)
     by_id = {int(record["query_id"]): record for record in manifest}
-    records = [by_id[query_id] for query_id in DIAGONAL_CLEAN_QUERY_IDS]
-    if any(record["family"] != DIAGONAL_CLEAN_FAMILY for record in records):
-        raise ValueError("q00-q09 must all be prompted")
     dataset = ColorGridDataset(str(BASE_CSV), grid_size=3)
-    model, _, checkpoint = build_model(
-        model_paths(DIAGONAL_CLEAN_FAMILY)[-1], "ema", device
-    )
     schedule = base.make_linear_schedule(T, device=device)
-    conditions = torch.cat(
-        [cond_for(record, dataset, device) for record in records], dim=0
-    )
-    trajectories = [
-        np.load(Path(record["dir"]) / "trajectory_xt.npy") for record in records
-    ]
     timestamp_arrays = [
-        np.load(Path(record["dir"]) / "trajectory_t.npy") for record in records
+        np.load(Path(by_id[query_id]["dir"]) / "trajectory_t.npy")
+        for query_id in DIAGONAL_CLEAN_QUERY_IDS
     ]
     timestamps = timestamp_arrays[0]
     if len(timestamps) != 100 or any(
@@ -55,36 +44,59 @@ def main():
     ):
         raise ValueError("expected one shared 100-timestamp trajectory bank")
 
-    clean_banks = []
-    with torch.no_grad():
-        for snapshot_index, timestep_raw in enumerate(timestamps):
-            timestep = int(timestep_raw)
-            states = torch.cat(
-                [
-                    torch.from_numpy(trajectory[snapshot_index]).to(
-                        device=device, dtype=torch.float32
-                    )
-                    for trajectory in trajectories
-                ],
-                dim=0,
-            )
-            t_batch = torch.full(
-                (len(records),), timestep, device=device, dtype=torch.long
-            )
-            predicted_noise = model(states, t_batch, conditions)
-            alpha_bar = schedule.alpha_bars[timestep]
-            predicted_clean = (
-                states - torch.sqrt(1.0 - alpha_bar) * predicted_noise
-            ) / torch.sqrt(alpha_bar)
-            clean_banks.append(predicted_clean.cpu().numpy())
-            if snapshot_index == 0 or (snapshot_index + 1) % 10 == 0:
-                print(
-                    f"[diagonal-clean] snapshot={snapshot_index+1}/100 t={timestep} "
-                    f"range=[{predicted_clean.min().item():.4g},"
-                    f"{predicted_clean.max().item():.4g}]",
-                    flush=True,
+    sample_trajectory = np.load(Path(by_id[0]["dir"]) / "trajectory_xt.npy")
+    clean = np.empty(
+        (100, len(DIAGONAL_CLEAN_QUERY_IDS), *sample_trajectory.shape[2:]),
+        dtype=np.float32,
+    )
+    checkpoint_epochs = {}
+    for family in DIAGONAL_CLEAN_FAMILIES:
+        query_ids = diagonal_clean_query_ids(family)
+        records = [by_id[query_id] for query_id in query_ids]
+        if any(record["family"] != family for record in records):
+            raise ValueError(f"query family mismatch for {family}")
+        model, _, checkpoint = build_model(model_paths(family)[-1], "ema", device)
+        checkpoint_epochs[family] = int(checkpoint.get("epoch", EPOCHS))
+        conditions = torch.cat(
+            [cond_for(record, dataset, device) for record in records], dim=0
+        )
+        if family == "unprompted":
+            conditions.zero_()
+        trajectories = [
+            np.load(Path(record["dir"]) / "trajectory_xt.npy") for record in records
+        ]
+        with torch.no_grad():
+            for snapshot_index, timestep_raw in enumerate(timestamps):
+                timestep = int(timestep_raw)
+                states = torch.cat(
+                    [
+                        torch.from_numpy(trajectory[snapshot_index]).to(
+                            device=device, dtype=torch.float32
+                        )
+                        for trajectory in trajectories
+                    ],
+                    dim=0,
                 )
-    clean = np.stack(clean_banks, axis=0)
+                t_batch = torch.full(
+                    (len(records),), timestep, device=device, dtype=torch.long
+                )
+                predicted_noise = model(states, t_batch, conditions)
+                alpha_bar = schedule.alpha_bars[timestep]
+                predicted_clean = (
+                    states - torch.sqrt(1.0 - alpha_bar) * predicted_noise
+                ) / torch.sqrt(alpha_bar)
+                clean[snapshot_index, list(query_ids)] = predicted_clean.cpu().numpy()
+                if snapshot_index == 0 or (snapshot_index + 1) % 10 == 0:
+                    print(
+                        f"[diagonal-clean] family={family} "
+                        f"snapshot={snapshot_index+1}/100 t={timestep} "
+                        f"range=[{predicted_clean.min().item():.4g},"
+                        f"{predicted_clean.max().item():.4g}]",
+                        flush=True,
+                    )
+        del model, trajectories, conditions
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
     DIAGONAL_CLEAN_CACHE_DIR.mkdir(parents=True, exist_ok=True)
     atomic_numpy(DIAGONAL_CLEAN_CACHE_DIR / "predicted_clean.npy", clean)
     atomic_numpy(
@@ -95,7 +107,7 @@ def main():
         json.dump(
             {
                 "query_ids": list(DIAGONAL_CLEAN_QUERY_IDS),
-                "family": DIAGONAL_CLEAN_FAMILY,
+                "families": list(DIAGONAL_CLEAN_FAMILIES),
                 "snapshot_indices": list(range(100)),
                 "trajectory_timesteps": [int(value) for value in timestamps],
                 "definition": (
@@ -104,7 +116,7 @@ def main():
                 ),
                 "pairing": "predicted clean from snapshot k is scored only at its own noise level k",
                 "parameter_source": "final EMA",
-                "checkpoint_epoch": int(checkpoint.get("epoch", EPOCHS)),
+                "checkpoint_epochs": checkpoint_epochs,
                 "shape": list(clean.shape),
             },
             handle,

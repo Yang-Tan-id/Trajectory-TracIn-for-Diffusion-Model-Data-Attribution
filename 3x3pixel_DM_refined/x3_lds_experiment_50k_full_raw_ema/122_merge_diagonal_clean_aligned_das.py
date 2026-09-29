@@ -13,28 +13,39 @@ def main():
     parser.add_argument("--timestamp-shard-count", type=int, default=4)
     args = parser.parse_args()
     totals = {
-        float(lam): np.zeros(
-            (len(DIAGONAL_CLEAN_QUERY_IDS), N_TRAIN), dtype=np.float64
-        )
+        float(lam): np.zeros((100, N_TRAIN), dtype=np.float64)
         for lam in DAS_LAMBDAS
     }
-    covered = []
     term_count = 0
     metadata = []
-    for shard_index in range(args.timestamp_shard_count):
-        root = diagonal_clean_shard_root(shard_index, args.timestamp_shard_count)
-        with open(root / "done.json") as handle:
-            info = json.load(handle)
-        metadata.append(info)
-        if info["query_ids"] != list(DIAGONAL_CLEAN_QUERY_IDS):
-            raise ValueError(f"query IDs differ in {root}")
-        covered.extend(int(value) for value in info["snapshot_indices"])
-        term_count += int(info["term_count"])
-        for lam in DAS_LAMBDAS:
-            totals[float(lam)] += np.load(root / f"lambda_{lambda_tag(lam)}.npy")
-    if sorted(covered) != list(range(100)):
-        raise ValueError("timestamp shards do not cover snapshot indices 0..99")
-    expected_terms = 100 * int(DAS_NUM_MC)
+    for family in DIAGONAL_CLEAN_FAMILIES:
+        covered = []
+        query_ids = list(diagonal_clean_query_ids(family))
+        family_terms = 0
+        for shard_index in range(args.timestamp_shard_count):
+            root = diagonal_clean_shard_root(
+                family, shard_index, args.timestamp_shard_count
+            )
+            with open(root / "done.json") as handle:
+                info = json.load(handle)
+            metadata.append(info)
+            if info["query_ids"] != query_ids or info["family"] != family:
+                raise ValueError(f"query/family mismatch in {root}")
+            covered.extend(int(value) for value in info["snapshot_indices"])
+            family_terms += int(info["term_count"])
+            for lam in DAS_LAMBDAS:
+                totals[float(lam)][query_ids] += np.load(
+                    root / f"lambda_{lambda_tag(lam)}.npy"
+                )
+        if sorted(covered) != list(range(100)):
+            raise ValueError(f"{family} shards do not cover snapshot indices 0..99")
+        expected_family_terms = 100 * int(DAS_NUM_MC)
+        if family_terms != expected_family_terms:
+            raise ValueError(
+                f"{family} term_count={family_terms}, expected={expected_family_terms}"
+            )
+        term_count += family_terms
+    expected_terms = len(DIAGONAL_CLEAN_FAMILIES) * 100 * int(DAS_NUM_MC)
     if term_count != expected_terms:
         raise ValueError(f"term_count={term_count}, expected={expected_terms}")
 
@@ -51,7 +62,10 @@ def main():
                 / f"lambda_{lambda_tag(lam)}"
             )
             output.mkdir(parents=True, exist_ok=True)
-            np.save(output / "scores.npy", values[position] / expected_terms)
+            np.save(
+                output / "scores.npy",
+                values[position] / (100 * int(DAS_NUM_MC)),
+            )
             with open(output / "info.json", "w") as handle:
                 json.dump(
                     {
@@ -79,7 +93,7 @@ def main():
                     handle,
                     indent=2,
                 )
-    print(f"[saved] {DIAGONAL_CLEAN_METHOD} q00-q09 all lambdas", flush=True)
+    print(f"[saved] {DIAGONAL_CLEAN_METHOD} q00-q99 all lambdas", flush=True)
 
 
 if __name__ == "__main__":

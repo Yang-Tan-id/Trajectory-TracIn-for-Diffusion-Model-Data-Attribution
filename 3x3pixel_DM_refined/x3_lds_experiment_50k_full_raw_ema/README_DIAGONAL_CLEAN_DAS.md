@@ -13,10 +13,10 @@ output probe for that `(k, MC)` term.  The final attribution is the mean of the
 100 timestamp by MC10 squared DAS terms.  CountSketch4096, projected-gradient
 normalization, final EMA parameters, and the full lambda sweep are retained.
 
-Run q00-q09 on GPUs 4-7 with the requested feature batch size:
+Run q00-q99 on GPUs 4-7 with the requested feature batch size:
 
 ```bash
-python -u 123_launch_diagonal_clean_aligned_das_10q_4gpu.py \
+python -u 125_launch_diagonal_clean_aligned_das_100q_4gpu.py \
   --gpus 4,5,6,7 \
   --batch-size 2560
 ```
@@ -24,11 +24,11 @@ python -u 123_launch_diagonal_clean_aligned_das_10q_4gpu.py \
 Then evaluate LDS:
 
 ```bash
-python -u 124_eval_diagonal_clean_aligned_das_10q_lds.py
+python -u 126_eval_diagonal_clean_aligned_das_100q_lds.py
 ```
 
 The LDS sweep is saved to:
 
 ```text
-x3_lds_exp_50k/lds/diagonal_clean_aligned_das_10q_lambda_sweep.json
+x3_lds_exp_50k/lds/diagonal_clean_aligned_das_100q_lambda_sweep.json
 ```
