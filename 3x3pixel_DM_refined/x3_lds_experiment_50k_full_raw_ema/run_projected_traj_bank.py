@@ -72,6 +72,17 @@ def parse_pair_indices(value, pair_count):
     return indices
 
 
+def parse_query_ids(value):
+    if value is None:
+        return None
+    query_ids = [int(item.strip()) for item in value.split(",") if item.strip()]
+    if not query_ids:
+        raise ValueError("--query-ids must contain at least one query ID")
+    if len(query_ids) != len(set(query_ids)):
+        raise ValueError("--query-ids contains duplicates")
+    return query_ids
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--family", choices=FAMILIES, required=True)
@@ -88,6 +99,15 @@ def main():
         help="comma-separated positions in the direction-specific list of 49 pairs",
     )
     parser.add_argument("--first-order-only", action="store_true")
+    parser.add_argument("--query-ids", help="comma-separated query IDs to score")
+    parser.add_argument(
+        "--exclude-endpoint",
+        action="store_true",
+        help="exclude trajectory index 99 (the final generated x0 state)",
+    )
+    parser.add_argument(
+        "--batch-size", type=int, default=TRACIN_PROJECTED_BATCH_SIZE
+    )
     parser.add_argument(
         "--output-suffix",
         default="",
@@ -100,10 +120,21 @@ def main():
         raise ValueError("--timestamp-shard-count must be positive")
     if not 0 <= args.timestamp_shard_index < args.timestamp_shard_count:
         raise ValueError("timestamp shard index is outside the shard count")
+    if args.batch_size <= 0:
+        raise ValueError("--batch-size must be positive")
     device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
 
     with open(QUERY_DIR / "manifest.json") as handle:
         records = [r for r in json.load(handle) if r["family"] == args.family]
+    requested_query_ids = parse_query_ids(args.query_ids)
+    if requested_query_ids is not None:
+        by_id = {int(record["query_id"]): record for record in records}
+        missing = [query_id for query_id in requested_query_ids if query_id not in by_id]
+        if missing:
+            raise ValueError(
+                f"queries {missing} do not belong to family={args.family}"
+            )
+        records = [by_id[query_id] for query_id in requested_query_ids]
     if not records or (
         args.timestamp_shard_count == 1
         and family_complete(
@@ -129,9 +160,12 @@ def main():
     t_seq = timestep_arrays[0]
     if len(t_seq) != 100 or any(not np.array_equal(t_seq, values) for values in timestep_arrays):
         raise ValueError("all bank queries must share the same 100 trajectory timestamps")
-    selected_timestamp_indices = list(
-        range(args.timestamp_shard_index, len(t_seq), args.timestamp_shard_count)
-    )
+    included_timestamp_indices = list(range(len(t_seq)))
+    if args.exclude_endpoint:
+        included_timestamp_indices.remove(len(t_seq) - 1)
+    selected_timestamp_indices = included_timestamp_indices[
+        args.timestamp_shard_index :: args.timestamp_shard_count
+    ]
     shard_namespace = (
         "_projected_traj_shards"
         if args.checkpoint_direction == "forward"
@@ -153,10 +187,10 @@ def main():
 
     q_count = len(records)
     d = int(TRACIN_PROJ_DIM)
-    batch_size = int(TRACIN_PROJECTED_BATCH_SIZE)
+    batch_size = int(args.batch_size)
     mc_count = int(TRACIN_TRAIN_MC)
     coefficient = float(TRACIN_SECOND_ORDER_COEFFICIENT)
-    snap_weight = 1.0 / len(t_seq)
+    snap_weight = 1.0 / len(included_timestamp_indices)
     orders = (
         ("first",)
         if args.first_order_only or args.checkpoint_direction == "backward"
@@ -339,6 +373,9 @@ def main():
                     "timestamp_shard_index": args.timestamp_shard_index,
                     "timestamp_shard_count": args.timestamp_shard_count,
                     "timestamp_indices": selected_timestamp_indices,
+                    "included_timestamp_indices": included_timestamp_indices,
+                    "exclude_endpoint": args.exclude_endpoint,
+                    "timestamp_weight": snap_weight,
                     "query_ids": [int(record["query_id"]) for record in records],
                 },
                 handle,
@@ -371,7 +408,12 @@ def main():
                     "first_order_only": args.first_order_only,
                     "output_suffix": args.output_suffix,
                     "param_source": "raw", "projection": "countsketch",
-                    "proj_dim": d, "num_snapshots": 100, "train_mc": mc_count,
+                    "proj_dim": d,
+                    "num_snapshots": len(included_timestamp_indices),
+                    "excluded_endpoint": args.exclude_endpoint,
+                    "included_timestamp_indices": included_timestamp_indices,
+                    "timestamp_weight": snap_weight,
+                    "train_mc": mc_count,
                     "contraction": contraction, "lr_weighted": TRACIN_USE_LR_WEIGHTS,
                     "second_order_coefficient": coefficient if order == "second" else 0.0,
                     "second_order_direction": "next_checkpoint_parameter_delta" if order == "second" else "disabled",

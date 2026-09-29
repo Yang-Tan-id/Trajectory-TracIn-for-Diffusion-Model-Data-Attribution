@@ -21,6 +21,8 @@ def main():
     parser.add_argument("--checkpoint-pair-indices")
     parser.add_argument("--first-order-only", action="store_true")
     parser.add_argument("--output-suffix", default="")
+    parser.add_argument("--query-ids")
+    parser.add_argument("--exclude-endpoint", action="store_true")
     args = parser.parse_args()
     if args.output_suffix and not re.fullmatch(
         r"[A-Za-z0-9_]+", args.output_suffix
@@ -38,6 +40,17 @@ def main():
 
     with open(QUERY_DIR / "manifest.json") as handle:
         records = [r for r in json.load(handle) if r["family"] == args.family]
+    if args.query_ids is not None:
+        query_ids = [
+            int(item.strip()) for item in args.query_ids.split(",") if item.strip()
+        ]
+        by_id = {int(record["query_id"]): record for record in records}
+        missing = [query_id for query_id in query_ids if query_id not in by_id]
+        if missing:
+            raise ValueError(
+                f"queries {missing} do not belong to family={args.family}"
+            )
+        records = [by_id[query_id] for query_id in query_ids]
     shard_namespace = (
         "_projected_traj_shards"
         if args.checkpoint_direction == "forward"
@@ -66,6 +79,8 @@ def main():
             raise ValueError(f"first-order mode mismatch in {shard}")
         if metadata.get("output_suffix", "") != args.output_suffix:
             raise ValueError(f"output suffix mismatch in {shard}")
+        if metadata.get("exclude_endpoint", False) != args.exclude_endpoint:
+            raise ValueError(f"endpoint exclusion mismatch in {shard}")
         if expected_pair_indices is not None and metadata.get(
             "checkpoint_pair_indices"
         ) != expected_pair_indices:
@@ -76,8 +91,12 @@ def main():
                 key = (order, contraction)
                 value = np.load(shard / f"{order}_{contraction}.npy")
                 arrays[key] = value if key not in arrays else arrays[key] + value
-    if sorted(covered_timestamps) != list(range(100)):
-        raise ValueError(f"timestamp shards do not cover 0..99 exactly: {covered_timestamps}")
+    expected_timestamps = list(range(99 if args.exclude_endpoint else 100))
+    if sorted(covered_timestamps) != expected_timestamps:
+        raise ValueError(
+            f"timestamp shards do not cover {expected_timestamps} exactly: "
+            f"{covered_timestamps}"
+        )
 
     for qi, record in enumerate(records):
         for (order, contraction), values in arrays.items():
@@ -116,6 +135,9 @@ def main():
                             else "previous_checkpoint"
                         ),
                         "merged_timestamp_indices": sorted(covered_timestamps),
+                        "excluded_endpoint": args.exclude_endpoint,
+                        "num_snapshots": len(expected_timestamps),
+                        "timestamp_weight": 1.0 / len(expected_timestamps),
                     },
                     handle,
                     indent=2,
