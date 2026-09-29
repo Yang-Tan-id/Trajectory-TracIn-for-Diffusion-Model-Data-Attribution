@@ -114,12 +114,22 @@ def main():
         f"[multiclean-das gpu={args.gpu}] family={args.family} "
         f"queries=q{query_ids[0]:02d}-q{query_ids[-1]:02d} anchors=10 "
         f"timestamps={len(selected)}/100 mc={DAS_NUM_MC} batch={args.batch_size} "
-        f"projection={dimension} aligned=true train_reused_across_anchors=true",
+        f"projection={dimension} aligned=true triangular=true "
+        f"train_reused_across_anchors=true",
         flush=True,
     )
 
     for timestamp_index in selected:
         timestep = int(DAS_TIMESTEPS[timestamp_index])
+        eligible_anchor_indices = [
+            anchor_index
+            for anchor_index, timestamp_count in enumerate(
+                MULTICLEAN_ANCHOR_DAS_COUNTS
+            )
+            if timestamp_index < timestamp_count
+        ]
+        if not eligible_anchor_indices:
+            raise RuntimeError(f"no anchor covers DAS timestamp {timestamp_index}")
         t_query = torch.tensor([timestep], device=device, dtype=torch.long)
         for mc_index in range(int(DAS_NUM_MC)):
             specs = build_countsketch_specs(
@@ -158,11 +168,13 @@ def main():
                 return (prediction * probe_single).sum() / scalar_denominator
 
             batched_gradient = vmap(grad(single_scalar), in_dims=(None, 0, 0))
-            query_x = clean[:, list(query_ids)].reshape(
-                MULTICLEAN_ANCHOR_COUNT * len(query_ids), *clean.shape[2:]
+            query_x = clean[eligible_anchor_indices][:, list(query_ids)].reshape(
+                len(eligible_anchor_indices) * len(query_ids), *clean.shape[2:]
             )
             query_c = condition_bank.unsqueeze(0).expand(
-                MULTICLEAN_ANCHOR_COUNT, len(query_ids), condition_bank.shape[-1]
+                len(eligible_anchor_indices),
+                len(query_ids),
+                condition_bank.shape[-1],
             ).reshape(-1, condition_bank.shape[-1])
             query_feature_parts = []
             for query_start in range(0, query_x.shape[0], 25):
@@ -262,11 +274,23 @@ def main():
                     )
                     raw /= denominator.unsqueeze(1)
                 per_anchor = raw.T.reshape(
-                    MULTICLEAN_ANCHOR_COUNT,
+                    len(eligible_anchor_indices),
                     len(query_ids),
                     N_TRAIN,
                 )
-                scores[lam] += per_anchor.square().sum(dim=0)
+                anchor_weights = torch.tensor(
+                    [
+                        1.0
+                        / (
+                            float(MULTICLEAN_ANCHOR_DAS_COUNTS[anchor_index])
+                            * float(DAS_NUM_MC)
+                        )
+                        for anchor_index in eligible_anchor_indices
+                    ],
+                    device=device,
+                    dtype=torch.float64,
+                ).view(-1, 1, 1)
+                scores[lam] += (per_anchor.square() * anchor_weights).sum(dim=0)
 
             completed_terms += 1
             elapsed = time.perf_counter() - started
@@ -279,7 +303,7 @@ def main():
             del specs, output_probe, aligned_noise, query_features
             del query_x, query_c, query_feature_parts, query_gradients
             del feature_cache, residual_cache, gram, eye, solved_queries, raw
-            del per_anchor, gradients, features, batched_gradient
+            del per_anchor, anchor_weights, gradients, features, batched_gradient
             if DAS_USE_SM_DENOMINATOR:
                 del solved_train, denominator
             if torch.cuda.is_available():
@@ -295,12 +319,22 @@ def main():
             "family": args.family,
             "query_ids": list(query_ids),
             "anchor_indices": list(MULTICLEAN_ANCHOR_INDICES),
+            "anchor_das_timestamp_counts": list(MULTICLEAN_ANCHOR_DAS_COUNTS),
             "anchor_count": MULTICLEAN_ANCHOR_COUNT,
-            "anchor_reduction": "sum of per-anchor squared DAS scores",
+            "anchor_reduction": (
+                "sum of independently timestamp-and-MC-averaged per-anchor "
+                "squared DAS scores"
+            ),
             "timestamp_indices": selected,
             "timestamps": [int(DAS_TIMESTEPS[index]) for index in selected],
             "num_mc_per_timestamp": int(DAS_NUM_MC),
             "term_count": total_terms,
+            "effective_anchor_timestamp_count": sum(
+                1
+                for timestamp_index in selected
+                for timestamp_count in MULTICLEAN_ANCHOR_DAS_COUNTS
+                if timestamp_index < timestamp_count
+            ),
             "parameter_source": "final EMA",
             "projection_dim": dimension,
             "normalize_projected_grads": normalize,

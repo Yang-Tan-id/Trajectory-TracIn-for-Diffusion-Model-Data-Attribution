@@ -15,8 +15,12 @@ def main():
         "query_ids": list(MULTICLEAN_QUERY_IDS),
         "query_count": len(MULTICLEAN_QUERY_IDS),
         "anchor_snapshot_indices": list(MULTICLEAN_ANCHOR_INDICES),
+        "anchor_das_timestamp_counts": list(MULTICLEAN_ANCHOR_DAS_COUNTS),
         "anchor_count": MULTICLEAN_ANCHOR_COUNT,
-        "anchor_reduction": "sum of per-anchor squared DAS scores",
+        "anchor_reduction": (
+            "sum of independently timestamp-and-MC-averaged per-anchor squared "
+            "DAS scores"
+        ),
         "das_timestamp_count": len(DAS_TIMESTEPS),
         "das_mc": int(DAS_NUM_MC),
         "lambdas": [float(value) for value in DAS_LAMBDAS],
@@ -62,7 +66,7 @@ def main():
                 flush=True,
             )
         output["results"][lambda_tag(lam)] = lambda_result
-    path = LDS_DIR / "multiclean_aligned_das_100q_lambda_sweep.json"
+    path = LDS_DIR / "multiclean_triangular_aligned_das_100q_lambda_sweep.json"
     with open(path, "w") as handle:
         json.dump(output, handle, indent=2)
     print(f"[saved] {path}", flush=True)

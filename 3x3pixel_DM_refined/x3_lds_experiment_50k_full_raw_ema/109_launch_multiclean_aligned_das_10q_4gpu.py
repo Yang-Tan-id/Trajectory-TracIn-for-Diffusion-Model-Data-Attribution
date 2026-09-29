@@ -19,7 +19,7 @@ def main():
     if len(gpus) != 4 or len(set(gpus)) != 4:
         raise ValueError("--gpus must contain exactly four distinct GPU ids")
     LOG_DIR.mkdir(parents=True, exist_ok=True)
-    log_path = LOG_DIR / "multiclean_aligned_das_100q_4gpu.log"
+    log_path = LOG_DIR / "multiclean_triangular_aligned_das_100q_4gpu.log"
     active = {}
     with open(log_path, "a", buffering=1) as stream:
         subprocess.run(
@@ -35,8 +35,9 @@ def main():
             check=True,
         )
         stream.write(
-            "\n[launcher] q00-q99 predicted-clean 10-anchor aligned DAS; "
-            "100 DAS timestamps, MC10, all lambdas, train pass reused\n"
+            "\n[launcher] q00-q99 predicted-clean 10-anchor triangular aligned DAS; "
+            "anchors use 10,20,...,100 timestamps, MC10, all lambdas, "
+            "train pass reused\n"
         )
         stream.write(
             f"[launcher] gpus={gpus} feature_batch_size={args.batch_size}\n"
@@ -98,7 +99,10 @@ def main():
             stderr=subprocess.STDOUT,
             check=True,
         )
-    print("[done] predicted-clean 10-anchor aligned DAS q00-q99", flush=True)
+    print(
+        "[done] predicted-clean 10-anchor triangular aligned DAS q00-q99",
+        flush=True,
+    )
 
 
 if __name__ == "__main__":

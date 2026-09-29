@@ -36,6 +36,10 @@ def main():
                 raise ValueError(f"query IDs differ in {root}")
             if info["anchor_indices"] != list(MULTICLEAN_ANCHOR_INDICES):
                 raise ValueError(f"anchor indices differ in {root}")
+            if info["anchor_das_timestamp_counts"] != list(
+                MULTICLEAN_ANCHOR_DAS_COUNTS
+            ):
+                raise ValueError(f"anchor DAS timestamp counts differ in {root}")
             covered_by_family[family].extend(
                 int(value) for value in info["timestamp_indices"]
             )
@@ -70,7 +74,7 @@ def main():
                 / f"lambda_{lambda_tag(lam)}"
             )
             output.mkdir(parents=True, exist_ok=True)
-            np.save(output / "scores.npy", values[position] / expected_terms)
+            np.save(output / "scores.npy", values[position])
             with open(output / "info.json", "w") as handle:
                 json.dump(
                     {
@@ -78,8 +82,14 @@ def main():
                         "method": MULTICLEAN_METHOD,
                         "lambda": lam,
                         "anchor_snapshot_indices": list(MULTICLEAN_ANCHOR_INDICES),
+                        "anchor_das_timestamp_counts": list(
+                            MULTICLEAN_ANCHOR_DAS_COUNTS
+                        ),
                         "anchor_count": MULTICLEAN_ANCHOR_COUNT,
-                        "anchor_reduction": "sum of per-anchor squared DAS scores",
+                        "anchor_reduction": (
+                            "sum of independently timestamp-and-MC-averaged "
+                            "per-anchor squared DAS scores"
+                        ),
                         "clean_definition": (
                             "x0_hat=(x_k-sqrt(1-alpha_bar_k)*eps_ema(x_k,k))"
                             "/sqrt(alpha_bar_k)"
@@ -87,6 +97,10 @@ def main():
                         "parameter_source": "final EMA",
                         "projection_dim": int(DAS_PROJ_DIM),
                         "das_timestamps": [int(value) for value in DAS_TIMESTEPS],
+                        "anchor_timestamp_rule": (
+                            "anchor j=1..10 uses DAS timestamp indices "
+                            "0..(10*j-1)"
+                        ),
                         "num_mc": int(DAS_NUM_MC),
                         "normalize_projected_grads": bool(
                             DAS_NORMALIZE_PROJECTED_GRADS

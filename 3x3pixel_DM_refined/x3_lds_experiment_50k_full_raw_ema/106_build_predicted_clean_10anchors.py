@@ -45,6 +45,9 @@ def main():
         not np.array_equal(t_seq, values) for values in timestep_arrays
     ):
         raise ValueError("reference trajectory timestamp banks differ")
+    anchor_timesteps = [int(t_seq[index]) for index in MULTICLEAN_ANCHOR_INDICES]
+    if anchor_timesteps != sorted(anchor_timesteps):
+        raise ValueError(f"anchor timesteps must increase: {anchor_timesteps}")
 
     sample_trajectory = np.load(Path(by_id[0]["dir"]) / "trajectory_xt.npy")
     clean = np.empty(
@@ -115,9 +118,8 @@ def main():
                 "query_ids": list(MULTICLEAN_QUERY_IDS),
                 "families": list(MULTICLEAN_FAMILIES),
                 "anchor_snapshot_indices": list(MULTICLEAN_ANCHOR_INDICES),
-                "anchor_timesteps": [
-                    int(t_seq[index]) for index in MULTICLEAN_ANCHOR_INDICES
-                ],
+                "anchor_timesteps": anchor_timesteps,
+                "anchor_das_timestamp_counts": list(MULTICLEAN_ANCHOR_DAS_COUNTS),
                 "definition": (
                     "x0_hat=(x_k-sqrt(1-alpha_bar_k)*eps_ema(x_k,k))"
                     "/sqrt(alpha_bar_k)"
