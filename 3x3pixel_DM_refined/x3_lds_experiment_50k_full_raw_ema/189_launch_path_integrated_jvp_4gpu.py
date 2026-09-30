@@ -135,6 +135,7 @@ def analyze():
         "definition": {
             "target": "finite predicted-noise change vector at one fixed endpoint, pollution direction, timestep, and prompt",
             "parameter_path": "theta(s)=theta+s*Delta-theta for the exact saved fresh-SGD parameter delta",
+            "precision_mode": PIJVP_PRECISION_MODE,
             "selection": {
                 "directions": list(PIJVP_DIRECTION_INDICES),
                 "timestamps": list(PIJVP_TIMESTAMPS),
@@ -157,6 +158,7 @@ def analyze():
         json.dump(output, handle, indent=2)
 
     print("\nfixed-point predicted-noise change prediction")
+    print(f"precision={PIJVP_PRECISION_MODE}")
     print(
         "method                    pooled-rho  dir-rho  fixed-t-rho  "
         "mag-ratio  mag-relerr  vector-relerr  vector-cos  branch-rho"

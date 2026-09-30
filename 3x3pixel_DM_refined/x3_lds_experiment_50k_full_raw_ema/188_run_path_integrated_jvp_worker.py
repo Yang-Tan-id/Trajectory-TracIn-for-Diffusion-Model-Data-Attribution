@@ -3,10 +3,12 @@
 import argparse
 import importlib
 import json
+import math
 import time
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from torch.func import functional_call, jvp
 
 import x3pixel_DM_training as base
@@ -26,6 +28,46 @@ def quadrature(order):
 
 GAUSS2 = quadrature(2)
 GAUSS4 = quadrature(4)
+
+
+def configure_high_precision():
+    """Make tiny finite parameter differences numerically meaningful."""
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = False
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
+    torch.set_float32_matmul_precision("highest")
+
+    # The training helper hard-codes float32 in its sinusoidal embedding.  This
+    # dtype-aware replacement lets the otherwise identical model run in float64.
+    def float64_time_embedding(t, dim):
+        half = dim // 2
+        frequencies = torch.exp(
+            -math.log(10000)
+            * torch.arange(0, half, device=t.device, dtype=torch.float64)
+            / (half - 1)
+        )
+        arguments = t.to(torch.float64).unsqueeze(1) * frequencies.unsqueeze(0)
+        embedding = torch.cat(
+            (torch.sin(arguments), torch.cos(arguments)), dim=1
+        )
+        if dim % 2 == 1:
+            embedding = F.pad(embedding, (0, 1))
+        return embedding
+
+    base.sinusoidal_time_embedding = float64_time_embedding
+
+
+def schedule_to_float64(schedule):
+    for name in (
+        "betas",
+        "alphas",
+        "alpha_bars",
+        "sqrt_alpha_bars",
+        "sqrt_one_minus_alpha_bars",
+    ):
+        setattr(schedule, name, getattr(schedule, name).double())
+    return schedule
 
 
 def point_metrics(predicted, actual):
@@ -164,14 +206,18 @@ def run_source(source_index, dataset, checkpoint, schedule, device, batch_size):
         )
         return
     target_image, target_condition = dataset[int(target_index)]
-    target_x0 = target_image.unsqueeze(0).to(device)
-    target_condition = target_condition.unsqueeze(0).to(device)
-    baseline = shared.make_model(dataset, checkpoint["model_state"], device)
+    target_x0 = target_image.unsqueeze(0).to(device=device, dtype=torch.float64)
+    target_condition = target_condition.unsqueeze(0).to(
+        device=device, dtype=torch.float64
+    )
+    baseline = shared.make_model(dataset, checkpoint["model_state"], device).double()
     names = tuple(name for name, _ in baseline.named_parameters())
     parameters = tuple(parameter.detach() for parameter in baseline.parameters())
     edmc_dir = edmc_source_dir(source_index)
     with np.load(edmc_dir / "block_0_responses.npz", allow_pickle=False) as archive:
-        directions = torch.from_numpy(archive["directions"]).to(device=device)
+        directions = torch.from_numpy(archive["directions"]).to(
+            device=device, dtype=torch.float64
+        )
     fresh_dir = ntcd_source_dir(source_index, "fresh_sgd")
     with open(fresh_dir / "result.json") as handle:
         fresh_result = json.load(handle)
@@ -227,6 +273,7 @@ def run_source(source_index, dataset, checkpoint, schedule, device, batch_size):
             "fixed_target_direction_count": PIJVP_DIRECTION_COUNT,
             "fixed_target_timestamp_count": PIJVP_TIMESTAMP_COUNT,
             "methods": list(PIJVP_METHODS),
+            "precision_mode": PIJVP_PRECISION_MODE,
             "blocks": blocks,
             "elapsed_seconds": time.perf_counter() - started,
         },
@@ -242,13 +289,14 @@ def main():
     args = parser.parse_args()
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is required")
+    configure_high_precision()
     device = torch.device(f"cuda:{args.gpu}")
     torch.cuda.set_device(device)
     dataset = ColorGridDataset(str(BASE_CSV), grid_size=3)
     checkpoint = torch.load(
         nsdl_checkpoint_path(), map_location="cpu", weights_only=False
     )
-    schedule = base.make_linear_schedule(T, device=device)
+    schedule = schedule_to_float64(base.make_linear_schedule(T, device=device))
     for source_index in nsdl_datapoint_indices()[
         args.shard_index :: args.shard_count
     ]:

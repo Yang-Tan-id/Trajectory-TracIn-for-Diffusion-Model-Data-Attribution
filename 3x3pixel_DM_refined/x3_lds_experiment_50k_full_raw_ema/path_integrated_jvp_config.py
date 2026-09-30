@@ -17,7 +17,8 @@ PIJVP_TIMESTAMPS = tuple(
     int(value)
     for value in np.linspace(0, T - 1, PIJVP_TIMESTAMP_COUNT, dtype=np.int64)
 )
-PIJVP_DEFAULT_BATCH_SIZE = 512
+PIJVP_DEFAULT_BATCH_SIZE = 256
+PIJVP_PRECISION_MODE = "float64_no_tf32"
 PIJVP_METHODS = (
     "start_jvp",
     "second_order_taylor",
@@ -25,7 +26,7 @@ PIJVP_METHODS = (
     "gauss2_path_jvp",
     "gauss4_path_jvp",
 )
-PIJVP_ROOT = ROOT / "path_integrated_jvp_fresh_sgd_20dir_100t"
+PIJVP_ROOT = ROOT / "path_integrated_jvp_fresh_sgd_20dir_100t_float64"
 PIJVP_SOURCE_DIR = PIJVP_ROOT / "sources"
 PIJVP_LOG_DIR = PIJVP_ROOT / "logs"
 PIJVP_SUMMARY_PATH = PIJVP_ROOT / "summary.json"
