@@ -57,3 +57,17 @@ x3_lds_exp_50k/attribution/
 and evaluates both signs against all eight existing LDS targets. To run all
 100 queries, use `--query-ids 0-99`; prompted and unprompted families run as
 two sequential four-GPU phases.
+
+## Full-model-centered post-hoc LDS
+
+The observed trajectory-reference metrics compare each subset model with the
+full-data model. After the main run, evaluate the corresponding complement
+bundle without rerunning attribution:
+
+```bash
+python -u 202_eval_bundle_tracin_complement_lds.py --query-ids 0-9
+```
+
+It estimates `A_D` as `mean_S(A_S) / 0.25` and evaluates
+`mean_t ||A_D - A_S||^2`. This is an approximation because the original run
+did not save an exact independently accumulated full-data vector.
