@@ -31,6 +31,15 @@ Results can be re-analyzed without GPU work:
 python -u 180_launch_endpoint_direction_mc_4gpu.py --analyze-only
 ```
 
+For a stricter assessment of whether direction variation is genuinely small,
+including tolerance coverage, 95%/99% deviation bands, worst-timestep behavior,
+source-cluster bootstrap confidence intervals, and separate L2/squared-L2
+results, run:
+
+```bash
+python -u 184_quantify_endpoint_direction_variation.py
+```
+
 Summary:
 
 ```text
