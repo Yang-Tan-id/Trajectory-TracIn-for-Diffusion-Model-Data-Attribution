@@ -33,8 +33,12 @@ python 198_verify_bundle_tracin.py
 python -u 201_launch_bundle_tracin_4gpu.py \
   --gpus 0,1,2,3 \
   --query-ids 0-9 \
-  --batch-size 1280
+  --batch-size 128
 ```
+
+This worker materializes MC10 per-example gradients before projection, so its
+memory use is higher than the earlier MC1 projected runs. Start at 128 on a
+24-GB A5000; if utilization and memory allow, increase to 256 or 512.
 
 The launcher is restartable at checkpoint-shard granularity. It saves:
 
