@@ -78,7 +78,11 @@ def main():
     }
 
     print("parameter-space scalar calibration by checkpoint pair", flush=True)
-    print("pair  method                                      alpha       param-cos", flush=True)
+    print(
+        "pair  method                                      alpha       "
+        "param-cos  response-cos  calibrated-ratio",
+        flush=True,
+    )
     for pair_index in pair_indices:
         array_path = root / args.family / f"pair_{pair_index:02d}.npz"
         metadata_path = root / args.family / f"pair_{pair_index:02d}.json"
@@ -129,7 +133,9 @@ def main():
                 pooled[method][key].append(value)
             print(
                 f"{pair_index:02d}    {method:44s} "
-                f"{alpha:+.6e}  {parameter_cosine:+.6f}",
+                f"{alpha:+.6e}  {parameter_cosine:+.6f}  "
+                f"{pair_output[method]['calibrated_vector_cosine_mean']:+.6f}  "
+                f"{pair_output[method]['calibrated_magnitude_ratio']:.6f}",
                 flush=True,
             )
         output["pairs"][str(pair_index)] = pair_output

@@ -56,6 +56,21 @@ This performs no moving-model gradient replay. Its output is isolated under:
 x3_lds_exp_50k/checkpoint_endpoint_adam_diagnostic_mc20_10q_100t/
 ```
 
+To test every adjacent checkpoint pair, the same launcher maintains a dynamic
+four-GPU queue (one pair per GPU at a time):
+
+```bash
+python -u 207_launch_checkpoint_endpoint_adam_diagnostic_4gpu.py \
+  --gpus 0,1,2,3 \
+  --pair-indices 0-48 \
+  --family prompted \
+  --query-ids 0-9 \
+  --loss-mc 1
+```
+
+Once the pair files exist, `--analyze-only` recomputes the 49-pair aggregate
+without launching GPU workers.
+
 After either run, fit one parameter-space scalar per checkpoint pair and
 frozen-gradient method without rerunning the GPU computation:
 

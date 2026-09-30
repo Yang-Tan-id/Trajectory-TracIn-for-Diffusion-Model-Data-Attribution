@@ -90,15 +90,14 @@ def main():
     if args.loss_mc <= 0:
         raise ValueError("--loss-mc must be positive")
     gpus = [int(value) for value in args.gpus.split(",") if value.strip()]
-    if len(pair_indices) > len(gpus):
-        raise ValueError("this launcher assigns at most one selected pair per GPU")
-
     if not args.analyze_only:
         LOG_DIR.mkdir(parents=True, exist_ok=True)
         log_path = LOG_DIR / "checkpoint_endpoint_adam_diagnostic_4gpu.log"
         with open(log_path, "a", buffering=1) as stream:
-            workers = []
-            for pair_index, gpu in zip(pair_indices, gpus):
+            pending = list(pair_indices)
+            active = {}
+
+            def launch(pair_index, gpu):
                 command = [
                     sys.executable,
                     "-u",
@@ -117,23 +116,32 @@ def main():
                     str(args.loss_mc),
                 ]
                 process = subprocess.Popen(command, stdout=stream, stderr=subprocess.STDOUT)
-                workers.append((pair_index, process))
                 print(f"[launcher] pair={pair_index:02d} gpu={gpu} pid={process.pid}", flush=True)
+                active[gpu] = (pair_index, process)
+
+            for gpu in gpus:
+                if not pending:
+                    break
+                launch(pending.pop(0), gpu)
             print(f"[launcher] log={log_path}", flush=True)
-            active = dict(workers)
             while active:
-                for pair_index, process in list(active.items()):
+                for gpu, (pair_index, process) in list(active.items()):
                     code = process.poll()
                     if code is None:
                         continue
-                    del active[pair_index]
-                    print(f"[launcher] pair={pair_index:02d} code={code}", flush=True)
+                    del active[gpu]
+                    print(
+                        f"[launcher] pair={pair_index:02d} gpu={gpu} code={code}",
+                        flush=True,
+                    )
                     if code != 0:
-                        for other in active.values():
+                        for _, other in active.values():
                             other.terminate()
-                        for other in active.values():
+                        for _, other in active.values():
                             other.wait()
                         raise SystemExit(code)
+                    if pending:
+                        launch(pending.pop(0), gpu)
                 if active:
                     time.sleep(1)
     summarize(pair_indices, args.family, args.loss_mc)
