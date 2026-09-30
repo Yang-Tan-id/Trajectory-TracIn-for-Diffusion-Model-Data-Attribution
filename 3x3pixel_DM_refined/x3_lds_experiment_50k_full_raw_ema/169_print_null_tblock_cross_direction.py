@@ -1,13 +1,21 @@
 """Print per-source results for the timestamp-block direction experiment."""
 
+import argparse
 import json
 
 from null_tblock_cross_direction_config import *
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--optimizer-mode",
+        choices=NTCD_OPTIMIZER_MODES,
+        default="restored_adamw",
+    )
+    args = parser.parse_args()
     for source_index in nsdl_datapoint_indices():
-        path = ntcd_source_dir(source_index) / "result.json"
+        path = ntcd_source_dir(source_index, args.optimizer_mode) / "result.json"
         with open(path) as handle:
             result = json.load(handle)
         print(

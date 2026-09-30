@@ -25,6 +25,13 @@ NTCD_ROOT = ROOT / "null_tblock_cross_direction_10source_40models_5targetdirs"
 NTCD_SOURCE_DIR = NTCD_ROOT / "sources"
 NTCD_LOG_DIR = NTCD_ROOT / "logs"
 NTCD_SUMMARY_PATH = NTCD_ROOT / "summary.json"
+NTCD_OPTIMIZER_MODES = (
+    "restored_adamw",
+    "fresh_sgd",
+    "fresh_adamw",
+    "zero_grad_restored_adamw",
+)
+NTCD_CONTROL_ROOT = ROOT / "null_tblock_cross_direction_optimizer_controls"
 
 
 def ntcd_target_index(source_index):
@@ -33,6 +40,28 @@ def ntcd_target_index(source_index):
     return target + int(target >= int(source_index))
 
 
-def ntcd_source_dir(source_index):
+def ntcd_mode_root(optimizer_mode="restored_adamw"):
+    if optimizer_mode not in NTCD_OPTIMIZER_MODES:
+        raise ValueError(optimizer_mode)
+    return (
+        NTCD_ROOT
+        if optimizer_mode == "restored_adamw"
+        else NTCD_CONTROL_ROOT / optimizer_mode
+    )
+
+
+def ntcd_mode_log_dir(optimizer_mode="restored_adamw"):
+    return ntcd_mode_root(optimizer_mode) / "logs"
+
+
+def ntcd_mode_summary_path(optimizer_mode="restored_adamw"):
+    return ntcd_mode_root(optimizer_mode) / "summary.json"
+
+
+def ntcd_source_dir(source_index, optimizer_mode="restored_adamw"):
     target_index = ntcd_target_index(source_index)
-    return NTCD_SOURCE_DIR / f"source_{source_index:05d}_target_{target_index:05d}"
+    return (
+        ntcd_mode_root(optimizer_mode)
+        / "sources"
+        / f"source_{source_index:05d}_target_{target_index:05d}"
+    )

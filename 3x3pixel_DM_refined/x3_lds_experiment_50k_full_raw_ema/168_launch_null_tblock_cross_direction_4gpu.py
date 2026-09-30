@@ -7,7 +7,9 @@ import sys
 import time
 
 import numpy as np
+import torch
 
+from null_same_direction_learning_config import nsdl_checkpoint_path
 from null_tblock_cross_direction_config import *
 
 
@@ -21,15 +23,35 @@ METRICS = (
 )
 
 
+def saved_parameter_delta_norm(updated_model_path, baseline_state):
+    payload = torch.load(
+        updated_model_path, map_location="cpu", weights_only=False
+    )
+    squared = sum(
+        (
+            payload["model_state"][name].double()
+            - baseline_state[name].double()
+        ).square().sum()
+        for name in baseline_state
+    )
+    return float(squared.sqrt())
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--gpus", default="0,1,2,3")
+    parser.add_argument(
+        "--optimizer-mode",
+        choices=NTCD_OPTIMIZER_MODES,
+        default="restored_adamw",
+    )
     args = parser.parse_args()
     gpus = [int(value) for value in args.gpus.split(",") if value.strip()]
     if not gpus:
         raise ValueError("--gpus must contain at least one GPU")
-    NTCD_LOG_DIR.mkdir(parents=True, exist_ok=True)
-    log_path = NTCD_LOG_DIR / "null_tblock_cross_direction_4gpu.log"
+    log_dir = ntcd_mode_log_dir(args.optimizer_mode)
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / "null_tblock_cross_direction_4gpu.log"
     active = []
     with open(log_path, "a", buffering=1) as stream:
         stream.write("\n[launcher] null timestamp-block cross-direction experiment\n")
@@ -44,6 +66,8 @@ def main():
                 str(shard_index),
                 "--shard-count",
                 str(len(gpus)),
+                "--optimizer-mode",
+                args.optimizer_mode,
             ]
             process = subprocess.Popen(
                 command, stdout=stream, stderr=subprocess.STDOUT
@@ -68,13 +92,14 @@ def main():
 
     results = []
     for source_index in nsdl_datapoint_indices():
-        path = ntcd_source_dir(source_index) / "result.json"
+        path = ntcd_source_dir(source_index, args.optimizer_mode) / "result.json"
         if not path.is_file():
             raise FileNotFoundError(path)
         with open(path) as handle:
             results.append(json.load(handle))
     summary = {
         "null_epoch": NSDL_NULL_EPOCH,
+        "optimizer_mode": args.optimizer_mode,
         "source_count": len(results),
         "updated_model_count": len(results) * len(NTCD_TIMESTAMP_BLOCKS),
         "target_direction_count": NTCD_TARGET_DIRECTION_COUNT,
@@ -88,12 +113,30 @@ def main():
         ],
         "blocks": [],
     }
+    baseline_state = torch.load(
+        nsdl_checkpoint_path(), map_location="cpu", weights_only=False
+    )["model_state"]
     for block_index, timestamps in enumerate(NTCD_TIMESTAMP_BLOCKS):
         block_summary = {
             "block_index": block_index,
             "timestamp_start": timestamps[0],
             "timestamp_end": timestamps[-1],
             "metrics": {},
+        }
+        parameter_delta_norms = []
+        for result in results:
+            block = result["blocks"][block_index]
+            value = block["update"].get("parameter_delta_norm")
+            if value is None:
+                value = saved_parameter_delta_norm(
+                    block["updated_model"], baseline_state
+                )
+            parameter_delta_norms.append(float(value))
+        parameter_delta_norms = np.asarray(parameter_delta_norms, dtype=np.float64)
+        block_summary["parameter_delta_norm"] = {
+            "mean": float(parameter_delta_norms.mean()),
+            "std": float(parameter_delta_norms.std()),
+            "per_source": parameter_delta_norms.tolist(),
         }
         for metric in METRICS:
             values = np.asarray(
@@ -106,8 +149,10 @@ def main():
                 "per_source": values.tolist(),
             }
         summary["blocks"].append(block_summary)
-    NTCD_ROOT.mkdir(parents=True, exist_ok=True)
-    with open(NTCD_SUMMARY_PATH, "w") as handle:
+    output_root = ntcd_mode_root(args.optimizer_mode)
+    summary_path = ntcd_mode_summary_path(args.optimizer_mode)
+    output_root.mkdir(parents=True, exist_ok=True)
+    with open(summary_path, "w") as handle:
         json.dump(summary, handle, indent=2)
     print("block       target delta L2        cross-direction delta cosine", flush=True)
     for block in summary["blocks"]:
@@ -119,7 +164,7 @@ def main():
             f"{cosine['mean']:+.6f} ± {cosine['std']:.6f}",
             flush=True,
         )
-    print(f"[saved] {NTCD_SUMMARY_PATH}", flush=True)
+    print(f"[saved] {summary_path}", flush=True)
 
 
 if __name__ == "__main__":

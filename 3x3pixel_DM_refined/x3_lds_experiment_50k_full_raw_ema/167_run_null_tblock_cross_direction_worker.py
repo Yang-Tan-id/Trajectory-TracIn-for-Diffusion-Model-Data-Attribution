@@ -17,6 +17,37 @@ from null_tblock_cross_direction_config import *
 shared = importlib.import_module("148_run_null_same_direction_learning_worker")
 
 
+def make_optimizer_for_mode(model, checkpoint, learning_rate, optimizer_mode):
+    config = checkpoint.get("config", {})
+    clip_norm = float(config.get("grad_clip_norm", GRAD_CLIP))
+    if optimizer_mode in ("restored_adamw", "zero_grad_restored_adamw"):
+        return shared.make_optimizer(model, checkpoint, learning_rate)
+    if optimizer_mode == "fresh_sgd":
+        return torch.optim.SGD(model.parameters(), lr=learning_rate), clip_norm
+    if optimizer_mode == "fresh_adamw":
+        optimizer = torch.optim.AdamW(
+            model.parameters(),
+            lr=learning_rate,
+            betas=(
+                float(config.get("adam_b1", ADAM_B1)),
+                float(config.get("adam_b2", ADAM_B2)),
+            ),
+            eps=float(config.get("adam_eps", ADAM_EPS)),
+            weight_decay=float(config.get("weight_decay", WEIGHT_DECAY)),
+        )
+        return optimizer, clip_norm
+    raise ValueError(optimizer_mode)
+
+
+@torch.no_grad()
+def parameter_delta_norm(baseline, updated):
+    squared = sum(
+        (after.double() - before.double()).square().sum()
+        for before, after in zip(baseline.parameters(), updated.parameters())
+    )
+    return float(squared.sqrt())
+
+
 def target_directions(source_index, target_index, source_direction, device):
     generator = torch.Generator(device=device)
     generator.manual_seed(
@@ -52,15 +83,26 @@ def one_block_update(
     timestamps,
     schedule,
     device,
+    optimizer_mode,
 ):
     t = torch.tensor(timestamps, device=device, dtype=torch.long)
     noise = source_direction.unsqueeze(0).expand(len(t), -1, -1, -1)
     xt = base.q_sample(x0.expand(len(t), -1, -1, -1), t, noise, schedule)
     optimizer.zero_grad(set_to_none=True)
-    prediction = model(xt, t, condition.expand(len(t), -1))
-    loss = F.mse_loss(prediction, noise)
-    loss.backward()
-    gradient_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), clip_norm)
+    if optimizer_mode == "zero_grad_restored_adamw":
+        with torch.no_grad():
+            prediction = model(xt, t, condition.expand(len(t), -1))
+            loss = F.mse_loss(prediction, noise)
+        for parameter in model.parameters():
+            parameter.grad = torch.zeros_like(parameter)
+        gradient_norm = torch.zeros((), device=device)
+    else:
+        prediction = model(xt, t, condition.expand(len(t), -1))
+        loss = F.mse_loss(prediction, noise)
+        loss.backward()
+        gradient_norm = torch.nn.utils.clip_grad_norm_(
+            model.parameters(), clip_norm
+        )
     optimizer.step()
     return {
         "timestamp_start": int(timestamps[0]),
@@ -69,6 +111,8 @@ def one_block_update(
         "loss": float(loss.detach()),
         "gradient_norm_before_clip": float(gradient_norm),
         "learning_rate": float(optimizer.param_groups[0]["lr"]),
+        "optimizer_mode": optimizer_mode,
+        "current_gradient_used": optimizer_mode != "zero_grad_restored_adamw",
     }
 
 
@@ -171,9 +215,11 @@ def analyze_delta(delta, direction_cosine):
     return arrays, summary
 
 
-def run_source(source_index, dataset, checkpoint, schedule, device):
+def run_source(
+    source_index, dataset, checkpoint, schedule, device, optimizer_mode
+):
     target_index = ntcd_target_index(source_index)
-    output_dir = ntcd_source_dir(source_index)
+    output_dir = ntcd_source_dir(source_index, optimizer_mode)
     result_path = output_dir / "result.json"
     if result_path.is_file():
         print(
@@ -204,8 +250,8 @@ def run_source(source_index, dataset, checkpoint, schedule, device):
     block_results = []
     for block_index, timestamp_block in enumerate(NTCD_TIMESTAMP_BLOCKS):
         updated = shared.make_model(dataset, checkpoint["model_state"], device)
-        optimizer, clip_norm = shared.make_optimizer(
-            updated, checkpoint, learning_rate
+        optimizer, clip_norm = make_optimizer_for_mode(
+            updated, checkpoint, learning_rate, optimizer_mode
         )
         update = one_block_update(
             updated,
@@ -217,7 +263,9 @@ def run_source(source_index, dataset, checkpoint, schedule, device):
             timestamp_block,
             schedule,
             device,
+            optimizer_mode,
         )
+        update["parameter_delta_norm"] = parameter_delta_norm(baseline, updated)
         delta = prediction_delta_bank(
             baseline,
             updated,
@@ -275,6 +323,7 @@ def run_source(source_index, dataset, checkpoint, schedule, device):
         "null_epoch": NSDL_NULL_EPOCH,
         "null_checkpoint": str(nsdl_checkpoint_path()),
         "learning_rate": learning_rate,
+        "optimizer_mode": optimizer_mode,
         "target_direction_count": NTCD_TARGET_DIRECTION_COUNT,
         "target_direction_cosine_to_source": cosine_to_source.detach().cpu().tolist(),
         "timestamp_blocks_are_independent_null_branches": True,
@@ -289,6 +338,11 @@ def main():
     parser.add_argument("--gpu", type=int, required=True)
     parser.add_argument("--shard-index", type=int, required=True)
     parser.add_argument("--shard-count", type=int, required=True)
+    parser.add_argument(
+        "--optimizer-mode",
+        choices=NTCD_OPTIMIZER_MODES,
+        default="restored_adamw",
+    )
     args = parser.parse_args()
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is required")
@@ -302,7 +356,14 @@ def main():
     source_indices = nsdl_datapoint_indices()[args.shard_index :: args.shard_count]
     print(f"[gpu {args.gpu}] sources={list(source_indices)}", flush=True)
     for source_index in source_indices:
-        run_source(source_index, dataset, checkpoint, schedule, device)
+        run_source(
+            source_index,
+            dataset,
+            checkpoint,
+            schedule,
+            device,
+            args.optimizer_mode,
+        )
         torch.cuda.empty_cache()
 
 
