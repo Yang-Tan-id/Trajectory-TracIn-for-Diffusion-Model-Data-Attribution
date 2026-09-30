@@ -40,6 +40,13 @@ results, run:
 python -u 184_quantify_endpoint_direction_variation.py
 ```
 
+To test whether an aligned loss gradient predicts the finite predicted-noise
+response at the exact same pollution direction and timestep, run:
+
+```bash
+python -u 185_eval_aligned_loss_same_direction_response.py
+```
+
 Summary:
 
 ```text
