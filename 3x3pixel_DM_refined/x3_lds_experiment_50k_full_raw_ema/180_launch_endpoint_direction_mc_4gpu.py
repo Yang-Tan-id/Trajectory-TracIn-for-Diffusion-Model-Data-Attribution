@@ -7,7 +7,7 @@ import sys
 import time
 
 import numpy as np
-from scipy.stats import pearsonr, spearmanr
+from scipy.stats import pearsonr, rankdata, spearmanr
 
 from endpoint_direction_mc_config import *
 
@@ -62,6 +62,54 @@ def aggregate_metric_records(records):
     return output
 
 
+def direction_heterogeneity(actual_sq_l2):
+    """Summarize finite-response magnitude variation across directions."""
+    response = np.sqrt(np.maximum(actual_sq_l2, 0.0))
+    mean_by_t = response.mean(axis=0)
+    std_by_t = response.std(axis=0)
+    cv_by_t = std_by_t / np.maximum(mean_by_t, NSDL_EPS)
+    q10, q50, q90 = np.quantile(response, (0.1, 0.5, 0.9), axis=0)
+    direction_mean = response.mean(axis=1)
+    curve_spearman = np.asarray(
+        [correlation(curve, mean_by_t, rank=True) for curve in response],
+        dtype=np.float64,
+    )
+    ranked = np.stack(
+        [rankdata(curve, method="average") for curve in response], axis=0
+    )
+    pairwise = np.corrcoef(ranked)
+    upper = np.triu_indices(EDMC_DIRECTION_COUNT, k=1)
+    normalized = response / np.maximum(mean_by_t[None, :], NSDL_EPS)
+    return {
+        "fixed_t_direction_cv_mean": float(np.mean(cv_by_t)),
+        "fixed_t_direction_cv_median": float(np.median(cv_by_t)),
+        "fixed_t_q90_over_q10_mean": float(
+            np.mean(q90 / np.maximum(q10, NSDL_EPS))
+        ),
+        "fixed_t_q90_minus_q10_over_median_mean": float(
+            np.mean((q90 - q10) / np.maximum(q50, NSDL_EPS))
+        ),
+        "direction_mean_over_t_cv": float(
+            np.std(direction_mean) / max(np.mean(direction_mean), NSDL_EPS)
+        ),
+        "direction_curve_vs_mean_spearman_mean": float(
+            np.nanmean(curve_spearman)
+        ),
+        "direction_curve_vs_mean_spearman_min": float(
+            np.nanmin(curve_spearman)
+        ),
+        "pairwise_direction_curve_spearman_mean": float(
+            np.nanmean(pairwise[upper])
+        ),
+        "below_half_of_direction_mean_fraction": float(
+            np.mean(normalized < 0.5)
+        ),
+        "above_1p5_of_direction_mean_fraction": float(
+            np.mean(normalized > 1.5)
+        ),
+    }
+
+
 def launch(gpus, batch_size):
     EDMC_LOG_DIR.mkdir(parents=True, exist_ok=True)
     log_path = EDMC_LOG_DIR / "endpoint_direction_mc_4gpu.log"
@@ -114,6 +162,7 @@ def analyze():
         "loss_single_direction": [],
     }
     exact_jvp_records = []
+    heterogeneity_records = []
     branch_count = 0
     for source_index in nsdl_datapoint_indices():
         source_dir = edmc_source_dir(source_index)
@@ -128,6 +177,7 @@ def analyze():
                     "loss_abs_directional_derivative"
                 ].astype(np.float64)
             truth = actual.mean(axis=0)
+            heterogeneity_records.append(direction_heterogeneity(actual))
             exact_jvp_records.append(
                 curve_metrics(jvp_value.reshape(-1), actual.reshape(-1))
             )
@@ -185,6 +235,9 @@ def analyze():
         "exact_parameter_delta_jvp_vs_finite": aggregate_metric_records(
             exact_jvp_records
         ),
+        "finite_response_direction_heterogeneity_l2": aggregate_metric_records(
+            heterogeneity_records
+        ),
         "single_direction_leave_one_out": {
             name: aggregate_metric_records(records)
             for name, records in leave_one_out_records.items()
@@ -211,6 +264,29 @@ def analyze():
             f"{metrics['false_small_rate_high_truth']['mean']:.4f}",
             flush=True,
         )
+    heterogeneity = output["finite_response_direction_heterogeneity_l2"]
+    print("\nfinite-response L2 heterogeneity across 100 directions", flush=True)
+    print(
+        "fixed-t CV="
+        f"{heterogeneity['fixed_t_direction_cv_mean']['mean']:.4f}±"
+        f"{heterogeneity['fixed_t_direction_cv_mean']['std']:.4f} | "
+        "q90/q10="
+        f"{heterogeneity['fixed_t_q90_over_q10_mean']['mean']:.4f} | "
+        "direction-mean CV="
+        f"{heterogeneity['direction_mean_over_t_cv']['mean']:.4f}",
+        flush=True,
+    )
+    print(
+        "curve Spearman: direction-vs-mean="
+        f"{heterogeneity['direction_curve_vs_mean_spearman_mean']['mean']:+.4f} | "
+        "pairwise="
+        f"{heterogeneity['pairwise_direction_curve_spearman_mean']['mean']:+.4f} | "
+        "<0.5x mean="
+        f"{heterogeneity['below_half_of_direction_mean_fraction']['mean']:.4f} | "
+        ">1.5x mean="
+        f"{heterogeneity['above_1p5_of_direction_mean_fraction']['mean']:.4f}",
+        flush=True,
+    )
     print("\nMC directions -> 100-direction truth", flush=True)
     print("estimator          R    spearman  relerr  false-small", flush=True)
     for estimator, counts in output["mc_subset_sweep"].items():

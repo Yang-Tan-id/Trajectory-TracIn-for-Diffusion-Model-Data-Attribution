@@ -13,6 +13,11 @@ tests whether one direction predicts the mean of the other 99 and sweeps
 direction counts `1,2,4,8,10,20,50,100`. It reports correlation across noise
 levels, relative error, and a false-small rate.
 
+The analysis also quantifies finite-response L2 heterogeneity across the 100
+directions: fixed-t coefficient of variation, q90/q10 spread, direction-wise
+mean variation, direction-to-mean and pairwise curve correlations, and the
+fractions below 0.5x or above 1.5x the fixed-t direction mean.
+
 ```bash
 python 178_verify_endpoint_direction_mc.py
 python -u 180_launch_endpoint_direction_mc_4gpu.py \
