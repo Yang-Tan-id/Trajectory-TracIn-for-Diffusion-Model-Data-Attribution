@@ -55,3 +55,23 @@ This performs no moving-model gradient replay. Its output is isolated under:
 ```text
 x3_lds_exp_50k/checkpoint_endpoint_adam_diagnostic_mc20_10q_100t/
 ```
+
+After either run, fit one parameter-space scalar per checkpoint pair and
+frozen-gradient method without rerunning the GPU computation:
+
+```bash
+python -u 208_eval_checkpoint_endpoint_scalar_calibration.py \
+  --pair-indices 0,16,32,48 \
+  --family prompted \
+  --loss-mc 1
+```
+
+Use `--loss-mc 20` for the MC20 outputs.  The fitted scalar is
+
+```text
+alpha_c = <d_c, Delta-theta_c> / ||d_c||^2,
+```
+
+where `d_c` is the frozen-gradient AdamW displacement and `Delta-theta_c` is
+the observed displacement between the saved checkpoints.  This calibration
+can correct response scale but cannot improve directional cosine.
