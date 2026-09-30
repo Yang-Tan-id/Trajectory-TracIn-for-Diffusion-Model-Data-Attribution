@@ -31,3 +31,13 @@ Combined output:
 ```text
 x3_lds_exp_50k/null_gradient_cross_direction_next_checkpoint_10points/summary.json
 ```
+
+After the four-GPU run, compare whether changes on the same- and opposite-noise
+inputs point in the same output-space direction without rerunning any model:
+
+```bash
+python -u 153_compare_same_opposite_predicted_noise_change.py
+```
+
+This reports the direct cosine for the actual null-to-next change, the
+single-point `J(-g)` prediction, and the checkpoint-parameter-delta JVP control.
