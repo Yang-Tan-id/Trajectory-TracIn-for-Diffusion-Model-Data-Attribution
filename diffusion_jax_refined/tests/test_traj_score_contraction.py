@@ -52,6 +52,13 @@ class TrajScoreContractionTest(unittest.TestCase):
         np.testing.assert_allclose(result, [expected])
         self.assertNotAlmostEqual(float(result[0]), wrong_square_after_sum)
 
+    def test_termwise_squared_squares_the_learning_rate_weighted_term(self) -> None:
+        expected = (0.25 * 3.0) ** 2 + (0.75 * 8.0) ** 2
+        legacy_squared = 0.25 * 3.0**2 + 0.75 * 8.0**2
+        result = self.score("termwise_squared")
+        np.testing.assert_allclose(result, [expected])
+        self.assertNotAlmostEqual(float(result[0]), legacy_squared)
+
     def test_absolute_takes_each_absolute_value_before_weighting(self) -> None:
         query = dict(self.query)
         query["query_features"] = np.asarray([[3.0, 0.0], [-4.0, 0.0]])

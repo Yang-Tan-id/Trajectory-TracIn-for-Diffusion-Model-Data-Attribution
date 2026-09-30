@@ -141,6 +141,13 @@ PREDICTED_NOISE_JVP_SCHEMES = {
     "predicted_noise_shared_orthogonal_probe8_termwise_square",
 }
 SCORE_SCHEMES = {
+    **{
+        f"recreate_{train_kind}_polluted_endpoint_{delta_kind}_{reduction}_q100":
+        f"traj_tracin_recreate_{train_kind}_polluted_endpoint_{delta_kind}_{reduction}_q100"
+        for train_kind in ("raw", "adamw_residual", "adamw_full")
+        for delta_kind in ("delta_raw", "delta_l2normalized")
+        for reduction in ("linear", "termwise_squared", "timestamp_sum_squared")
+    },
     "raw_mc10_aligned10x10": "traj_tracin_raw_mc10_aligned10x10",
     "raw_mc10_aligned10x10_squared_previous_lr":
         "traj_tracin_raw_mc10_aligned10x10_squared_previous_lr",

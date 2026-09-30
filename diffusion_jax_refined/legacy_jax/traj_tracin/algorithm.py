@@ -170,8 +170,25 @@ def merge_train_checkpoint_parts_atomic(
     has_train_v_l2_features = None
     has_optimizer_history_features = None
     normalized_jacobian_train_mc_samples = None
+    common_scalar_metadata = {}
     for part_path in part_paths:
         with np.load(part_path, allow_pickle=True) as part:
+            for metadata_key in (
+                "train_optimizer_transform",
+                "train_feature_semantics",
+                "train_noise_mode",
+                "train_noise_seed_rule",
+            ):
+                if metadata_key not in part.files:
+                    continue
+                metadata_value = np.asarray(part[metadata_key]).item()
+                if metadata_key in common_scalar_metadata:
+                    if common_scalar_metadata[metadata_key] != metadata_value:
+                        raise ValueError(
+                            f"{metadata_key} mismatch across checkpoint parts: {part_path}"
+                        )
+                else:
+                    common_scalar_metadata[metadata_key] = metadata_value
             part_has_train_jacobian_norms = "train_jacobian_norms" in part.files
             part_has_train_v_l2_features = "train_features_v_l2_normalized" in part.files
             part_has_optimizer_history_features = "optimizer_history_features" in part.files
@@ -411,6 +428,15 @@ def merge_train_checkpoint_parts_atomic(
                 )
             write_small_array(archive, "proj_dim", np.asarray(proj_dim, dtype=np.int32))
             write_small_array(archive, "query_objective", np.asarray(query_objective))
+            write_small_array(
+                archive,
+                "projection_seed_rule",
+                np.asarray("(train_seed,'traj_tracin_projection',checkpoint_index)"),
+            )
+            for metadata_key, metadata_value in common_scalar_metadata.items():
+                if metadata_key == "train_feature_semantics" and has_train_jacobian_norms:
+                    continue
+                write_small_array(archive, metadata_key, np.asarray(metadata_value))
             write_small_array(
                 archive,
                 "query_target_checkpoint",
@@ -1692,6 +1718,14 @@ def normalize_query_objective_name(name: str) -> str:
         "next_checkpoint_ref_projection": "trajectory_next_checkpoint_ref_projection",
         "next_ckpt_ref_projection": "trajectory_next_checkpoint_ref_projection",
         "next_checkpoint_reference_projection": "trajectory_next_checkpoint_ref_projection",
+        "trajectory_polluted_endpoint_next_delta_projection":
+            "trajectory_polluted_endpoint_next_delta_projection",
+        "polluted_endpoint_next_delta_projection":
+            "trajectory_polluted_endpoint_next_delta_projection",
+        "trajectory_polluted_endpoint_next_delta_projection_normalized":
+            "trajectory_polluted_endpoint_next_delta_projection_normalized",
+        "polluted_endpoint_next_delta_projection_normalized":
+            "trajectory_polluted_endpoint_next_delta_projection_normalized",
         "trajectory_future_residual_mixture": "trajectory_future_residual_mixture",
         "future_residual_mixture": "trajectory_future_residual_mixture",
         "future_residual_mix": "trajectory_future_residual_mixture",
@@ -1718,10 +1752,21 @@ def normalize_query_objective_name(name: str) -> str:
             "trajectory_next_checkpoint_implied_noise_mse, "
             "trajectory_next_checkpoint_trajectory_noise_mse, "
             "trajectory_next_checkpoint_ref_projection, trajectory_future_residual_mixture, "
+            "trajectory_polluted_endpoint_next_delta_projection, "
+            "trajectory_polluted_endpoint_next_delta_projection_normalized, "
             "trajectory_predicted_noise_probe, "
             "eps_deviation_l1_mean, eps_deviation_l2_sq_mean, "
             "trajectory_noise_squared_deviation_normalized"
         ) from exc
+
+
+def checkpoint_timestamp_shared_noise_key(
+    train_seed: int, checkpoint_index: int, timestep: int
+):
+    """Deterministic noise key shared by train/query for one (checkpoint, t)."""
+    key = jax.random.PRNGKey(int(train_seed) + 91_337)
+    key = jax.random.fold_in(key, int(checkpoint_index))
+    return jax.random.fold_in(key, int(timestep))
 
 
 def query_objective_uses_next_checkpoint(name: str) -> bool:
@@ -1730,6 +1775,8 @@ def query_objective_uses_next_checkpoint(name: str) -> bool:
         "trajectory_next_checkpoint_implied_noise_mse",
         "trajectory_next_checkpoint_trajectory_noise_mse",
         "trajectory_next_checkpoint_ref_projection",
+        "trajectory_polluted_endpoint_next_delta_projection",
+        "trajectory_polluted_endpoint_next_delta_projection_normalized",
         "trajectory_future_residual_mixture",
     }
 
@@ -1759,6 +1806,17 @@ def query_objective_formula(name: str) -> str:
         )
     if name == "trajectory_next_checkpoint_ref_projection":
         return "sum_k w_k mean((stopgrad(eps_theta_c_plus_1)-eps_theta_c)*(stopgrad(eps_theta_ref)-eps_theta_c))"
+    if name == "trajectory_polluted_endpoint_next_delta_projection":
+        return (
+            "sum_k w_k mean(eps_theta_c(x_t_endpoint,t) * "
+            "stopgrad(eps_theta_c_plus_1(x_t_endpoint,t)-eps_theta_c(x_t_endpoint,t)))"
+        )
+    if name == "trajectory_polluted_endpoint_next_delta_projection_normalized":
+        return (
+            "sum_k w_k mean(eps_theta_c(x_t_endpoint,t) * "
+            "unit_l2(stopgrad(eps_theta_c_plus_1(x_t_endpoint,t)-"
+            "eps_theta_c(x_t_endpoint,t))))"
+        )
     if name == "trajectory_future_residual_mixture":
         return (
             "sum_k w_k mean(stopgrad(sum_j alpha_j normalize(eps_theta_c-eps_theta_j)) * "
@@ -1791,6 +1849,20 @@ def query_scalar(adapter, model, params, query_target_params, reference_params, 
         return jnp.mean(diff ** 2)
     if objective == "trajectory_next_checkpoint_ref_projection":
         return jnp.mean((eps_query_target - eps) * (eps_ref - eps))
+    if objective in (
+        "trajectory_polluted_endpoint_next_delta_projection",
+        "trajectory_polluted_endpoint_next_delta_projection_normalized",
+    ):
+        # The direction is deliberately held fixed.  This is J_eps(theta_c)^T
+        # delta_eps, not the gradient of ||delta_eps||^2 (which would introduce
+        # an additional sign and factor of two).
+        delta = jax.lax.stop_gradient(eps_query_target - eps)
+        if objective.endswith("_normalized"):
+            delta = delta / jnp.maximum(
+                jnp.sqrt(jnp.sum(jnp.square(delta), dtype=jnp.float32)),
+                jnp.asarray(1e-12, dtype=jnp.float32),
+            )
+        return jnp.mean(eps * delta)
     if objective == "eps_deviation_l1_mean":
         return jnp.mean(jnp.abs(diff))
     if objective == "eps_deviation_l2_sq_mean":
@@ -2382,6 +2454,10 @@ def run_attribution(cfg: TrajAttributionConfig):
     uses_next_trajectory_reference_target = (
         cfg.query_objective == "trajectory_next_checkpoint_trajectory_noise_mse"
     )
+    uses_polluted_endpoint_delta = cfg.query_objective in {
+        "trajectory_polluted_endpoint_next_delta_projection",
+        "trajectory_polluted_endpoint_next_delta_projection_normalized",
+    }
     uses_checkpoint_trajectory_target = (
         uses_implied_noise_trajectory_target or uses_next_trajectory_reference_target
     )
@@ -2604,6 +2680,53 @@ def run_attribution(cfg: TrajAttributionConfig):
         f"[device-check] query_cond={array_device_str(query_cond)} | "
         f"schedule_betas={array_device_str(schedule.betas)}"
     )
+
+    polluted_endpoint_trajectory = None
+    if stage_mode == "query" and uses_polluted_endpoint_delta:
+        if precomputed_traj is None or precomputed_sample_meta is None:
+            raise ValueError(
+                "polluted-endpoint delta projection requires a saved query sample "
+                "with trajectory_xt.npy and final_state.npy"
+            )
+        xt_saved, t_saved, pos_saved, sample_meta = precomputed_traj
+        _selected_xt, selected_t, selected_pos = select_precomputed_trajectory_snapshots(
+            xt_saved,
+            t_saved,
+            pos_saved,
+            num_keep=cfg.num_traj_snapshots,
+            snapshot_positions=cfg.traj_snapshot_positions,
+        )
+        endpoint_path = os.path.join(str(sample_meta.get("seed_dir", "")), "final_state.npy")
+        if not os.path.isfile(endpoint_path):
+            raise FileNotFoundError(endpoint_path)
+        endpoint_all = np.load(endpoint_path)
+        endpoint_index = int(sample_meta.get("sample_index", 0))
+        if endpoint_all.ndim != 4 or endpoint_index >= endpoint_all.shape[0]:
+            raise ValueError(
+                f"invalid polluted-endpoint final_state shape/index: "
+                f"{endpoint_all.shape}, {endpoint_index}"
+            )
+        endpoint_x0 = np.asarray(
+            endpoint_all[endpoint_index : endpoint_index + 1], dtype=np.float32
+        )
+        alphas_cumprod_host = np.asarray(
+            jax.device_get(schedule.alphas_cumprod), dtype=np.float32
+        )
+        polluted_noise_seed = int(cfg.seed)
+        polluted_endpoint_trajectory = (
+            endpoint_x0,
+            np.asarray(selected_t, dtype=np.int32),
+            np.asarray(selected_pos, dtype=np.int32),
+            alphas_cumprod_host,
+            polluted_noise_seed,
+        )
+        print(
+            "[polluted-endpoint] prepared saved endpoint for checkpoint-specific x_t | "
+            f"snapshots={len(selected_t)} "
+            "seed_rule=(train_seed+91337,checkpoint_index,timestep) "
+            f"train_seed={polluted_noise_seed}",
+            flush=True,
+        )
 
     checkpoint_trajectory_cache_dir = None
     checkpoint_trajectory_cache_paths = []
@@ -3871,6 +3994,42 @@ def run_attribution(cfg: TrajAttributionConfig):
                 print(
                     f"[stage:{stage_mode}] using timestamp schedule only | "
                     f"snapshots={len(t_seq)}; reference trajectory states are not needed for train loss gradients",
+                    flush=True,
+                )
+            elif stage_mode == "query" and uses_polluted_endpoint_delta:
+                assert polluted_endpoint_trajectory is not None
+                (
+                    endpoint_x0,
+                    t_seq,
+                    pos_seq,
+                    alphas_cumprod_host,
+                    polluted_noise_seed,
+                ) = polluted_endpoint_trajectory
+                polluted_states = []
+                for t_value in np.asarray(t_seq, dtype=np.int32):
+                    # This exact key is also used by every train datapoint at
+                    # the matching checkpoint/timestamp when shared-noise mode
+                    # is enabled, and by both query delta variants.
+                    noise_key = checkpoint_timestamp_shared_noise_key(
+                        polluted_noise_seed, ckpt_i, int(t_value)
+                    )
+                    noise = np.asarray(
+                        jax.device_get(
+                            jax.random.normal(
+                                noise_key, endpoint_x0.shape, dtype=jnp.float32
+                            )
+                        ),
+                        dtype=np.float32,
+                    )
+                    alpha_bar = float(alphas_cumprod_host[int(t_value)])
+                    polluted_states.append(
+                        np.sqrt(alpha_bar) * endpoint_x0
+                        + np.sqrt(max(0.0, 1.0 - alpha_bar)) * noise
+                    )
+                xt_refs = [array_to_device(x, device) for x in polluted_states]
+                print(
+                    "[stage:query] using checkpoint-specific endpoint-forward-noised "
+                    f"states | checkpoint={ckpt_i + 1} snapshots={len(t_seq)}",
                     flush=True,
                 )
             elif stage_mode == "query" and uses_checkpoint_trajectory_target:
@@ -5392,6 +5551,23 @@ def run_attribution(cfg: TrajAttributionConfig):
                         f"inside each score batch | batch_size={bs_stage}",
                         flush=True,
                     )
+                train_noise_mode = os.environ.get(
+                    "TRAJ_TRACIN_TRAIN_NOISE_MODE", "per_example"
+                ).strip().lower()
+                if train_noise_mode not in (
+                    "per_example",
+                    "checkpoint_timestamp_shared",
+                ):
+                    raise ValueError(
+                        "TRAJ_TRACIN_TRAIN_NOISE_MODE must be 'per_example' or "
+                        "'checkpoint_timestamp_shared'"
+                    )
+                if train_noise_mode == "checkpoint_timestamp_shared":
+                    print(
+                        "[stage:train] diffusion noise is shared by all datapoints "
+                        "within each (checkpoint,timestamp) and aligned with query x_t",
+                        flush=True,
+                    )
                 for snap_id, t_value in enumerate(t_seq):
                     term_features = np.empty((len(picked), proj_dim), dtype=np.float32)
                     t_scalar = array_to_device(jnp.asarray(int(t_value), dtype=jnp.int32), device)
@@ -5408,16 +5584,22 @@ def run_attribution(cfg: TrajAttributionConfig):
                             device,
                             use_bfloat16=use_bfloat16_train_batch,
                         )
-                        rngs = array_to_device(
-                            jnp.stack(
+                        if train_noise_mode == "checkpoint_timestamp_shared":
+                            shared_key = checkpoint_timestamp_shared_noise_key(
+                                cfg.seed, ckpt_i, int(t_value)
+                            )
+                            rngs_host = jnp.repeat(
+                                shared_key[None, :], bs_stage, axis=0
+                            )
+                        else:
+                            rngs_host = jnp.stack(
                                 [
                                     jax.random.PRNGKey(cfg.seed + 700_000 * (ckpt_i + 1) + 10_000 * snap_id + start + j)
                                     for j in range(bs_stage)
                                 ],
                                 axis=0,
-                            ),
-                            device,
-                        )
+                            )
+                        rngs = array_to_device(rngs_host, device)
                         if batch_id == 1 or batch_id % 10 == 0 or end == len(picked):
                             print(
                                 f"[stage:train] batch start {batch_id}/{total_batches} | "
@@ -5518,6 +5700,13 @@ def run_attribution(cfg: TrajAttributionConfig):
                                 if optimizer_train_transform == "adamw_residual_update"
                                 else "projected_expected_loss_gradient"
                             )
+                        ),
+                        train_noise_mode=np.asarray(train_noise_mode),
+                        train_noise_seed_rule=np.asarray(
+                            "fold_in(fold_in(PRNGKey(train_seed+91337),"
+                            "checkpoint_index),timestep)"
+                            if train_noise_mode == "checkpoint_timestamp_shared"
+                            else "per-example historical key rule"
                         ),
                     )
                     print(
@@ -6093,6 +6282,27 @@ def run_attribution(cfg: TrajAttributionConfig):
                     )
                 query_payload["previous_checkpoint_lr_ratios"] = np.asarray(
                     stage_previous_lr_ratios, dtype=np.float32
+                )
+            if uses_polluted_endpoint_delta:
+                query_payload.update(
+                    polluted_endpoint_x_t=np.asarray(True),
+                    polluted_endpoint_noise_seed_rule=np.asarray(
+                        "jax.random.fold_in(jax.random.fold_in("
+                        "PRNGKey(train_seed+91337),checkpoint_index),timestep); "
+                        "independent across checkpoints; identical across "
+                        "train datapoints and query delta-normalization modes "
+                        "within a checkpoint/timestep"
+                    ),
+                    polluted_endpoint_delta_normalized=np.asarray(
+                        cfg.query_objective.endswith("_normalized")
+                    ),
+                    polluted_endpoint_delta_definition=np.asarray(
+                        "stopgrad(eps(params[c+1],x_t,t)-eps(params[c],x_t,t)); "
+                        "normalized mode divides by its output-space L2 norm"
+                    ),
+                    projection_seed_rule=np.asarray(
+                        "(train_seed,'traj_tracin_projection',checkpoint_index)"
+                    ),
                 )
             if save_query_hvp:
                 if len(stage_query_hvp_features) != len(stage_features):
