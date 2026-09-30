@@ -36,6 +36,10 @@ def main():
             "opposite": 1,
             "random_same_norm": NSDL_RANDOM_DIRECTION_COUNT,
         },
+        "evaluation": (
+            "direct predicted-noise after-minus-before; MSE/RMSE/mean-L2/"
+            "max-abs/signed-direction-projection; no loss comparison"
+        ),
         "optimizer": "restored checkpoint AdamW state and checkpoint LR",
     }
     print(json.dumps(payload, indent=2))

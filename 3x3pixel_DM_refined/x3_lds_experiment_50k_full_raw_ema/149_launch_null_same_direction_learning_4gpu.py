@@ -13,11 +13,11 @@ from null_same_direction_learning_config import *
 
 def aggregate_group(results, name):
     keys = (
-        "before_mean",
-        "after_mean",
-        "decrease_mean",
-        "relative_decrease_mean",
-        "fraction_improved",
+        "mse_mean",
+        "rmse_mean",
+        "mean_l2_mean",
+        "max_abs_mean",
+        "signed_projection_mean",
     )
     return {
         key: {
@@ -99,13 +99,13 @@ def main():
     with open(NSDL_SUMMARY_PATH, "w") as handle:
         json.dump(summary, handle, indent=2)
     for name in ("same_direction", "opposite_direction", "random_directions"):
-        decrease = summary[name]["decrease_mean"]
-        relative = summary[name]["relative_decrease_mean"]
+        rmse = summary[name]["rmse_mean"]
+        projection = summary[name]["signed_projection_mean"]
         print(
-            f"{name:20s} loss_decrease="
-            f"{decrease['mean_across_datapoints']:+.6e} ± "
-            f"{decrease['std_across_datapoints']:.6e} | relative="
-            f"{relative['mean_across_datapoints']:+.6e}",
+            f"{name:20s} predicted_noise_rmse="
+            f"{rmse['mean_across_datapoints']:.6e} ± "
+            f"{rmse['std_across_datapoints']:.6e} | signed_projection="
+            f"{projection['mean_across_datapoints']:+.6e}",
             flush=True,
         )
     print(f"[saved] {NSDL_SUMMARY_PATH}", flush=True)

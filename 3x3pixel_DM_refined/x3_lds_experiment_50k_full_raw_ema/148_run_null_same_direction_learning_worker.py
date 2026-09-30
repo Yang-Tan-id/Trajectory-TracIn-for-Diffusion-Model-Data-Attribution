@@ -109,13 +109,17 @@ def evaluation_directions(datapoint_index, training_direction, device):
 
 
 @torch.no_grad()
-def losses_by_direction(model, x0, condition, directions, schedule, device):
+def prediction_differences_by_direction(
+    baseline_model, updated_model, x0, condition, directions, schedule, device
+):
     timestamps = torch.tensor(
         NSDL_TIMESTAMPS, device=device, dtype=torch.long
     )
-    losses = torch.zeros(
-        len(directions), device=device, dtype=torch.float64
-    )
+    output_dimension = int(np.prod(x0.shape[1:]))
+    metrics = {
+        name: torch.zeros(len(directions), device=device, dtype=torch.float64)
+        for name in ("mse", "mean_l2", "max_abs", "signed_projection")
+    }
     for direction_start in range(
         0, len(directions), NSDL_EVAL_DIRECTION_BATCH
     ):
@@ -124,7 +128,14 @@ def losses_by_direction(model, x0, condition, directions, schedule, device):
         )
         bank = directions[direction_start:direction_end]
         count = len(bank)
-        total = torch.zeros(count, device=device, dtype=torch.float64)
+        sum_squared = torch.zeros(count, device=device, dtype=torch.float64)
+        sum_l2 = torch.zeros(count, device=device, dtype=torch.float64)
+        max_abs = torch.zeros(count, device=device, dtype=torch.float64)
+        sum_projection = torch.zeros(count, device=device, dtype=torch.float64)
+        unit_bank = bank.double().flatten(1)
+        unit_bank = unit_bank / unit_bank.norm(
+            dim=1, keepdim=True
+        ).clamp_min(NSDL_EPS)
         for timestamp_start in range(0, T, NSDL_UPDATE_BATCH_SIZE):
             t = timestamps[
                 timestamp_start : timestamp_start + NSDL_UPDATE_BATCH_SIZE
@@ -137,18 +148,28 @@ def losses_by_direction(model, x0, condition, directions, schedule, device):
             flat_x0 = x0.expand(count * width, -1, -1, -1)
             flat_condition = condition.expand(count * width, -1)
             xt = base.q_sample(flat_x0, flat_t, flat_noise, schedule)
-            prediction = model(xt, flat_t, flat_condition)
-            batch_loss = (
-                (prediction.double() - flat_noise.double())
-                .square()
-                .flatten(1)
-                .mean(1)
-                .reshape(count, width)
-                .sum(1)
+            before = baseline_model(xt, flat_t, flat_condition)
+            after = updated_model(xt, flat_t, flat_condition)
+            difference = (after.double() - before.double()).reshape(
+                count, width, output_dimension
             )
-            total += batch_loss
-        losses[direction_start:direction_end] = total / float(T)
-    return losses
+            sum_squared += difference.square().sum(dim=(1, 2))
+            sum_l2 += difference.norm(dim=2).sum(dim=1)
+            max_abs = torch.maximum(
+                max_abs, difference.abs().amax(dim=(1, 2))
+            )
+            sum_projection += (
+                difference * unit_bank[:, None, :]
+            ).sum(dim=2).sum(dim=1)
+        selection = slice(direction_start, direction_end)
+        metrics["mse"][selection] = sum_squared / float(
+            T * output_dimension
+        )
+        metrics["mean_l2"][selection] = sum_l2 / float(T)
+        metrics["max_abs"][selection] = max_abs
+        metrics["signed_projection"][selection] = sum_projection / float(T)
+    metrics["rmse"] = metrics["mse"].sqrt()
+    return metrics
 
 
 def four_updates(
@@ -193,20 +214,13 @@ def four_updates(
     return history
 
 
-def summarize_group(before, after):
-    decrease = before - after
-    relative = decrease / (before + after + NSDL_EPS)
-    return {
-        "count": int(len(before)),
-        "before_mean": float(before.mean()),
-        "before_std": float(before.std(unbiased=False)),
-        "after_mean": float(after.mean()),
-        "after_std": float(after.std(unbiased=False)),
-        "decrease_mean": float(decrease.mean()),
-        "decrease_std": float(decrease.std(unbiased=False)),
-        "relative_decrease_mean": float(relative.mean()),
-        "fraction_improved": float((decrease > 0).double().mean()),
-    }
+def summarize_group(metrics, selection):
+    selected = {name: value[selection] for name, value in metrics.items()}
+    result = {"count": int(len(next(iter(selected.values()))))}
+    for name, value in selected.items():
+        result[f"{name}_mean"] = float(value.mean())
+        result[f"{name}_std"] = float(value.std(unbiased=False))
+    return result
 
 
 def run_datapoint(datapoint_index, dataset, checkpoint, schedule, device):
@@ -229,9 +243,6 @@ def run_datapoint(datapoint_index, dataset, checkpoint, schedule, device):
         updated, checkpoint, learning_rate
     )
     started = time.perf_counter()
-    before = losses_by_direction(
-        baseline, x0, condition, directions, schedule, device
-    )
     updates = four_updates(
         updated,
         optimizer,
@@ -242,20 +253,21 @@ def run_datapoint(datapoint_index, dataset, checkpoint, schedule, device):
         schedule,
         device,
     )
-    after = losses_by_direction(
-        updated, x0, condition, directions, schedule, device
+    metrics = prediction_differences_by_direction(
+        baseline,
+        updated,
+        x0,
+        condition,
+        directions,
+        schedule,
+        device,
     )
-    decrease = before - after
-    relative = decrease / (before + after + NSDL_EPS)
     output_dir.mkdir(parents=True, exist_ok=True)
     np.savez(
-        output_dir / "direction_losses.npz",
+        output_dir / "direction_prediction_differences.npz",
         directions=directions.cpu().numpy(),
         cosine_to_training=cosine.cpu().numpy(),
-        before=before.cpu().numpy(),
-        after=after.cpu().numpy(),
-        decrease=decrease.cpu().numpy(),
-        relative_decrease=relative.cpu().numpy(),
+        **{name: value.cpu().numpy() for name, value in metrics.items()},
     )
     atomic_torch_save(
         output_dir / "updated_model.pt",
@@ -278,12 +290,19 @@ def run_datapoint(datapoint_index, dataset, checkpoint, schedule, device):
         "direction_norm": float(direction.norm()),
         "training_timestamps": list(NSDL_TIMESTAMPS),
         "updates": updates,
-        "same_direction": summarize_group(before[:1], after[:1]),
-        "opposite_direction": summarize_group(before[1:2], after[1:2]),
-        "random_directions": summarize_group(before[2:], after[2:]),
-        "random_cosine_loss_decrease_correlation": float(
+        "evaluation": "predicted noise after-minus-before; no loss comparison",
+        "same_direction": summarize_group(metrics, slice(0, 1)),
+        "opposite_direction": summarize_group(metrics, slice(1, 2)),
+        "random_directions": summarize_group(metrics, slice(2, None)),
+        "random_cosine_signed_projection_correlation": float(
             np.corrcoef(
-                cosine[2:].cpu().numpy(), decrease[2:].cpu().numpy()
+                cosine[2:].cpu().numpy(),
+                metrics["signed_projection"][2:].cpu().numpy(),
+            )[0, 1]
+        ),
+        "random_cosine_rmse_correlation": float(
+            np.corrcoef(
+                cosine[2:].cpu().numpy(), metrics["rmse"][2:].cpu().numpy()
             )[0, 1]
         ),
         "elapsed_seconds": time.perf_counter() - started,
@@ -291,9 +310,9 @@ def run_datapoint(datapoint_index, dataset, checkpoint, schedule, device):
     atomic_json(done_path, result)
     print(
         f"[gpu {device.index}] datapoint={datapoint_index} "
-        f"same={result['same_direction']['decrease_mean']:+.6e} "
-        f"opposite={result['opposite_direction']['decrease_mean']:+.6e} "
-        f"random={result['random_directions']['decrease_mean']:+.6e}",
+        f"same_rmse={result['same_direction']['rmse_mean']:.6e} "
+        f"opposite_rmse={result['opposite_direction']['rmse_mean']:.6e} "
+        f"random_rmse={result['random_directions']['rmse_mean']:.6e}",
         flush=True,
     )
 
