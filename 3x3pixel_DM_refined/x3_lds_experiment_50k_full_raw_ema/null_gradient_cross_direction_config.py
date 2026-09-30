@@ -29,7 +29,12 @@ NGCD_ODD_EVEN_RANDOM_PROMPT_ROOT = (
 NGCD_CROSS_DATAPOINT_ROOT = (
     ROOT / "null_gradient_even_cross_datapoint_next_checkpoint_10pairs"
 )
+NGCD_CROSS_DATAPOINT_INDEPENDENT_NOISE_ROOT = (
+    ROOT
+    / "null_gradient_even_cross_datapoint_independent_noise_next_checkpoint_10pairs"
+)
 NGCD_CROSS_DATAPOINT_TARGET_SEED_BASE = 979200
+NGCD_CROSS_DATAPOINT_NOISE_SEED_BASE = 979300
 NGCD_EPS = 1e-12
 
 
@@ -71,6 +76,11 @@ def ngcd_cross_datapoint_target_index(source_index):
     return target + int(target >= int(source_index))
 
 
-def ngcd_cross_datapoint_output_paths():
-    root = NGCD_CROSS_DATAPOINT_ROOT
+def ngcd_cross_datapoint_output_paths(target_noise_mode="shared"):
+    if target_noise_mode == "shared":
+        root = NGCD_CROSS_DATAPOINT_ROOT
+    elif target_noise_mode == "independent":
+        root = NGCD_CROSS_DATAPOINT_INDEPENDENT_NOISE_ROOT
+    else:
+        raise ValueError(target_noise_mode)
     return root, root / "pairs", root / "logs", root / "summary.json"

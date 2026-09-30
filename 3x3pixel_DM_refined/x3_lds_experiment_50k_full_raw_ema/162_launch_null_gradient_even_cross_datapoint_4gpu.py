@@ -48,7 +48,12 @@ def load_results(pair_dir):
     return results
 
 
-def aggregate(results):
+def aggregate(results, target_noise_mode):
+    default_noise_cosine = 1.0 if target_noise_mode == "shared" else float("nan")
+    noise_cosines = [
+        float(entry.get("source_target_noise_cosine", default_noise_cosine))
+        for entry in results
+    ]
     summary = {
         "null_epoch": NGCD_NULL_EPOCH,
         "next_epoch": NGCD_NEXT_EPOCH,
@@ -60,6 +65,12 @@ def aggregate(results):
             for entry in results
         ],
         "target_uses_own_prompt": True,
+        "target_noise_mode": target_noise_mode,
+        "source_target_noise_cosine": {
+            "mean": float(np.mean(noise_cosines)),
+            "std": float(np.std(noise_cosines)),
+            "per_pair": noise_cosines,
+        },
         "directions": {},
     }
     for direction in ("same", "opposite"):
@@ -82,11 +93,18 @@ def aggregate(results):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--gpus", default="0,1,2,3")
+    parser.add_argument(
+        "--target-noise-mode",
+        choices=("shared", "independent"),
+        default="shared",
+    )
     args = parser.parse_args()
     gpus = [int(value) for value in args.gpus.split(",") if value.strip()]
     if not gpus:
         raise ValueError("--gpus must contain at least one GPU")
-    _, pair_dir, log_dir, summary_path = ngcd_cross_datapoint_output_paths()
+    _, pair_dir, log_dir, summary_path = ngcd_cross_datapoint_output_paths(
+        args.target_noise_mode
+    )
     log_dir.mkdir(parents=True, exist_ok=True)
     processes = []
     for shard_index, gpu in enumerate(gpus):
@@ -101,6 +119,8 @@ def main():
             str(shard_index),
             "--shard-count",
             str(len(gpus)),
+            "--target-noise-mode",
+            args.target_noise_mode,
         ]
         handle = open(log_path, "w")
         process = subprocess.Popen(command, stdout=handle, stderr=subprocess.STDOUT)
@@ -116,8 +136,14 @@ def main():
     if failures:
         raise RuntimeError(f"worker failures: {failures}")
 
-    summary = aggregate(load_results(pair_dir))
+    summary = aggregate(load_results(pair_dir), args.target_noise_mode)
     atomic_json(summary_path, summary)
+    noise_cosine = summary["source_target_noise_cosine"]
+    print(
+        f"[noise axes] source-target cosine={noise_cosine['mean']:+.6f} "
+        f"± {noise_cosine['std']:.6f}",
+        flush=True,
+    )
     for direction in ("same", "opposite"):
         print(f"[{direction}]", flush=True)
         for predictor in PREDICTORS:

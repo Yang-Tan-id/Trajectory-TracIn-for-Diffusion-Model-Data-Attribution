@@ -1,4 +1,4 @@
-"""Compare target responses on positive and negative shared noise directions."""
+"""Compare target responses on positive and negative target noise directions."""
 
 import argparse
 import importlib
@@ -23,8 +23,15 @@ SOURCES = (
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.parse_args()
-    root, pair_dir, _, _ = ngcd_cross_datapoint_output_paths()
+    parser.add_argument(
+        "--target-noise-mode",
+        choices=("shared", "independent"),
+        default="shared",
+    )
+    args = parser.parse_args()
+    root, pair_dir, _, _ = ngcd_cross_datapoint_output_paths(
+        args.target_noise_mode
+    )
     entries = []
     for source_index in nsdl_datapoint_indices():
         target_index = ngcd_cross_datapoint_target_index(source_index)
@@ -51,6 +58,7 @@ def main():
         )
 
     result = {
+        "target_noise_mode": args.target_noise_mode,
         "pairs": [
             {
                 "source": entry["source_datapoint_index"],

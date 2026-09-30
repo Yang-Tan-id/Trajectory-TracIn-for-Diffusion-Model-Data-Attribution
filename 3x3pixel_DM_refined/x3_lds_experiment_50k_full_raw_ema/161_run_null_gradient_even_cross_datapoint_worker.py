@@ -25,6 +25,7 @@ def run_pair(
     schedule,
     device,
     pair_dir,
+    target_noise_mode,
 ):
     output_dir = pair_dir / f"source_{source_index:05d}_target_{target_index:05d}"
     result_path = output_dir / "result.json"
@@ -41,7 +42,22 @@ def run_pair(
     target_x0 = target_image.unsqueeze(0).to(device)
     source_condition = source_condition.unsqueeze(0).to(device)
     target_condition = target_condition.unsqueeze(0).to(device)
-    direction = shared.fixed_direction(source_index, device)
+    source_direction = shared.fixed_direction(source_index, device)
+    if target_noise_mode == "shared":
+        target_direction = source_direction
+    else:
+        generator = torch.Generator(device=device)
+        generator.manual_seed(
+            NGCD_CROSS_DATAPOINT_NOISE_SEED_BASE
+            + int(source_index)
+            + N_TRAIN * int(target_index)
+        )
+        target_direction = torch.randn(
+            source_direction.shape,
+            generator=generator,
+            device=device,
+            dtype=source_direction.dtype,
+        )
 
     null_model = shared.make_model(dataset, null_checkpoint["model_state"], device)
     next_model = shared.make_model(dataset, next_checkpoint["model_state"], device)
@@ -54,7 +70,7 @@ def run_pair(
         null_model,
         source_x0,
         source_condition,
-        direction,
+        source_direction,
         schedule,
         device,
     )
@@ -62,7 +78,7 @@ def run_pair(
         null_model,
         source_x0,
         source_condition,
-        -direction,
+        -source_direction,
         schedule,
         device,
     )
@@ -74,10 +90,13 @@ def run_pair(
     }
     checkpoint_tangent = shared.parameter_delta(parameters, next_parameters)
     direction_results = {}
-    saved_arrays = {"shared_noise_direction": direction.detach().cpu().numpy()}
+    saved_arrays = {
+        "source_noise_direction": source_direction.detach().cpu().numpy(),
+        "target_noise_direction": target_direction.detach().cpu().numpy(),
+    }
     for direction_name, evaluation_direction in (
-        ("same", direction),
-        ("opposite", -direction),
+        ("same", target_direction),
+        ("opposite", -target_direction),
     ):
         metrics, arrays = odd_even.evaluate_tangent_bank(
             null_model,
@@ -108,6 +127,13 @@ def run_pair(
         "source_condition": source_condition[0].detach().cpu().tolist(),
         "target_condition": target_condition[0].detach().cpu().tolist(),
         "target_uses_own_prompt": True,
+        "target_noise_mode": target_noise_mode,
+        "source_target_noise_cosine": float(
+            torch.nn.functional.cosine_similarity(
+                source_direction.reshape(1, -1),
+                target_direction.reshape(1, -1),
+            )[0]
+        ),
         "plus_loss_gradient_norm": plus_norm,
         "minus_loss_gradient_norm": minus_norm,
         "plus_loss_batch_values": plus_losses,
@@ -135,6 +161,11 @@ def main():
     parser.add_argument("--gpu", type=int, required=True)
     parser.add_argument("--shard-index", type=int, required=True)
     parser.add_argument("--shard-count", type=int, required=True)
+    parser.add_argument(
+        "--target-noise-mode",
+        choices=("shared", "independent"),
+        default="shared",
+    )
     args = parser.parse_args()
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is required")
@@ -148,7 +179,7 @@ def main():
         ngcd_checkpoint_path(NGCD_NEXT_EPOCH), map_location="cpu", weights_only=False
     )
     schedule = base.make_linear_schedule(T, device=device)
-    _, pair_dir, _, _ = ngcd_cross_datapoint_output_paths()
+    _, pair_dir, _, _ = ngcd_cross_datapoint_output_paths(args.target_noise_mode)
     source_indices = nsdl_datapoint_indices()[args.shard_index :: args.shard_count]
     for source_index in source_indices:
         target_index = ngcd_cross_datapoint_target_index(source_index)
@@ -161,6 +192,7 @@ def main():
             schedule,
             device,
             pair_dir,
+            args.target_noise_mode,
         )
         torch.cuda.empty_cache()
 

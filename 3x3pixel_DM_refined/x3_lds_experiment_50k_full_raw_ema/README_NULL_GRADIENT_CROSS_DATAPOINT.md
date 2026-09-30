@@ -17,6 +17,17 @@ python -u 162_launch_null_gradient_even_cross_datapoint_4gpu.py \
 python -u 163_compare_cross_datapoint_same_opposite.py
 ```
 
+To test a new, independently sampled target noise axis instead of reusing the
+source axis:
+
+```bash
+python -u 162_launch_null_gradient_even_cross_datapoint_4gpu.py \
+  --gpus 0,1,2,3 \
+  --target-noise-mode independent
+python -u 163_compare_cross_datapoint_same_opposite.py \
+  --target-noise-mode independent
+```
+
 Outputs are under:
 
 ```text
