@@ -20,7 +20,9 @@ def rowwise_correlation(left, right):
     right = right - right.mean(axis=1, keepdims=True)
     denominator = np.linalg.norm(left, axis=1) * np.linalg.norm(right, axis=1)
     result = np.full(len(left), np.nan, dtype=np.float64)
-    valid = denominator > NSDL_EPS
+    # Correlation is scale invariant. A fixed absolute epsilon incorrectly
+    # classifies small but non-constant squared-response curves as constants.
+    valid = np.isfinite(denominator) & (denominator > 0.0)
     result[valid] = np.sum(left[valid] * right[valid], axis=1) / denominator[valid]
     return result
 
