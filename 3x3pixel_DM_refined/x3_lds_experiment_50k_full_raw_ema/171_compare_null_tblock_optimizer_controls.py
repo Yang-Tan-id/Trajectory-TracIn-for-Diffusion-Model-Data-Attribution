@@ -23,6 +23,7 @@ def main():
     restored = summaries["restored_adamw"]
     output = {
         "optimizer_modes": list(NTCD_OPTIMIZER_MODES),
+        "optimizer_state_isolation": NTCD_STATECOPY_VERSION,
         "blocks": [],
     }
     print(

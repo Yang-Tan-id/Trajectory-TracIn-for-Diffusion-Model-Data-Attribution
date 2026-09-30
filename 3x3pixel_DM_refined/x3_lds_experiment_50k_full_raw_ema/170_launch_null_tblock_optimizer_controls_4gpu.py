@@ -11,6 +11,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--gpus", default="0,1,2,3")
     args = parser.parse_args()
+    # Fresh optimizers do not load mutable checkpoint state. Their existing
+    # outputs remain valid; launchers skip them when result.json is present.
     for optimizer_mode in NTCD_OPTIMIZER_MODES:
         print(f"\n[control launcher] optimizer={optimizer_mode}", flush=True)
         subprocess.run(

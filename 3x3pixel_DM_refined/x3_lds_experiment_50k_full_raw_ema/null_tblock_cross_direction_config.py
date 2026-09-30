@@ -32,6 +32,7 @@ NTCD_OPTIMIZER_MODES = (
     "zero_grad_restored_adamw",
 )
 NTCD_CONTROL_ROOT = ROOT / "null_tblock_cross_direction_optimizer_controls"
+NTCD_STATECOPY_VERSION = "statecopy_v2"
 
 
 def ntcd_target_index(source_index):
@@ -43,11 +44,9 @@ def ntcd_target_index(source_index):
 def ntcd_mode_root(optimizer_mode="restored_adamw"):
     if optimizer_mode not in NTCD_OPTIMIZER_MODES:
         raise ValueError(optimizer_mode)
-    return (
-        NTCD_ROOT
-        if optimizer_mode == "restored_adamw"
-        else NTCD_CONTROL_ROOT / optimizer_mode
-    )
+    if optimizer_mode in ("restored_adamw", "zero_grad_restored_adamw"):
+        return NTCD_CONTROL_ROOT / f"{optimizer_mode}_{NTCD_STATECOPY_VERSION}"
+    return NTCD_CONTROL_ROOT / optimizer_mode
 
 
 def ntcd_mode_log_dir(optimizer_mode="restored_adamw"):

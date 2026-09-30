@@ -40,9 +40,16 @@ target, noise-direction, and timestamp-block seeds:
 python -u 170_launch_null_tblock_optimizer_controls_4gpu.py --gpus 0,1,2,3
 ```
 
-The restored branch reuses the existing 40 models. The three new modes create
-120 additional models. Their combined comparison is saved to:
+The corrected restored and zero-gradient branches create 80 state-isolated
+models. Existing fresh-SGD and fresh-AdamW outputs are reused. Their combined
+comparison is saved to:
 
 ```text
 x3_lds_exp_50k/null_tblock_cross_direction_optimizer_controls/optimizer_control_comparison.json
 ```
+
+Restored optimizer states are deep-copied for every independent branch. The
+corrected restored and zero-gradient outputs use `statecopy_v2` directories;
+this prevents Adam step counters or moment tensors from advancing across
+nominally independent timestamp blocks. Existing fresh-SGD and fresh-AdamW
+results remain valid and are reused.

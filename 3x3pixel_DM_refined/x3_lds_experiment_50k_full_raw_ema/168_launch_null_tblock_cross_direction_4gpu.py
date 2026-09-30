@@ -97,9 +97,21 @@ def main():
             raise FileNotFoundError(path)
         with open(path) as handle:
             results.append(json.load(handle))
+    if args.optimizer_mode == "zero_grad_restored_adamw":
+        for result in results:
+            norms = [
+                float(block["update"]["parameter_delta_norm"])
+                for block in result["blocks"]
+            ]
+            if max(norms) - min(norms) > 1e-12:
+                raise RuntimeError(
+                    "zero-gradient branches are not identical for source "
+                    f"{result['source_datapoint_index']}: {norms}"
+                )
     summary = {
         "null_epoch": NSDL_NULL_EPOCH,
         "optimizer_mode": args.optimizer_mode,
+        "optimizer_state_isolation": NTCD_STATECOPY_VERSION,
         "source_count": len(results),
         "updated_model_count": len(results) * len(NTCD_TIMESTAMP_BLOCKS),
         "target_direction_count": NTCD_TARGET_DIRECTION_COUNT,

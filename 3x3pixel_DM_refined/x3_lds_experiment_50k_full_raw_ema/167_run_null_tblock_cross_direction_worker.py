@@ -1,6 +1,7 @@
 """Create 40 one-step timestamp-block models and evaluate five target axes."""
 
 import argparse
+import copy
 import importlib
 import time
 
@@ -21,7 +22,11 @@ def make_optimizer_for_mode(model, checkpoint, learning_rate, optimizer_mode):
     config = checkpoint.get("config", {})
     clip_norm = float(config.get("grad_clip_norm", GRAD_CLIP))
     if optimizer_mode in ("restored_adamw", "zero_grad_restored_adamw"):
-        return shared.make_optimizer(model, checkpoint, learning_rate)
+        branch_checkpoint = dict(checkpoint)
+        branch_checkpoint["optimizer_state"] = copy.deepcopy(
+            checkpoint["optimizer_state"]
+        )
+        return shared.make_optimizer(model, branch_checkpoint, learning_rate)
     if optimizer_mode == "fresh_sgd":
         return torch.optim.SGD(model.parameters(), lr=learning_rate), clip_norm
     if optimizer_mode == "fresh_adamw":
