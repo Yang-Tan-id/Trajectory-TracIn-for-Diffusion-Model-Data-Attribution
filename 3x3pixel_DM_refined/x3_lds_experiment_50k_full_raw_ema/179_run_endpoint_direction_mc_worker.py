@@ -71,6 +71,11 @@ def response_bank(
         before, linear_delta = jvp(
             prediction_fn, parameters, parameter_tangent
         )
+        # No higher-order derivative is needed. Detaching here prevents the CPU
+        # result buffers from acquiring one long CopySlices autograd graph over
+        # every evaluation batch and makes them safely convertible to NumPy.
+        before = before.detach()
+        linear_delta = linear_delta.detach()
         with torch.no_grad():
             after = updated(xt, timestamps, conditions)
         finite_delta = after - before
@@ -96,10 +101,10 @@ def response_bank(
         )
     shape = (EDMC_DIRECTION_COUNT, T)
     return {
-        "actual_sq_l2": actual_sq_l2.reshape(shape).numpy(),
-        "jvp_sq_l2": jvp_sq_l2.reshape(shape).numpy(),
-        "loss_abs_directional_derivative": loss_abs_derivative.reshape(shape).numpy(),
-        "actual_abs_loss_change": actual_abs_loss_change.reshape(shape).numpy(),
+        "actual_sq_l2": actual_sq_l2.reshape(shape).detach().numpy(),
+        "jvp_sq_l2": jvp_sq_l2.reshape(shape).detach().numpy(),
+        "loss_abs_directional_derivative": loss_abs_derivative.reshape(shape).detach().numpy(),
+        "actual_abs_loss_change": actual_abs_loss_change.reshape(shape).detach().numpy(),
     }
 
 
