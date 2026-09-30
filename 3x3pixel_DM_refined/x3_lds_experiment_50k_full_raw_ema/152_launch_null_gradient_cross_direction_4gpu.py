@@ -48,12 +48,18 @@ def aggregate(results, direction_name, predictor):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--gpus", default="0,1,2,3")
+    parser.add_argument(
+        "--evaluation-prompt", choices=("original", "random"), default="original"
+    )
     args = parser.parse_args()
     gpus = [int(value) for value in args.gpus.split(",") if value.strip()]
     if not gpus:
         raise ValueError("at least one GPU is required")
-    NGCD_LOG_DIR.mkdir(parents=True, exist_ok=True)
-    log_path = NGCD_LOG_DIR / "null_gradient_cross_direction_4gpu.log"
+    root, point_dir, log_dir, summary_path = ngcd_output_paths(
+        args.evaluation_prompt
+    )
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / "null_gradient_cross_direction_4gpu.log"
     active = []
     with open(log_path, "a", buffering=1) as stream:
         stream.write("\n[launcher] null-gradient cross-direction JVP\n")
@@ -69,6 +75,8 @@ def main():
                     str(shard_index),
                     "--shard-count",
                     str(len(gpus)),
+                    "--evaluation-prompt",
+                    args.evaluation_prompt,
                 ],
                 stdout=stream,
                 stderr=subprocess.STDOUT,
@@ -93,12 +101,13 @@ def main():
     results = []
     for datapoint_index in nsdl_datapoint_indices():
         with open(
-            NGCD_POINT_DIR / f"i{datapoint_index:05d}" / "result.json"
+            point_dir / f"i{datapoint_index:05d}" / "result.json"
         ) as handle:
             results.append(json.load(handle))
     summary = {
         "null_epoch": NGCD_NULL_EPOCH,
         "next_epoch": NGCD_NEXT_EPOCH,
+        "evaluation_prompt_mode": args.evaluation_prompt,
         "datapoint_indices": list(nsdl_datapoint_indices()),
         "same": {
             predictor: aggregate(results, "same", predictor)
@@ -132,8 +141,8 @@ def main():
         },
         "per_datapoint_results": results,
     }
-    NGCD_ROOT.mkdir(parents=True, exist_ok=True)
-    with open(NGCD_SUMMARY_PATH, "w") as handle:
+    root.mkdir(parents=True, exist_ok=True)
+    with open(summary_path, "w") as handle:
         json.dump(summary, handle, indent=2)
     for direction_name in ("same", "opposite"):
         primary = summary[direction_name]["single_point_sgd_jvp"]
@@ -147,7 +156,7 @@ def main():
             f"{control['global_cosine']['std']:.6f}",
             flush=True,
         )
-    print(f"[saved] {NGCD_SUMMARY_PATH}", flush=True)
+    print(f"[saved] {summary_path}", flush=True)
 
 
 if __name__ == "__main__":

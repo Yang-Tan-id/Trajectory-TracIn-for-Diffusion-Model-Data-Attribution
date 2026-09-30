@@ -42,6 +42,23 @@ def fixed_direction(datapoint_index, device):
     )
 
 
+def random_evaluation_condition(
+    datapoint_index, dataset, loss_condition, device
+):
+    generator = np.random.default_rng(
+        NGCD_RANDOM_PROMPT_SEED_BASE + int(datapoint_index)
+    )
+    loss_cpu = loss_condition.detach().cpu()
+    for candidate_index in generator.permutation(N_TRAIN):
+        _, candidate = dataset[int(candidate_index)]
+        if not torch.equal(candidate, loss_cpu):
+            return (
+                candidate.unsqueeze(0).to(device),
+                int(candidate_index),
+            )
+    raise RuntimeError("could not find a random prompt different from loss prompt")
+
+
 def mean_positive_loss_gradient(
     model, x0, condition, direction, schedule, device
 ):
@@ -184,15 +201,24 @@ def run_datapoint(
     next_checkpoint,
     schedule,
     device,
+    evaluation_prompt,
+    point_dir,
 ):
-    output_dir = NGCD_POINT_DIR / f"i{datapoint_index:05d}"
+    output_dir = point_dir / f"i{datapoint_index:05d}"
     result_path = output_dir / "result.json"
     if result_path.is_file():
         print(f"[gpu {device.index}] skip datapoint={datapoint_index}", flush=True)
         return
-    image, condition = dataset[int(datapoint_index)]
+    image, loss_condition = dataset[int(datapoint_index)]
     x0 = image.unsqueeze(0).to(device)
-    condition = condition.unsqueeze(0).to(device)
+    loss_condition = loss_condition.unsqueeze(0).to(device)
+    if evaluation_prompt == "random":
+        evaluation_condition, prompt_source_index = random_evaluation_condition(
+            datapoint_index, dataset, loss_condition[0], device
+        )
+    else:
+        evaluation_condition = loss_condition
+        prompt_source_index = int(datapoint_index)
     direction = fixed_direction(datapoint_index, device)
     null_model = make_model(dataset, null_checkpoint["model_state"], device)
     next_model = make_model(dataset, next_checkpoint["model_state"], device)
@@ -201,7 +227,7 @@ def run_datapoint(
     next_parameters = tuple(next_model.parameters())
     started = time.perf_counter()
     loss_gradient, gradient_norm, batch_losses = mean_positive_loss_gradient(
-        null_model, x0, condition, direction, schedule, device
+        null_model, x0, loss_condition, direction, schedule, device
     )
     # A gradient-descent update has parameter tangent -g. Its scale is
     # irrelevant for the direction cosine tested here.
@@ -234,7 +260,7 @@ def run_datapoint(
             sgd_tangent,
             checkpoint_tangent,
             x0,
-            condition,
+            evaluation_condition,
             evaluation_direction,
             schedule,
             device,
@@ -253,6 +279,11 @@ def run_datapoint(
         "datapoint_index": int(datapoint_index),
         "null_epoch": NGCD_NULL_EPOCH,
         "next_epoch": NGCD_NEXT_EPOCH,
+        "loss_prompt_source_index": int(datapoint_index),
+        "evaluation_prompt_mode": evaluation_prompt,
+        "evaluation_prompt_source_index": prompt_source_index,
+        "loss_condition": loss_condition[0].detach().cpu().tolist(),
+        "evaluation_condition": evaluation_condition[0].detach().cpu().tolist(),
         "timestamps": list(NSDL_TIMESTAMPS),
         "same_direction_loss_batch_values": batch_losses,
         "same_direction_loss_gradient_norm": gradient_norm,
@@ -276,6 +307,9 @@ def main():
     parser.add_argument("--gpu", type=int, required=True)
     parser.add_argument("--shard-index", type=int, required=True)
     parser.add_argument("--shard-count", type=int, required=True)
+    parser.add_argument(
+        "--evaluation-prompt", choices=("original", "random"), default="original"
+    )
     args = parser.parse_args()
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA is required")
@@ -293,6 +327,7 @@ def main():
         weights_only=False,
     )
     schedule = base.make_linear_schedule(T, device=device)
+    _, point_dir, _, _ = ngcd_output_paths(args.evaluation_prompt)
     indices = nsdl_datapoint_indices()[args.shard_index :: args.shard_count]
     print(f"[gpu {args.gpu}] datapoints={list(indices)}", flush=True)
     for datapoint_index in indices:
@@ -303,6 +338,8 @@ def main():
             next_checkpoint,
             schedule,
             device,
+            args.evaluation_prompt,
+            point_dir,
         )
         torch.cuda.empty_cache()
 

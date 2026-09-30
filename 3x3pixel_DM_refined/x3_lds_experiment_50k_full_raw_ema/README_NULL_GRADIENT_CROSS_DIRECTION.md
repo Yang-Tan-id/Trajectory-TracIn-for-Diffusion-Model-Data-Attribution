@@ -41,3 +41,15 @@ python -u 153_compare_same_opposite_predicted_noise_change.py
 
 This reports the direct cosine for the actual null-to-next change, the
 single-point `J(-g)` prediction, and the checkpoint-parameter-delta JVP control.
+
+To keep the loss gradient on the datapoint's original prompt but evaluate both
+noised inputs using one deterministic random valid prompt that differs from
+the loss prompt, run the separate random-prompt bank:
+
+```bash
+python 150_verify_null_gradient_cross_direction.py --evaluation-prompt random
+python -u 152_launch_null_gradient_cross_direction_4gpu.py \
+  --gpus 0,1,2,3 --evaluation-prompt random
+python -u 153_compare_same_opposite_predicted_noise_change.py \
+  --evaluation-prompt random
+```

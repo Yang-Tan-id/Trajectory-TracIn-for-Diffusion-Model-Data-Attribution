@@ -1,6 +1,7 @@
 """Verify null-to-next checkpoint cross-direction JVP prerequisites."""
 
 import json
+import argparse
 
 import torch
 
@@ -8,6 +9,11 @@ from null_gradient_cross_direction_config import *
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--evaluation-prompt", choices=("original", "random"), default="original"
+    )
+    args = parser.parse_args()
     paths = {
         "null": ngcd_checkpoint_path(NGCD_NULL_EPOCH),
         "next": ngcd_checkpoint_path(NGCD_NEXT_EPOCH),
@@ -28,6 +34,12 @@ def main():
         ),
         "primary_prediction": "J_null(x_minus) @ (-loss_gradient_positive)",
         "primary_target": "epsilon_next(x_minus)-epsilon_null(x_minus)",
+        "loss_prompt": "original datapoint prompt",
+        "evaluation_prompt": (
+            "a deterministic random valid training prompt different from the loss prompt"
+            if args.evaluation_prompt == "random"
+            else "original datapoint prompt"
+        ),
         "controls": [
             "same-direction input",
             "J_null @ (theta_next-theta_null) checkpoint-delta linearization",

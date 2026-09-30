@@ -1,5 +1,6 @@
 """Compare predicted-noise change directions on +epsilon and -epsilon inputs."""
 
+import argparse
 import json
 
 import numpy as np
@@ -87,10 +88,16 @@ def aggregate(per_datapoint, source):
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--evaluation-prompt", choices=("original", "random"), default="original"
+    )
+    args = parser.parse_args()
+    root, point_dir, _, _ = ngcd_output_paths(args.evaluation_prompt)
     per_datapoint = []
     for datapoint_index in nsdl_datapoint_indices():
         path = (
-            NGCD_POINT_DIR
+            point_dir
             / f"i{datapoint_index:05d}"
             / "predicted_noise_direction_arrays.npz"
         )
@@ -115,14 +122,15 @@ def main():
         ),
         "null_epoch": NGCD_NULL_EPOCH,
         "next_epoch": NGCD_NEXT_EPOCH,
+        "evaluation_prompt_mode": args.evaluation_prompt,
         "datapoint_indices": list(nsdl_datapoint_indices()),
         "sources": {
             source: aggregate(per_datapoint, source) for source in SOURCES
         },
         "per_datapoint_results": per_datapoint,
     }
-    output_path = NGCD_ROOT / "same_opposite_change_direction_consistency.json"
-    NGCD_ROOT.mkdir(parents=True, exist_ok=True)
+    output_path = root / "same_opposite_change_direction_consistency.json"
+    root.mkdir(parents=True, exist_ok=True)
     with open(output_path, "w") as handle:
         json.dump(output, handle, indent=2)
 
