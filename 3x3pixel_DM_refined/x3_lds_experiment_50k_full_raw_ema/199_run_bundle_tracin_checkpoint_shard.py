@@ -1,8 +1,9 @@
 """Compute checkpoint-sharded Bundle TracIn response vectors.
 
-For each checkpoint and training example, this worker estimates the standard
-diffusion training gradient by averaging independent ``(t, epsilon)`` draws.
-The training draws are deliberately independent of the query trajectory.
+For every checkpoint interval and training example, this worker replays the
+four ``(t, epsilon)`` events actually used during the four training epochs in
+that interval and averages their loss gradients.  These are exact training
+events rather than newly sampled Monte Carlo draws.
 
 For LDS we exploit linearity and aggregate projected training gradients with
 the fixed membership matrix before applying the query output Jacobian.  In the
@@ -32,10 +33,8 @@ from attribution_one_query import (
 )
 from bundle_tracin_config import *
 from dataset_loader import ColorGridDataset
-from x3_endpoint_das_jax_logic_pytorch import (
-    build_countsketch_specs,
-    make_torch_generator,
-)
+from forward_loss_alignment_config import replay_noise_path, replay_t_path
+from x3_endpoint_das_jax_logic_pytorch import build_countsketch_specs
 
 
 def atomic_numpy_save(path, value):
@@ -136,6 +135,16 @@ def main():
             f"membership shape={membership_np.shape}, expected={(expected_masks, N_TRAIN)}"
         )
     membership = torch.from_numpy(membership_np).to(device=device)
+    replay_t = np.load(replay_t_path(), mmap_mode="r")
+    replay_noise = np.load(replay_noise_path(), mmap_mode="r")
+    expected_t_shape = (50, N_TRAIN, BUNDLE_TRACIN_TRAIN_EVENTS)
+    expected_noise_shape = expected_t_shape + (3, 3, 3)
+    if replay_t.shape != expected_t_shape:
+        raise ValueError(f"replay t shape={replay_t.shape}, expected={expected_t_shape}")
+    if replay_noise.shape != expected_noise_shape:
+        raise ValueError(
+            f"replay noise shape={replay_noise.shape}, expected={expected_noise_shape}"
+        )
     trajectories = {
         int(record["query_id"]): np.load(Path(record["dir"]) / "trajectory_xt.npy")
         for record in records
@@ -205,23 +214,21 @@ def main():
             ),
         )
 
-        mc_count = BUNDLE_TRACIN_TRAIN_MC
+        event_count = BUNDLE_TRACIN_TRAIN_EVENTS
 
-        def single_mean_loss(params, x0, condition, timesteps, noises):
-            x_mc = x0.unsqueeze(0).expand(mc_count, *x0.shape)
-            condition_mc = condition.unsqueeze(0).expand(mc_count, condition.shape[-1])
-            xt = base.q_sample(x_mc, timesteps, noises, schedule)
-            prediction = functional_call(model, params, (xt, timesteps, condition_mc))
-            return (
-                (prediction - noises)
-                .pow(2)
-                .reshape(mc_count, -1)
-                .mean(dim=1)
-                .mean()
+        def single_event_loss(params, x0, condition, timestep, noise):
+            xt = base.q_sample(
+                x0.unsqueeze(0), timestep.unsqueeze(0), noise.unsqueeze(0), schedule
             )
+            prediction = functional_call(
+                model,
+                params,
+                (xt, timestep.unsqueeze(0), condition.unsqueeze(0)),
+            )
+            return (prediction - noise.unsqueeze(0)).pow(2).mean()
 
         batched_gradient = vmap(
-            grad(single_mean_loss), in_dims=(None, 0, 0, 0, 0)
+            grad(single_event_loss), in_dims=(None, 0, 0, 0, 0)
         )
         subset_features = torch.zeros(
             (expected_masks, BUNDLE_TRACIN_PROJ_DIM),
@@ -236,44 +243,45 @@ def main():
             end = min(start + args.batch_size, N_TRAIN)
             x_batch = x_all[start:end]
             condition_batch = condition_all[start:end]
-            generator = make_torch_generator(
-                device,
-                TRAIN_SEED,
-                "bundle_tracin_train_mc",
-                args.family,
-                checkpoint_index,
-                start,
-                mc_count,
+            point_count = end - start
+            x_events = (
+                x_batch[:, None]
+                .expand(point_count, event_count, *x_batch.shape[1:])
+                .reshape(point_count * event_count, *x_batch.shape[1:])
             )
-            train_timesteps = torch.randint(
-                0,
-                T,
-                (end - start, mc_count),
-                generator=generator,
-                device=device,
-                dtype=torch.long,
+            condition_events = (
+                condition_batch[:, None]
+                .expand(point_count, event_count, condition_batch.shape[-1])
+                .reshape(point_count * event_count, condition_batch.shape[-1])
             )
-            noises = torch.randn(
-                (end - start, mc_count, *x_batch.shape[1:]),
-                generator=generator,
-                device=device,
-                dtype=x_batch.dtype,
-            )
-            gradients = batched_gradient(
+            train_timesteps = torch.from_numpy(
+                np.array(
+                    replay_t[checkpoint_index, start:end], copy=True
+                ).reshape(-1)
+            ).to(device=device, dtype=torch.long)
+            noises = torch.from_numpy(
+                np.array(
+                    replay_noise[checkpoint_index, start:end], copy=True
+                ).reshape(point_count * event_count, *x_batch.shape[1:])
+            ).to(device=device, dtype=x_batch.dtype)
+            event_gradients = batched_gradient(
                 parameter_dict,
-                x_batch,
-                condition_batch,
+                x_events,
+                condition_events,
                 train_timesteps,
                 noises,
             )
-            projected = _project_batched_grads(
-                gradients,
+            projected_events = _project_batched_grads(
+                event_gradients,
                 names,
                 specs,
                 BUNDLE_TRACIN_PROJ_DIM,
                 False,
                 1e-8,
             )
+            projected = projected_events.reshape(
+                point_count, event_count, BUNDLE_TRACIN_PROJ_DIM
+            ).mean(dim=1)
             subset_features.add_(membership[:, start:end] @ projected)
             if (
                 batch_position == 1
@@ -341,7 +349,8 @@ def main():
                 "checkpoint_shard_count": args.checkpoint_shard_count,
                 "assigned_checkpoint_indices": checkpoint_indices,
                 "completed_checkpoint_indices": completed,
-                "train_mc": mc_count,
+                "train_events_per_checkpoint": event_count,
+                "training_event_source": "exact_replay_cache",
                 "batch_size": args.batch_size,
                 "projection_dim": BUNDLE_TRACIN_PROJ_DIM,
             },
@@ -363,7 +372,8 @@ def main():
             specs,
             batched_gradient,
             subset_features,
-            gradients,
+            event_gradients,
+            projected_events,
             projected,
             noises,
             train_timesteps,
@@ -384,9 +394,11 @@ def main():
             "checkpoint_shard_index": args.checkpoint_shard_index,
             "checkpoint_shard_count": args.checkpoint_shard_count,
             "checkpoint_indices": checkpoint_indices,
-            "train_gradient": "mean_MC_standard_diffusion_loss",
-            "train_t_noise_alignment": "independent_of_query",
-            "train_mc": BUNDLE_TRACIN_TRAIN_MC,
+            "train_gradient": "mean_of_four_exact_replayed_training_event_gradients",
+            "train_t_noise_alignment": "exact_training_events_not_query_aligned",
+            "train_events_per_checkpoint": BUNDLE_TRACIN_TRAIN_EVENTS,
+            "training_event_t_cache": str(replay_t_path()),
+            "training_event_noise_cache": str(replay_noise_path()),
             "parameter_source": BUNDLE_TRACIN_PARAM_SOURCE,
             "projection": "countsketch_shared_by_train_and_query_jacobian",
             "projection_dim": BUNDLE_TRACIN_PROJ_DIM,

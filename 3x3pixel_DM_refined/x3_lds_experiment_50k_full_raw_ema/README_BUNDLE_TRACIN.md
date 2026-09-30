@@ -7,13 +7,15 @@ For checkpoint `c`, training point `i`, query `q`, and trajectory timestamp
 `t`, it estimates
 
 ```text
-g_i,c = grad_theta mean_{m=1..10} L_simple(i; random t_m, random epsilon_m)
+g_i,c = (1/4) sum_{e=1..4} grad_theta L_simple(i; t_train_i,c,e, epsilon_train_i,c,e)
 a_i,q,c,t = -eta_c J_q,c,t g_i,c
 ```
 
-The training `t/noise` draws are independent of the query trajectory. The
-checkpoint responses are added as signed vectors. For an LDS subset `S`, the
-score is
+The four `t/noise` pairs are the events actually realized for that datapoint
+during the four epochs represented by checkpoint interval `c`. They come from
+the exact training-event replay cache; they are not newly sampled MC10 draws
+and are not forced to match the query trajectory. The checkpoint responses are
+added as signed vectors. For an LDS subset `S`, the score is
 
 ```text
 Bundle(S, q) = mean_t || sum_{i in S} sum_c a_i,q,c,t ||_2^2.
@@ -29,6 +31,7 @@ materializing the multi-gigabyte pointwise tensor.
 ## Run q00-q09 on four GPUs
 
 ```bash
+python -u 24_prepare_forward_loss_alignment.py --skip-queries --skip-baseline
 python 198_verify_bundle_tracin.py
 python -u 201_launch_bundle_tracin_4gpu.py \
   --gpus 0,1,2,3 \
@@ -36,15 +39,16 @@ python -u 201_launch_bundle_tracin_4gpu.py \
   --batch-size 128
 ```
 
-This worker materializes MC10 per-example gradients before projection, so its
-memory use is higher than the earlier MC1 projected runs. Start at 128 on a
-24-GB A5000; if utilization and memory allow, increase to 256 or 512.
+The preparation command is only needed when the exact replay cache is absent.
+The worker flattens four replayed events per datapoint before projection, so a
+datapoint batch of 128 creates an effective gradient batch of 512. Start at
+128 on a 24-GB A5000; if utilization and memory allow, increase gradually.
 
 The launcher is restartable at checkpoint-shard granularity. It saves:
 
 ```text
 x3_lds_exp_50k/attribution/
-  bundle_tracin_raw_mc10_independent_t_noise_projected4096_checkpoint_sum_timestamp_mean/
+  bundle_tracin_raw_replayed4event_projected4096_checkpoint_sum_timestamp_mean/
     qXX/bundle_vectors.npy   # [192, 100, 27]
     qXX/bundle_scores.npy    # [192]
     qXX/info.json

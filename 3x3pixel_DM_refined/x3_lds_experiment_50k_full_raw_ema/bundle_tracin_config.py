@@ -1,17 +1,18 @@
 """Configuration for vector-valued, interaction-aware Bundle TracIn."""
 
 from exp_config import *
+from forward_loss_alignment_config import FLA_EVENTS_PER_CHECKPOINT
 
 
 BUNDLE_TRACIN_QUERY_IDS = tuple(range(10))
-BUNDLE_TRACIN_TRAIN_MC = 10
+BUNDLE_TRACIN_TRAIN_EVENTS = FLA_EVENTS_PER_CHECKPOINT
 BUNDLE_TRACIN_PROJ_DIM = 4096
 BUNDLE_TRACIN_PARAM_SOURCE = "raw"
 BUNDLE_TRACIN_BATCH_SIZE = TRACIN_PROJECTED_BATCH_SIZE
 BUNDLE_TRACIN_CHECKPOINT_SHARDS = 4
 BUNDLE_TRACIN_OUTPUT_DIM = 3 * 3 * 3
 BUNDLE_TRACIN_METHOD = (
-    "bundle_tracin_raw_mc10_independent_t_noise_projected4096_"
+    "bundle_tracin_raw_replayed4event_projected4096_"
     "checkpoint_sum_timestamp_mean"
 )
 BUNDLE_TRACIN_SHARD_NAMESPACE = f"_{BUNDLE_TRACIN_METHOD}_checkpoint_shards"
