@@ -47,6 +47,13 @@ response at the exact same pollution direction and timestep, run:
 python -u 185_eval_aligned_loss_same_direction_response.py
 ```
 
+To keep one query pollution direction fixed while estimating its response from
+multiple *other* loss directions, run the leave-one-query-direction-out test:
+
+```bash
+python -u 186_eval_multiloss_fixed_query_direction.py
+```
+
 Summary:
 
 ```text
