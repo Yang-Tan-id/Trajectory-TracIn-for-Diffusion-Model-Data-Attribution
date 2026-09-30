@@ -21,6 +21,7 @@ from checkpoint_endpoint_adam_diagnostic_config import *
 from dataset_loader import ColorGridDataset
 from forward_loss_alignment_config import replay_noise_path, replay_t_path
 from train_worker import lr_at
+from x3_endpoint_das_jax_logic_pytorch import make_torch_generator
 
 
 transition = importlib.import_module("204_run_checkpoint_transition_diagnostic_shard")
@@ -127,9 +128,12 @@ def main():
     parser.add_argument("--pair-index", type=int, required=True)
     parser.add_argument("--query-ids", default="0-9")
     parser.add_argument("--query-batch-size", type=int, default=CTD_QUERY_BATCH_SIZE)
+    parser.add_argument("--loss-mc", type=int, default=1)
     args = parser.parse_args()
     if not 0 <= args.pair_index < 49:
         raise ValueError("--pair-index must be in [0, 48]")
+    if args.loss_mc <= 0:
+        raise ValueError("--loss-mc must be positive")
 
     transition.configure_training_precision()
     device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
@@ -182,23 +186,66 @@ def main():
     started = time.perf_counter()
 
     for event_index, epoch_batches in enumerate(orders[target_index]):
-        for indices_np in epoch_batches:
+        for batch_position, indices_np in enumerate(epoch_batches):
             indices = torch.from_numpy(indices_np).to(device=device, dtype=torch.long)
             x = x_all.index_select(0, indices)
             condition = condition_all.index_select(0, indices)
-            timestep = torch.from_numpy(
-                np.array(replay_t[target_index, indices_np, event_index], copy=True)
-            ).to(device=device, dtype=torch.long)
-            noise = torch.from_numpy(
-                np.array(replay_noise[target_index, indices_np, event_index], copy=True)
-            ).to(device=device, dtype=x.dtype)
-            xt = base.q_sample(x, timestep, noise, schedule)
+            if args.loss_mc == 1:
+                timestep = torch.from_numpy(
+                    np.array(
+                        replay_t[target_index, indices_np, event_index], copy=True
+                    )
+                ).to(device=device, dtype=torch.long)
+                noise = torch.from_numpy(
+                    np.array(
+                        replay_noise[target_index, indices_np, event_index], copy=True
+                    )
+                ).to(device=device, dtype=x.dtype)
+                x_loss = x
+                condition_loss = condition
+            else:
+                count = len(indices_np)
+                generator = make_torch_generator(
+                    device,
+                    TRAIN_SEED,
+                    "checkpoint_endpoint_adam_loss_mc",
+                    args.family,
+                    args.pair_index,
+                    event_index,
+                    batch_position,
+                    args.loss_mc,
+                )
+                timestep = torch.randint(
+                    0,
+                    T,
+                    (count, args.loss_mc),
+                    generator=generator,
+                    device=device,
+                    dtype=torch.long,
+                ).reshape(-1)
+                noise = torch.randn(
+                    (count, args.loss_mc, *x.shape[1:]),
+                    generator=generator,
+                    device=device,
+                    dtype=x.dtype,
+                ).reshape(-1, *x.shape[1:])
+                x_loss = (
+                    x[:, None]
+                    .expand(count, args.loss_mc, *x.shape[1:])
+                    .reshape(-1, *x.shape[1:])
+                )
+                condition_loss = (
+                    condition[:, None]
+                    .expand(count, args.loss_mc, condition.shape[-1])
+                    .reshape(-1, condition.shape[-1])
+                )
+            xt = base.q_sample(x_loss, timestep, noise, schedule)
 
             start_gradient, start_norm = frozen_gradient(
-                start_model, xt, timestep, condition, noise
+                start_model, xt, timestep, condition_loss, noise
             )
             target_gradient, target_norm = frozen_gradient(
-                target_model, xt, timestep, condition, noise
+                target_model, xt, timestep, condition_loss, noise
             )
             trapezoid_gradient = tuple(
                 0.5 * (left + right)
@@ -269,7 +316,8 @@ def main():
             predicted, actual
         )
 
-    output_dir = CEAD_ROOT / args.family
+    output_root = cead_root(args.loss_mc)
+    output_dir = output_root / args.family
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / f"pair_{args.pair_index:02d}.npz"
     metadata_path = output_dir / f"pair_{args.pair_index:02d}.json"
@@ -287,6 +335,12 @@ def main():
                 "start_epoch": int(start_checkpoint["epoch"]),
                 "target_epoch": int(target_checkpoint["epoch"]),
                 "gradient_models": "fixed endpoint checkpoints; no moving-model replay",
+                "loss_mc": args.loss_mc,
+                "loss_sampling": (
+                    "exact_replayed_training_event"
+                    if args.loss_mc == 1
+                    else "independent_t_noise_shared_by_start_and_target"
+                ),
                 "shadow_optimizer": "restored start AdamW state and exact LR schedule",
                 "parameter_agreement": parameter_agreement,
                 "start_gradient_norm_mean": float(np.mean(clip_norms["start"])),

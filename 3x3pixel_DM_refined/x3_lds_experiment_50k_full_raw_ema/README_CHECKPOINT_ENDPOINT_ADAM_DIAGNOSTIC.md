@@ -35,3 +35,23 @@ under:
 ```text
 x3_lds_exp_50k/checkpoint_endpoint_adam_diagnostic_10q_100t/
 ```
+
+To test whether four realized events per datapoint are too noisy, repeat the
+same two-checkpoint experiment with 20 independent `(t, epsilon)` samples per
+datapoint loss. Start and target endpoint models share the same MC samples:
+
+```bash
+python -u 207_launch_checkpoint_endpoint_adam_diagnostic_4gpu.py \
+  --gpus 0,1,2,3 \
+  --pair-indices 0,16,32,48 \
+  --family prompted \
+  --query-ids 0-9 \
+  --query-batch-size 256 \
+  --loss-mc 20
+```
+
+This performs no moving-model gradient replay. Its output is isolated under:
+
+```text
+x3_lds_exp_50k/checkpoint_endpoint_adam_diagnostic_mc20_10q_100t/
+```

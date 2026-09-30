@@ -11,12 +11,13 @@ import numpy as np
 from checkpoint_endpoint_adam_diagnostic_config import *
 
 
-def summarize(pair_indices, family):
+def summarize(pair_indices, family, loss_mc):
+    output_root = cead_root(loss_mc)
     records = []
     parameter = {method: [] for method in CEAD_METHODS if method != CEAD_METHODS[0]}
     for pair_index in pair_indices:
-        path = CEAD_ROOT / family / f"pair_{pair_index:02d}.npz"
-        metadata_path = CEAD_ROOT / family / f"pair_{pair_index:02d}.json"
+        path = output_root / family / f"pair_{pair_index:02d}.npz"
+        metadata_path = output_root / family / f"pair_{pair_index:02d}.json"
         with np.load(path, allow_pickle=False) as payload:
             records.append({name: payload[name] for name in payload.files})
         with open(metadata_path) as handle:
@@ -25,7 +26,12 @@ def summarize(pair_indices, family):
             parameter[method].append(values)
 
     actual = np.concatenate([record["actual_l2"] for record in records])
-    output = {"family": family, "pair_indices": pair_indices, "methods": {}}
+    output = {
+        "family": family,
+        "pair_indices": pair_indices,
+        "loss_mc": loss_mc,
+        "methods": {},
+    }
     print("\ntwo-checkpoint frozen-gradient AdamW response", flush=True)
     print(
         "method                                      vector-cos  vector-relerr  "
@@ -64,7 +70,7 @@ def summarize(pair_indices, family):
         }
         for method, items in parameter.items()
     }
-    output_path = CEAD_ROOT / f"summary_{family}.json"
+    output_path = output_root / f"summary_{family}.json"
     with open(output_path, "w") as handle:
         json.dump(output, handle, indent=2)
     print(f"[saved] {output_path}", flush=True)
@@ -77,9 +83,12 @@ def main():
     parser.add_argument("--family", choices=FAMILIES, default="prompted")
     parser.add_argument("--query-ids", default="0-9")
     parser.add_argument("--query-batch-size", type=int, default=CTD_QUERY_BATCH_SIZE)
+    parser.add_argument("--loss-mc", type=int, default=1)
     parser.add_argument("--analyze-only", action="store_true")
     args = parser.parse_args()
     pair_indices = parse_integer_selection(args.pair_indices, (0, 16, 32, 48))
+    if args.loss_mc <= 0:
+        raise ValueError("--loss-mc must be positive")
     gpus = [int(value) for value in args.gpus.split(",") if value.strip()]
     if len(pair_indices) > len(gpus):
         raise ValueError("this launcher assigns at most one selected pair per GPU")
@@ -104,6 +113,8 @@ def main():
                     args.query_ids,
                     "--query-batch-size",
                     str(args.query_batch_size),
+                    "--loss-mc",
+                    str(args.loss_mc),
                 ]
                 process = subprocess.Popen(command, stdout=stream, stderr=subprocess.STDOUT)
                 workers.append((pair_index, process))
@@ -125,7 +136,7 @@ def main():
                         raise SystemExit(code)
                 if active:
                     time.sleep(1)
-    summarize(pair_indices, args.family)
+    summarize(pair_indices, args.family, args.loss_mc)
 
 
 if __name__ == "__main__":

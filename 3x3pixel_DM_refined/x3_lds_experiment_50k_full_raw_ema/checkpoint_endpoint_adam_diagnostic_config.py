@@ -10,3 +10,9 @@ CEAD_METHODS = (
     "frozen_target_gradient_adamw_jvp",
     "frozen_endpoint_trapezoid_adamw_jvp",
 )
+
+
+def cead_root(loss_mc):
+    if int(loss_mc) == 1:
+        return CEAD_ROOT
+    return ROOT / f"checkpoint_endpoint_adam_diagnostic_mc{int(loss_mc)}_10q_100t"
