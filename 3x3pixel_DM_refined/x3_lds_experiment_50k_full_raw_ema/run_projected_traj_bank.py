@@ -109,6 +109,18 @@ def main():
         "--batch-size", type=int, default=TRACIN_PROJECTED_BATCH_SIZE
     )
     parser.add_argument(
+        "--train-noise-sampling",
+        choices=("independent", "antithetic"),
+        default="independent",
+        help="independent MC noise or paired +epsilon/-epsilon training noise",
+    )
+    parser.add_argument(
+        "--train-mc-pairs",
+        type=int,
+        default=TRACIN_TRAIN_MC,
+        help="number of base epsilon draws in antithetic mode (twice as many losses)",
+    )
+    parser.add_argument(
         "--output-suffix",
         default="",
         help="suffix added to shard namespaces and final attribution methods",
@@ -122,6 +134,8 @@ def main():
         raise ValueError("timestamp shard index is outside the shard count")
     if args.batch_size <= 0:
         raise ValueError("--batch-size must be positive")
+    if args.train_mc_pairs <= 0:
+        raise ValueError("--train-mc-pairs must be positive")
     device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
 
     with open(QUERY_DIR / "manifest.json") as handle:
@@ -188,7 +202,12 @@ def main():
     q_count = len(records)
     d = int(TRACIN_PROJ_DIM)
     batch_size = int(args.batch_size)
-    mc_count = int(TRACIN_TRAIN_MC)
+    train_mc_pairs = int(args.train_mc_pairs)
+    noise_sample_count = (
+        2 * train_mc_pairs
+        if args.train_noise_sampling == "antithetic"
+        else int(TRACIN_TRAIN_MC)
+    )
     coefficient = float(TRACIN_SECOND_ORDER_COEFFICIENT)
     snap_weight = 1.0 / len(included_timestamp_indices)
     orders = (
@@ -216,7 +235,9 @@ def main():
         f"pair_indices={checkpoint_pair_indices} first_order_only={args.first_order_only} "
         f"timestamps={len(selected_timestamp_indices)}/{len(t_seq)} "
         f"shard={args.timestamp_shard_index}/{args.timestamp_shard_count} "
-        f"train_points={N_TRAIN} train_mc={mc_count} batch={batch_size} dim={d}",
+        f"train_points={N_TRAIN} train_noise={args.train_noise_sampling} "
+        f"train_mc_pairs={train_mc_pairs if args.train_noise_sampling == 'antithetic' else 0} "
+        f"train_loss_terms={noise_sample_count} batch={batch_size} dim={d}",
         flush=True,
     )
 
@@ -290,14 +311,24 @@ def main():
                 del query_hvp, directional
             del query_grad, query_loss, eps_target
 
-            t_mc = torch.full((mc_count,), tval, device=device, dtype=torch.long)
+            t_mc = torch.full(
+                (noise_sample_count,), tval, device=device, dtype=torch.long
+            )
 
             def single_mean_loss(pdict, x0, cond, noises):
-                x_mc = x0.unsqueeze(0).expand(mc_count, *x0.shape)
-                c_mc = cond.unsqueeze(0).expand(mc_count, cond.shape[-1])
+                x_mc = x0.unsqueeze(0).expand(noise_sample_count, *x0.shape)
+                c_mc = cond.unsqueeze(0).expand(
+                    noise_sample_count, cond.shape[-1]
+                )
                 xt = base.q_sample(x_mc, t_mc, noises, sched)
                 pred = functional_call(model, pdict, (xt, t_mc, c_mc))
-                return (pred - noises).pow(2).reshape(mc_count, -1).mean(dim=1).mean()
+                return (
+                    (pred - noises)
+                    .pow(2)
+                    .reshape(noise_sample_count, -1)
+                    .mean(dim=1)
+                    .mean()
+                )
 
             batched_grad = vmap(grad(single_mean_loss), in_dims=(None, 0, 0, 0))
             # Backward mode scores gradients at theta_c against theta_{c-1}
@@ -309,13 +340,39 @@ def main():
             for batch_i, start in enumerate(range(0, N_TRAIN, batch_size), start=1):
                 end = min(start + batch_size, N_TRAIN)
                 xb, cb = x_all[start:end], cond_all[start:end]
-                generator = make_torch_generator(
-                    device, TRAIN_SEED, "projected_traj_train", ci, si, start, mc_count
-                )
-                noises = torch.randn(
-                    (end - start, mc_count, *xb.shape[1:]),
-                    generator=generator, device=device, dtype=xb.dtype,
-                )
+                if args.train_noise_sampling == "antithetic":
+                    generator = make_torch_generator(
+                        device,
+                        TRAIN_SEED,
+                        "projected_traj_train_antithetic",
+                        ci,
+                        si,
+                        start,
+                        train_mc_pairs,
+                    )
+                    base_noises = torch.randn(
+                        (end - start, train_mc_pairs, *xb.shape[1:]),
+                        generator=generator,
+                        device=device,
+                        dtype=xb.dtype,
+                    )
+                    noises = torch.cat((base_noises, -base_noises), dim=1)
+                else:
+                    generator = make_torch_generator(
+                        device,
+                        TRAIN_SEED,
+                        "projected_traj_train",
+                        ci,
+                        si,
+                        start,
+                        noise_sample_count,
+                    )
+                    noises = torch.randn(
+                        (end - start, noise_sample_count, *xb.shape[1:]),
+                        generator=generator,
+                        device=device,
+                        dtype=xb.dtype,
+                    )
                 grads_b = batched_grad(params_dict, xb, cb, noises)
                 phi = _project_batched_grads(grads_b, names, specs, d, False, 1e-8)
                 for order in orders:
@@ -377,6 +434,13 @@ def main():
                     "exclude_endpoint": args.exclude_endpoint,
                     "timestamp_weight": snap_weight,
                     "query_ids": [int(record["query_id"]) for record in records],
+                    "train_noise_sampling": args.train_noise_sampling,
+                    "train_mc_pairs": (
+                        train_mc_pairs
+                        if args.train_noise_sampling == "antithetic"
+                        else None
+                    ),
+                    "train_loss_terms": noise_sample_count,
                 },
                 handle,
                 indent=2,
@@ -413,7 +477,14 @@ def main():
                     "excluded_endpoint": args.exclude_endpoint,
                     "included_timestamp_indices": included_timestamp_indices,
                     "timestamp_weight": snap_weight,
-                    "train_mc": mc_count,
+                    "train_mc": noise_sample_count,
+                    "train_noise_sampling": args.train_noise_sampling,
+                    "train_mc_pairs": (
+                        train_mc_pairs
+                        if args.train_noise_sampling == "antithetic"
+                        else None
+                    ),
+                    "train_loss_terms": noise_sample_count,
                     "contraction": contraction, "lr_weighted": TRACIN_USE_LR_WEIGHTS,
                     "second_order_coefficient": coefficient if order == "second" else 0.0,
                     "second_order_direction": "next_checkpoint_parameter_delta" if order == "second" else "disabled",

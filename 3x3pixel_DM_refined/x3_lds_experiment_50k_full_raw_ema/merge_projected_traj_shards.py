@@ -23,6 +23,12 @@ def main():
     parser.add_argument("--output-suffix", default="")
     parser.add_argument("--query-ids")
     parser.add_argument("--exclude-endpoint", action="store_true")
+    parser.add_argument(
+        "--train-noise-sampling",
+        choices=("independent", "antithetic"),
+        default="independent",
+    )
+    parser.add_argument("--train-mc-pairs", type=int, default=None)
     args = parser.parse_args()
     if args.output_suffix and not re.fullmatch(
         r"[A-Za-z0-9_]+", args.output_suffix
@@ -81,6 +87,15 @@ def main():
             raise ValueError(f"output suffix mismatch in {shard}")
         if metadata.get("exclude_endpoint", False) != args.exclude_endpoint:
             raise ValueError(f"endpoint exclusion mismatch in {shard}")
+        if metadata.get("train_noise_sampling", "independent") != args.train_noise_sampling:
+            raise ValueError(f"train noise sampling mismatch in {shard}")
+        if args.train_noise_sampling == "antithetic":
+            if args.train_mc_pairs is None or args.train_mc_pairs <= 0:
+                raise ValueError(
+                    "--train-mc-pairs must be positive in antithetic mode"
+                )
+            if metadata.get("train_mc_pairs") != args.train_mc_pairs:
+                raise ValueError(f"train MC pair count mismatch in {shard}")
         if expected_pair_indices is not None and metadata.get(
             "checkpoint_pair_indices"
         ) != expected_pair_indices:
@@ -138,6 +153,11 @@ def main():
                         "excluded_endpoint": args.exclude_endpoint,
                         "num_snapshots": len(expected_timestamps),
                         "timestamp_weight": 1.0 / len(expected_timestamps),
+                        "train_noise_sampling": metadata.get(
+                            "train_noise_sampling", "independent"
+                        ),
+                        "train_mc_pairs": metadata.get("train_mc_pairs"),
+                        "train_loss_terms": metadata.get("train_loss_terms"),
                     },
                     handle,
                     indent=2,
