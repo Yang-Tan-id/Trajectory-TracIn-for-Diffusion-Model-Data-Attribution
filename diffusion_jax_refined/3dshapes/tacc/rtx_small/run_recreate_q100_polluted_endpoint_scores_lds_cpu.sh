@@ -36,9 +36,22 @@ query_file="$shapes/queries_in_distribution_plus_zero_seed_100_219.json"
 train_root="$shapes/result/$experiment/model/prompted_solo/seed_${seed}_train_gradient"
 raw_train="$train_root/traj_tracin_recreate_raw_mc1_aligned10x1/train_datapoint_gradient_artifact.npz"
 adamw_train="$train_root/traj_tracin_recreate_adamw_dual_mc1_aligned10x1/train_datapoint_gradient_artifact.npz"
+score_train_kinds="${SCORE_TRAIN_KINDS:-raw,adamw_residual,adamw_full}"
 
-[[ -f "$raw_train" ]] || { echo "Missing raw train artifact: $raw_train" >&2; exit 1; }
-[[ -f "$adamw_train" ]] || { echo "Missing AdamW train artifact: $adamw_train" >&2; exit 1; }
+if [[ ",$score_train_kinds," == *,raw,* ]]; then
+  [[ -f "$raw_train" ]] || { echo "Missing raw train artifact: $raw_train" >&2; exit 1; }
+fi
+if [[ ",$score_train_kinds," == *,adamw_residual,* || ",$score_train_kinds," == *,adamw_full,* ]]; then
+  [[ -f "$adamw_train" ]] || { echo "Missing AdamW train artifact: $adamw_train" >&2; exit 1; }
+fi
+
+IFS=',' read -r -a train_kinds <<<"$score_train_kinds"
+for train_kind in "${train_kinds[@]}"; do
+  case "$train_kind" in
+    raw|adamw_residual|adamw_full) ;;
+    *) echo "Invalid SCORE_TRAIN_KINDS entry: $train_kind" >&2; exit 1 ;;
+  esac
+done
 
 declare -A query_namespaces=(
   [delta_raw]="recreate_q100_polluted_endpoint_next_delta_raw_10t"
@@ -80,7 +93,7 @@ run_score() {
 
 cd "$shapes"
 for delta_kind in delta_raw delta_l2normalized; do
-  for train_kind in raw adamw_residual adamw_full; do
+  for train_kind in "${train_kinds[@]}"; do
     run_score "$train_kind" "$delta_kind" linear
     run_score "$train_kind" "$delta_kind" termwise_squared
     run_score "$train_kind" "$delta_kind" timestamp_sum_squared
@@ -88,7 +101,7 @@ for delta_kind in delta_raw delta_l2normalized; do
 done
 
 schemes_csv="$(IFS=,; echo "${score_schemes[*]}")"
-echo "[lds] 18 score families x 4 normalization variants x 4 targets"
+echo "[lds] ${#score_schemes[@]} score families x 4 normalization variants x 4 targets"
 python "$shapes/script/run_traj_tracin_lds_cached.py" \
   --execute --experiment "$experiment" --train-seed "$seed" \
   --query-file "$query_file" --query-ids "$query_ids" \
