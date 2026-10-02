@@ -29,8 +29,6 @@ conda activate /scratch/11447/yangtan7447/conda-envs/trajectory-tracin
 export PYTHONUNBUFFERED=1
 export TF_GPU_ALLOCATOR="${TF_GPU_ALLOCATOR:-cuda_malloc_async}"
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
-export TF_CUDNN_USE_AUTOTUNE=0
-export XLA_FLAGS="${XLA_FLAGS:---xla_gpu_autotune_level=0}"
 export EXPERIMENT_TAG="${EXPERIMENT_TAG:-experiment1}"
 export TRAIN_SEED="${TRAIN_SEED:-42}"
 export JAX_EPOCHS="${JAX_EPOCHS:-200}"
@@ -102,9 +100,18 @@ run_family() {
 echo "[definition] 50 checkpoints x 10 timestamps x MC1; 5000 points; projection=4096"
 echo "[projection] deterministic checkpoint-specific CountSketch shared by raw/query/AdamW"
 echo "[noise] one train-seed key per checkpoint/timestamp shared by all train points and query"
-run_family raw "$raw_artifact" none
-run_family adamw_dual "$adamw_artifact" adamw_residual_update
+if [[ "${RECREATE_RUN_RAW:-1}" == "1" ]]; then
+  run_family raw "$raw_artifact" none
+else
+  echo "[skip] raw family disabled by RECREATE_RUN_RAW=${RECREATE_RUN_RAW:-1}"
+fi
+if [[ "${RECREATE_RUN_ADAMW:-1}" == "1" ]]; then
+  run_family adamw_dual "$adamw_artifact" adamw_residual_update
+else
+  echo "[skip] AdamW family disabled by RECREATE_RUN_ADAMW=${RECREATE_RUN_ADAMW:-1}"
+fi
 
+if [[ -f "$raw_artifact" && -f "$adamw_artifact" ]]; then
 python - "$raw_artifact" "$adamw_artifact" <<'PY'
 import sys
 import numpy as np
@@ -120,7 +127,12 @@ with np.load(raw_path, allow_pickle=False) as raw, np.load(adamw_path, allow_pic
         raise SystemExit("optimizer-history shape does not match AdamW terms")
     print("[verified] raw/residual/full-restoration alignment and optimizer history")
 PY
+else
+  echo "[verify] deferred until both merged artifacts exist"
+fi
 
-echo "[done] raw=$raw_artifact"
-echo "[done] AdamW residual=$adamw_artifact::train_features"
-echo "[done] AdamW full=residual + $adamw_artifact::optimizer_history_features"
+[[ -f "$raw_artifact" ]] && echo "[done] raw=$raw_artifact"
+if [[ -f "$adamw_artifact" ]]; then
+  echo "[done] AdamW residual=$adamw_artifact::train_features"
+  echo "[done] AdamW full=residual + $adamw_artifact::optimizer_history_features"
+fi
