@@ -61,6 +61,9 @@ def main():
     parser.add_argument("--direction-shard-count", type=int, default=4)
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--train-t-chunk-size", type=int, default=50)
+    parser.add_argument(
+        "--train-t-count", type=int, default=DITD_DEFAULT_TRAIN_T_COUNT
+    )
     parser.add_argument("--query-term-batch-size", type=int, default=100)
     parser.add_argument("--direction-count", type=int, default=DITD_DIRECTION_COUNT)
     args = parser.parse_args()
@@ -102,9 +105,10 @@ def main():
     query_t = torch.tensor(
         DITD_QUERY_TIMESTEPS, device=device, dtype=torch.long
     )
-    train_t = torch.tensor(
-        DITD_TRAIN_TIMESTEPS, device=device, dtype=torch.long
-    )
+    train_t_values = ditd_train_timesteps(args.train_t_count)
+    train_t = torch.tensor(train_t_values, device=device, dtype=torch.long)
+    train_t_count = len(train_t_values)
+    methods = ditd_methods(train_t_count)
     query_count = len(records)
     query_timestamp_count = len(query_t)
     selected_directions = list(
@@ -115,7 +119,7 @@ def main():
         )
     )
     shard_root = ditd_shard_root(
-        args.direction_shard_index, args.direction_shard_count
+        args.direction_shard_index, args.direction_shard_count, train_t_count
     )
     done_path = shard_root / "done.json"
     if done_path.is_file():
@@ -125,7 +129,7 @@ def main():
     expected_shape = (query_count, N_TRAIN)
     partial_paths = {
         contraction: shard_root / f"partial_{contraction}.npy"
-        for contraction in DITD_METHODS
+        for contraction in methods
     }
     progress_path = shard_root / "progress.json"
     completed_directions = []
@@ -136,6 +140,7 @@ def main():
             "contract_version": DITD_CONTRACT_VERSION,
             "batch_size": args.batch_size,
             "train_t_chunk_size": args.train_t_chunk_size,
+            "train_t_count": train_t_count,
             "query_term_batch_size": args.query_term_batch_size,
             "direction_count": args.direction_count,
         }
@@ -160,7 +165,7 @@ def main():
             contraction: torch.zeros(
                 expected_shape, device=device, dtype=torch.float64
             )
-            for contraction in DITD_METHODS
+            for contraction in methods
         }
 
     remaining = [
@@ -169,7 +174,7 @@ def main():
     started = time.perf_counter()
     print(
         f"[direction-integrated gpu={args.gpu}] directions={len(selected_directions)} "
-        f"of {args.direction_count}; checkpoints=49; train_t=1000 exact; "
+        f"of {args.direction_count}; checkpoints=49; train_t={train_t_count} evenly-spaced; "
         f"query_t={query_timestamp_count}; queries={list(DITD_QUERY_IDS)}; "
         f"train_batch={args.batch_size}; train_t_chunk={args.train_t_chunk_size}; "
         f"projection={DITD_PROJECTION_DIM}",
@@ -313,7 +318,10 @@ def main():
             )
             checkpoint_lr = float(tracin_lr_weight(checkpoint))
             num_batches = math.ceil(N_TRAIN / args.batch_size)
-            progress_every = max(1, num_batches // 5)
+            # Roughly twenty heartbeat lines per checkpoint pair.  The old
+            # five-line cadence left long silent periods for integrated-t
+            # gradients and looked stalled in screen logs.
+            progress_every = max(1, num_batches // 20)
             for batch_position, train_start in enumerate(
                 range(0, N_TRAIN, args.batch_size), start=1
             ):
@@ -323,8 +331,8 @@ def main():
                     device=device,
                     dtype=torch.float32,
                 )
-                for t_start in range(0, T, args.train_t_chunk_size):
-                    t_end = min(t_start + args.train_t_chunk_size, T)
+                for t_start in range(0, train_t_count, args.train_t_chunk_size):
+                    t_end = min(t_start + args.train_t_chunk_size, train_t_count)
                     t_chunk = train_t[t_start:t_end]
                     gradients = batched_train_gradient(
                         named,
@@ -341,7 +349,9 @@ def main():
                         False,
                         1e-8,
                     )
-                    train_matrix += projected * (float(len(t_chunk)) / float(T))
+                    train_matrix += projected * (
+                        float(len(t_chunk)) / float(train_t_count)
+                    )
                     del gradients, projected
 
                 dots = (query_matrix @ train_matrix.T).reshape(
@@ -411,6 +421,7 @@ def main():
                 "contract_version": DITD_CONTRACT_VERSION,
                 "batch_size": args.batch_size,
                 "train_t_chunk_size": args.train_t_chunk_size,
+                "train_t_count": train_t_count,
                 "query_term_batch_size": args.query_term_batch_size,
                 "direction_count": args.direction_count,
                 "completed_directions": completed_directions,
@@ -430,7 +441,7 @@ def main():
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-    for contraction in DITD_METHODS:
+    for contraction in methods:
         atomic_numpy(shard_root / f"{contraction}.npy", scores[contraction].cpu().numpy())
     atomic_json(
         done_path,
@@ -442,9 +453,12 @@ def main():
             "direction_shard_count": args.direction_shard_count,
             "direction_indices": selected_directions,
             "direction_count": args.direction_count,
-            "train_timesteps": list(DITD_TRAIN_TIMESTEPS),
+            "train_timesteps": list(train_t_values),
             "query_timesteps": list(DITD_QUERY_TIMESTEPS),
-            "train_t_reduction": "exact arithmetic mean over all 1000 diffusion indices",
+            "train_t_reduction": (
+                f"arithmetic mean over {train_t_count} evenly spaced diffusion "
+                "indices including 0 and 999"
+            ),
             "direction_alignment": (
                 "one Gaussian noise direction shared by train loss and every "
                 "query endpoint/timestamp within each checkpoint-direction term"
@@ -454,6 +468,7 @@ def main():
             "projection_dim": DITD_PROJECTION_DIM,
             "batch_size": args.batch_size,
             "train_t_chunk_size": args.train_t_chunk_size,
+            "train_t_count": train_t_count,
             "query_term_batch_size": args.query_term_batch_size,
         },
     )

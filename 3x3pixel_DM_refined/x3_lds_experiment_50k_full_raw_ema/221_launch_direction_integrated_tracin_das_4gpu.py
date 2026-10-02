@@ -20,16 +20,22 @@ def main():
     parser.add_argument("--gpus", default="0,1,2,3")
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--train-t-chunk-size", type=int, default=50)
+    parser.add_argument(
+        "--train-t-count", type=int, default=DITD_DEFAULT_TRAIN_T_COUNT
+    )
     parser.add_argument("--query-term-batch-size", type=int, default=100)
     parser.add_argument("--direction-count", type=int, default=DITD_DIRECTION_COUNT)
     args = parser.parse_args()
     gpus = parse_gpus(args.gpus)
     LOG_DIR.mkdir(parents=True, exist_ok=True)
-    log_path = LOG_DIR / "direction_integrated_tracin_das_100dir_q00_q09_4gpu.log"
+    log_path = LOG_DIR / (
+        f"direction_integrated_tracin_das_{args.train_t_count}traint_"
+        "100dir_q00_q09_4gpu.log"
+    )
     active = {}
     with open(log_path, "a", buffering=1) as stream:
         stream.write(
-            "\n[launcher] direction-aligned all-1000-t train loss; "
+            f"\n[launcher] direction-aligned {args.train_t_count}-t train loss; "
             "100 endpoint timestamps; next delta; projected4096; q00-q09\n"
         )
         for shard_index, gpu in enumerate(gpus):
@@ -47,10 +53,14 @@ def main():
                 str(args.batch_size),
                 "--train-t-chunk-size",
                 str(args.train_t_chunk_size),
+                "--train-t-count",
+                str(args.train_t_count),
                 "--query-term-batch-size",
                 str(args.query_term_batch_size),
                 "--direction-count",
                 str(args.direction_count),
+                "--train-t-count",
+                str(args.train_t_count),
             ]
             label = f"direction-shard-{shard_index}"
             stream.write(f"[launcher] {label}: {' '.join(command)}\n")
@@ -94,4 +104,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
