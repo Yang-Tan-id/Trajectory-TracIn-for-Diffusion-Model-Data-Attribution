@@ -33,6 +33,7 @@ experiment="${EXPERIMENT_TAG:-experiment1}"
 seed="${TRAIN_SEED:-42}"
 query_ids="${QUERY_IDS:-100}"
 query_file="$shapes/queries_in_distribution_plus_zero_seed_100_219.json"
+score_scope="${SCORE_SCOPE:-q100}"
 train_root="$shapes/result/$experiment/model/prompted_solo/seed_${seed}_train_gradient"
 raw_train="$train_root/traj_tracin_recreate_raw_mc1_aligned10x1/train_datapoint_gradient_artifact.npz"
 adamw_train="$train_root/traj_tracin_recreate_adamw_dual_mc1_aligned10x1/train_datapoint_gradient_artifact.npz"
@@ -54,8 +55,8 @@ for train_kind in "${train_kinds[@]}"; do
 done
 
 declare -A query_namespaces=(
-  [delta_raw]="recreate_q100_polluted_endpoint_next_delta_raw_10t"
-  [delta_l2normalized]="recreate_q100_polluted_endpoint_next_delta_l2normalized_10t"
+  [delta_raw]="recreate_${score_scope}_polluted_endpoint_next_delta_raw_10t"
+  [delta_l2normalized]="recreate_${score_scope}_polluted_endpoint_next_delta_l2normalized_10t"
 )
 
 score_schemes=()
@@ -73,7 +74,7 @@ run_score() {
     *) echo "unknown train kind: $train_kind" >&2; return 1 ;;
   esac
 
-  local namespace="recreate_${train_kind}_polluted_endpoint_${delta_kind}_${reduction}_q100"
+  local namespace="recreate_${train_kind}_polluted_endpoint_${delta_kind}_${reduction}_${score_scope}"
   local contraction="$reduction"
   [[ "$reduction" == "termwise_squared" ]] || true
   export TRACIN_SCORE_CONTRACTION="$contraction"

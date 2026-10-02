@@ -142,8 +142,9 @@ PREDICTED_NOISE_JVP_SCHEMES = {
 }
 SCORE_SCHEMES = {
     **{
-        f"recreate_{train_kind}_polluted_endpoint_{delta_kind}_{reduction}_q100":
-        f"traj_tracin_recreate_{train_kind}_polluted_endpoint_{delta_kind}_{reduction}_q100"
+        f"recreate_{train_kind}_polluted_endpoint_{delta_kind}_{reduction}_{scope}":
+        f"traj_tracin_recreate_{train_kind}_polluted_endpoint_{delta_kind}_{reduction}_{scope}"
+        for scope in ("q100", "q0_99")
         for train_kind in ("raw", "adamw_residual", "adamw_full")
         for delta_kind in ("delta_raw", "delta_l2normalized")
         for reduction in ("linear", "termwise_squared", "timestamp_sum_squared")
