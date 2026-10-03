@@ -22,19 +22,28 @@ def atomic_json(path, value):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--timestamp-shard-count", type=int, default=2)
+    parser.add_argument("--aligned-mc10-full-only", action="store_true")
     args = parser.parse_args()
-    methods = tdna_methods()
+    if args.aligned_mc10_full_only:
+        transforms = ("adamw_full",)
+        contractions = ("timestamp_sum_squared",)
+        methods = {
+            "adamw_full": {
+                variant: {
+                    "timestamp_sum_squared": method
+                }
+                for variant, method in tdna_mc10_methods().items()
+            }
+        }
+        shard_root_fn = tdna_mc10_shard_root
+    else:
+        transforms = TDNA_TRANSFORMS
+        contractions = TDNA_CONTRACTIONS
+        methods = tdna_methods()
+        shard_root_fn = tdna_shard_root
     with open(QUERY_DIR / "manifest.json") as handle:
         manifest = json.load(handle)
     by_id = {int(record["query_id"]): record for record in manifest}
-    all_scores = {
-        transform: {
-            variant: np.zeros((100, N_TRAIN), dtype=np.float64)
-            for variant in TDNA_VARIANTS
-        }
-        for transform in TDNA_TRANSFORMS
-    }
-
     metadata = []
     for family in FAMILIES:
         query_ids = [
@@ -49,14 +58,14 @@ def main():
                     contraction: np.zeros(
                         (len(query_ids), N_TRAIN), dtype=np.float64
                     )
-                    for contraction in TDNA_CONTRACTIONS
+                    for contraction in contractions
                 }
                 for variant in TDNA_VARIANTS
             }
-            for transform in TDNA_TRANSFORMS
+            for transform in transforms
         }
         for shard_index in range(args.timestamp_shard_count):
-            root = tdna_shard_root(
+            root = shard_root_fn(
                 family, shard_index, args.timestamp_shard_count
             )
             with open(root / "done.json") as handle:
@@ -65,10 +74,10 @@ def main():
             if info["query_ids"] != query_ids:
                 raise ValueError(f"query mismatch in {root}")
             covered.extend(int(value) for value in info["timestamp_indices"])
-            for transform in TDNA_TRANSFORMS:
+            for transform in transforms:
                 for variant in TDNA_VARIANTS:
                     group = f"{transform}__{variant}"
-                    for contraction in TDNA_CONTRACTIONS:
+                    for contraction in contractions:
                         path = root / f"{group}_{contraction}.npy"
                         family_scores[transform][variant][contraction] += np.load(
                             path
@@ -76,9 +85,9 @@ def main():
         if sorted(covered) != list(range(100)):
             raise ValueError(f"{family} shards do not cover all 100 timestamps")
 
-        for transform in TDNA_TRANSFORMS:
+        for transform in transforms:
             for variant in TDNA_VARIANTS:
-                for contraction in TDNA_CONTRACTIONS:
+                for contraction in contractions:
                     method = methods[transform][variant][contraction]
                     values = family_scores[transform][variant][contraction]
                     for position, query_id in enumerate(query_ids):
@@ -95,24 +104,28 @@ def main():
                                 "contraction": contraction,
                                 "checkpoint_transitions": 49,
                                 "timestamps": 100,
+                                "noise_directions_per_timestamp": (
+                                    TDNA_MC10
+                                    if args.aligned_mc10_full_only
+                                    else 1
+                                ),
                                 "parameter_projection": "CountSketch4096",
                                 "train_query_noise_alignment": "same noise and t",
+                                "output_delta_normalized": True,
                                 "adamw_zero_baseline_subtracted": False,
                             },
                         )
-                    if contraction == "linear":
-                        all_scores[transform][variant][query_ids] = values
 
     membership = np.load(MASK_DIR / "membership.npy").astype(np.float64)
     result = {
         "query_ids": list(TRACIN_DAS_ALL_QUERY_IDS),
         "variants": {},
     }
-    for transform in TDNA_TRANSFORMS:
+    for transform in transforms:
         result["variants"][transform] = {}
         for variant in TDNA_VARIANTS:
             result["variants"][transform][variant] = {}
-            for contraction in TDNA_CONTRACTIONS:
+            for contraction in contractions:
                 method = methods[transform][variant][contraction]
                 scores = np.stack(
                     [
@@ -153,7 +166,12 @@ def main():
                     )
                 result["variants"][transform][variant][contraction] = method_result
 
-    output_path = LDS_DIR / "tracin_das_norm4_gradient_and_adamw_full_q00_q99.json"
+    output_path = LDS_DIR / (
+        "tracin_das_adamw_full_delta_norm_aligned_mc10_100x10_"
+        "timestamp_sum_squared_q00_q99.json"
+        if args.aligned_mc10_full_only
+        else "tracin_das_norm4_gradient_and_adamw_full_q00_q99.json"
+    )
     atomic_json(output_path, result)
     print(f"[saved] {output_path}", flush=True)
 
