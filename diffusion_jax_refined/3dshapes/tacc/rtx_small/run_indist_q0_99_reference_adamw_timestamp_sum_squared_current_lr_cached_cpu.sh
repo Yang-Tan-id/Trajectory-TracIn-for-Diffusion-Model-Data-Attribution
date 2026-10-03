@@ -28,9 +28,9 @@ export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-64}"
 export OPENBLAS_NUM_THREADS="${SLURM_CPUS_PER_TASK:-64}"
 export MKL_NUM_THREADS="${SLURM_CPUS_PER_TASK:-64}"
 export TRACIN_SCORE_TIMESTEP_ALLOWLIST="0,111,222,333,444,555,666,777,888,999"
-# Full AdamW features already contain eta_c.  stored_lr leaves eta_c unchanged;
-# do not multiply by another absolute LR.
-export TRACIN_SCORE_CHECKPOINT_WEIGHTING=stored_lr
+# Full AdamW features already contain the current eta_c.  Uniform outer
+# checkpoint weighting preserves eta_c without multiplying by a second LR.
+export TRACIN_SCORE_CHECKPOINT_WEIGHTING=uniform_checkpoint
 export TRACIN_SCORE_TIMESTEP_WEIGHTING=uniform
 export TRACIN_SCORE_CONTRACTION=timestamp_sum_squared
 export TRACIN_SCORE_QUERY_NORMALIZE=1
@@ -42,8 +42,7 @@ query_file="$shapes/queries_in_distribution_plus_zero_seed_100_219.json"
 query_ids="$(seq -s, 0 99)"
 query_namespace="loss_direction_original_f_reference_trajectory_100t_indist100q"
 train_artifact="$shapes/result/$experiment/model/prompted_solo/seed_${seed}_train_gradient/traj_tracin_adamw_dual_aligned10x10/train_datapoint_gradient_artifact.npz"
-residual_namespace="adamw_residual_aligned10x10_timestamp_sum_squared_stored_lr_ref100q"
-full_namespace="adamw_full_aligned10x10_timestamp_sum_squared_stored_lr_ref100q"
+full_namespace="adamw_full_aligned10x10_timestamp_sum_squared_current_lr_ref100q"
 sample_root="$shapes/result/$experiment/sample_ddim_eta0_1000"
 
 [[ -f "$query_file" ]] || { echo "Missing query manifest: $query_file" >&2; exit 1; }
@@ -62,17 +61,7 @@ done
 [[ "$missing" == 0 ]] || exit 1
 
 cd "$shapes"
-echo '[1/3] residual AdamW, timestamp-sum-square, stored/current checkpoint LR, Q0-Q99'
-python script/run_traj_tracin_queries_and_scores.py \
-  --execute --experiment "$experiment" --train-seed "$seed" \
-  --query-file "$query_file" --query-ids "$query_ids" --gpus 0 \
-  --skip-sampling --skip-query-gradient \
-  --artifact-namespace "$query_namespace" \
-  --train-artifact "$train_artifact" \
-  --score-output-namespace "$residual_namespace" \
-  --num-snapshots 100
-
-echo '[2/3] full AdamW, timestamp-sum-square, stored/current checkpoint LR, Q0-Q99'
+echo '[1/2] full AdamW, timestamp-sum-square, current checkpoint LR, Q0-Q99'
 python script/run_traj_tracin_queries_and_scores.py \
   --execute --experiment "$experiment" --train-seed "$seed" \
   --query-file "$query_file" --query-ids "$query_ids" --gpus 0 \
@@ -83,11 +72,11 @@ python script/run_traj_tracin_queries_and_scores.py \
   --num-snapshots 100 \
   --add-optimizer-history
 
-echo '[3/3] cached LDS: 100 queries x 2 schemes x 4 variants x 4 targets'
+echo '[2/2] cached LDS: 100 queries x 4 variants x 4 targets'
 python script/run_reference_q0_99_timestampwise_lds_cached.py \
   --execute --experiment "$experiment" --train-seed "$seed" \
   --query-file "$query_file" --query-ids "$query_ids" \
-  --score-schemes "$residual_namespace,$full_namespace" \
+  --score-schemes "$full_namespace" \
   --prediction-sign=1
 
-echo '[done] Q0-Q99 stored/current-LR AdamW timestamp-sum-square'
+echo '[done] Q0-Q99 current-LR full-AdamW timestamp-sum-square'
