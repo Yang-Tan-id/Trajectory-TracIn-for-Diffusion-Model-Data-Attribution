@@ -141,6 +141,10 @@ PREDICTED_NOISE_JVP_SCHEMES = {
     "predicted_noise_shared_orthogonal_probe8_termwise_square",
 }
 SCORE_SCHEMES = {
+    "retrac_exact4_endpoint100x1_q0_99":
+        "traj_tracin_retrac_exact4_endpoint100x1_q0_99",
+    "endpoint_tracin_train100x1_query100x1_q0_99":
+        "traj_tracin_endpoint_tracin_train100x1_query100x1_q0_99",
     "recreate_adamw_full_direction20_mean100t_delta_l2normalized_timestamp_sum_squared_q0_99":
         "traj_tracin_recreate_adamw_full_direction20_mean100t_delta_l2normalized_timestamp_sum_squared_q0_99",
     **{
