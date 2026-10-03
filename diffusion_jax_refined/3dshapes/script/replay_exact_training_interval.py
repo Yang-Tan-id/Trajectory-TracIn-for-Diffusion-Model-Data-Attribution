@@ -79,7 +79,8 @@ def main():
     parser.add_argument("--proj-dim", type=int, default=4096)
     parser.add_argument(
         "--event-feature", choices=(
-            "raw_gradient", "adamw_local_update", "adamw_hypothetical_update"
+            "raw_gradient", "raw_gradient_full_l2_normalized",
+            "adamw_local_update", "adamw_hypothetical_update"
         ),
         default="raw_gradient",
     )
@@ -202,6 +203,17 @@ def main():
             grads = jax.grad(selected_loss)(params)
             if args.event_feature == "raw_gradient":
                 feature_tree = grads
+            elif args.event_feature == "raw_gradient_full_l2_normalized":
+                norm_sq = sum(
+                    jnp.vdot(
+                        leaf.astype(jnp.float32), leaf.astype(jnp.float32)
+                    ).real
+                    for leaf in jax.tree_util.tree_leaves(grads)
+                )
+                denominator = jnp.sqrt(jnp.maximum(norm_sq, 1e-16))
+                feature_tree = jax.tree_util.tree_map(
+                    lambda leaf: leaf / denominator.astype(leaf.dtype), grads
+                )
             elif args.event_feature == "adamw_hypothetical_update":
                 feature_tree, _ = state.tx.update(grads, opt_state, params)
             else:
@@ -268,10 +280,13 @@ def main():
             )
             compute_epoch_gradients = args.extract_gradient_sketches and not gradient_part.exists()
             if compute_epoch_gradients:
-                epoch_features = np.empty((len(owned_indices), args.proj_dim), dtype=np.float32)
-                epoch_timesteps = np.empty((len(owned_indices),), dtype=np.int32)
-                epoch_batches = np.empty((len(owned_indices),), dtype=np.int32)
-                epoch_positions = np.empty((len(owned_indices),), dtype=np.int16)
+                # The trainer drops the incomplete final batch.  Initialize
+                # absent per-epoch events explicitly instead of serializing
+                # uninitialized np.empty memory for those dataset indices.
+                epoch_features = np.zeros((len(owned_indices), args.proj_dim), dtype=np.float32)
+                epoch_timesteps = np.full((len(owned_indices),), -1, dtype=np.int32)
+                epoch_batches = np.full((len(owned_indices),), -1, dtype=np.int32)
+                epoch_positions = np.full((len(owned_indices),), -1, dtype=np.int16)
             for batch_no, start in enumerate(range(0, steps_per_epoch * cfg.batch_size, cfg.batch_size)):
                 if saved_events is None:
                     if batch_no == 0:
@@ -333,9 +348,9 @@ def main():
                     "dropout_key": json.dumps(key_words(dropout_rng)),
                     "next_state_key": json.dumps(key_words(next_rng)),
                 })
-                if args.fixed_checkpoint and saved_events is None:
-                    # Random-event recovery only. Parameters and AdamW history remain
-                    # exactly those stored in the interval's starting checkpoint.
+                if args.fixed_checkpoint:
+                    # Paper/official ReTrac evaluates every saved event at the
+                    # interval's checkpoint parameters; only RNG bookkeeping moves.
                     state = state.replace(rng=next_rng)
                 else:
                     state, _ = train_step(state, x, y)
@@ -353,7 +368,7 @@ def main():
                 module.maybe_to_dtype(jnp.asarray(ds.images[eval_selected]), cfg.use_bfloat16), device
             )
             eval_y = jax.device_put(jnp.asarray(ds.labels[eval_selected]), device)
-            if args.fixed_checkpoint and saved_events is None:
+            if args.fixed_checkpoint:
                 eval_next_rng, _, _ = jax.random.split(state.rng, 3)
                 state = state.replace(rng=eval_next_rng)
             elif not args.fixed_checkpoint:
@@ -370,6 +385,7 @@ def main():
                     projection_checkpoint_index=np.asarray(checkpoint_index, dtype=np.int32),
                     feature_definition=np.asarray({
                         "raw_gradient": "CountSketch(fixed/replayed per-example diffusion-loss gradient)",
+                        "raw_gradient_full_l2_normalized": "CountSketch(full-parameter-L2-normalized fixed-checkpoint per-example diffusion-loss gradient)",
                         "adamw_local_update": "CountSketch(local AdamW update response to per-example gradient / batch_size)",
                         "adamw_hypothetical_update": "CountSketch(AdamW update from one per-example gradient using fixed checkpoint optimizer state)",
                     }[args.event_feature]),

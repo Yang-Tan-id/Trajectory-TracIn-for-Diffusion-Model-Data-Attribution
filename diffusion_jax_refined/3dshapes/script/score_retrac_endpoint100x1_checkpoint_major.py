@@ -75,8 +75,9 @@ def output_root(result_root: Path, train_seed: int, query: dict[str, Any], names
     )
 
 
-def outputs_exist(root: Path) -> bool:
-    return all((root / directory / "scores.npy").is_file() for directory, _ in VARIANTS)
+def outputs_exist(root: Path, paper_retrac: bool = False) -> bool:
+    variants = VARIANTS[-1:] if paper_retrac else VARIANTS
+    return all((root / directory / "scores.npy").is_file() for directory, _ in variants)
 
 
 def endpoint_noise_key(train_seed: int, query_id: int, checkpoint: int, timestep: int):
@@ -105,6 +106,35 @@ def make_endpoint_query_fn(adapter, model, schedule, projector):
 
         grad = jax.grad(loss_fn)(params)
         return projector(grad).astype(jnp.float32)
+
+    return jax.jit(jax.vmap(one, in_axes=(None, 0, 0, 0, None)))
+
+
+def make_paper_retrac_endpoint_query_fn(adapter, model, schedule, projector):
+    """Normalize each full-space timestep gradient, then average its sketch."""
+    def one(params, endpoint, cond, noises, timesteps):
+        def loss_one(candidate, noise, timestep):
+            t = jnp.full((endpoint.shape[0],), timestep, dtype=jnp.int32)
+            xt = q_sample(schedule, endpoint, t, noise)
+            pred = adapter.eps_apply(model, candidate, xt, t, cond)
+            return jnp.mean(jnp.square(pred - noise))
+
+        def body(total, inputs):
+            noise, timestep = inputs
+            grad = jax.grad(loss_one)(params, noise, timestep)
+            norm_sq = sum(
+                jnp.vdot(leaf.astype(jnp.float32), leaf.astype(jnp.float32)).real
+                for leaf in jax.tree_util.tree_leaves(grad)
+            )
+            denominator = jnp.sqrt(jnp.maximum(norm_sq, 1e-16))
+            normalized = jax.tree_util.tree_map(
+                lambda leaf: leaf / denominator.astype(leaf.dtype), grad
+            )
+            return total + projector(normalized).astype(jnp.float32), None
+
+        initial = jnp.zeros((4096,), dtype=jnp.float32)
+        total, _ = jax.lax.scan(body, initial, (noises, timesteps))
+        return total / jnp.asarray(timesteps.shape[0], dtype=jnp.float32)
 
     return jax.jit(jax.vmap(one, in_axes=(None, 0, 0, 0, None)))
 
@@ -139,7 +169,9 @@ def load_endpoint_train_part(path: Path) -> tuple[np.ndarray, np.ndarray, np.nda
     return features[0], indices, timesteps
 
 
-def load_event_shard(path: Path, learning_rate_schedule, steps_per_epoch: int):
+def load_event_shard(
+    path: Path, learning_rate_schedule, steps_per_epoch: int, *, paper_retrac: bool = False
+):
     with np.load(path, allow_pickle=False) as payload:
         features = np.asarray(payload["train_features"], dtype=np.float32)
         indices = np.asarray(payload["dataset_indices"], dtype=np.int64)
@@ -147,10 +179,13 @@ def load_event_shard(path: Path, learning_rate_schedule, steps_per_epoch: int):
         timesteps = np.asarray(payload["timesteps"], dtype=np.int32)
         epoch = int(np.asarray(payload["epoch"]).item())
         definition = str(np.asarray(payload["event_feature"]).item())
-    if definition != "raw_gradient":
-        raise ValueError(f"{path}: expected raw_gradient, got {definition}")
-    steps = (epoch - 1) * steps_per_epoch + batches
+    expected = "raw_gradient_full_l2_normalized" if paper_retrac else "raw_gradient"
+    if definition != expected:
+        raise ValueError(f"{path}: expected {expected}, got {definition}")
+    present = batches >= 0
+    steps = (epoch - 1) * steps_per_epoch + np.maximum(batches, 0)
     lrs = np.asarray(jax.device_get(learning_rate_schedule(jnp.asarray(steps))), dtype=np.float64)
+    lrs[~present] = 0.0
     if timesteps.shape != indices.shape:
         raise ValueError(
             f"{path}: timestep shape {timesteps.shape} does not match indices {indices.shape}"
@@ -165,6 +200,7 @@ def load_retrac_events(
     learning_rate_schedule,
     steps_per_epoch: int,
     shards: int = 2,
+    paper_retrac: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     start_epoch = 4 * (checkpoint + 1)
     interval = root / f"epoch_{start_epoch}_{start_epoch + 4}"
@@ -183,7 +219,8 @@ def load_retrac_events(
             if not path.is_file():
                 raise FileNotFoundError(path)
             features, indices, lrs, timesteps = load_event_shard(
-                path, learning_rate_schedule, steps_per_epoch
+                path, learning_rate_schedule, steps_per_epoch,
+                paper_retrac=paper_retrac,
             )
             feature_parts.append(features)
             index_parts.append(indices)
@@ -224,6 +261,10 @@ def main() -> None:
     parser.add_argument("--endpoint-train-artifact", type=Path)
     parser.add_argument("--retrac-event-root", type=Path, required=True)
     parser.add_argument("--methods", choices=("retrac", "endpoint", "both"), default="both")
+    parser.add_argument(
+        "--paper-retrac", action="store_true",
+        help="Use full-space per-timestep/per-event L2 normalization before projection.",
+    )
     parser.add_argument("--retrac-namespace", default="retrac_exact4_endpoint100x1_q0_99")
     parser.add_argument(
         "--retrac-reduction",
@@ -297,7 +338,7 @@ def main() -> None:
             result_root, args.train_seed, query, args.endpoint_namespace
         )
     queries = [query for query in queries if not (
-        (not run_retrac or outputs_exist(query["retrac_root"]))
+        (not run_retrac or outputs_exist(query["retrac_root"], args.paper_retrac))
         and (not run_endpoint or outputs_exist(query["endpoint_root"]))
     )]
     if not queries:
@@ -361,6 +402,7 @@ def main() -> None:
                 score_indices,
                 lr_schedule,
                 steps_per_epoch,
+                paper_retrac=args.paper_retrac,
             )
             if score_indices is None:
                 score_indices = retrac_indices
@@ -390,7 +432,11 @@ def main() -> None:
             seed_parts=(args.train_seed, "traj_tracin_projection", checkpoint),
             device=device,
         )
-        query_fn = make_endpoint_query_fn(adapter, model, schedule, projector)
+        query_fn = (
+            make_paper_retrac_endpoint_query_fn(adapter, model, schedule, projector)
+            if args.paper_retrac
+            else make_endpoint_query_fn(adapter, model, schedule, projector)
+        )
         train_device = (
             array_to_device(jnp.asarray(train), device) if run_endpoint else None
         )
@@ -452,7 +498,14 @@ def main() -> None:
             if run_retrac:
                 assert events_device is not None and event_lrs is not None
                 assert retrac_scores is not None
-                retrac_values = retrac_contractions(events_device, query_features)
+                if args.paper_retrac:
+                    raw = jnp.einsum(
+                        "ekp,qp->qek", events_device, query_features,
+                        precision=jax.lax.Precision.HIGHEST,
+                    )
+                    retrac_values = raw[:, None, :, :]
+                else:
+                    retrac_values = retrac_contractions(events_device, query_features)
                 retrac_values.block_until_ready()
                 weighted_events = (
                     np.asarray(retrac_values[:count], dtype=np.float32)
@@ -491,8 +544,10 @@ def main() -> None:
         del retrac_timestamp_groups
 
     assert score_indices is not None
+    output_variants = VARIANTS[-1:] if args.paper_retrac else VARIANTS
     for query_index, query in enumerate(queries):
-        for variant_index, (directory, variant) in enumerate(VARIANTS):
+        for output_index, (directory, variant) in enumerate(output_variants):
+            variant_index = 0 if args.paper_retrac else output_index
             methods = []
             if run_retrac:
                 methods.append(("retrac_exact_training_events", "retrac_root", retrac_scores))
@@ -516,7 +571,11 @@ def main() -> None:
                     algorithm=method,
                     extra_manifest={
                         "score_variant": variant,
-                        "query_objective": "endpoint_denoising_mean_loss_100_timestamps_mc1",
+                        "query_objective": (
+                            "mean_of_full_l2_normalized_endpoint_denoising_gradients_100_timestamps_mc1"
+                            if args.paper_retrac
+                            else "endpoint_denoising_mean_loss_100_timestamps_mc1"
+                        ),
                         "query_gradient_artifact_written": False,
                         "checkpoint_count": 49,
                         "score_reduction": (
@@ -526,7 +585,9 @@ def main() -> None:
                         ),
                         "prediction_sign_for_loss_utility": -1,
                         "train_definition": (
-                            "four exact training events with saved t/noise/dropout and event LR"
+                            "four saved training events, each full-space-L2-normalized before projection, with event LR"
+                            if args.paper_retrac and root_key == "retrac_root"
+                            else "four exact training events with saved t/noise/dropout and event LR"
                             if root_key == "retrac_root"
                             else "mean denoising loss over 100 timestamps x MC1 and checkpoint LR"
                         ),

@@ -141,6 +141,8 @@ PREDICTED_NOISE_JVP_SCHEMES = {
     "predicted_noise_shared_orthogonal_probe8_termwise_square",
 }
 SCORE_SCHEMES = {
+    "paper_retrac_exact4_endpoint100x1_q0_99":
+        "traj_tracin_paper_retrac_exact4_endpoint100x1_q0_99",
     "retrac_exact4_endpoint100x1_q0_99":
         "traj_tracin_retrac_exact4_endpoint100x1_q0_99",
     "retrac_exact4_endpoint100x1_timestamp_sum_squared_q0_99":
@@ -440,6 +442,8 @@ EXPECTED_RESIDUAL_JACOBIAN_VARIANTS = (
 FOUR_NORM_EXPECTED_SCHEMES = {
     "loss_direction_residual_rms_original_f",
 }
+PAPER_RETRAC_SCHEMES = {"paper_retrac_exact4_endpoint100x1_q0_99"}
+PAPER_RETRAC_VARIANTS = (("query_train_l2", "score_query_train_l2_normalized"),)
 
 
 def parse_ints(text: str) -> list[int]:
@@ -555,7 +559,9 @@ def main() -> None:
     if not scheme_names or invalid_schemes:
         raise ValueError(f"Invalid --score-schemes: {invalid_schemes or args.score_schemes!r}")
     expected_results = len(query_ids) * len(TARGETS) * sum(
-        len(VARIANTS)
+        len(PAPER_RETRAC_VARIANTS)
+        if name in PAPER_RETRAC_SCHEMES
+        else len(VARIANTS)
         if name in FOUR_NORM_EXPECTED_SCHEMES
         else len(EXPECTED_RESIDUAL_JACOBIAN_VARIANTS)
         if name in EXPECTED_RESIDUAL_JACOBIAN_SCHEMES
@@ -621,7 +627,9 @@ def main() -> None:
             score_namespace = SCORE_SCHEMES[scheme_name]
             score_root = query_score_root / score_namespace
             scheme_variants = (
-                VARIANTS
+                PAPER_RETRAC_VARIANTS
+                if scheme_name in PAPER_RETRAC_SCHEMES
+                else VARIANTS
                 if scheme_name in FOUR_NORM_EXPECTED_SCHEMES
                 else EXPECTED_RESIDUAL_JACOBIAN_VARIANTS
                 if scheme_name in EXPECTED_RESIDUAL_JACOBIAN_SCHEMES
