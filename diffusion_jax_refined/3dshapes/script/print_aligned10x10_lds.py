@@ -97,6 +97,12 @@ SCHEME_GROUPS = {
             "traj_tracin_adamw_full_aligned10x10_timestamp_sum_squared",
         ),
     ),
+    "timestamp_sum_squared_current_lr_ref100q": (
+        (
+            "full_timestamp_sum_squared_current_lr_ref100q",
+            "traj_tracin_adamw_full_aligned10x10_timestamp_sum_squared_current_lr_ref100q",
+        ),
+    ),
     "second_order_hvp": (
         (
             "residual_second_order_hvp",
@@ -322,6 +328,7 @@ def main() -> None:
             "squared_previous_lr",
             "absolute",
             "timestamp_sum_squared",
+            "timestamp_sum_squared_current_lr_ref100q",
             "second_order_hvp",
             "second_order_hvp_linear",
             "previous_target_linear",
