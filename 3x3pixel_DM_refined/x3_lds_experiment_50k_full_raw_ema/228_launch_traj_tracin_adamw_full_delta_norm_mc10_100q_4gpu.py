@@ -22,10 +22,10 @@ def main():
     args = parser.parse_args()
     gpus = parse_gpus(args.gpus)
     assignments = (
-        ("prompted", 0, gpus[0]),
-        ("prompted", 1, gpus[1]),
-        ("unprompted", 0, gpus[2]),
-        ("unprompted", 1, gpus[3]),
+        ("prompted", 0, 3, gpus[0]),
+        ("prompted", 1, 3, gpus[1]),
+        ("prompted", 2, 3, gpus[2]),
+        ("unprompted", 0, 1, gpus[3]),
     )
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     log_path = LOG_DIR / (
@@ -38,7 +38,7 @@ def main():
             "independent train MC10; full AdamW; norm4; "
             "timestamp-sum-square; q00-q99\n"
         )
-        for family, shard_index, gpu in assignments:
+        for family, shard_index, shard_count, gpu in assignments:
             label = f"{family}-timestamp-shard-{shard_index}"
             command = [
                 sys.executable,
@@ -51,7 +51,7 @@ def main():
                 "--timestamp-shard-index",
                 str(shard_index),
                 "--timestamp-shard-count",
-                "2",
+                str(shard_count),
                 "--batch-size",
                 str(args.batch_size),
             ]
@@ -82,8 +82,10 @@ def main():
                 sys.executable,
                 "-u",
                 "227_merge_eval_traj_tracin_adamw_full_delta_norm_mc10.py",
-                "--timestamp-shard-count",
-                "2",
+                "--prompted-shard-count",
+                "3",
+                "--unprompted-shard-count",
+                "1",
             ],
             stdout=stream,
             stderr=subprocess.STDOUT,

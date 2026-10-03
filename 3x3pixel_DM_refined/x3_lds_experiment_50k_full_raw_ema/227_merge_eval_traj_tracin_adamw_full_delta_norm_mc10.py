@@ -31,13 +31,19 @@ def atomic_json(path, value):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--timestamp-shard-count", type=int, default=2)
+    parser.add_argument("--prompted-shard-count", type=int, default=3)
+    parser.add_argument("--unprompted-shard-count", type=int, default=1)
     args = parser.parse_args()
     with open(QUERY_DIR / "manifest.json") as handle:
         manifest = json.load(handle)
     by_id = {int(record["query_id"]): record for record in manifest}
 
     for family in FAMILIES:
+        shard_count = (
+            args.prompted_shard_count
+            if family == "prompted"
+            else args.unprompted_shard_count
+        )
         query_ids = [
             query_id
             for query_id in TRACIN_DAS_ALL_QUERY_IDS
@@ -48,8 +54,8 @@ def main():
             variant: np.zeros((len(query_ids), N_TRAIN), dtype=np.float64)
             for variant in worker.VARIANTS
         }
-        for shard_index in range(args.timestamp_shard_count):
-            root = worker.shard_root(family, shard_index, args.timestamp_shard_count)
+        for shard_index in range(shard_count):
+            root = worker.shard_root(family, shard_index, shard_count)
             with open(root / "done.json") as handle:
                 info = json.load(handle)
             if info["query_ids"] != query_ids:

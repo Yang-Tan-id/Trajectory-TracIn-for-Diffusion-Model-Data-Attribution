@@ -183,8 +183,8 @@ def main():
     with open(QUERY_DIR / "manifest.json") as handle:
         manifest = json.load(handle)
     records = [record for record in manifest if record["family"] == args.family]
-    if len(records) != 50:
-        raise ValueError(f"expected 50 {args.family} queries, found {len(records)}")
+    if not records:
+        raise ValueError(f"no queries found for family={args.family}")
     query_ids = [int(record["query_id"]) for record in records]
 
     dataset = ColorGridDataset(str(BASE_CSV), grid_size=3)
