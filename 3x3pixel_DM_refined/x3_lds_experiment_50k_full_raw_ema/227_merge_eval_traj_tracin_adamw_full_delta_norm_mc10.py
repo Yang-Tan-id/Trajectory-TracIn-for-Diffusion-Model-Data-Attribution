@@ -31,8 +31,8 @@ def atomic_json(path, value):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--prompted-shard-count", type=int, default=3)
-    parser.add_argument("--unprompted-shard-count", type=int, default=1)
+    parser.add_argument("--prompted-shard-count", type=int, default=2)
+    parser.add_argument("--unprompted-shard-count", type=int, default=2)
     args = parser.parse_args()
     with open(QUERY_DIR / "manifest.json") as handle:
         manifest = json.load(handle)

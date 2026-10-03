@@ -22,10 +22,10 @@ def main():
     args = parser.parse_args()
     gpus = parse_gpus(args.gpus)
     assignments = (
-        ("prompted", 0, 3, gpus[0]),
-        ("prompted", 1, 3, gpus[1]),
-        ("prompted", 2, 3, gpus[2]),
-        ("unprompted", 0, 1, gpus[3]),
+        ("prompted", 0, 2, gpus[0]),
+        ("prompted", 1, 2, gpus[1]),
+        ("unprompted", 0, 2, gpus[2]),
+        ("unprompted", 1, 2, gpus[3]),
     )
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     log_path = LOG_DIR / (
@@ -83,9 +83,9 @@ def main():
                 "-u",
                 "227_merge_eval_traj_tracin_adamw_full_delta_norm_mc10.py",
                 "--prompted-shard-count",
-                "3",
+                "2",
                 "--unprompted-shard-count",
-                "1",
+                "2",
             ],
             stdout=stream,
             stderr=subprocess.STDOUT,
