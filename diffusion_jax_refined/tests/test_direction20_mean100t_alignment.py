@@ -10,6 +10,7 @@ QUERY = ROOT / "3dshapes" / "script" / "direction20_query_common.py"
 SCORER = ROOT / "3dshapes" / "script" / "score_direction20_timestamp_square_checkpoint_major.py"
 LDS = ROOT / "3dshapes" / "script" / "run_traj_tracin_lds_cached.py"
 RTX = ROOT / "3dshapes" / "tacc" / "rtx_small"
+H100 = ROOT / "3dshapes" / "tacc" / "h100"
 
 
 def test_direction_key_is_checkpoint_specific_and_shared_by_contract():
@@ -87,15 +88,16 @@ def test_four_variants_and_rtx_pipeline_are_wired():
     assert '"checkpoint_weighting": "inside_adamw_update_only"' in scorer
     assert '"query_gradient_artifact_written": False' in scorer
 
-    for filename in (
-        "run_direction20_mean100t_train_adamw_rtx_small.sh",
-        "run_direction20_mean100t_q0_99_scores_lds_rtx_small.sh",
-    ):
-        launcher = (RTX / filename).read_text()
-        assert "#SBATCH -p rtx-small" in launcher
-        assert "#SBATCH -n 2" in launcher
+    score_launcher = (
+        RTX / "run_direction20_mean100t_q0_99_scores_lds_rtx_small.sh"
+    ).read_text()
+    assert "#SBATCH -p rtx-small" in score_launcher
+    assert "#SBATCH -n 2" in score_launcher
 
-    train = (RTX / "run_direction20_mean100t_train_adamw_rtx_small.sh").read_text()
+    train = (H100 / "run_direction20_mean100t_train_adamw_h100.sh").read_text()
+    assert "#SBATCH -p h100" in train
+    assert "#SBATCH -N 4" in train
+    assert "#SBATCH -n 16" in train
     assert "TRAJ_TRACIN_TRAIN_ALIGNED_DIRECTION_COUNT=20" in train
     assert "TRAJ_TRACIN_TRAIN_OPTIMIZER_TRANSFORM=adamw_residual_update" in train
     assert "TRAJ_TRACIN_SKIP_STAGE_MERGE=1" in train
