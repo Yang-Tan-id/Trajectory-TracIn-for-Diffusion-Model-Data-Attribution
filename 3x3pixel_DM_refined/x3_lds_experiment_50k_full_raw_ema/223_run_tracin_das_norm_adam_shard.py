@@ -219,14 +219,6 @@ def main():
         default="aligned",
     )
     parser.add_argument("--query-mc", type=int, default=1)
-    parser.add_argument(
-        "--aligned-mc10-full-only",
-        action="store_true",
-        help=(
-            "full AdamW only: retain ten aligned query/train noise terms "
-            "through checkpoint summation before timestamp-wise squaring"
-        ),
-    )
     args = parser.parse_args()
     if not 0 <= args.timestamp_shard_index < args.timestamp_shard_count:
         raise ValueError("invalid timestamp shard")
@@ -234,27 +226,9 @@ def main():
         raise ValueError("batch size must be positive")
     if args.query_mc <= 0:
         raise ValueError("query MC must be positive")
-    if (
-        args.train_noise_mode == "aligned"
-        and args.query_mc != 1
-        and not args.aligned_mc10_full_only
-    ):
+    if args.train_noise_mode == "aligned" and args.query_mc != 1:
         raise ValueError("query MC > 1 requires independent train noise")
-    if args.aligned_mc10_full_only:
-        if (
-            args.query_scope != "all"
-            or args.noise_mode != "checkpoint"
-            or args.parameter_projection != "projected4096"
-            or args.train_noise_mode != "aligned"
-            or args.query_mc != TDNA_MC10
-            or args.avg_pair_lr_multi
-            or args.timestamp_count_multi
-        ):
-            raise ValueError(
-                "aligned MC10 full mode requires "
-                "all/checkpoint/projected4096/aligned/query-mc=10"
-            )
-    elif (
+    if (
         args.query_scope != "all"
         or args.noise_mode != "checkpoint"
         or args.parameter_projection != "projected4096"
@@ -388,24 +362,6 @@ def main():
             args.timestamp_shard_index,
             args.timestamp_shard_count,
         )
-    elif args.aligned_mc10_full_only:
-        methods_by_group = {
-            f"adamw_full__{variant}": {
-                "timestamp_sum_squared": method
-            }
-            for variant, method in tdna_mc10_methods().items()
-        }
-        pair_indices_by_group = {
-            group: set(range(49)) for group in methods_by_group
-        }
-        timestamp_indices_by_group = {
-            group: set(range(len(timestamps))) for group in methods_by_group
-        }
-        shard_root = tdna_mc10_shard_root(
-            args.family,
-            args.timestamp_shard_index,
-            args.timestamp_shard_count,
-        )
     else:
         nested_methods = tdna_methods()
         methods_by_group = {
@@ -424,11 +380,7 @@ def main():
             args.timestamp_shard_index,
             args.timestamp_shard_count,
         )
-    contractions = (
-        ("timestamp_sum_squared",)
-        if args.aligned_mc10_full_only
-        else ("linear", "termwise_squared", "timestamp_sum_squared")
-    )
+    contractions = ("linear", "termwise_squared", "timestamp_sum_squared")
     snapshot_weight_by_group = (
         {group: 1.0 / float(group) for group in methods_by_group}
         if args.timestamp_count_multi
@@ -473,8 +425,6 @@ def main():
             raise ValueError("partial shard train-noise mode differs")
         if int(progress.get("query_mc", 1)) != args.query_mc:
             raise ValueError("partial shard query MC differs")
-        if bool(progress.get("aligned_mc10_full_only", False)) != args.aligned_mc10_full_only:
-            raise ValueError("partial shard aligned-MC10 mode differs")
         if progress.get("family", TRACIN_DAS_FAMILY) != args.family:
             raise ValueError("partial shard family differs")
         if progress.get("query_scope", "ten") != args.query_scope:
@@ -528,7 +478,6 @@ def main():
         f"noise_mode={args.noise_mode} "
         f"train_noise_mode={args.train_noise_mode} "
         f"query_mc={args.query_mc} "
-        f"aligned_mc10_full_only={args.aligned_mc10_full_only} "
         f"avg_pair_lr_multi={args.avg_pair_lr_multi} "
         f"timestamp_count_multi={args.timestamp_count_multi} "
         f"query_train_noise_aligned={args.train_noise_mode == 'aligned'} "
@@ -540,15 +489,7 @@ def main():
         timestep = timestamps[timestamp_index]
         t_query = torch.tensor([timestep], device=device, dtype=torch.long)
         timestamp_accumulators = {
-            group: torch.zeros(
-                (
-                    (len(records), args.query_mc, N_TRAIN)
-                    if args.aligned_mc10_full_only
-                    else expected_shape
-                ),
-                device=device,
-                dtype=torch.float64,
-            )
+            group: torch.zeros(expected_shape, device=device, dtype=torch.float64)
             for group in methods_by_group
         }
 
@@ -670,25 +611,7 @@ def main():
                     delta_norms.append(float(delta_norm))
             query_matrix = torch.stack(query_vectors).detach().to(torch.float32)
 
-            if args.aligned_mc10_full_only:
-                def single_train_loss(parameter_dict, x0, condition, noise):
-                    xt = base.q_sample(
-                        x0.unsqueeze(0), t_query, noise, schedule
-                    )
-                    prediction = functional_call(
-                        model,
-                        parameter_dict,
-                        (xt, t_query, condition.unsqueeze(0)),
-                    )
-                    return (prediction - noise).square().mean()
-
-                per_noise_gradient = vmap(
-                    grad(single_train_loss), in_dims=(None, None, None, 0)
-                )
-                batched_gradient = vmap(
-                    per_noise_gradient, in_dims=(None, 0, 0, None)
-                )
-            elif args.train_noise_mode == "aligned":
+            if args.train_noise_mode == "aligned":
                 def train_loss(parameter_dict, x0, condition):
                     xt = base.q_sample(
                         x0.unsqueeze(0), t_query, query_noises[0, 0], schedule
@@ -765,13 +688,6 @@ def main():
                         named,
                         x_all[start:end],
                         cond_all[start:end],
-                        query_noises[0],
-                    )
-                    if args.aligned_mc10_full_only
-                    else batched_gradient(
-                        named,
-                        x_all[start:end],
-                        cond_all[start:end],
                     )
                     if args.train_noise_mode == "aligned"
                     else batched_gradient(
@@ -781,13 +697,7 @@ def main():
                         train_noises,
                     )
                 )
-                original_batch = end - start
-                if args.aligned_mc10_full_only:
-                    gradients = {
-                        name: value.flatten(0, 1)
-                        for name, value in gradients.items()
-                    }
-                train_features = {} if args.aligned_mc10_full_only else {
+                train_features = {
                     "gradient": gradients,
                 }
                 adam_gradients, unclipped_norms = adamw_full_batched(
@@ -806,39 +716,14 @@ def main():
                         1e-8,
                     ).detach()
                     train_matrices[transform] = matrix
-                    if args.aligned_mc10_full_only:
-                        query_banked = query_matrix.reshape(
-                            len(records), args.query_mc, -1
-                        )
-                        train_banked = matrix.reshape(
-                            original_batch, args.query_mc, -1
-                        )
-                        raw = torch.einsum(
-                            "qmd,bmd->qmb", query_banked, train_banked
-                        )
-                        query_norm = query_banked.norm(dim=2).clamp_min(TDNA_EPS)
-                        train_norm = train_banked.norm(dim=2).clamp_min(TDNA_EPS)
-                        dot_variants[transform] = {
-                            "raw": raw,
-                            "query_l2": raw / query_norm[:, :, None],
-                            "train_l2": raw / train_norm.T[None, :, :],
-                            "query_train_l2": raw / (
-                                query_norm[:, :, None]
-                                * train_norm.T[None, :, :]
-                            ),
-                        }
-                    else:
-                        dot_variants[transform] = normalized_dot_variants(
-                            query_matrix, matrix
-                        )
+                    dot_variants[transform] = normalized_dot_variants(
+                        query_matrix, matrix
+                    )
                 for group in active_groups:
                     transform, variant = group.split("__", 1)
                     dots = dot_variants[transform][variant].reshape(
                         len(records), args.query_mc, end - start
                     ).to(torch.float64)
-                    if args.aligned_mc10_full_only:
-                        timestamp_accumulators[group][:, :, start:end] += dots
-                        continue
                     linear_dots = dots.mean(dim=1)
                     squared_dots = dots.square().mean(dim=1)
                     # The full AdamW feature is already a parameter update and
@@ -856,9 +741,7 @@ def main():
                     )
                 del adam_gradients, unclipped_norms
                 del train_features, train_matrices, dot_variants
-                del dots
-                if not args.aligned_mc10_full_only:
-                    del linear_dots, squared_dots
+                del dots, linear_dots, squared_dots
                 if batch_position == 1 or batch_position % progress_every == 0 or batch_position == num_batches:
                     print(
                         f"[tracin-das gpu={args.gpu}] timestamp={shard_timestamp_position}/{len(remaining)} "
@@ -884,24 +767,14 @@ def main():
             del batched_gradient, gradients, query_noises, query_xt
             if args.noise_mode != "trajectory-cone60":
                 del shared_noises
-            if args.aligned_mc10_full_only:
-                del single_train_loss, per_noise_gradient
-            else:
-                del train_loss
-            del train_noises
+            del train_loss, train_noises
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
         for group in methods_by_group:
-            if args.aligned_mc10_full_only:
-                scores[group]["timestamp_sum_squared"] += (
-                    timestamp_accumulators[group].square().mean(dim=1)
-                    / float(len(timestamps))
-                )
-            else:
-                scores[group]["timestamp_sum_squared"] += (
-                    timestamp_accumulators[group].square()
-                )
+            scores[group]["timestamp_sum_squared"] += (
+                timestamp_accumulators[group].square()
+            )
         completed_timestamps.append(timestamp_index)
         completed_timestamps.sort()
         checkpoint_every = (
@@ -928,7 +801,6 @@ def main():
                     "parameter_projection": args.parameter_projection,
                     "train_noise_mode": args.train_noise_mode,
                     "query_mc": args.query_mc,
-                    "aligned_mc10_full_only": args.aligned_mc10_full_only,
                     "query_ids": query_ids,
                     "family": args.family,
                     "query_scope": args.query_scope,
@@ -993,11 +865,8 @@ def main():
             "parameter_projection": args.parameter_projection,
             "train_noise_mode": args.train_noise_mode,
             "query_mc": args.query_mc,
-            "aligned_mc10_full_only": args.aligned_mc10_full_only,
             "train_mc": (
-                args.query_mc
-                if args.aligned_mc10_full_only
-                else train_mc_count
+                train_mc_count
             ),
             "parameter_projection_dim": (
                 TRACIN_PROJ_DIM
@@ -1008,12 +877,7 @@ def main():
                 args.noise_mode, args.query_mc
             ),
             "train_loss_noise": (
-                (
-                    "ten separately differentiated loss terms, each using "
-                    "the matching query endpoint noise direction"
-                    if args.aligned_mc10_full_only
-                    else "same term noise as query endpoint"
-                )
+                "same term noise as query endpoint"
                 if args.train_noise_mode == "aligned"
                 else f"independent per-datapoint MC{train_mc_count} noises"
             ),
