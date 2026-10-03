@@ -144,13 +144,18 @@ def load_event_shard(path: Path, learning_rate_schedule, steps_per_epoch: int):
         features = np.asarray(payload["train_features"], dtype=np.float32)
         indices = np.asarray(payload["dataset_indices"], dtype=np.int64)
         batches = np.asarray(payload["batch_indices"], dtype=np.int64)
+        timesteps = np.asarray(payload["timesteps"], dtype=np.int32)
         epoch = int(np.asarray(payload["epoch"]).item())
         definition = str(np.asarray(payload["event_feature"]).item())
     if definition != "raw_gradient":
         raise ValueError(f"{path}: expected raw_gradient, got {definition}")
     steps = (epoch - 1) * steps_per_epoch + batches
     lrs = np.asarray(jax.device_get(learning_rate_schedule(jnp.asarray(steps))), dtype=np.float64)
-    return features, indices, lrs
+    if timesteps.shape != indices.shape:
+        raise ValueError(
+            f"{path}: timestep shape {timesteps.shape} does not match indices {indices.shape}"
+        )
+    return features, indices, lrs, timesteps
 
 
 def load_retrac_events(
@@ -160,30 +165,34 @@ def load_retrac_events(
     learning_rate_schedule,
     steps_per_epoch: int,
     shards: int = 2,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     start_epoch = 4 * (checkpoint + 1)
     interval = root / f"epoch_{start_epoch}_{start_epoch + 4}"
     event_features = []
     event_lrs = []
+    event_timesteps = []
     for epoch in range(start_epoch + 1, start_epoch + 5):
         feature_parts = []
         index_parts = []
         lr_parts = []
+        timestep_parts = []
         for shard in range(shards):
             path = interval / (
                 f"event_gradient_epoch_{epoch:04d}_shard_{shard:02d}_of_{shards:02d}.npz"
             )
             if not path.is_file():
                 raise FileNotFoundError(path)
-            features, indices, lrs = load_event_shard(
+            features, indices, lrs, timesteps = load_event_shard(
                 path, learning_rate_schedule, steps_per_epoch
             )
             feature_parts.append(features)
             index_parts.append(indices)
             lr_parts.append(lrs)
+            timestep_parts.append(timesteps)
         features = np.concatenate(feature_parts, axis=0)
         indices = np.concatenate(index_parts)
         lrs = np.concatenate(lr_parts)
+        timesteps = np.concatenate(timestep_parts)
         if expected_indices is None:
             expected_indices = np.sort(np.unique(indices))
             if len(expected_indices) != len(indices):
@@ -195,8 +204,14 @@ def load_retrac_events(
             raise ValueError(f"{interval}: ReTrac indices do not cover the score index bank") from exc
         event_features.append(features[order])
         event_lrs.append(lrs[order])
+        event_timesteps.append(timesteps[order])
     assert expected_indices is not None
-    return np.stack(event_features), np.stack(event_lrs), expected_indices
+    return (
+        np.stack(event_features),
+        np.stack(event_lrs),
+        np.stack(event_timesteps),
+        expected_indices,
+    )
 
 
 def main() -> None:
@@ -210,6 +225,15 @@ def main() -> None:
     parser.add_argument("--retrac-event-root", type=Path, required=True)
     parser.add_argument("--methods", choices=("retrac", "endpoint", "both"), default="both")
     parser.add_argument("--retrac-namespace", default="retrac_exact4_endpoint100x1_q0_99")
+    parser.add_argument(
+        "--retrac-reduction",
+        choices=("linear", "timestamp_sum_squared"),
+        default="linear",
+        help=(
+            "Reduce event terms linearly, or first sum terms sharing the exact "
+            "replayed training timestep across checkpoints/events and then square."
+        ),
+    )
     parser.add_argument("--endpoint-namespace", default="endpoint_tracin_train100x1_query100x1_q0_99")
     parser.add_argument("--query-batch-size", type=int, default=2)
     parser.add_argument("--shard-index", type=int, default=0)
@@ -294,6 +318,7 @@ def main() -> None:
     )
     endpoint_scores = None
     retrac_scores = None
+    retrac_timestamp_groups = None
     score_indices = None
     ddim_ts = np.linspace(
         int(cfg.timesteps) - 1, 0, int(cfg.ddim_steps), dtype=np.int32
@@ -314,6 +339,7 @@ def main() -> None:
         train = None
         events = None
         event_lrs = None
+        event_timesteps = None
         timesteps = query_timesteps
         if run_endpoint:
             assert endpoint_parts is not None
@@ -329,7 +355,7 @@ def main() -> None:
             elif not np.array_equal(score_indices, indices):
                 raise ValueError(f"checkpoint {checkpoint}: endpoint train indices changed")
         if run_retrac:
-            events, event_lrs, retrac_indices = load_retrac_events(
+            events, event_lrs, event_timesteps, retrac_indices = load_retrac_events(
                 args.retrac_event_root,
                 checkpoint,
                 score_indices,
@@ -348,6 +374,14 @@ def main() -> None:
             retrac_scores = np.zeros(
                 (len(queries), len(VARIANTS), len(score_indices)), dtype=np.float64
             )
+            if args.retrac_reduction == "timestamp_sum_squared":
+                retrac_timestamp_groups = np.zeros(
+                    (
+                        len(queries), len(VARIANTS), int(cfg.timesteps),
+                        len(score_indices),
+                    ),
+                    dtype=np.float32,
+                )
         state, _ = adapter.restore_state(checkpoints[checkpoint], state_template)
         params = tree_to_device(select_state_params(state, "raw"), device)
         projector = build_countsketch_projector_jax(
@@ -420,13 +454,41 @@ def main() -> None:
                 assert retrac_scores is not None
                 retrac_values = retrac_contractions(events_device, query_features)
                 retrac_values.block_until_ready()
-                retrac_scores[start : start + count] += np.sum(
-                    np.asarray(retrac_values[:count], dtype=np.float64)
-                    * event_lrs[None, None, :, :],
-                    axis=2,
+                weighted_events = (
+                    np.asarray(retrac_values[:count], dtype=np.float32)
+                    * event_lrs[None, None, :, :].astype(np.float32)
                 )
+                if args.retrac_reduction == "linear":
+                    retrac_scores[start : start + count] += np.sum(
+                        weighted_events, axis=2, dtype=np.float64
+                    )
+                else:
+                    assert retrac_timestamp_groups is not None
+                    assert event_timesteps is not None
+                    point_indices = np.arange(len(score_indices), dtype=np.int64)
+                    for query_offset in range(count):
+                        for variant_index in range(len(VARIANTS)):
+                            grouped = retrac_timestamp_groups[
+                                start + query_offset, variant_index
+                            ]
+                            for event_index in range(event_timesteps.shape[0]):
+                                np.add.at(
+                                    grouped,
+                                    (event_timesteps[event_index], point_indices),
+                                    weighted_events[
+                                        query_offset, variant_index, event_index
+                                    ],
+                                )
 
         print(f"[checkpoint] {checkpoint + 1}/49 complete", flush=True)
+
+    if run_retrac and args.retrac_reduction == "timestamp_sum_squared":
+        assert retrac_scores is not None and retrac_timestamp_groups is not None
+        retrac_scores.fill(0.0)
+        for timestep in range(retrac_timestamp_groups.shape[2]):
+            values = retrac_timestamp_groups[:, :, timestep, :].astype(np.float64)
+            retrac_scores += np.square(values)
+        del retrac_timestamp_groups
 
     assert score_indices is not None
     for query_index, query in enumerate(queries):
@@ -457,6 +519,11 @@ def main() -> None:
                         "query_objective": "endpoint_denoising_mean_loss_100_timestamps_mc1",
                         "query_gradient_artifact_written": False,
                         "checkpoint_count": 49,
+                        "score_reduction": (
+                            args.retrac_reduction
+                            if root_key == "retrac_root"
+                            else "linear"
+                        ),
                         "prediction_sign_for_loss_utility": -1,
                         "train_definition": (
                             "four exact training events with saved t/noise/dropout and event LR"
