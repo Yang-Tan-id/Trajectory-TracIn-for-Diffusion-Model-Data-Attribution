@@ -44,6 +44,7 @@ from traj_tracin.algorithm import (
     make_diffusion_schedule,
     q_sample,
     schedule_to_device,
+    select_snapshot_positions,
     select_state_params,
     tree_to_device,
 )
@@ -155,11 +156,11 @@ def load_event_shard(path: Path, learning_rate_schedule, steps_per_epoch: int):
 def load_retrac_events(
     root: Path,
     checkpoint: int,
-    expected_indices: np.ndarray,
+    expected_indices: np.ndarray | None,
     learning_rate_schedule,
     steps_per_epoch: int,
     shards: int = 2,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     start_epoch = 4 * (checkpoint + 1)
     interval = root / f"epoch_{start_epoch}_{start_epoch + 4}"
     event_features = []
@@ -183,14 +184,19 @@ def load_retrac_events(
         features = np.concatenate(feature_parts, axis=0)
         indices = np.concatenate(index_parts)
         lrs = np.concatenate(lr_parts)
+        if expected_indices is None:
+            expected_indices = np.sort(np.unique(indices))
+            if len(expected_indices) != len(indices):
+                raise ValueError(f"{interval}: duplicate ReTrac dataset indices")
         lookup = {int(index): row for row, index in enumerate(indices)}
         try:
             order = np.asarray([lookup[int(index)] for index in expected_indices], dtype=np.int64)
         except KeyError as exc:
-            raise ValueError(f"{interval}: ReTrac indices do not cover endpoint train bank") from exc
+            raise ValueError(f"{interval}: ReTrac indices do not cover the score index bank") from exc
         event_features.append(features[order])
         event_lrs.append(lrs[order])
-    return np.stack(event_features), np.stack(event_lrs)
+    assert expected_indices is not None
+    return np.stack(event_features), np.stack(event_lrs), expected_indices
 
 
 def main() -> None:
@@ -200,14 +206,19 @@ def main() -> None:
     parser.add_argument("--experiment", default="experiment1")
     parser.add_argument("--train-seed", type=int, default=42)
     parser.add_argument("--epochs", type=int, default=200)
-    parser.add_argument("--endpoint-train-artifact", type=Path, required=True)
+    parser.add_argument("--endpoint-train-artifact", type=Path)
     parser.add_argument("--retrac-event-root", type=Path, required=True)
+    parser.add_argument("--methods", choices=("retrac", "endpoint", "both"), default="both")
     parser.add_argument("--retrac-namespace", default="retrac_exact4_endpoint100x1_q0_99")
     parser.add_argument("--endpoint-namespace", default="endpoint_tracin_train100x1_query100x1_q0_99")
     parser.add_argument("--query-batch-size", type=int, default=2)
     parser.add_argument("--shard-index", type=int, default=0)
     parser.add_argument("--shard-count", type=int, default=1)
     args = parser.parse_args()
+    run_retrac = args.methods in ("retrac", "both")
+    run_endpoint = args.methods in ("endpoint", "both")
+    if run_endpoint and args.endpoint_train_artifact is None:
+        parser.error("--endpoint-train-artifact is required for --methods endpoint/both")
 
     all_query_ids = parse_ints(args.query_ids)
     query_ids = all_query_ids[args.shard_index :: args.shard_count]
@@ -261,15 +272,12 @@ def main() -> None:
         query["endpoint_root"] = output_root(
             result_root, args.train_seed, query, args.endpoint_namespace
         )
-    queries = [
-        query for query in queries
-        if not (
-            outputs_exist(query["retrac_root"])
-            and outputs_exist(query["endpoint_root"])
-        )
-    ]
+    queries = [query for query in queries if not (
+        (not run_retrac or outputs_exist(query["retrac_root"]))
+        and (not run_endpoint or outputs_exist(query["endpoint_root"]))
+    )]
     if not queries:
-        print("[done] every query in this shard already has both methods and four variants")
+        print(f"[done] every query in this shard already has {args.methods} and four variants")
         return
 
     module = importlib.import_module("DM__training_CIFAR5_MULTI_pixel")
@@ -281,10 +289,21 @@ def main() -> None:
     lr_cfg.lr_schedule = cfg.tracin_lr_schedule
     lr_cfg.lr_warmup_ratio = cfg.tracin_warmup_ratio
     lr_schedule = module.make_learning_rate_schedule(lr_cfg, total_steps)
-    endpoint_parts = Path(str(args.endpoint_train_artifact) + ".parts")
-    endpoint_scores = np.zeros((len(queries), len(VARIANTS), len(dataset)), dtype=np.float64)
-    retrac_scores = np.zeros_like(endpoint_scores)
+    endpoint_parts = (
+        Path(str(args.endpoint_train_artifact) + ".parts") if run_endpoint else None
+    )
+    endpoint_scores = None
+    retrac_scores = None
     score_indices = None
+    ddim_ts = np.linspace(
+        int(cfg.timesteps) - 1, 0, int(cfg.ddim_steps), dtype=np.int32
+    )
+    query_positions = select_snapshot_positions(
+        int(cfg.ddim_steps), 100, cfg.traj_snapshot_positions
+    )
+    query_timesteps = np.asarray(
+        [int(ddim_ts[int(position)]) for position in query_positions], dtype=np.int32
+    )
 
     print(
         f"[stream] shard={args.shard_index}/{args.shard_count} queries={len(queries)} "
@@ -292,24 +311,43 @@ def main() -> None:
         flush=True,
     )
     for checkpoint in range(49):
-        train, indices, timesteps = load_endpoint_train_part(
-            endpoint_parts / f"ckpt_{checkpoint:04d}.npz"
-        )
-        if score_indices is None:
-            score_indices = indices
-            endpoint_scores = np.zeros(
-                (len(queries), len(VARIANTS), len(indices)), dtype=np.float64
+        train = None
+        events = None
+        event_lrs = None
+        timesteps = query_timesteps
+        if run_endpoint:
+            assert endpoint_parts is not None
+            train, indices, stored_timesteps = load_endpoint_train_part(
+                endpoint_parts / f"ckpt_{checkpoint:04d}.npz"
             )
-            retrac_scores = np.zeros_like(endpoint_scores)
-        elif not np.array_equal(score_indices, indices):
-            raise ValueError(f"checkpoint {checkpoint}: endpoint train indices changed")
-        events, event_lrs = load_retrac_events(
-            args.retrac_event_root,
-            checkpoint,
-            indices,
-            lr_schedule,
-            steps_per_epoch,
-        )
+            if not np.array_equal(stored_timesteps, query_timesteps):
+                raise ValueError(
+                    f"checkpoint {checkpoint}: endpoint/query timestep schedule mismatch"
+                )
+            if score_indices is None:
+                score_indices = indices
+            elif not np.array_equal(score_indices, indices):
+                raise ValueError(f"checkpoint {checkpoint}: endpoint train indices changed")
+        if run_retrac:
+            events, event_lrs, retrac_indices = load_retrac_events(
+                args.retrac_event_root,
+                checkpoint,
+                score_indices,
+                lr_schedule,
+                steps_per_epoch,
+            )
+            if score_indices is None:
+                score_indices = retrac_indices
+            elif not np.array_equal(score_indices, retrac_indices):
+                raise ValueError(f"checkpoint {checkpoint}: ReTrac indices changed")
+        if endpoint_scores is None and run_endpoint:
+            endpoint_scores = np.zeros(
+                (len(queries), len(VARIANTS), len(score_indices)), dtype=np.float64
+            )
+        if retrac_scores is None and run_retrac:
+            retrac_scores = np.zeros(
+                (len(queries), len(VARIANTS), len(score_indices)), dtype=np.float64
+            )
         state, _ = adapter.restore_state(checkpoints[checkpoint], state_template)
         params = tree_to_device(select_state_params(state, "raw"), device)
         projector = build_countsketch_projector_jax(
@@ -319,8 +357,12 @@ def main() -> None:
             device=device,
         )
         query_fn = make_endpoint_query_fn(adapter, model, schedule, projector)
-        train_device = array_to_device(jnp.asarray(train), device)
-        events_device = array_to_device(jnp.asarray(events), device)
+        train_device = (
+            array_to_device(jnp.asarray(train), device) if run_endpoint else None
+        )
+        events_device = (
+            array_to_device(jnp.asarray(events), device) if run_retrac else None
+        )
         checkpoint_lr = float(
             module.learning_rate_at_step(
                 cfg, 4 * (checkpoint + 1) * steps_per_epoch, total_steps
@@ -364,30 +406,38 @@ def main() -> None:
                 array_to_device(jnp.asarray(noises), device),
                 array_to_device(jnp.asarray(timesteps), device),
             )
-            endpoint_values = endpoint_contractions(train_device, query_features)
-            retrac_values = retrac_contractions(events_device, query_features)
-            endpoint_values.block_until_ready()
-            retrac_values.block_until_ready()
             count = len(real)
-            endpoint_scores[start : start + count] += (
-                checkpoint_lr
-                * np.asarray(endpoint_values[:count], dtype=np.float64)
-            )
-            retrac_scores[start : start + count] += np.sum(
-                np.asarray(retrac_values[:count], dtype=np.float64)
-                * event_lrs[None, None, :, :],
-                axis=2,
-            )
+            if run_endpoint:
+                assert train_device is not None and endpoint_scores is not None
+                endpoint_values = endpoint_contractions(train_device, query_features)
+                endpoint_values.block_until_ready()
+                endpoint_scores[start : start + count] += (
+                    checkpoint_lr
+                    * np.asarray(endpoint_values[:count], dtype=np.float64)
+                )
+            if run_retrac:
+                assert events_device is not None and event_lrs is not None
+                assert retrac_scores is not None
+                retrac_values = retrac_contractions(events_device, query_features)
+                retrac_values.block_until_ready()
+                retrac_scores[start : start + count] += np.sum(
+                    np.asarray(retrac_values[:count], dtype=np.float64)
+                    * event_lrs[None, None, :, :],
+                    axis=2,
+                )
 
         print(f"[checkpoint] {checkpoint + 1}/49 complete", flush=True)
 
     assert score_indices is not None
     for query_index, query in enumerate(queries):
         for variant_index, (directory, variant) in enumerate(VARIANTS):
-            for method, root_key, scores in (
-                ("retrac_exact_training_events", "retrac_root", retrac_scores),
-                ("endpoint_tracin", "endpoint_root", endpoint_scores),
-            ):
+            methods = []
+            if run_retrac:
+                methods.append(("retrac_exact_training_events", "retrac_root", retrac_scores))
+            if run_endpoint:
+                methods.append(("endpoint_tracin", "endpoint_root", endpoint_scores))
+            for method, root_key, scores in methods:
+                assert scores is not None
                 output = query[root_key] / directory
                 if (output / "scores.npy").is_file():
                     continue
@@ -395,7 +445,11 @@ def main() -> None:
                     output,
                     scores[query_index, variant_index],
                     score_indices,
-                    train_dir=(args.retrac_event_root if root_key == "retrac_root" else endpoint_parts),
+                    train_dir=(
+                        args.retrac_event_root
+                        if root_key == "retrac_root"
+                        else endpoint_parts
+                    ),
                     query_dir=sample_root,
                     algorithm=method,
                     extra_manifest={
