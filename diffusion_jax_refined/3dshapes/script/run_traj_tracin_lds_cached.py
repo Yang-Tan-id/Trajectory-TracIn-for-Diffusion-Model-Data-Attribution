@@ -141,6 +141,8 @@ PREDICTED_NOISE_JVP_SCHEMES = {
     "predicted_noise_shared_orthogonal_probe8_termwise_square",
 }
 SCORE_SCHEMES = {
+    "recreate_adamw_full_direction20_mean100t_delta_l2normalized_timestamp_sum_squared_q0_99":
+        "traj_tracin_recreate_adamw_full_direction20_mean100t_delta_l2normalized_timestamp_sum_squared_q0_99",
     **{
         f"recreate_{train_kind}_polluted_endpoint_{delta_kind}_{reduction}_{scope}":
         f"traj_tracin_recreate_{train_kind}_polluted_endpoint_{delta_kind}_{reduction}_{scope}"

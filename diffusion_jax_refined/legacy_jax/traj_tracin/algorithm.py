@@ -1769,6 +1769,22 @@ def checkpoint_timestamp_shared_noise_key(
     return jax.random.fold_in(key, int(timestep))
 
 
+def checkpoint_direction_shared_noise_key(
+    train_seed: int, checkpoint_index: int, direction_index: int
+):
+    """One diffusion-noise direction shared across every timestep/query/train point.
+
+    The checkpoint index is deliberately part of the domain-separated key, so
+    direction ``d`` at two checkpoints is not the same random vector.  Train
+    and query producers call this helper with the same three integers to make
+    their alignment exact and reproducible.
+    """
+    key = jax.random.PRNGKey(int(train_seed) + 193_771)
+    for value in (0x4449524E, checkpoint_index, direction_index):
+        key = jax.random.fold_in(key, int(value))
+    return key
+
+
 def query_objective_uses_next_checkpoint(name: str) -> bool:
     return normalize_query_objective_name(name) in {
         "trajectory_next_checkpoint_noise_mse",
@@ -2294,6 +2310,46 @@ def train_losses_at_t_sequence_mc_vectorized(
     pred = adapter.eps_apply(model, params, xt, t_rep, cond_rep)
     per_replica = jnp.mean((pred - noise) ** 2, axis=tuple(range(1, pred.ndim)))
     return per_replica.reshape((B, total)).mean(axis=1)
+
+
+def train_losses_at_t_sequence_fixed_noise_vectorized(
+    adapter,
+    model,
+    params,
+    schedule,
+    x0_batch,
+    cond_batch,
+    *,
+    t_values,
+    noise_direction,
+):
+    """Mean diffusion loss over timesteps using one fixed noise direction.
+
+    ``noise_direction`` has one sample's image shape and is broadcast across
+    every datapoint and timestep.  This is the strict direction-alignment
+    objective: differentiating the returned per-example mean once is exactly
+    the gradient of the mean of the 100 aligned timestamp losses.
+    """
+    batch_size = x0_batch.shape[0]
+    timestamp_count = int(t_values.shape[0])
+    x0_rep = jnp.repeat(x0_batch, repeats=timestamp_count, axis=0)
+    cond_rep = jnp.repeat(cond_batch, repeats=timestamp_count, axis=0)
+    t_rep = jnp.tile(t_values.astype(jnp.int32), reps=(batch_size,))
+    one_noise = jnp.asarray(noise_direction, dtype=x0_batch.dtype)
+    if one_noise.ndim == x0_batch.ndim:
+        if one_noise.shape[0] != 1:
+            raise ValueError(
+                "noise_direction with a batch axis must contain exactly one sample"
+            )
+        one_noise = one_noise[0]
+    noise = jnp.broadcast_to(one_noise, x0_rep.shape)
+    xt = q_sample(schedule, x0_rep, t_rep, noise)
+    pred = adapter.eps_apply(model, params, xt, t_rep, cond_rep)
+    per_timestamp = jnp.mean(
+        (pred - noise) ** 2,
+        axis=tuple(range(1, pred.ndim)),
+    )
+    return per_timestamp.reshape((batch_size, timestamp_count)).mean(axis=1)
 
 
 def make_score_snapshot_batch_fn(
@@ -5342,6 +5398,258 @@ def run_attribution(cfg: TrajAttributionConfig):
                         )
                     else:
                         train_t_seq = np.asarray([int(t) for t in t_seq], dtype=np.int32)
+                    aligned_direction_count = max(
+                        0,
+                        int(
+                            os.environ.get(
+                                "TRAJ_TRACIN_TRAIN_ALIGNED_DIRECTION_COUNT", "0"
+                            )
+                        ),
+                    )
+                    if aligned_direction_count:
+                        # Each term is one per-example gradient of the mean loss
+                        # over all selected timestamps, evaluated with a single
+                        # diffusion-noise direction.  Direction d is shared by
+                        # every train point and by query generation at this
+                        # checkpoint, but checkpoint c+1 gets a fresh bank.
+                        t_values_all = array_to_device(
+                            jnp.asarray(train_t_seq, dtype=jnp.int32), device
+                        )
+
+                        def train_phi_one_aligned_direction(
+                            p, x0_one, cond_one, noise_direction
+                        ):
+                            x0_one = x0_one[None, ...]
+                            if cond_one.ndim == 0:
+                                cond_one = cond_one[None]
+                            else:
+                                cond_one = cond_one[None, ...]
+
+                            def loss_fn(pp):
+                                return train_losses_at_t_sequence_fixed_noise_vectorized(
+                                    adapter=adapter,
+                                    model=model,
+                                    params=pp,
+                                    schedule=schedule,
+                                    x0_batch=x0_one,
+                                    cond_batch=cond_one,
+                                    t_values=t_values_all,
+                                    noise_direction=noise_direction,
+                                )[0]
+
+                            _loss, grads = jax.value_and_grad(loss_fn)(p)
+                            if adam_inverse_rms is not None:
+                                grads = jax.tree_util.tree_map(
+                                    lambda grad, inv_rms: -grad.astype(jnp.float32)
+                                    * inv_rms,
+                                    grads,
+                                    adam_inverse_rms,
+                                )
+                            elif adamw_history_update is not None:
+                                adamw_update, _ = state.tx.update(
+                                    grads, state.opt_state, p
+                                )
+                                grads = jax.tree_util.tree_map(
+                                    lambda update, history: update.astype(jnp.float32)
+                                    - history.astype(jnp.float32),
+                                    adamw_update,
+                                    adamw_history_update,
+                                )
+                            return projector(grads)
+
+                        train_phi_batch_aligned_direction = jax.jit(
+                            jax.vmap(
+                                train_phi_one_aligned_direction,
+                                in_axes=(None, 0, 0, None),
+                            )
+                        )
+                        bs_stage = max(1, int(cfg.score_batch_size))
+                        total_batches = (len(picked) + bs_stage - 1) // bs_stage
+                        progress_every = max(
+                            1,
+                            int(
+                                os.environ.get(
+                                    "TRAJ_TRACIN_TRAIN_BATCH_LOG_EVERY", "25"
+                                )
+                            ),
+                        )
+                        direction_terms = []
+                        for direction_i in range(aligned_direction_count):
+                            term_features = np.empty(
+                                (len(picked), proj_dim), dtype=np.float32
+                            )
+                            direction_key = checkpoint_direction_shared_noise_key(
+                                cfg.seed, ckpt_i, direction_i
+                            )
+                            for batch_id, start in enumerate(
+                                range(0, len(picked), bs_stage), start=1
+                            ):
+                                end = min(len(picked), start + bs_stage)
+                                real_indices = picked[start:end]
+                                padded_indices = pad_indices_to_batch(
+                                    real_indices, bs_stage
+                                )
+                                x_batch, cond_batch = make_train_batch(
+                                    adapter,
+                                    ds,
+                                    padded_indices,
+                                    device,
+                                    use_bfloat16=use_bfloat16_train_batch,
+                                )
+                                noise_direction = array_to_device(
+                                    jax.random.normal(
+                                        direction_key,
+                                        (1,) + tuple(x_batch.shape[1:]),
+                                        dtype=x_batch.dtype,
+                                    ),
+                                    device,
+                                )
+                                phi_batch = train_phi_batch_aligned_direction(
+                                    params,
+                                    x_batch,
+                                    cond_batch,
+                                    noise_direction,
+                                )
+                                phi_batch.block_until_ready()
+                                term_features[start:end] = np.asarray(
+                                    phi_batch[: end - start], dtype=np.float32
+                                )
+                                if (
+                                    batch_id == 1
+                                    or batch_id == total_batches
+                                    or batch_id % progress_every == 0
+                                ):
+                                    print(
+                                        "[stage:train] aligned-direction batch "
+                                        f"{batch_id}/{total_batches} | "
+                                        f"ckpt={ckpt_i + 1}/{len(ckpts)} | "
+                                        f"direction={direction_i + 1}/{aligned_direction_count} | "
+                                        f"datapoints={end}/{len(picked)} | "
+                                        f"timestamps={len(train_t_seq)} | "
+                                        f"elapsed={format_seconds(time.time() - stage_ckpt_start)}",
+                                        flush=True,
+                                    )
+                            direction_terms.append(term_features)
+                            stage_terms_done += 1
+
+                        train_phi_terms.extend(direction_terms)
+                        train_ckpt_indices.extend(
+                            [int(ckpt_i)] * aligned_direction_count
+                        )
+                        train_timesteps.extend([-1] * aligned_direction_count)
+                        train_snapshot_positions.extend(
+                            [-1] * aligned_direction_count
+                        )
+                        train_ckpt_paths.extend(
+                            [str(ckpt_path)] * aligned_direction_count
+                        )
+                        # AdamW residual/full features already contain the
+                        # checkpoint LR.  Direction/timestamp averaging is a
+                        # global scale and is kept out of the stored update.
+                        train_term_weights.extend([1.0] * aligned_direction_count)
+                        direction_indices = np.arange(
+                            aligned_direction_count, dtype=np.int32
+                        )
+                        if stage_part_path is None:
+                            stage_features.extend(direction_terms)
+                            stage_ckpt_indices.extend(
+                                [int(ckpt_i)] * aligned_direction_count
+                            )
+                            stage_timesteps.extend([-1] * aligned_direction_count)
+                            stage_snapshot_positions.extend(
+                                [-1] * aligned_direction_count
+                            )
+                            stage_ckpt_paths.extend(
+                                [str(ckpt_path)] * aligned_direction_count
+                            )
+                            stage_term_weights.extend(
+                                [1.0] * aligned_direction_count
+                            )
+                        else:
+                            save_npz_compressed_atomic(
+                                stage_part_path,
+                                train_features=np.stack(
+                                    direction_terms, axis=0
+                                ).astype(np.float32),
+                                score_indices=np.asarray(picked, dtype=np.int64),
+                                ckpt_indices=np.full(
+                                    aligned_direction_count,
+                                    ckpt_i,
+                                    dtype=np.int32,
+                                ),
+                                timesteps=np.full(
+                                    aligned_direction_count, -1, dtype=np.int32
+                                ),
+                                snapshot_positions=np.full(
+                                    aligned_direction_count, -1, dtype=np.int32
+                                ),
+                                direction_indices=direction_indices,
+                                term_weights=np.ones(
+                                    aligned_direction_count, dtype=np.float32
+                                ),
+                                ckpt_paths=np.asarray(
+                                    [str(ckpt_path)] * aligned_direction_count
+                                ),
+                                proj_dim=np.asarray(proj_dim, dtype=np.int32),
+                                train_optimizer_transform=np.asarray(
+                                    optimizer_train_transform
+                                ),
+                                **(
+                                    {
+                                        "optimizer_history_features": np.repeat(
+                                            adamw_history_feature[None, :],
+                                            aligned_direction_count,
+                                            axis=0,
+                                        ).astype(np.float32)
+                                    }
+                                    if adamw_history_feature is not None
+                                    else {}
+                                ),
+                                train_feature_semantics=np.asarray(
+                                    "projected_adamw_residual_update_of_100t_mean_"
+                                    "fixed_direction_loss_gradient"
+                                    if optimizer_train_transform
+                                    == "adamw_residual_update"
+                                    else "projected_100t_mean_fixed_direction_loss_gradient"
+                                ),
+                                train_timestamp_aggregation=np.asarray(
+                                    "mean_loss_then_gradient"
+                                ),
+                                train_timestamp_count=np.asarray(
+                                    len(train_t_seq), dtype=np.int32
+                                ),
+                                train_timesteps_used=np.asarray(
+                                    train_t_seq, dtype=np.int32
+                                ),
+                                train_direction_count=np.asarray(
+                                    aligned_direction_count, dtype=np.int32
+                                ),
+                                checkpoint_direction_shared_train_gradient=np.asarray(
+                                    True
+                                ),
+                                train_noise_mode=np.asarray(
+                                    "checkpoint_direction_shared"
+                                ),
+                                train_noise_seed_rule=np.asarray(
+                                    "checkpoint_direction_shared_noise_key("
+                                    "train_seed,checkpoint_index,direction_index)"
+                                ),
+                            )
+                            print(
+                                "[stage:train] saved aligned-direction checkpoint part "
+                                f"{ckpt_i + 1}/{len(ckpts)}: {stage_part_path}",
+                                flush=True,
+                            )
+                        used_ckpts_for_stage.append(ckpt_path)
+                        print(
+                            f"[stage:{stage_mode}] checkpoint {ckpt_i + 1}/{len(ckpts)} "
+                            f"done | directions={aligned_direction_count} | "
+                            f"timestamps={len(train_t_seq)} | "
+                            f"elapsed={format_seconds(time.time() - stage_ckpt_start)} | "
+                            f"total_elapsed={format_seconds(time.time() - stage_start_time)}",
+                            flush=True,
+                        )
+                        continue
                     timestamp_chunk_size = max(
                         1,
                         int(
