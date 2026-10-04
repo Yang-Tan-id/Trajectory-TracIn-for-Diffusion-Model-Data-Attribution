@@ -119,6 +119,8 @@ def main():
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--grad-microbatch-size", type=int, default=4)
     parser.add_argument("--query-term-batch-size", type=int, default=128)
+    parser.add_argument("--family", choices=("prompted", "unprompted"), default="prompted")
+    parser.add_argument("--query-scope", choices=("ten", "all"), default="ten")
     args = parser.parse_args()
     if not 0 <= args.timestamp_shard_index < args.timestamp_shard_count:
         raise ValueError("invalid timestamp shard")
@@ -128,7 +130,22 @@ def main():
     device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
     if torch.cuda.is_available():
         torch.cuda.set_device(device)
-    root = npa_shard_root(args.timestamp_shard_index, args.timestamp_shard_count)
+    if args.query_scope == "all":
+        query_ids = npa100_query_ids(args.family)
+        active_variants = ("raw",)
+        active_contractions = ("timestamp_sum_squared",)
+        contract_version = NPA100_CONTRACT_VERSION
+        root = npa100_shard_root(
+            args.family, args.timestamp_shard_index, args.timestamp_shard_count
+        )
+    else:
+        if args.family != NPA_FAMILY:
+            raise ValueError("the ten-query diagnostic only supports prompted")
+        query_ids = NPA_QUERY_IDS
+        active_variants = NPA_VARIANTS
+        active_contractions = NPA_CONTRACTIONS
+        contract_version = NPA_CONTRACT_VERSION
+        root = npa_shard_root(args.timestamp_shard_index, args.timestamp_shard_count)
     done_path = root / "done.json"
     if done_path.is_file():
         print(f"[skip] {done_path}", flush=True)
@@ -136,19 +153,19 @@ def main():
 
     with open(QUERY_DIR / "manifest.json") as handle:
         by_id = {int(item["query_id"]): item for item in json.load(handle)}
-    records = [by_id[query_id] for query_id in NPA_QUERY_IDS]
-    if any(record["family"] != NPA_FAMILY for record in records):
-        raise ValueError("q00-q09 must all be prompted")
+    records = [by_id[query_id] for query_id in query_ids]
+    if any(record["family"] != args.family for record in records):
+        raise ValueError(f"invalid query bank for family={args.family}")
     endpoints = torch.cat(
         [
             torch.from_numpy(np.load(QUERY_DIR / f"q{query_id:02d}" / "final_state.npy"))
-            for query_id in NPA_QUERY_IDS
+            for query_id in query_ids
         ],
         dim=0,
     ).to(device=device, dtype=torch.float32)
-    paths = model_paths(NPA_FAMILY)
+    paths = model_paths(args.family)
     bootstrap, dataset, _ = build_model(paths[0], "raw", device)
-    x_all, cond_all = preload_dataset(dataset, NPA_FAMILY, device)
+    x_all, cond_all = preload_dataset(dataset, args.family, device)
     conditions = torch.cat(
         [cond_for(record, dataset, device) for record in records], dim=0
     )
@@ -160,14 +177,14 @@ def main():
             args.timestamp_shard_index :: args.timestamp_shard_count
         ]
     )
-    expected_shape = (len(NPA_QUERY_IDS), N_TRAIN)
+    expected_shape = (len(query_ids), N_TRAIN)
     scores = {
         score_key(pairing, variant, contraction, group): torch.zeros(
             expected_shape, device=device, dtype=torch.float64
         )
         for pairing in NPA_PAIRINGS
-        for variant in NPA_VARIANTS
-        for contraction in NPA_CONTRACTIONS
+        for variant in active_variants
+        for contraction in active_contractions
         for group in NPA_TIMESTAMP_GROUPS
     }
     partial_path = root / "partial_scores.npz"
@@ -176,7 +193,7 @@ def main():
     if partial_path.is_file() and progress_path.is_file():
         with open(progress_path) as handle:
             progress = json.load(handle)
-        if int(progress["contract_version"]) != NPA_CONTRACT_VERSION:
+        if int(progress["contract_version"]) != contract_version:
             raise ValueError("partial contract version differs")
         if int(progress["grad_microbatch_size"]) != args.grad_microbatch_size:
             raise ValueError("partial grad microbatch differs")
@@ -191,7 +208,8 @@ def main():
     total_terms = len(remaining) * len(NPA_CHECKPOINT_PAIRS)
     completed_terms = 0
     print(
-        f"[pairing-ablation gpu={args.gpu}] q00-q09 directions=10 "
+        f"[pairing-ablation gpu={args.gpu}] family={args.family} "
+        f"queries={query_ids[0]}..{query_ids[-1]} ({len(query_ids)}) directions=10 "
         f"timestamps={len(selected)}/20 checkpoint_pairs={NPA_CHECKPOINT_PAIRS} "
         f"pairings={NPA_PAIRINGS} full_adamw=true projection=4096 "
         f"batch={args.batch_size} microbatch={args.grad_microbatch_size}",
@@ -207,12 +225,12 @@ def main():
         ]
         timestamp_accumulators = {
             (pairing, variant): torch.zeros(
-                (len(NPA_QUERY_IDS), NPA_DIRECTION_COUNT, N_TRAIN),
+                (len(query_ids), NPA_DIRECTION_COUNT, N_TRAIN),
                 device=device,
                 dtype=torch.float32,
             )
             for pairing in NPA_PAIRINGS
-            for variant in NPA_VARIANTS
+            for variant in active_variants
         }
 
         for checkpoint_position, checkpoint_index in enumerate(
@@ -279,7 +297,7 @@ def main():
                 torch.arange(NPA_DIRECTION_COUNT, device=device), shifts=-1
             )
 
-            query_count = len(NPA_QUERY_IDS)
+            query_count = len(query_ids)
             endpoint_bank = endpoints[:, None].expand(
                 query_count, NPA_DIRECTION_COUNT, *endpoints.shape[1:]
             ).reshape(-1, *endpoints.shape[1:])
@@ -426,32 +444,37 @@ def main():
                         dots_by_variant = {
                             "raw": torch.einsum(
                                 "qmp,bmp->qmb", query_matrix, train_raw
-                            ),
-                            "query_train_l2": torch.einsum(
-                                "qmp,bmp->qmb", query_unit, train_unit
-                            ),
+                            )
                         }
+                        if "query_train_l2" in active_variants:
+                            dots_by_variant["query_train_l2"] = torch.einsum(
+                                "qmp,bmp->qmb", query_unit, train_unit
+                            )
                         for variant, dots in dots_by_variant.items():
                             timestamp_accumulators[(pairing, variant)][
                                 :, :, micro_start:micro_end
                             ] += dots
-                            for group in groups:
-                                weight = 1.0 / len(NPA_TIMESTAMP_GROUPS[group])
-                                scores[
-                                    score_key(pairing, variant, "linear", group)
-                                ][:, micro_start:micro_end] += (
-                                    weight * dots.mean(dim=1).double()
-                                )
-                                scores[
-                                    score_key(
-                                        pairing,
-                                        variant,
-                                        "termwise_squared",
-                                        group,
+                            if "linear" in active_contractions:
+                                for group in groups:
+                                    weight = 1.0 / len(NPA_TIMESTAMP_GROUPS[group])
+                                    scores[
+                                        score_key(pairing, variant, "linear", group)
+                                    ][:, micro_start:micro_end] += (
+                                        weight * dots.mean(dim=1).double()
                                     )
-                                ][:, micro_start:micro_end] += (
-                                    weight * dots.square().mean(dim=1).double()
-                                )
+                            if "termwise_squared" in active_contractions:
+                                for group in groups:
+                                    weight = 1.0 / len(NPA_TIMESTAMP_GROUPS[group])
+                                    scores[
+                                        score_key(
+                                            pairing,
+                                            variant,
+                                            "termwise_squared",
+                                            group,
+                                        )
+                                    ][:, micro_start:micro_end] += (
+                                        weight * dots.square().mean(dim=1).double()
+                                    )
                     del gradients, updates, train_matrix
                     del base_train, independent_train
                     del base_train_unit, independent_train_unit
@@ -491,16 +514,17 @@ def main():
                 torch.cuda.empty_cache()
 
         for pairing in NPA_PAIRINGS:
-            for variant in NPA_VARIANTS:
+            for variant in active_variants:
                 timestamp_values = timestamp_accumulators[(pairing, variant)]
                 reduced = timestamp_values.square().mean(dim=1).double()
                 for group in groups:
                     weight = 1.0 / len(NPA_TIMESTAMP_GROUPS[group])
-                    scores[
-                        score_key(
-                            pairing, variant, "timestamp_sum_squared", group
-                        )
-                    ] += weight * reduced
+                    if "timestamp_sum_squared" in active_contractions:
+                        scores[
+                            score_key(
+                                pairing, variant, "timestamp_sum_squared", group
+                            )
+                        ] += weight * reduced
         completed.append(timestamp_index)
         completed.sort()
         if len(completed) % 2 == 0 or len(completed) == len(selected):
@@ -511,7 +535,7 @@ def main():
             atomic_json(
                 progress_path,
                 {
-                    "contract_version": NPA_CONTRACT_VERSION,
+                    "contract_version": contract_version,
                     "timestamp_shard_index": args.timestamp_shard_index,
                     "timestamp_shard_count": args.timestamp_shard_count,
                     "selected_timestamp_indices": selected,
@@ -527,14 +551,15 @@ def main():
     atomic_json(
         done_path,
         {
-            "contract_version": NPA_CONTRACT_VERSION,
-            "query_ids": list(NPA_QUERY_IDS),
+            "contract_version": contract_version,
+            "query_ids": list(query_ids),
+            "family": args.family,
             "checkpoint_pairs": list(NPA_CHECKPOINT_PAIRS),
             "timestamp_indices": selected,
             "direction_count": NPA_DIRECTION_COUNT,
             "pairings": list(NPA_PAIRINGS),
-            "variants": list(NPA_VARIANTS),
-            "contractions": list(NPA_CONTRACTIONS),
+            "variants": list(active_variants),
+            "contractions": list(active_contractions),
             "projection_dim": NPA_PROJECTION_DIM,
             "train_transform": "saved-state full AdamW hypothetical update",
             "query": "normalized next-checkpoint predicted-noise delta direction",
@@ -545,4 +570,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

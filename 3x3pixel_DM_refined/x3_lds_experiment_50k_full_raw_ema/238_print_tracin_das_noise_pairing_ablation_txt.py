@@ -4,8 +4,9 @@ import argparse
 import itertools
 import json
 import os
-import random
 from pathlib import Path
+
+import numpy as np
 
 
 DEFAULT_JSON = Path(
@@ -28,30 +29,51 @@ def signed(value):
     return f"{float(value):+.6f}"
 
 
-def exact_sign_flip_p(values):
-    """Exact paired randomization p-values for H1: mean(values) > 0."""
-    values = [float(value) for value in values]
-    observed = sum(values) / len(values)
-    null = [
-        sum(sign * value for sign, value in zip(signs, values)) / len(values)
-        for signs in itertools.product((-1.0, 1.0), repeat=len(values))
-    ]
+def paired_sign_flip_p(values, seed, monte_carlo_draws=200000):
+    """Paired randomization p-values for H1: mean(values) > 0."""
+    values = np.asarray(values, dtype=np.float64)
+    observed = float(values.mean())
     tolerance = 1e-15
-    one_sided = sum(value >= observed - tolerance for value in null) / len(null)
-    two_sided = sum(
-        abs(value) >= abs(observed) - tolerance for value in null
-    ) / len(null)
-    return one_sided, two_sided
+    if len(values) <= 20:
+        null = np.asarray(
+            [
+                np.mean(np.asarray(signs, dtype=np.float64) * values)
+                for signs in itertools.product((-1.0, 1.0), repeat=len(values))
+            ]
+        )
+        one_sided = float(np.mean(null >= observed - tolerance))
+        two_sided = float(np.mean(np.abs(null) >= abs(observed) - tolerance))
+        return one_sided, two_sided, "exact"
+
+    rng = np.random.default_rng(seed)
+    one_extreme = 0
+    two_extreme = 0
+    completed = 0
+    chunk_size = 10000
+    while completed < monte_carlo_draws:
+        count = min(chunk_size, monte_carlo_draws - completed)
+        signs = rng.integers(0, 2, size=(count, len(values)), dtype=np.int8)
+        null = ((2.0 * signs - 1.0) @ values) / len(values)
+        one_extreme += int(np.count_nonzero(null >= observed - tolerance))
+        two_extreme += int(np.count_nonzero(np.abs(null) >= abs(observed) - tolerance))
+        completed += count
+    one_sided = (one_extreme + 1.0) / (monte_carlo_draws + 1.0)
+    two_sided = (two_extreme + 1.0) / (monte_carlo_draws + 1.0)
+    return one_sided, two_sided, f"mc{monte_carlo_draws}"
 
 
 def paired_bootstrap_ci(values, seed, draws=100000):
-    values = [float(value) for value in values]
-    rng = random.Random(seed)
-    means = sorted(
-        sum(values[rng.randrange(len(values))] for _ in values) / len(values)
-        for _ in range(draws)
-    )
-    return means[int(0.025 * draws)], means[int(0.975 * draws) - 1]
+    values = np.asarray(values, dtype=np.float64)
+    rng = np.random.default_rng(seed)
+    means = np.empty(draws, dtype=np.float64)
+    chunk_size = 10000
+    for start in range(0, draws, chunk_size):
+        end = min(start + chunk_size, draws)
+        indices = rng.integers(
+            0, len(values), size=(end - start, len(values)), dtype=np.int32
+        )
+        means[start:end] = values[indices].mean(axis=1)
+    return tuple(float(value) for value in np.quantile(means, (0.025, 0.975)))
 
 
 def main():
@@ -167,8 +189,7 @@ def main():
             "PAIRED SIGNIFICANCE TESTS (ALL TIMESTAMPS, SIGN=-1)",
             "=" * 116,
             "H1: aligned LDS > control LDS",
-            "p1 = exact one-sided paired sign-flip randomization p-value",
-            "p2 = exact two-sided paired sign-flip randomization p-value",
+            "p1/p2 = paired sign-flip randomization p-values (exact for <=20 queries; MC200000 otherwise)",
             "CI = paired-query bootstrap 95% confidence interval for aligned - control",
             "Unadjusted exploratory p-values; apply a multiple-testing correction when making global claims.",
         ]
@@ -193,13 +214,15 @@ def main():
                         contraction
                     ]["all"][metric]["per_query"]
                     mean = sum(values) / len(values)
-                    p1, p2 = exact_sign_flip_p(values)
+                    p1, p2, test_kind = paired_sign_flip_p(
+                        values, seed=20261004 + test_index
+                    )
                     low, high = paired_bootstrap_ci(
                         values, seed=20261004 + test_index
                     )
                     wins = sum(float(value) > 0.0 for value in values)
                     lines.append(
-                        f"{metric:30s} {control:19s} {signed(mean):>10s} "
+                        f"{metric:30s} {control + '/' + test_kind:19s} {signed(mean):>10s} "
                         f"{p1:10.6f} {p2:10.6f} "
                         f"[{signed(low)}, {signed(high)}] {wins:>3d}/{len(values):<3d}"
                     )

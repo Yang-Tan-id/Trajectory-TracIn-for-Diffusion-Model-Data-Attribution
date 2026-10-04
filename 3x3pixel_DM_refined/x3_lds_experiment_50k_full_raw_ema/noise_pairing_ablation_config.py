@@ -30,6 +30,32 @@ NPA_PROJECTION_DIM = 4096
 NPA_NOISE_SEED = 20261004
 NPA_EPS = 1e-12
 NPA_CONTRACT_VERSION = 1
+NPA100_CONTRACT_VERSION = 2
+
+
+def npa100_query_ids(family):
+    if family == "prompted":
+        return tuple(range(75))
+    if family == "unprompted":
+        return tuple(range(75, 100))
+    raise ValueError(f"unknown family: {family}")
+
+
+def npa100_method(pairing, timestamp_group):
+    return (
+        "tracin_das_noise_pairing_ablation_"
+        "10ckpt_20t_mc10_adamw_full_next_delta_projected4096_"
+        f"{pairing}_raw_timestamp_sum_squared_{timestamp_group}_q00_q99"
+    )
+
+
+def npa100_shard_root(family, timestamp_shard_index, timestamp_shard_count):
+    return (
+        ATTR_DIR
+        / "_tracin_das_noise_pairing_ablation_10ckpt_20t_mc10_q00_q99_shards"
+        / family
+        / f"shard_{int(timestamp_shard_index):02d}_of_{int(timestamp_shard_count):02d}"
+    )
 
 
 def npa_method(pairing, variant, contraction, timestamp_group):
@@ -46,4 +72,3 @@ def npa_shard_root(timestamp_shard_index, timestamp_shard_count):
         / "_tracin_das_noise_pairing_ablation_10ckpt_20t_mc10_shards"
         / f"shard_{int(timestamp_shard_index):02d}_of_{int(timestamp_shard_count):02d}"
     )
-
