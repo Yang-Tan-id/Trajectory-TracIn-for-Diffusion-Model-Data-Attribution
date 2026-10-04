@@ -23,7 +23,7 @@ from forward_loss_alignment_config import replay_noise_path, replay_t_path
 from x3_endpoint_das_jax_logic_pytorch import build_countsketch_specs, make_torch_generator
 
 
-CONTRACT_VERSION = 1
+CONTRACT_VERSION = 2
 
 
 def atomic_json(path, value):
@@ -66,6 +66,77 @@ def project_gradient_batch(grads, names, specs, dimension, *, normalize):
             flat * signs.unsqueeze(0),
         )
     return (output / math.sqrt(float(dimension))).detach()
+
+
+def optimizer_state_by_name(checkpoint, names, device):
+    """Map the saved AdamW state to model parameter names."""
+    optimizer_state = checkpoint["optimizer_state"]
+    groups = optimizer_state["param_groups"]
+    if len(groups) != 1:
+        raise ValueError("AdamW ReTrac expects exactly one parameter group")
+    parameter_ids = list(groups[0]["params"])
+    if len(parameter_ids) != len(names):
+        raise ValueError("optimizer/model parameter count mismatch")
+    states = optimizer_state["state"]
+    by_name = {}
+    for name, parameter_id in zip(names, parameter_ids):
+        state = states[parameter_id]
+        by_name[name] = {
+            "step": int(torch.as_tensor(state["step"]).item()),
+            "exp_avg": state["exp_avg"].to(device=device, dtype=torch.float32),
+            "exp_avg_sq": state["exp_avg_sq"].to(
+                device=device, dtype=torch.float32
+            ),
+        }
+        if "max_exp_avg_sq" in state:
+            by_name[name]["max_exp_avg_sq"] = state["max_exp_avg_sq"].to(
+                device=device, dtype=torch.float32
+            )
+    group = groups[0]
+    return by_name, {
+        "lr": float(group["lr"]),
+        "beta1": float(group["betas"][0]),
+        "beta2": float(group["betas"][1]),
+        "eps": float(group["eps"]),
+        "weight_decay": float(group.get("weight_decay", 0.0)),
+        "amsgrad": bool(group.get("amsgrad", False)),
+        "maximize": bool(group.get("maximize", False)),
+    }
+
+
+def adamw_full_batched(gradients, names, parameters, optimizer_state, hyper):
+    """One hypothetical saved-state AdamW update for every replayed event."""
+    norm_sq = None
+    for name in names:
+        term = gradients[name].float().square().flatten(1).sum(dim=1)
+        norm_sq = term if norm_sq is None else norm_sq + term
+    scales = (float(GRAD_CLIP) / norm_sq.sqrt().clamp_min(RETRAC_EPS)).clamp(
+        max=1.0
+    )
+    beta1, beta2 = hyper["beta1"], hyper["beta2"]
+    sign = -1.0 if hyper["maximize"] else 1.0
+    output = {}
+    for name in names:
+        shape = (len(scales),) + (1,) * (gradients[name].ndim - 1)
+        gradient = sign * gradients[name].float() * scales.reshape(shape)
+        state = optimizer_state[name]
+        step = state["step"] + 1
+        moment = beta1 * state["exp_avg"].unsqueeze(0) + (1.0 - beta1) * gradient
+        variance = (
+            beta2 * state["exp_avg_sq"].unsqueeze(0)
+            + (1.0 - beta2) * gradient.square()
+        )
+        if hyper["amsgrad"]:
+            variance = torch.maximum(
+                state["max_exp_avg_sq"].unsqueeze(0), variance
+            )
+        denominator = (
+            variance.sqrt() / math.sqrt(1.0 - beta2**step) + hyper["eps"]
+        )
+        step_size = hyper["lr"] / (1.0 - beta1**step)
+        decay = -hyper["lr"] * hyper["weight_decay"] * parameters[name]
+        output[name] = decay.unsqueeze(0) - step_size * moment / denominator
+    return output
 
 
 def main():
@@ -135,6 +206,7 @@ def main():
         (query_count, N_TRAIN), device=device, dtype=torch.float64
     )
     scores_retrac = torch.zeros_like(scores_tracin)
+    scores_retrac_adamw_full = torch.zeros_like(scores_tracin)
     completed = []
     partial_path = root / "partial_scores.npz"
     progress_path = root / "progress.json"
@@ -147,6 +219,9 @@ def main():
         partial = np.load(partial_path)
         scores_tracin.copy_(torch.from_numpy(partial["tracin"]).to(device))
         scores_retrac.copy_(torch.from_numpy(partial["retrac"]).to(device))
+        scores_retrac_adamw_full.copy_(
+            torch.from_numpy(partial["retrac_adamw_full"]).to(device)
+        )
         print(f"[resume] completed checkpoints={completed}", flush=True)
 
     started = time.perf_counter()
@@ -171,6 +246,9 @@ def main():
         named = dict(model.named_parameters())
         names = tuple(named)
         active = tuple(named.values())
+        optimizer_state, optimizer_hyper = optimizer_state_by_name(
+            checkpoint, names, device
+        )
         specs = build_countsketch_specs(
             list(active),
             RETRAC_PROJ_DIM,
@@ -293,13 +371,32 @@ def main():
                 RETRAC_PROJ_DIM,
                 normalize=True,
             ).reshape(count, RETRAC_EVENTS_PER_CHECKPOINT, -1).mean(dim=1)
+            adamw_updates = adamw_full_batched(
+                event_gradients,
+                names,
+                named,
+                optimizer_state,
+                optimizer_hyper,
+            )
+            train_event_retrac_adamw_full = project_gradient_batch(
+                adamw_updates,
+                names,
+                specs,
+                RETRAC_PROJ_DIM,
+                normalize=True,
+            ).reshape(count, RETRAC_EVENTS_PER_CHECKPOINT, -1).mean(dim=1)
             scores_tracin[:, start:end] += (
                 query_tracin @ train_event_tracin.T
             ).double() * checkpoint_lr
             scores_retrac[:, start:end] += (
                 query_retrac @ train_event_retrac.T
             ).double() * checkpoint_lr
-            del event_gradients, train_event_tracin, train_event_retrac
+            scores_retrac_adamw_full[:, start:end] += (
+                query_retrac @ train_event_retrac_adamw_full.T
+            ).double() * checkpoint_lr
+            del event_gradients, adamw_updates
+            del train_event_tracin, train_event_retrac
+            del train_event_retrac_adamw_full
             if (
                 batch_position == 1
                 or batch_position % progress_every == 0
@@ -316,6 +413,7 @@ def main():
             partial_path,
             tracin=scores_tracin.cpu().numpy(),
             retrac=scores_retrac.cpu().numpy(),
+            retrac_adamw_full=scores_retrac_adamw_full.cpu().numpy(),
         )
         atomic_json(
             progress_path,
@@ -355,6 +453,11 @@ def main():
             "query_mc": RETRAC_QUERY_MC,
             "train_events_per_checkpoint": RETRAC_EVENTS_PER_CHECKPOINT,
             "train_event_source": "exact replayed t_train and epsilon_train",
+            "adamw_train_transform": (
+                "saved-state full AdamW hypothetical update; full-space L2 "
+                "normalization before CountSketch"
+            ),
+            "query_adamw_transform": False,
             "parameter_source": RETRAC_PARAM_SOURCE,
             "projection_dim": RETRAC_PROJ_DIM,
             "checkpoint_weight": "saved checkpoint learning rate",

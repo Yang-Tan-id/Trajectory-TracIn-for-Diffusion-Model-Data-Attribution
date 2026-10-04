@@ -48,7 +48,7 @@ def main():
                 flush=True,
             )
         output["methods"][label] = {"artifact": method, "targets": method_result}
-    path = LDS_DIR / "diffusion_tracin_vs_retrac_replayed_100q.json"
+    path = LDS_DIR / "diffusion_tracin_vs_retrac_adamw_full_replayed_100q.json"
     with open(path, "w") as handle:
         json.dump(output, handle, indent=2)
     print(f"[saved] {path}", flush=True)

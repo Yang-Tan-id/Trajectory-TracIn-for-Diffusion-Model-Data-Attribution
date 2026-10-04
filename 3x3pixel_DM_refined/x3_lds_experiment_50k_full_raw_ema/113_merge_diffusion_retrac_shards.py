@@ -15,6 +15,9 @@ def main():
     totals = {
         "diffusion_tracin": np.zeros((len(RETRAC_QUERY_IDS), N_TRAIN), dtype=np.float64),
         "diffusion_retrac": np.zeros((len(RETRAC_QUERY_IDS), N_TRAIN), dtype=np.float64),
+        "diffusion_retrac_adamw_full": np.zeros(
+            (len(RETRAC_QUERY_IDS), N_TRAIN), dtype=np.float64
+        ),
     }
     for family in RETRAC_FAMILIES:
         covered = []
@@ -31,11 +34,31 @@ def main():
             partial = np.load(root / "partial_scores.npz")
             totals["diffusion_tracin"][query_ids] += partial["tracin"]
             totals["diffusion_retrac"][query_ids] += partial["retrac"]
+            totals["diffusion_retrac_adamw_full"][query_ids] += partial[
+                "retrac_adamw_full"
+            ]
         if sorted(covered) != list(range(50)):
             raise ValueError(
                 f"{family} checkpoint coverage mismatch: {sorted(covered)}"
             )
     for key, method in RETRAC_METHODS.items():
+        definitions = {
+            "diffusion_tracin": (
+                "sum_checkpoint eta * dot(mean_t(query_loss_gradient), "
+                "mean_4_replayed_training_event_gradients)"
+            ),
+            "diffusion_retrac": (
+                "sum_checkpoint eta * "
+                "dot(mean_t(normalize(mean_mc(query_loss_gradient))), "
+                "mean_4(normalize(replayed_training_event_gradient)))"
+            ),
+            "diffusion_retrac_adamw_full": (
+                "sum_checkpoint eta * "
+                "dot(mean_t(normalize(mean_mc(query_loss_gradient))), "
+                "mean_4(normalize(saved-state full-AdamW hypothetical update "
+                "from replayed training event gradient)))"
+            ),
+        }
         for position, query_id in enumerate(RETRAC_QUERY_IDS):
             output = ATTR_DIR / method / f"q{query_id:02d}"
             output.mkdir(parents=True, exist_ok=True)
@@ -45,14 +68,7 @@ def main():
                     {
                         "method": key,
                         "query_id": query_id,
-                        "definition": (
-                            "sum_checkpoint eta * dot(mean_t(query_loss_gradient), "
-                            "mean_4_replayed_training_event_gradients)"
-                            if key == "diffusion_tracin"
-                            else
-                            "sum_checkpoint eta * dot(mean_t(normalize(mean_mc(query_loss_gradient))), "
-                            "mean_4(normalize(replayed_training_event_gradient)))"
-                        ),
+                        "definition": definitions[key],
                         "query_timesteps": list(RETRAC_TIMESTEPS),
                         "query_mc": RETRAC_QUERY_MC,
                         "train_events_per_checkpoint": RETRAC_EVENTS_PER_CHECKPOINT,
@@ -60,6 +76,8 @@ def main():
                         "checkpoint_count": 50,
                         "parameter_source": RETRAC_PARAM_SOURCE,
                         "projection_dim": RETRAC_PROJ_DIM,
+                        "query_adamw_transform": False,
+                        "train_adamw_transform": key == "diffusion_retrac_adamw_full",
                     },
                     handle,
                     indent=2,

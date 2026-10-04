@@ -50,6 +50,11 @@ def main():
     print(f"projection = shared CountSketch{RETRAC_PROJ_DIM} per checkpoint")
     print("Diffusion-TracIn = raw query/train loss gradients")
     print("Diffusion-ReTrac = per-timestep query and per-event train gradients L2-normalized")
+    print(
+        "AdamW-ReTrac = unchanged normalized query gradient; each exact train "
+        "event becomes a saved-state full-AdamW update, then is L2-normalized"
+    )
+    print("query AdamW transform = false")
     print("checkpoint weight = saved checkpoint learning rate")
     print("[OK] Diffusion-TracIn/ReTrac replay prerequisites verified")
 

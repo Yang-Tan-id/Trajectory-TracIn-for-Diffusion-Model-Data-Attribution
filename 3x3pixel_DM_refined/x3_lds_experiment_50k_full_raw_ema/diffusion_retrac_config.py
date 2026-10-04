@@ -20,11 +20,17 @@ RETRAC_TRACIN_METHOD = (
 RETRAC_METHOD = (
     "diffusion_retrac_replayed_raw_50ckpt_100t_mc10_projected4096"
 )
+RETRAC_ADAMW_FULL_METHOD = (
+    "diffusion_retrac_replayed_adamw_full_50ckpt_100t_mc10_projected4096"
+)
 RETRAC_METHODS = {
     "diffusion_tracin": RETRAC_TRACIN_METHOD,
     "diffusion_retrac": RETRAC_METHOD,
+    "diffusion_retrac_adamw_full": RETRAC_ADAMW_FULL_METHOD,
 }
-RETRAC_SHARD_NAMESPACE = "_diffusion_retrac_replayed_raw_100q_shards"
+RETRAC_SHARD_NAMESPACE = (
+    "_diffusion_retrac_replayed_raw_adamw_full_100q_shards"
+)
 
 
 def retrac_query_ids(family):

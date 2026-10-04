@@ -71,7 +71,11 @@ def main():
     subprocess.run(
         [sys.executable, "114_eval_diffusion_retrac_10q_lds.py"], check=True
     )
-    print("[done] Diffusion-TracIn + Diffusion-ReTrac q00-q99 and LDS", flush=True)
+    print(
+        "[done] Diffusion-TracIn + raw/AdamW-full Diffusion-ReTrac "
+        "q00-q99 and LDS",
+        flush=True,
+    )
 
 
 if __name__ == "__main__":
