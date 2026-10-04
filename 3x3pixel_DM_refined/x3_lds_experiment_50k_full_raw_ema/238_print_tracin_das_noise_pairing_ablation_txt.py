@@ -1,8 +1,10 @@
 """Render the controlled noise-pairing LDS ablation as a readable text report."""
 
 import argparse
+import itertools
 import json
 import os
+import random
 from pathlib import Path
 
 
@@ -24,6 +26,32 @@ def atomic_text(path, value):
 
 def signed(value):
     return f"{float(value):+.6f}"
+
+
+def exact_sign_flip_p(values):
+    """Exact paired randomization p-values for H1: mean(values) > 0."""
+    values = [float(value) for value in values]
+    observed = sum(values) / len(values)
+    null = [
+        sum(sign * value for sign, value in zip(signs, values)) / len(values)
+        for signs in itertools.product((-1.0, 1.0), repeat=len(values))
+    ]
+    tolerance = 1e-15
+    one_sided = sum(value >= observed - tolerance for value in null) / len(null)
+    two_sided = sum(
+        abs(value) >= abs(observed) - tolerance for value in null
+    ) / len(null)
+    return one_sided, two_sided
+
+
+def paired_bootstrap_ci(values, seed, draws=100000):
+    values = [float(value) for value in values]
+    rng = random.Random(seed)
+    means = sorted(
+        sum(values[rng.randrange(len(values))] for _ in values) / len(values)
+        for _ in range(draws)
+    )
+    return means[int(0.025 * draws)], means[int(0.975 * draws) - 1]
 
 
 def main():
@@ -131,6 +159,51 @@ def main():
                         f"{signed(deltas['random_permutation']):>10s} "
                         f"{signed(deltas['independent']):>10s}"
                     )
+
+    lines.extend(
+        [
+            "",
+            "",
+            "PAIRED SIGNIFICANCE TESTS (ALL TIMESTAMPS, SIGN=-1)",
+            "=" * 116,
+            "H1: aligned LDS > control LDS",
+            "p1 = exact one-sided paired sign-flip randomization p-value",
+            "p2 = exact two-sided paired sign-flip randomization p-value",
+            "CI = paired-query bootstrap 95% confidence interval for aligned - control",
+            "Unadjusted exploratory p-values; apply a multiple-testing correction when making global claims.",
+        ]
+    )
+    test_index = 0
+    for variant in variants:
+        for contraction in contractions:
+            lines.extend(
+                [
+                    "",
+                    f"VARIANT={variant}  CONTRACTION={contraction}",
+                    "-" * 116,
+                    (
+                        f"{'target':30s} {'control':19s} {'delta':>10s} "
+                        f"{'p1':>10s} {'p2':>10s} {'bootstrap 95% CI':>27s} {'wins':>7s}"
+                    ),
+                ]
+            )
+            for metric in metrics:
+                for control in CONTROLS:
+                    values = result["paired_improvements"][control][variant][
+                        contraction
+                    ]["all"][metric]["per_query"]
+                    mean = sum(values) / len(values)
+                    p1, p2 = exact_sign_flip_p(values)
+                    low, high = paired_bootstrap_ci(
+                        values, seed=20261004 + test_index
+                    )
+                    wins = sum(float(value) > 0.0 for value in values)
+                    lines.append(
+                        f"{metric:30s} {control:19s} {signed(mean):>10s} "
+                        f"{p1:10.6f} {p2:10.6f} "
+                        f"[{signed(low)}, {signed(high)}] {wins:>3d}/{len(values):<3d}"
+                    )
+                    test_index += 1
 
     lines.extend(["", "", "PER-QUERY RESULTS (ALL TIMESTAMPS, SIGN=-1)", "=" * 96])
     for variant in variants:
