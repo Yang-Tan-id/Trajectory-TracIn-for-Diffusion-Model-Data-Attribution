@@ -11,8 +11,12 @@
 
 set -euo pipefail
 
-script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-worker="$script_dir/run_paper_retrac_endpoint100x1_q0_99_scores_lds_rtx_small.sh"
+repo="${REPO_ROOT:-${SLURM_SUBMIT_DIR:-$PWD}}"
+while [[ "$repo" != / && ! -f "$repo/diffusion_jax_refined/3dshapes/tacc/rtx_small/run_paper_retrac_endpoint100x1_q0_99_scores_lds_rtx_small.sh" ]]; do
+  repo="$(dirname "$repo")"
+done
+worker="$repo/diffusion_jax_refined/3dshapes/tacc/rtx_small/run_paper_retrac_endpoint100x1_q0_99_scores_lds_rtx_small.sh"
+[[ -f "$worker" ]] || { echo "Unable to locate score worker from $repo" >&2; exit 1; }
 artifact="paper_retrac_raw_adamw_full_l2_normalized_four_events_n5000"
 
 echo "[1/2] paper-normalized raw-loss ReTrac"
