@@ -38,6 +38,8 @@ train_root="$shapes/result/$experiment/model/prompted_solo/seed_${seed}_train_gr
 raw_train="$train_root/traj_tracin_recreate_raw_mc1_aligned10x1/train_datapoint_gradient_artifact.npz"
 adamw_train="$train_root/traj_tracin_recreate_adamw_dual_mc1_aligned10x1/train_datapoint_gradient_artifact.npz"
 score_train_kinds="${SCORE_TRAIN_KINDS:-raw,adamw_residual,adamw_full}"
+score_delta_kinds="${SCORE_DELTA_KINDS:-delta_raw,delta_l2normalized}"
+score_reductions="${SCORE_REDUCTIONS:-linear,termwise_squared,timestamp_sum_squared}"
 
 if [[ ",$score_train_kinds," == *,raw,* ]]; then
   [[ -f "$raw_train" ]] || { echo "Missing raw train artifact: $raw_train" >&2; exit 1; }
@@ -47,10 +49,24 @@ if [[ ",$score_train_kinds," == *,adamw_residual,* || ",$score_train_kinds," == 
 fi
 
 IFS=',' read -r -a train_kinds <<<"$score_train_kinds"
+IFS=',' read -r -a delta_kinds <<<"$score_delta_kinds"
+IFS=',' read -r -a reductions <<<"$score_reductions"
 for train_kind in "${train_kinds[@]}"; do
   case "$train_kind" in
     raw|adamw_residual|adamw_full) ;;
     *) echo "Invalid SCORE_TRAIN_KINDS entry: $train_kind" >&2; exit 1 ;;
+  esac
+done
+for delta_kind in "${delta_kinds[@]}"; do
+  case "$delta_kind" in
+    delta_raw|delta_l2normalized) ;;
+    *) echo "Invalid SCORE_DELTA_KINDS entry: $delta_kind" >&2; exit 1 ;;
+  esac
+done
+for reduction in "${reductions[@]}"; do
+  case "$reduction" in
+    linear|termwise_squared|termwise_squared_lr_after|timestamp_sum_squared) ;;
+    *) echo "Invalid SCORE_REDUCTIONS entry: $reduction" >&2; exit 1 ;;
   esac
 done
 
@@ -93,11 +109,11 @@ run_score() {
 }
 
 cd "$shapes"
-for delta_kind in delta_raw delta_l2normalized; do
+for delta_kind in "${delta_kinds[@]}"; do
   for train_kind in "${train_kinds[@]}"; do
-    run_score "$train_kind" "$delta_kind" linear
-    run_score "$train_kind" "$delta_kind" termwise_squared
-    run_score "$train_kind" "$delta_kind" timestamp_sum_squared
+    for reduction in "${reductions[@]}"; do
+      run_score "$train_kind" "$delta_kind" "$reduction"
+    done
   done
 done
 

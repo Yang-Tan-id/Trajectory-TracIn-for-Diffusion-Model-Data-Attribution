@@ -99,11 +99,13 @@ def _normalize_rows(x: np.ndarray, eps: float) -> np.ndarray:
 def _traj_score_contraction() -> str:
     value = os.environ.get("TRACIN_SCORE_CONTRACTION", "linear").strip().lower()
     if value not in (
-        "linear", "squared", "termwise_squared", "absolute", "timestamp_sum_squared"
+        "linear", "squared", "termwise_squared", "termwise_squared_lr_after",
+        "absolute", "timestamp_sum_squared"
     ):
         raise ValueError(
             "TRACIN_SCORE_CONTRACTION must be 'linear', 'squared', "
-            "'termwise_squared', 'absolute', or 'timestamp_sum_squared', "
+            "'termwise_squared', 'termwise_squared_lr_after', 'absolute', "
+            "or 'timestamp_sum_squared', "
             f"got {value!r}"
         )
     return value
@@ -117,6 +119,11 @@ def _contract_traj_term(values: np.ndarray, contraction: str) -> np.ndarray:
     if contraction == "termwise_squared":
         raise ValueError(
             "termwise_squared must be applied after the per-term learning-rate weight"
+        )
+    if contraction == "termwise_squared_lr_after":
+        raise ValueError(
+            "termwise_squared_lr_after must square the dot product before applying "
+            "the per-term learning-rate weight"
         )
     if contraction == "timestamp_sum_squared":
         raise ValueError(
@@ -389,6 +396,8 @@ def _combine_multiterm_dot_scores(
             groups[timestep] += weighted
         elif score_contraction == "termwise_squared":
             scores += np.square(weighted)
+        elif score_contraction == "termwise_squared_lr_after":
+            scores += float(weight) * np.square(values)
         else:
             scores += weighted
 
@@ -407,7 +416,9 @@ def _combine_multiterm_dot_scores(
         if normalize_train:
             values = values / np.maximum(train_norms[train_i], float(train_normalize_eps))
         return values if (
-            grouped_by_timestamp or score_contraction == "termwise_squared"
+            grouped_by_timestamp or score_contraction in (
+                "termwise_squared", "termwise_squared_lr_after"
+            )
         ) else _contract_traj_term(values, score_contraction)
     train_ckpts = np.asarray(train_payload.get("ckpt_indices", ()), dtype=np.int32).reshape(-1)
     train_timesteps = np.asarray(train_payload.get("timesteps", ()), dtype=np.int32).reshape(-1)
@@ -1537,6 +1548,8 @@ def _run_fused_traj_score_batch(
         elif score_contraction == "termwise_squared":
             weighted_raw = raw_dot.T * weights_all[:, term_i, None]
             raw_scores += np.square(weighted_raw)
+        elif score_contraction == "termwise_squared_lr_after":
+            raw_scores += np.square(raw_dot.T) * weights_all[:, term_i, None]
         else:
             weighted_raw = _contract_traj_term(
                 raw_dot, score_contraction
@@ -1554,6 +1567,10 @@ def _run_fused_traj_score_batch(
             elif score_contraction == "termwise_squared":
                 weighted_train = normalized_train_dot.T * weights_all[:, term_i, None]
                 train_scores += np.square(weighted_train)
+            elif score_contraction == "termwise_squared_lr_after":
+                train_scores += (
+                    np.square(normalized_train_dot.T) * weights_all[:, term_i, None]
+                )
             else:
                 weighted_train = _contract_traj_term(
                     normalized_train_dot, score_contraction
@@ -1567,6 +1584,8 @@ def _run_fused_traj_score_batch(
             elif score_contraction == "termwise_squared":
                 weighted_query = query_dot.T * weights_all[:, term_i, None]
                 query_scores += np.square(weighted_query)
+            elif score_contraction == "termwise_squared_lr_after":
+                query_scores += np.square(query_dot.T) * weights_all[:, term_i, None]
             else:
                 weighted_query = _contract_traj_term(
                     query_dot, score_contraction
@@ -1582,6 +1601,10 @@ def _run_fused_traj_score_batch(
                 elif score_contraction == "termwise_squared":
                     weighted_both = normalized_both_dot.T * weights_all[:, term_i, None]
                     both_scores += np.square(weighted_both)
+                elif score_contraction == "termwise_squared_lr_after":
+                    both_scores += (
+                        np.square(normalized_both_dot.T) * weights_all[:, term_i, None]
+                    )
                 else:
                     weighted_both = _contract_traj_term(
                         normalized_both_dot, score_contraction

@@ -159,7 +159,10 @@ SCORE_SCHEMES = {
         for scope in ("q100", "q0_99")
         for train_kind in ("raw", "adamw_residual", "adamw_full")
         for delta_kind in ("delta_raw", "delta_l2normalized")
-        for reduction in ("linear", "termwise_squared", "timestamp_sum_squared")
+        for reduction in (
+            "linear", "termwise_squared", "termwise_squared_lr_after",
+            "timestamp_sum_squared",
+        )
     },
     "raw_mc10_aligned10x10": "traj_tracin_raw_mc10_aligned10x10",
     "raw_mc10_aligned10x10_squared_previous_lr":
