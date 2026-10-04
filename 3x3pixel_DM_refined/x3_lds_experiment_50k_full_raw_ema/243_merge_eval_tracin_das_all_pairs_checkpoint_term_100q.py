@@ -37,7 +37,7 @@ def method_name(group):
     return (
         "tracin_das_noise_pairing_all_pairs_10ckpt_20t_mc10_"
         "adamw_full_next_delta_projected4096_"
-        f"raw_{CONTRACTION}_{group}_q00_q99"
+        f"raw_{CONTRACTION}_lr_outside_{group}_q00_q99"
     )
 
 
@@ -79,7 +79,8 @@ def main():
     result = {
         "query_ids": list(query_ids),
         "formula": (
-            "mean_t sum_checkpoint (mean_direction_pair projected_inner_product)^2"
+            "mean_t sum_checkpoint lr_checkpoint * "
+            "(mean_direction_pair projected_adamw_direction_without_lr_inner_product)^2"
         ),
         "checkpoint_pairs": list(NPA_CHECKPOINT_PAIRS),
         "timestamp_groups": {
@@ -124,7 +125,7 @@ def main():
     lines = [
         "ALL-PAIRS WITHIN-CHECKPOINT DIRECTION-SUM-SQUARED TRACIN-DAS",
         "=" * 92,
-        "score = mean_t sum_c [mean_(m,n) <q_(c,t,m), h_(i,c,t,n)>]^2",
+        "score = mean_t sum_c lr_c [mean_(m,n) <q_(c,t,m), h_(i,c,t,n)/lr_c>]^2",
         "reported LDS sign = -1",
         "",
         "ALL TIMESTAMPS",
@@ -145,7 +146,7 @@ def main():
 
     output = (
         LDS_DIR
-        / "tracin_das_all_pairs_checkpoint_direction_sum_squared_10ckpt_20t_mc10_q00_q99.json"
+        / "tracin_das_all_pairs_checkpoint_direction_sum_squared_lr_outside_10ckpt_20t_mc10_q00_q99.json"
     )
     atomic_json(output, result)
     atomic_text(output.with_suffix(".txt"), "\n".join(lines) + "\n")

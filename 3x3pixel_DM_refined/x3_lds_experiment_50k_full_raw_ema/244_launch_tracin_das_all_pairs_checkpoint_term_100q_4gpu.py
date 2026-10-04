@@ -69,11 +69,11 @@ def main():
     args = parser.parse_args()
     gpus = parse_gpus(args.gpus)
     LOG_DIR.mkdir(parents=True, exist_ok=True)
-    log_path = LOG_DIR / "tracin_das_all_pairs_checkpoint_term_100q_4gpu.log"
+    log_path = LOG_DIR / "tracin_das_all_pairs_checkpoint_term_lr_outside_100q_4gpu.log"
     with open(log_path, "a", buffering=1) as stream:
         stream.write(
             "\n[launcher] q00-q99 all-pairs; sum directions then square within "
-            "each checkpoint/timestamp; full AdamW; projected4096\n"
+            "each checkpoint/timestamp; LR outside square; full AdamW; projected4096\n"
         )
         print(f"[launcher] log={log_path}", flush=True)
         run_family("prompted", gpus, args, stream)

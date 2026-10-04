@@ -523,9 +523,14 @@ def main():
                                 :, :, :, micro_start:micro_end
                             ] += cross_dots
                         if "checkpoint_direction_sum_squared" in active_contractions:
+                            learning_rate = float(adam_hyper["lr"])
+                            if learning_rate <= 0.0:
+                                raise ValueError(
+                                    f"non-positive checkpoint learning rate: {learning_rate}"
+                                )
                             checkpoint_value = cross_dots.mean(
                                 dim=(1, 2)
-                            ).square().double()
+                            ).square().double() / learning_rate
                             for group in groups:
                                 weight = 1.0 / len(NPA_TIMESTAMP_GROUPS[group])
                                 scores[
