@@ -32,6 +32,7 @@ NPA_EPS = 1e-12
 NPA_CONTRACT_VERSION = 1
 NPA100_CONTRACT_VERSION = 2
 NPA100_CROSS_CONTRACT_VERSION = 3
+NPA100_CROSS_TERM_CONTRACT_VERSION = 4
 
 
 def npa100_query_ids(family):
@@ -63,6 +64,17 @@ def npa100_cross_shard_root(family, timestamp_shard_index, timestamp_shard_count
     return (
         ATTR_DIR
         / "_tracin_das_noise_pairing_all_pairs_cross_10ckpt_20t_mc10_q00_q99_shards"
+        / family
+        / f"shard_{int(timestamp_shard_index):02d}_of_{int(timestamp_shard_count):02d}"
+    )
+
+
+def npa100_cross_term_shard_root(
+    family, timestamp_shard_index, timestamp_shard_count
+):
+    return (
+        ATTR_DIR
+        / "_tracin_das_noise_pairing_all_pairs_checkpoint_term_10ckpt_20t_mc10_q00_q99_shards"
         / family
         / f"shard_{int(timestamp_shard_index):02d}_of_{int(timestamp_shard_count):02d}"
     )

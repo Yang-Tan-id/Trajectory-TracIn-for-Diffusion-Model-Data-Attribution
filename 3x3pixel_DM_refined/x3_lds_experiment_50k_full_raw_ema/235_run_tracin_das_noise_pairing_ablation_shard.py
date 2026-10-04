@@ -121,7 +121,9 @@ def main():
     parser.add_argument("--query-term-batch-size", type=int, default=128)
     parser.add_argument("--family", choices=("prompted", "unprompted"), default="prompted")
     parser.add_argument(
-        "--query-scope", choices=("ten", "all", "all-cross"), default="ten"
+        "--query-scope",
+        choices=("ten", "all", "all-cross", "all-cross-term"),
+        default="ten",
     )
     args = parser.parse_args()
     if not 0 <= args.timestamp_shard_index < args.timestamp_shard_count:
@@ -132,11 +134,18 @@ def main():
     device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
     if torch.cuda.is_available():
         torch.cuda.set_device(device)
-    if args.query_scope in ("all", "all-cross"):
+    if args.query_scope in ("all", "all-cross", "all-cross-term"):
         query_ids = npa100_query_ids(args.family)
         active_variants = ("raw",)
         active_contractions = ("timestamp_sum_squared",)
-        if args.query_scope == "all-cross":
+        if args.query_scope == "all-cross-term":
+            active_pairings = ("all_pairs",)
+            active_contractions = ("checkpoint_direction_sum_squared",)
+            contract_version = NPA100_CROSS_TERM_CONTRACT_VERSION
+            root = npa100_cross_term_shard_root(
+                args.family, args.timestamp_shard_index, args.timestamp_shard_count
+            )
+        elif args.query_scope == "all-cross":
             active_pairings = ("all_pairs",)
             contract_version = NPA100_CROSS_CONTRACT_VERSION
             root = npa100_cross_shard_root(
@@ -235,18 +244,19 @@ def main():
             if timestamp_index in indices
         ]
         timestamp_accumulators = {}
-        for pairing in active_pairings:
-            for variant in active_variants:
-                direction_shape = (
-                    (NPA_DIRECTION_COUNT, NPA_DIRECTION_COUNT)
-                    if pairing == "all_pairs"
-                    else (NPA_DIRECTION_COUNT,)
-                )
-                timestamp_accumulators[(pairing, variant)] = torch.zeros(
-                    (len(query_ids), *direction_shape, N_TRAIN),
-                    device=device,
-                    dtype=torch.float32,
-                )
+        if "timestamp_sum_squared" in active_contractions:
+            for pairing in active_pairings:
+                for variant in active_variants:
+                    direction_shape = (
+                        (NPA_DIRECTION_COUNT, NPA_DIRECTION_COUNT)
+                        if pairing == "all_pairs"
+                        else (NPA_DIRECTION_COUNT,)
+                    )
+                    timestamp_accumulators[(pairing, variant)] = torch.zeros(
+                        (len(query_ids), *direction_shape, N_TRAIN),
+                        device=device,
+                        dtype=torch.float32,
+                    )
 
         for checkpoint_position, checkpoint_index in enumerate(
             NPA_CHECKPOINT_PAIRS, start=1
@@ -508,9 +518,26 @@ def main():
                         cross_dots = torch.einsum(
                             "qmp,bnp->qmnb", query_matrix, base_train
                         )
-                        timestamp_accumulators[("all_pairs", "raw")][
-                            :, :, :, micro_start:micro_end
-                        ] += cross_dots
+                        if "timestamp_sum_squared" in active_contractions:
+                            timestamp_accumulators[("all_pairs", "raw")][
+                                :, :, :, micro_start:micro_end
+                            ] += cross_dots
+                        if "checkpoint_direction_sum_squared" in active_contractions:
+                            checkpoint_value = cross_dots.mean(
+                                dim=(1, 2)
+                            ).square().double()
+                            for group in groups:
+                                weight = 1.0 / len(NPA_TIMESTAMP_GROUPS[group])
+                                scores[
+                                    score_key(
+                                        "all_pairs",
+                                        "raw",
+                                        "checkpoint_direction_sum_squared",
+                                        group,
+                                    )
+                                ][:, micro_start:micro_end] += (
+                                    weight * checkpoint_value
+                                )
                     del gradients, updates, train_matrix
                     del base_train
                     if needs_independent_bank:
@@ -518,6 +545,8 @@ def main():
                     del train_by_pairing
                     if "all_pairs" in active_pairings:
                         del cross_dots
+                        if "checkpoint_direction_sum_squared" in active_contractions:
+                            del checkpoint_value
                 if (
                     batch_position == 1
                     or batch_position % progress_every == 0
@@ -552,16 +581,18 @@ def main():
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
-        for pairing in active_pairings:
-            for variant in active_variants:
-                timestamp_values = timestamp_accumulators[(pairing, variant)]
-                direction_dims = (
-                    (1, 2) if pairing == "all_pairs" else (1,)
-                )
-                reduced = timestamp_values.square().mean(dim=direction_dims).double()
-                for group in groups:
-                    weight = 1.0 / len(NPA_TIMESTAMP_GROUPS[group])
-                    if "timestamp_sum_squared" in active_contractions:
+        if "timestamp_sum_squared" in active_contractions:
+            for pairing in active_pairings:
+                for variant in active_variants:
+                    timestamp_values = timestamp_accumulators[(pairing, variant)]
+                    direction_dims = (
+                        (1, 2) if pairing == "all_pairs" else (1,)
+                    )
+                    reduced = timestamp_values.square().mean(
+                        dim=direction_dims
+                    ).double()
+                    for group in groups:
+                        weight = 1.0 / len(NPA_TIMESTAMP_GROUPS[group])
                         scores[
                             score_key(
                                 pairing, variant, "timestamp_sum_squared", group
