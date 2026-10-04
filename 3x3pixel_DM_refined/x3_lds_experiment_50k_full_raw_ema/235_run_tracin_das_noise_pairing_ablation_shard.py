@@ -120,7 +120,9 @@ def main():
     parser.add_argument("--grad-microbatch-size", type=int, default=4)
     parser.add_argument("--query-term-batch-size", type=int, default=128)
     parser.add_argument("--family", choices=("prompted", "unprompted"), default="prompted")
-    parser.add_argument("--query-scope", choices=("ten", "all"), default="ten")
+    parser.add_argument(
+        "--query-scope", choices=("ten", "all", "all-cross"), default="ten"
+    )
     args = parser.parse_args()
     if not 0 <= args.timestamp_shard_index < args.timestamp_shard_count:
         raise ValueError("invalid timestamp shard")
@@ -130,20 +132,29 @@ def main():
     device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
     if torch.cuda.is_available():
         torch.cuda.set_device(device)
-    if args.query_scope == "all":
+    if args.query_scope in ("all", "all-cross"):
         query_ids = npa100_query_ids(args.family)
         active_variants = ("raw",)
         active_contractions = ("timestamp_sum_squared",)
-        contract_version = NPA100_CONTRACT_VERSION
-        root = npa100_shard_root(
-            args.family, args.timestamp_shard_index, args.timestamp_shard_count
-        )
+        if args.query_scope == "all-cross":
+            active_pairings = ("all_pairs",)
+            contract_version = NPA100_CROSS_CONTRACT_VERSION
+            root = npa100_cross_shard_root(
+                args.family, args.timestamp_shard_index, args.timestamp_shard_count
+            )
+        else:
+            active_pairings = NPA_PAIRINGS
+            contract_version = NPA100_CONTRACT_VERSION
+            root = npa100_shard_root(
+                args.family, args.timestamp_shard_index, args.timestamp_shard_count
+            )
     else:
         if args.family != NPA_FAMILY:
             raise ValueError("the ten-query diagnostic only supports prompted")
         query_ids = NPA_QUERY_IDS
         active_variants = NPA_VARIANTS
         active_contractions = NPA_CONTRACTIONS
+        active_pairings = NPA_PAIRINGS
         contract_version = NPA_CONTRACT_VERSION
         root = npa_shard_root(args.timestamp_shard_index, args.timestamp_shard_count)
     done_path = root / "done.json"
@@ -182,7 +193,7 @@ def main():
         score_key(pairing, variant, contraction, group): torch.zeros(
             expected_shape, device=device, dtype=torch.float64
         )
-        for pairing in NPA_PAIRINGS
+        for pairing in active_pairings
         for variant in active_variants
         for contraction in active_contractions
         for group in NPA_TIMESTAMP_GROUPS
@@ -211,7 +222,7 @@ def main():
         f"[pairing-ablation gpu={args.gpu}] family={args.family} "
         f"queries={query_ids[0]}..{query_ids[-1]} ({len(query_ids)}) directions=10 "
         f"timestamps={len(selected)}/20 checkpoint_pairs={NPA_CHECKPOINT_PAIRS} "
-        f"pairings={NPA_PAIRINGS} full_adamw=true projection=4096 "
+        f"pairings={active_pairings} full_adamw=true projection=4096 "
         f"batch={args.batch_size} microbatch={args.grad_microbatch_size}",
         flush=True,
     )
@@ -223,15 +234,19 @@ def main():
             for group, indices in NPA_TIMESTAMP_GROUPS.items()
             if timestamp_index in indices
         ]
-        timestamp_accumulators = {
-            (pairing, variant): torch.zeros(
-                (len(query_ids), NPA_DIRECTION_COUNT, N_TRAIN),
-                device=device,
-                dtype=torch.float32,
-            )
-            for pairing in NPA_PAIRINGS
-            for variant in active_variants
-        }
+        timestamp_accumulators = {}
+        for pairing in active_pairings:
+            for variant in active_variants:
+                direction_shape = (
+                    (NPA_DIRECTION_COUNT, NPA_DIRECTION_COUNT)
+                    if pairing == "all_pairs"
+                    else (NPA_DIRECTION_COUNT,)
+                )
+                timestamp_accumulators[(pairing, variant)] = torch.zeros(
+                    (len(query_ids), *direction_shape, N_TRAIN),
+                    device=device,
+                    dtype=torch.float32,
+                )
 
         for checkpoint_position, checkpoint_index in enumerate(
             NPA_CHECKPOINT_PAIRS, start=1
@@ -376,7 +391,13 @@ def main():
             train_grad_fn = vmap(
                 grad(train_loss), in_dims=(None, 0, 0, 0, 0)
             )
-            combined_noises = torch.cat((base_noises, independent_noises), dim=0)
+            needs_independent_bank = "independent" in active_pairings
+            combined_noises = (
+                torch.cat((base_noises, independent_noises), dim=0)
+                if needs_independent_bank
+                else base_noises
+            )
+            bank_count = 2 if needs_independent_bank else 1
             num_batches = math.ceil(N_TRAIN / args.batch_size)
             progress_every = max(1, num_batches // 5)
             for batch_position, outer_start in enumerate(
@@ -390,7 +411,7 @@ def main():
                         micro_start + args.grad_microbatch_size, outer_end
                     )
                     count = micro_end - micro_start
-                    event_count = 2 * NPA_DIRECTION_COUNT
+                    event_count = bank_count * NPA_DIRECTION_COUNT
                     xb = x_all[micro_start:micro_end, None].expand(
                         count, event_count, *x_all.shape[1:]
                     ).reshape(-1, *x_all.shape[1:])
@@ -418,29 +439,37 @@ def main():
                         False,
                         NPA_EPS,
                     ).reshape(
-                        count, 2, NPA_DIRECTION_COUNT, NPA_PROJECTION_DIM
+                        count, bank_count, NPA_DIRECTION_COUNT, NPA_PROJECTION_DIM
                     ).detach()
                     base_train = train_matrix[:, 0]
-                    independent_train = train_matrix[:, 1]
-                    base_train_unit = base_train / base_train.norm(
-                        dim=2, keepdim=True
-                    ).clamp_min(NPA_EPS)
-                    independent_train_unit = independent_train / independent_train.norm(
-                        dim=2, keepdim=True
-                    ).clamp_min(NPA_EPS)
-                    train_by_pairing = {
-                        "aligned": (base_train, base_train_unit),
-                        "cyclic": (
-                            base_train[:, cyclic_permutation],
-                            base_train_unit[:, cyclic_permutation],
-                        ),
-                        "random_permutation": (
-                            base_train[:, random_permutation],
-                            base_train_unit[:, random_permutation],
-                        ),
-                        "independent": (independent_train, independent_train_unit),
-                    }
+                    if active_pairings == ("all_pairs",):
+                        train_by_pairing = {}
+                    else:
+                        independent_train = train_matrix[:, 1]
+                        base_train_unit = base_train / base_train.norm(
+                            dim=2, keepdim=True
+                        ).clamp_min(NPA_EPS)
+                        independent_train_unit = independent_train / independent_train.norm(
+                            dim=2, keepdim=True
+                        ).clamp_min(NPA_EPS)
+                        train_by_pairing = {
+                            "aligned": (base_train, base_train_unit),
+                            "cyclic": (
+                                base_train[:, cyclic_permutation],
+                                base_train_unit[:, cyclic_permutation],
+                            ),
+                            "random_permutation": (
+                                base_train[:, random_permutation],
+                                base_train_unit[:, random_permutation],
+                            ),
+                            "independent": (
+                                independent_train,
+                                independent_train_unit,
+                            ),
+                        }
                     for pairing, (train_raw, train_unit) in train_by_pairing.items():
+                        if pairing not in active_pairings:
+                            continue
                         dots_by_variant = {
                             "raw": torch.einsum(
                                 "qmp,bmp->qmb", query_matrix, train_raw
@@ -475,10 +504,20 @@ def main():
                                     ][:, micro_start:micro_end] += (
                                         weight * dots.square().mean(dim=1).double()
                                     )
+                    if "all_pairs" in active_pairings:
+                        cross_dots = torch.einsum(
+                            "qmp,bnp->qmnb", query_matrix, base_train
+                        )
+                        timestamp_accumulators[("all_pairs", "raw")][
+                            :, :, :, micro_start:micro_end
+                        ] += cross_dots
                     del gradients, updates, train_matrix
-                    del base_train, independent_train
-                    del base_train_unit, independent_train_unit
-                    del train_by_pairing, dots_by_variant, dots
+                    del base_train
+                    if needs_independent_bank:
+                        del independent_train, base_train_unit, independent_train_unit
+                    del train_by_pairing
+                    if "all_pairs" in active_pairings:
+                        del cross_dots
                 if (
                     batch_position == 1
                     or batch_position % progress_every == 0
@@ -513,10 +552,13 @@ def main():
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
-        for pairing in NPA_PAIRINGS:
+        for pairing in active_pairings:
             for variant in active_variants:
                 timestamp_values = timestamp_accumulators[(pairing, variant)]
-                reduced = timestamp_values.square().mean(dim=1).double()
+                direction_dims = (
+                    (1, 2) if pairing == "all_pairs" else (1,)
+                )
+                reduced = timestamp_values.square().mean(dim=direction_dims).double()
                 for group in groups:
                     weight = 1.0 / len(NPA_TIMESTAMP_GROUPS[group])
                     if "timestamp_sum_squared" in active_contractions:
@@ -557,7 +599,7 @@ def main():
             "checkpoint_pairs": list(NPA_CHECKPOINT_PAIRS),
             "timestamp_indices": selected,
             "direction_count": NPA_DIRECTION_COUNT,
-            "pairings": list(NPA_PAIRINGS),
+            "pairings": list(active_pairings),
             "variants": list(active_variants),
             "contractions": list(active_contractions),
             "projection_dim": NPA_PROJECTION_DIM,
