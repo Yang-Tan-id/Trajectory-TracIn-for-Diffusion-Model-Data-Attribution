@@ -27,7 +27,11 @@ experiment="${EXPERIMENT_TAG:-experiment1}"
 seed="${TRAIN_SEED:-42}"
 query_file="$shapes/queries_in_distribution_plus_zero_seed_100_219.json"
 query_ids="${QUERY_IDS:-$(seq -s, 0 99)}"
-events="$shapes/result/$experiment/paper_retrac_full_l2_normalized_four_events_n5000"
+artifact_name="${PAPER_ARTIFACT_NAME:-paper_retrac_full_l2_normalized_four_events_n5000}"
+train_transform="${PAPER_TRAIN_TRANSFORM:-raw}"
+namespace="${PAPER_NAMESPACE:-paper_retrac_exact4_endpoint100x1_q0_99}"
+score_scheme="${PAPER_SCORE_SCHEME:-paper_retrac_exact4_endpoint100x1_q0_99}"
+events="$shapes/result/$experiment/$artifact_name"
 logs="$shapes/result/$experiment/logs/paper_retrac_endpoint100x1_scores/${SLURM_JOB_ID}"
 mkdir -p "$logs"
 
@@ -46,7 +50,8 @@ for gpu in 0 1; do
         --query-file "$query_file" --query-ids "$query_ids" \
         --experiment "$experiment" --train-seed "$seed" \
         --retrac-event-root "$events" --methods retrac --paper-retrac \
-        --retrac-namespace paper_retrac_exact4_endpoint100x1_q0_99 \
+        --paper-train-transform "$train_transform" \
+        --retrac-namespace "$namespace" \
         --retrac-reduction linear --query-batch-size "${QUERY_BATCH_SIZE:-1}" \
         --shard-index "$gpu" --shard-count 2
   ) >"$logs/gpu_${gpu}.log" 2>&1 &
@@ -59,7 +64,7 @@ for pid in "${pids[@]}"; do wait "$pid" || failed=1; done
 JAX_PLATFORMS=cpu python "$shapes/script/run_traj_tracin_lds_cached.py" \
   --execute --experiment "$experiment" --train-seed "$seed" \
   --query-file "$query_file" --query-ids "$query_ids" \
-  --score-schemes paper_retrac_exact4_endpoint100x1_q0_99 \
+  --score-schemes "$score_scheme" \
   --prediction-sign -1
 
 echo "[done] paper-normalized ReTrac Q0-Q99 scores and LDS"

@@ -80,7 +80,8 @@ def main():
     parser.add_argument(
         "--event-feature", choices=(
             "raw_gradient", "raw_gradient_full_l2_normalized",
-            "adamw_local_update", "adamw_hypothetical_update"
+            "adamw_local_update", "adamw_hypothetical_update",
+            "raw_and_adamw_full_l2_normalized",
         ),
         default="raw_gradient",
     )
@@ -201,18 +202,27 @@ def main():
                 return per_example_losses(pp, x, y, noise, timesteps, dropout_rng)[position]
 
             grads = jax.grad(selected_loss)(params)
-            if args.event_feature == "raw_gradient":
-                feature_tree = grads
-            elif args.event_feature == "raw_gradient_full_l2_normalized":
+            def full_l2_normalize(tree):
                 norm_sq = sum(
                     jnp.vdot(
                         leaf.astype(jnp.float32), leaf.astype(jnp.float32)
                     ).real
-                    for leaf in jax.tree_util.tree_leaves(grads)
+                    for leaf in jax.tree_util.tree_leaves(tree)
                 )
                 denominator = jnp.sqrt(jnp.maximum(norm_sq, 1e-16))
-                feature_tree = jax.tree_util.tree_map(
-                    lambda leaf: leaf / denominator.astype(leaf.dtype), grads
+                return jax.tree_util.tree_map(
+                    lambda leaf: leaf / denominator.astype(leaf.dtype), tree
+                )
+
+            if args.event_feature == "raw_gradient":
+                feature_tree = grads
+            elif args.event_feature == "raw_gradient_full_l2_normalized":
+                feature_tree = full_l2_normalize(grads)
+            elif args.event_feature == "raw_and_adamw_full_l2_normalized":
+                adamw_updates, _ = state.tx.update(grads, opt_state, params)
+                return (
+                    projector(full_l2_normalize(grads)),
+                    projector(full_l2_normalize(adamw_updates)),
                 )
             elif args.event_feature == "adamw_hypothetical_update":
                 feature_tree, _ = state.tx.update(grads, opt_state, params)
@@ -284,6 +294,8 @@ def main():
                 # absent per-epoch events explicitly instead of serializing
                 # uninitialized np.empty memory for those dataset indices.
                 epoch_features = np.zeros((len(owned_indices), args.proj_dim), dtype=np.float32)
+                if args.event_feature == "raw_and_adamw_full_l2_normalized":
+                    epoch_adamw_features = np.zeros_like(epoch_features)
                 epoch_timesteps = np.full((len(owned_indices),), -1, dtype=np.int32)
                 epoch_batches = np.full((len(owned_indices),), -1, dtype=np.int32)
                 epoch_positions = np.full((len(owned_indices),), -1, dtype=np.int16)
@@ -333,7 +345,14 @@ def main():
                             x, y, noise, t_device, dropout_rng,
                             jnp.asarray(position, dtype=jnp.int32),
                         )
-                        epoch_features[row] = np.asarray(feature, dtype=np.float32)
+                        if args.event_feature == "raw_and_adamw_full_l2_normalized":
+                            raw_feature, adamw_feature = feature
+                            epoch_features[row] = np.asarray(raw_feature, dtype=np.float32)
+                            epoch_adamw_features[row] = np.asarray(
+                                adamw_feature, dtype=np.float32
+                            )
+                        else:
+                            epoch_features[row] = np.asarray(feature, dtype=np.float32)
                         epoch_timesteps[row] = timesteps[position]
                         epoch_batches[row] = batch_no
                         epoch_positions[row] = position
@@ -375,8 +394,11 @@ def main():
                 state, _ = eval_step(state, eval_x, eval_y)
             if compute_epoch_gradients:
                 temporary_part = gradient_part.with_suffix(".tmp.npz")
+                feature_payload = {"train_features": epoch_features}
+                if args.event_feature == "raw_and_adamw_full_l2_normalized":
+                    feature_payload["train_features_adamw_full"] = epoch_adamw_features
                 np.savez_compressed(
-                    temporary_part, train_features=epoch_features,
+                    temporary_part, **feature_payload,
                     dataset_indices=owned_indices, timesteps=epoch_timesteps,
                     batch_indices=epoch_batches, batch_positions=epoch_positions,
                     epoch=np.asarray(epoch, dtype=np.int32),
@@ -388,6 +410,7 @@ def main():
                         "raw_gradient_full_l2_normalized": "CountSketch(full-parameter-L2-normalized fixed-checkpoint per-example diffusion-loss gradient)",
                         "adamw_local_update": "CountSketch(local AdamW update response to per-example gradient / batch_size)",
                         "adamw_hypothetical_update": "CountSketch(AdamW update from one per-example gradient using fixed checkpoint optimizer state)",
+                        "raw_and_adamw_full_l2_normalized": "CountSketch of both full-L2-normalized raw gradient and AdamW full hypothetical update",
                     }[args.event_feature]),
                     event_feature=np.asarray(args.event_feature),
                 )

@@ -170,18 +170,32 @@ def load_endpoint_train_part(path: Path) -> tuple[np.ndarray, np.ndarray, np.nda
 
 
 def load_event_shard(
-    path: Path, learning_rate_schedule, steps_per_epoch: int, *, paper_retrac: bool = False
+    path: Path, learning_rate_schedule, steps_per_epoch: int, *,
+    paper_retrac: bool = False, paper_train_transform: str = "raw",
 ):
     with np.load(path, allow_pickle=False) as payload:
-        features = np.asarray(payload["train_features"], dtype=np.float32)
+        feature_key = (
+            "train_features_adamw_full"
+            if paper_retrac and paper_train_transform == "adamw_full"
+            else "train_features"
+        )
+        features = np.asarray(payload[feature_key], dtype=np.float32)
         indices = np.asarray(payload["dataset_indices"], dtype=np.int64)
         batches = np.asarray(payload["batch_indices"], dtype=np.int64)
         timesteps = np.asarray(payload["timesteps"], dtype=np.int32)
         epoch = int(np.asarray(payload["epoch"]).item())
         definition = str(np.asarray(payload["event_feature"]).item())
-    expected = "raw_gradient_full_l2_normalized" if paper_retrac else "raw_gradient"
-    if definition != expected:
-        raise ValueError(f"{path}: expected {expected}, got {definition}")
+    if paper_retrac:
+        allowed = {
+            "raw_gradient_full_l2_normalized",
+            "raw_and_adamw_full_l2_normalized",
+        }
+        if paper_train_transform == "adamw_full":
+            allowed = {"raw_and_adamw_full_l2_normalized"}
+    else:
+        allowed = {"raw_gradient"}
+    if definition not in allowed:
+        raise ValueError(f"{path}: expected one of {sorted(allowed)}, got {definition}")
     present = batches >= 0
     steps = (epoch - 1) * steps_per_epoch + np.maximum(batches, 0)
     lrs = np.asarray(jax.device_get(learning_rate_schedule(jnp.asarray(steps))), dtype=np.float64)
@@ -201,6 +215,7 @@ def load_retrac_events(
     steps_per_epoch: int,
     shards: int = 2,
     paper_retrac: bool = False,
+    paper_train_transform: str = "raw",
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     start_epoch = 4 * (checkpoint + 1)
     interval = root / f"epoch_{start_epoch}_{start_epoch + 4}"
@@ -221,6 +236,7 @@ def load_retrac_events(
             features, indices, lrs, timesteps = load_event_shard(
                 path, learning_rate_schedule, steps_per_epoch,
                 paper_retrac=paper_retrac,
+                paper_train_transform=paper_train_transform,
             )
             feature_parts.append(features)
             index_parts.append(indices)
@@ -264,6 +280,10 @@ def main() -> None:
     parser.add_argument(
         "--paper-retrac", action="store_true",
         help="Use full-space per-timestep/per-event L2 normalization before projection.",
+    )
+    parser.add_argument(
+        "--paper-train-transform", choices=("raw", "adamw_full"), default="raw",
+        help="Select the pre-projection normalized train feature in paper-ReTrac mode.",
     )
     parser.add_argument("--retrac-namespace", default="retrac_exact4_endpoint100x1_q0_99")
     parser.add_argument(
@@ -403,6 +423,7 @@ def main() -> None:
                 lr_schedule,
                 steps_per_epoch,
                 paper_retrac=args.paper_retrac,
+                paper_train_transform=args.paper_train_transform,
             )
             if score_indices is None:
                 score_indices = retrac_indices
@@ -586,6 +607,8 @@ def main() -> None:
                         "prediction_sign_for_loss_utility": -1,
                         "train_definition": (
                             "four saved training events, each full-space-L2-normalized before projection, with event LR"
+                            if args.paper_retrac and args.paper_train_transform == "raw" and root_key == "retrac_root"
+                            else "four saved training events, each transformed by AdamW full, full-space-L2-normalized, then projected, with event LR"
                             if args.paper_retrac and root_key == "retrac_root"
                             else "four exact training events with saved t/noise/dropout and event LR"
                             if root_key == "retrac_root"
