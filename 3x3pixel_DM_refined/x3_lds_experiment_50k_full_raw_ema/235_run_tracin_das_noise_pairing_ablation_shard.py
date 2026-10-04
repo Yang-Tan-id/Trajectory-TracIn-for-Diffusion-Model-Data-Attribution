@@ -122,7 +122,13 @@ def main():
     parser.add_argument("--family", choices=("prompted", "unprompted"), default="prompted")
     parser.add_argument(
         "--query-scope",
-        choices=("ten", "all", "all-cross", "all-cross-term"),
+        choices=(
+            "ten",
+            "all",
+            "all-cross",
+            "all-cross-term",
+            "all-cross-both",
+        ),
         default="ten",
     )
     args = parser.parse_args()
@@ -134,11 +140,26 @@ def main():
     device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
     if torch.cuda.is_available():
         torch.cuda.set_device(device)
-    if args.query_scope in ("all", "all-cross", "all-cross-term"):
+    if args.query_scope in (
+        "all",
+        "all-cross",
+        "all-cross-term",
+        "all-cross-both",
+    ):
         query_ids = npa100_query_ids(args.family)
         active_variants = ("raw",)
         active_contractions = ("timestamp_sum_squared",)
-        if args.query_scope == "all-cross-term":
+        if args.query_scope == "all-cross-both":
+            active_pairings = ("all_pairs",)
+            active_contractions = (
+                "timestamp_sum_squared",
+                "checkpoint_direction_sum_squared",
+            )
+            contract_version = NPA100_CROSS_BOTH_CONTRACT_VERSION
+            root = npa100_cross_both_shard_root(
+                args.family, args.timestamp_shard_index, args.timestamp_shard_count
+            )
+        elif args.query_scope == "all-cross-term":
             active_pairings = ("all_pairs",)
             active_contractions = ("checkpoint_direction_sum_squared",)
             contract_version = NPA100_CROSS_TERM_CONTRACT_VERSION
