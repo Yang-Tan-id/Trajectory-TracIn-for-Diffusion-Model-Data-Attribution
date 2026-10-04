@@ -19,6 +19,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--gpus", default="0,1,2,3")
     parser.add_argument("--batch-size", type=int, default=4)
+    parser.add_argument("--grad-microbatch-size", type=int, default=8)
     parser.add_argument("--query-term-batch-size", type=int, default=128)
     args = parser.parse_args()
     gpus = parse_gpus(args.gpus)
@@ -52,6 +53,8 @@ def main():
                 str(shard_count),
                 "--batch-size",
                 str(args.batch_size),
+                "--grad-microbatch-size",
+                str(args.grad_microbatch_size),
                 "--query-term-batch-size",
                 str(args.query_term_batch_size),
             ]

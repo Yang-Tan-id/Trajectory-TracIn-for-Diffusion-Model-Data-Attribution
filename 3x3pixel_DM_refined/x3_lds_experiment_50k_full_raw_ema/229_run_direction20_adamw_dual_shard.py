@@ -138,11 +138,16 @@ def main():
     parser.add_argument("--direction-shard-index", type=int, required=True)
     parser.add_argument("--direction-shard-count", type=int, default=2)
     parser.add_argument("--batch-size", type=int, default=4)
+    parser.add_argument("--grad-microbatch-size", type=int, default=8)
     parser.add_argument("--query-term-batch-size", type=int, default=128)
     args = parser.parse_args()
     if not 0 <= args.direction_shard_index < args.direction_shard_count:
         raise ValueError("invalid direction shard")
-    if args.batch_size <= 0 or args.query_term_batch_size <= 0:
+    if (
+        args.batch_size <= 0
+        or args.grad_microbatch_size <= 0
+        or args.query_term_batch_size <= 0
+    ):
         raise ValueError("batch sizes must be positive")
 
     device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
@@ -175,12 +180,20 @@ def main():
         ],
         dim=0,
     )
+    trajectory_arrays = [
+        np.load(Path(record["dir"]) / "trajectory_xt.npy")
+        for record in records
+    ]
+    if any(value.ndim != 5 or value.shape[1] != 1 for value in trajectory_arrays):
+        raise ValueError(
+            "expected cached trajectories with shape [timestamp,1,channel,height,width]"
+        )
     trajectories = torch.stack(
         [
-            torch.from_numpy(
-                np.load(Path(record["dir"]) / "trajectory_xt.npy").copy()
-            ).to(device=device, dtype=torch.float32)
-            for record in records
+            torch.from_numpy(value[:, 0].copy()).to(
+                device=device, dtype=torch.float32
+            )
+            for value in trajectory_arrays
         ],
         dim=0,
     )
@@ -234,6 +247,8 @@ def main():
             raise ValueError("partial contract changed")
         if int(progress["batch_size"]) != args.batch_size:
             raise ValueError("partial batch size differs")
+        if int(progress.get("grad_microbatch_size", 8)) != args.grad_microbatch_size:
+            raise ValueError("partial gradient microbatch size differs")
         if progress["query_ids"] != query_ids:
             raise ValueError("partial query IDs differ")
         completed = [int(value) for value in progress["completed_directions"]]
@@ -261,7 +276,8 @@ def main():
     print(
         f"[direction20 gpu={args.gpu}] family={args.family} queries={query_ids[0]}..{query_ids[-1]} "
         f"directions={len(directions)}/20 train_t=100(mean) query_t=100 "
-        f"full_adamw=true projection=4096 batch={args.batch_size}",
+        f"full_adamw=true projection=4096 batch={args.batch_size} "
+        f"grad_microbatch={args.grad_microbatch_size}",
         flush=True,
     )
 
@@ -406,28 +422,41 @@ def main():
                 range(0, N_TRAIN, args.batch_size), start=1
             ):
                 end = min(start + args.batch_size, N_TRAIN)
-                gradients = train_grad_fn(
-                    named, x_all[start:end], cond_all[start:end], noise
-                )
-                updates = adamw_full_batched(
-                    gradients, names, named, adam_state, adam_hyper
-                )
-                train_matrix = _project_batched_grads(
-                    updates,
-                    names,
-                    specs,
-                    D20_PROJECTION_DIM,
-                    False,
-                    1e-8,
-                ).detach()
-                for mode in D20_QUERY_MODES:
-                    variants = normalized_dots(query_matrices[mode], train_matrix)
-                    for variant in D20_VARIANTS:
-                        accumulators[mode][variant][:, :, start:end] += variants[
-                            variant
-                        ].reshape(query_count, timestamp_count, end - start)
-                    del variants
-                del gradients, updates, train_matrix
+                for micro_start in range(start, end, args.grad_microbatch_size):
+                    micro_end = min(
+                        micro_start + args.grad_microbatch_size, end
+                    )
+                    gradients = train_grad_fn(
+                        named,
+                        x_all[micro_start:micro_end],
+                        cond_all[micro_start:micro_end],
+                        noise,
+                    )
+                    updates = adamw_full_batched(
+                        gradients, names, named, adam_state, adam_hyper
+                    )
+                    train_matrix = _project_batched_grads(
+                        updates,
+                        names,
+                        specs,
+                        D20_PROJECTION_DIM,
+                        False,
+                        1e-8,
+                    ).detach()
+                    for mode in D20_QUERY_MODES:
+                        variants = normalized_dots(
+                            query_matrices[mode], train_matrix
+                        )
+                        for variant in D20_VARIANTS:
+                            accumulators[mode][variant][
+                                :, :, micro_start:micro_end
+                            ] += variants[variant].reshape(
+                                query_count,
+                                timestamp_count,
+                                micro_end - micro_start,
+                            )
+                        del variants
+                    del gradients, updates, train_matrix
                 if (
                     batch_position == 1
                     or batch_position % progress_every == 0
@@ -472,6 +501,7 @@ def main():
                 "family": args.family,
                 "query_ids": query_ids,
                 "batch_size": args.batch_size,
+                "grad_microbatch_size": args.grad_microbatch_size,
                 "query_term_batch_size": args.query_term_batch_size,
                 "completed_directions": completed,
             },
@@ -508,6 +538,7 @@ def main():
             "contraction": "checkpoint-sum then square; mean over direction and timestamp",
             "projection_dim": D20_PROJECTION_DIM,
             "batch_size": args.batch_size,
+            "grad_microbatch_size": args.grad_microbatch_size,
         },
     )
     print(f"[done] {done_path}", flush=True)
