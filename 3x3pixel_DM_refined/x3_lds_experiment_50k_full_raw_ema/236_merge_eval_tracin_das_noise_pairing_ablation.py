@@ -3,6 +3,8 @@
 import argparse
 import json
 import os
+import subprocess
+import sys
 
 import numpy as np
 from scipy.stats import spearmanr
@@ -164,8 +166,16 @@ def main():
     output = LDS_DIR / "tracin_das_noise_pairing_ablation_10ckpt_20t_mc10_q00_q09.json"
     atomic_json(output, result)
     print(f"[saved] {output}", flush=True)
+    subprocess.run(
+        [
+            sys.executable,
+            "238_print_tracin_das_noise_pairing_ablation_txt.py",
+            "--input",
+            str(output),
+        ],
+        check=True,
+    )
 
 
 if __name__ == "__main__":
     main()
-
