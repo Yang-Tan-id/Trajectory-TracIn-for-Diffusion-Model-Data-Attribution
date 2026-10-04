@@ -169,6 +169,31 @@ def load_endpoint_train_part(path: Path) -> tuple[np.ndarray, np.ndarray, np.nda
     return features[0], indices, timesteps
 
 
+def load_adamw_aligned10x10_train_part(
+    path: Path, *, add_optimizer_history: bool,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Collapse cached AdamW 10x10 terms to one stored-LR feature per checkpoint."""
+    with np.load(path, allow_pickle=False) as payload:
+        features = np.asarray(payload["train_features"], dtype=np.float32)
+        indices = np.asarray(payload["score_indices"], dtype=np.int64)
+        weights = np.asarray(payload["term_weights"], dtype=np.float64).reshape(-1)
+        ckpts = np.asarray(payload["ckpt_indices"], dtype=np.int32).reshape(-1)
+        if features.ndim != 3 or features.shape[1:] != (len(indices), 4096):
+            raise ValueError(f"{path}: unexpected AdamW feature shape {features.shape}")
+        if weights.shape[0] != features.shape[0] or ckpts.shape[0] != features.shape[0]:
+            raise ValueError(f"{path}: AdamW term metadata does not match {features.shape[0]} terms")
+        if add_optimizer_history:
+            if "optimizer_history_features" not in payload:
+                raise ValueError(f"{path}: missing optimizer_history_features for AdamW full")
+            history = np.asarray(payload["optimizer_history_features"], dtype=np.float32)
+            if history.shape != (features.shape[0], features.shape[2]):
+                raise ValueError(f"{path}: optimizer history shape {history.shape} is incompatible")
+            features = features + history[:, None, :]
+    # Existing term_weights carry the checkpoint LR and timestamp averaging.
+    collapsed = np.einsum("t,tkp->kp", weights, features, optimize=True)
+    return collapsed.astype(np.float32), indices
+
+
 def load_event_shard(
     path: Path, learning_rate_schedule, steps_per_epoch: int, *,
     paper_retrac: bool = False, paper_train_transform: str = "raw",
@@ -275,6 +300,11 @@ def main() -> None:
     parser.add_argument("--train-seed", type=int, default=42)
     parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--endpoint-train-artifact", type=Path)
+    parser.add_argument(
+        "--endpoint-adamw-aligned10x10", action="store_true",
+        help="Use cached AdamW aligned10x10 train terms, collapsed with stored term weights.",
+    )
+    parser.add_argument("--endpoint-adamw-full", action="store_true")
     parser.add_argument("--retrac-event-root", type=Path, required=True)
     parser.add_argument("--methods", choices=("retrac", "endpoint", "both"), default="both")
     parser.add_argument(
@@ -404,13 +434,17 @@ def main() -> None:
         timesteps = query_timesteps
         if run_endpoint:
             assert endpoint_parts is not None
-            train, indices, stored_timesteps = load_endpoint_train_part(
-                endpoint_parts / f"ckpt_{checkpoint:04d}.npz"
-            )
-            if not np.array_equal(stored_timesteps, query_timesteps):
-                raise ValueError(
-                    f"checkpoint {checkpoint}: endpoint/query timestep schedule mismatch"
+            part_path = endpoint_parts / f"ckpt_{checkpoint:04d}.npz"
+            if args.endpoint_adamw_aligned10x10:
+                train, indices = load_adamw_aligned10x10_train_part(
+                    part_path, add_optimizer_history=args.endpoint_adamw_full
                 )
+            else:
+                train, indices, stored_timesteps = load_endpoint_train_part(part_path)
+                if not np.array_equal(stored_timesteps, query_timesteps):
+                    raise ValueError(
+                        f"checkpoint {checkpoint}: endpoint/query timestep schedule mismatch"
+                    )
             if score_indices is None:
                 score_indices = indices
             elif not np.array_equal(score_indices, indices):
@@ -513,7 +547,7 @@ def main() -> None:
                 endpoint_values = endpoint_contractions(train_device, query_features)
                 endpoint_values.block_until_ready()
                 endpoint_scores[start : start + count] += (
-                    checkpoint_lr
+                    (1.0 if args.endpoint_adamw_aligned10x10 else checkpoint_lr)
                     * np.asarray(endpoint_values[:count], dtype=np.float64)
                 )
             if run_retrac:
