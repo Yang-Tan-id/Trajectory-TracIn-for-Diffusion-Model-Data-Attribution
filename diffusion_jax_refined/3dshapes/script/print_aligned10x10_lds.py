@@ -293,6 +293,11 @@ SCHEME_GROUPS = {
     ),
 }
 VARIANTS = ("raw", "query_l2", "train_l2", "query_train_l2")
+STANDARD_LDS_GROUP = (
+    "m_64_k_2500_subset_seed_0__"
+    "m_64_k_2500_subset_seed_1__"
+    "m_64_k_2500_subset_seed_2"
+)
 
 
 def parse_ints(text: str) -> list[int]:
@@ -393,7 +398,16 @@ def main() -> None:
                         / target
                         / f"pred_kept_sign_{args.prediction_sign}"
                     )
-                    matches = list(target_root.glob("*/lds_summary.json"))
+                    standard_summary = (
+                        target_root / STANDARD_LDS_GROUP / "lds_summary.json"
+                    )
+                    # Avoid a Lustre directory scan for every query/variant/target.
+                    # All standard 3D Shapes LDS runs use this deterministic group.
+                    matches = (
+                        [standard_summary]
+                        if standard_summary.is_file()
+                        else list(target_root.glob("*/lds_summary.json"))
+                    )
                     if len(matches) != 1:
                         raise RuntimeError(
                             f"Expected one result for Q{query_id} {scheme}/{variant}/{target}; "
