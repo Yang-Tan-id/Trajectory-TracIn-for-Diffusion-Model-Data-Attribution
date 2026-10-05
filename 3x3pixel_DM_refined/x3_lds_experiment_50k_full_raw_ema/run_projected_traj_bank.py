@@ -26,7 +26,12 @@ from exp_config import *
 from x3_endpoint_das_jax_logic_pytorch import build_countsketch_specs, make_torch_generator
 
 
-def output_methods(checkpoint_direction, first_order_only=False, output_suffix=""):
+def output_methods(
+    checkpoint_direction,
+    first_order_only=False,
+    output_suffix="",
+    parameter_source="raw",
+):
     prefix = (
         "traj_projected"
         if checkpoint_direction == "forward"
@@ -39,20 +44,24 @@ def output_methods(checkpoint_direction, first_order_only=False, output_suffix="
     )
     suffix = f"_{output_suffix}" if output_suffix else ""
     return tuple(
-        f"{prefix}_{order}_raw_{contraction}{suffix}"
+        f"{prefix}_{order}_{parameter_source}_{contraction}{suffix}"
         for order in orders
         for contraction in TRACIN_CONTRACTIONS
     )
 
 
 def family_complete(
-    records, checkpoint_direction, first_order_only=False, output_suffix=""
+    records,
+    checkpoint_direction,
+    first_order_only=False,
+    output_suffix="",
+    parameter_source="raw",
 ):
     return all(
         (ATTR_DIR / method / f"q{int(record['query_id']):02d}" / "scores.npy").is_file()
         for record in records
         for method in output_methods(
-            checkpoint_direction, first_order_only, output_suffix
+            checkpoint_direction, first_order_only, output_suffix, parameter_source
         )
     )
 
@@ -86,6 +95,9 @@ def parse_query_ids(value):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--family", choices=FAMILIES, required=True)
+    parser.add_argument(
+        "--parameter-source", choices=("raw", "ema"), default="raw"
+    )
     parser.add_argument("--gpu", type=int, default=0)
     parser.add_argument("--timestamp-shard-index", type=int, default=0)
     parser.add_argument("--timestamp-shard-count", type=int, default=1)
@@ -156,6 +168,7 @@ def main():
             args.checkpoint_direction,
             args.first_order_only,
             args.output_suffix,
+            args.parameter_source,
         )
     ):
         print(
@@ -187,6 +200,8 @@ def main():
     )
     if args.output_suffix:
         shard_namespace += f"_{args.output_suffix}"
+    if args.parameter_source != "raw":
+        shard_namespace += f"_{args.parameter_source}"
     shard_root = (
         ATTR_DIR
         / shard_namespace
@@ -263,8 +278,10 @@ def main():
                 f"theta_{ci}->target_theta_{target_ci} start",
                 flush=True,
             )
-            model, _, ck = build_model(cur_path, "raw", device)
-            target, _, target_ck = build_model(paths[target_ci], "raw", device)
+            model, _, ck = build_model(cur_path, args.parameter_source, device)
+            target, _, target_ck = build_model(
+                paths[target_ci], args.parameter_source, device
+            )
             named = dict(model.named_parameters())
             names = tuple(named)
             params = tuple(named.values())
@@ -427,6 +444,7 @@ def main():
                     "checkpoint_pairs": checkpoint_pairs,
                     "first_order_only": args.first_order_only,
                     "output_suffix": args.output_suffix,
+                    "parameter_source": args.parameter_source,
                     "timestamp_shard_index": args.timestamp_shard_index,
                     "timestamp_shard_count": args.timestamp_shard_count,
                     "timestamp_indices": selected_timestamp_indices,
@@ -456,7 +474,9 @@ def main():
                 else "traj_projected_backward"
             )
             suffix = f"_{args.output_suffix}" if args.output_suffix else ""
-            method = f"{prefix}_{order}_raw_{contraction}{suffix}"
+            method = (
+                f"{prefix}_{order}_{args.parameter_source}_{contraction}{suffix}"
+            )
             out = ATTR_DIR / method / f"q{int(record['query_id']):02d}"
             out.mkdir(parents=True, exist_ok=True)
             np.save(out / "scores.npy", values[qi].cpu().numpy())
@@ -471,7 +491,8 @@ def main():
                     "checkpoint_pairs": checkpoint_pairs,
                     "first_order_only": args.first_order_only,
                     "output_suffix": args.output_suffix,
-                    "param_source": "raw", "projection": "countsketch",
+                    "param_source": args.parameter_source,
+                    "projection": "countsketch",
                     "proj_dim": d,
                     "num_snapshots": len(included_timestamp_indices),
                     "excluded_endpoint": args.exclude_endpoint,

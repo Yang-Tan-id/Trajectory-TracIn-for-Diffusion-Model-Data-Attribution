@@ -12,6 +12,9 @@ from exp_config import ATTR_DIR, QUERY_DIR, TRACIN_CONTRACTIONS
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--family", choices=("prompted", "unprompted"), required=True)
+    parser.add_argument(
+        "--parameter-source", choices=("raw", "ema"), default="raw"
+    )
     parser.add_argument("--timestamp-shard-count", type=int, required=True)
     parser.add_argument(
         "--checkpoint-direction",
@@ -64,6 +67,8 @@ def main():
     )
     if args.output_suffix:
         shard_namespace += f"_{args.output_suffix}"
+    if args.parameter_source != "raw":
+        shard_namespace += f"_{args.parameter_source}"
     root = ATTR_DIR / shard_namespace / args.family
     orders = (
         ("first",)
@@ -85,6 +90,8 @@ def main():
             raise ValueError(f"first-order mode mismatch in {shard}")
         if metadata.get("output_suffix", "") != args.output_suffix:
             raise ValueError(f"output suffix mismatch in {shard}")
+        if metadata.get("parameter_source", "raw") != args.parameter_source:
+            raise ValueError(f"parameter source mismatch in {shard}")
         if metadata.get("exclude_endpoint", False) != args.exclude_endpoint:
             raise ValueError(f"endpoint exclusion mismatch in {shard}")
         if metadata.get("train_noise_sampling", "independent") != args.train_noise_sampling:
@@ -121,7 +128,9 @@ def main():
                 else "traj_projected_backward"
             )
             suffix = f"_{args.output_suffix}" if args.output_suffix else ""
-            method = f"{prefix}_{order}_raw_{contraction}{suffix}"
+            method = (
+                f"{prefix}_{order}_{args.parameter_source}_{contraction}{suffix}"
+            )
             out = ATTR_DIR / method / f"q{int(record['query_id']):02d}"
             out.mkdir(parents=True, exist_ok=True)
             np.save(out / "scores.npy", values[qi])
@@ -140,7 +149,7 @@ def main():
                         "checkpoint_pairs": metadata.get("checkpoint_pairs"),
                         "first_order_only": args.first_order_only,
                         "output_suffix": args.output_suffix,
-                        "param_source": "raw",
+                        "param_source": args.parameter_source,
                         "projection": "countsketch",
                         "contraction": contraction,
                         "timestamp_shards": args.timestamp_shard_count,
