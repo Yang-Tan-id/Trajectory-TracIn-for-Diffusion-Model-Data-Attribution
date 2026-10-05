@@ -196,6 +196,10 @@ def main():
         path_noises = mixed_unit * bridge_radius.reshape(
             *bridge_radius.shape, 1, 1
         )
+        if TBA_PURE_IMPLIED_NOISE:
+            # Exact query-dependent direction inferred from endpoint -> x_t.
+            # Unlike the bridge experiment, no random direction is mixed in.
+            path_noises = implied_bank
         query_count = len(TBA_QUERY_IDS)
         endpoint_bank = endpoints[:, None].expand(
             query_count, TBA_DIRECTION_COUNT, *endpoints.shape[1:]
@@ -393,7 +397,11 @@ def main():
             "timestamp_indices": selected,
             "checkpoint_pairs": list(NPA_CHECKPOINT_PAIRS),
             "direction_count": TBA_DIRECTION_COUNT,
-            "noise_path": "linear bridge from fixed random origins to trajectory-implied noise",
+            "noise_path": (
+                "pure endpoint-to-reference-state implied noise"
+                if TBA_PURE_IMPLIED_NOISE
+                else "linear bridge from fixed random origins to trajectory-implied noise"
+            ),
             "train_noise": "exactly aligned to each query path direction",
         },
     )
