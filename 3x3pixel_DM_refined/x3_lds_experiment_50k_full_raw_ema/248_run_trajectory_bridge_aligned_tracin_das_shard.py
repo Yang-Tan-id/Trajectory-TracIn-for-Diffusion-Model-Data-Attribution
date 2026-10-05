@@ -150,8 +150,10 @@ def main():
     completed_terms = 0
     started = time.perf_counter()
     print(
-        f"[trajectory-bridge gpu={args.gpu}] q00-q09 timestamps={len(selected)}/20 "
-        f"pairs=10 directions=10 query-dependent aligned loss full_adamw=true "
+        f"[trajectory-bridge gpu={args.gpu}] queries={list(TBA_QUERY_IDS)} "
+        f"timestamps={len(selected)}/{len(DAS_TIMESTEPS)} "
+        f"pairs={len(NPA_CHECKPOINT_PAIRS)} directions={TBA_DIRECTION_COUNT} "
+        f"query-dependent aligned loss full_adamw=true "
         f"projection=4096 batch={args.batch_size} microbatch={args.grad_microbatch_size}",
         flush=True,
     )
@@ -341,7 +343,8 @@ def main():
                     print(
                         f"[trajectory-bridge gpu={args.gpu}] "
                         f"timestamp={local_timestamp}/{len(remaining)} t={timestep} "
-                        f"pair={checkpoint_position}/10 batch={batch_position}/{num_batches}",
+                        f"pair={checkpoint_position}/{len(NPA_CHECKPOINT_PAIRS)} "
+                        f"batch={batch_position}/{num_batches}",
                         flush=True,
                     )
 
