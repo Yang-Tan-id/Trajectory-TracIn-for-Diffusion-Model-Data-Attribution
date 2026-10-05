@@ -55,6 +55,7 @@ def score_key(contraction, group):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--gpu", type=int, required=True)
+    parser.add_argument("--family", choices=("prompted", "unprompted"), default="prompted")
     parser.add_argument("--timestamp-shard-index", type=int, required=True)
     parser.add_argument("--timestamp-shard-count", type=int, default=4)
     parser.add_argument("--batch-size", type=int, default=64)
@@ -73,8 +74,10 @@ def main():
     with open(QUERY_DIR / "manifest.json") as handle:
         by_id = {int(item["query_id"]): item for item in json.load(handle)}
     records = [by_id[query_id] for query_id in TBA_QUERY_IDS]
-    if any(record["family"] != "prompted" for record in records):
-        raise ValueError("trajectory-bridge diagnostic expects prompted q00-q09")
+    if any(record["family"] != args.family for record in records):
+        raise ValueError(
+            f"trajectory-bridge query family mismatch: expected {args.family}"
+        )
 
     endpoints = torch.cat(
         [
@@ -94,9 +97,9 @@ def main():
         raise ValueError("query trajectory timestamp grids differ")
     trajectory_times = np.asarray(trajectory_times[0], dtype=np.int64)
 
-    paths = model_paths("prompted")
+    paths = model_paths(args.family)
     bootstrap, dataset, _ = build_model(paths[0], "raw", device)
-    x_all, cond_all = preload_dataset(dataset, "prompted", device)
+    x_all, cond_all = preload_dataset(dataset, args.family, device)
     conditions = torch.cat(
         [cond_for(record, dataset, device) for record in records], dim=0
     )
@@ -281,6 +284,7 @@ def main():
                     device,
                     NPA_NOISE_SEED,
                     "trajectory_implied_independent_train_noise",
+                    args.family,
                     checkpoint_index,
                     timestamp_index,
                 )
