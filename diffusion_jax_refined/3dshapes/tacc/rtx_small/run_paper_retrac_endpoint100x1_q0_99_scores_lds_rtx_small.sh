@@ -16,8 +16,8 @@ while [[ "$repo" != / && ! -f "$repo/diffusion_jax_refined/3dshapes/script/score
   repo="$(dirname "$repo")"
 done
 shapes="$repo/diffusion_jax_refined/3dshapes"
-source /scratch/11447/yangtan7447/miniforge3/etc/profile.d/conda.sh
-conda activate /scratch/11447/yangtan7447/conda-envs/trajectory-tracin
+python_bin="${PYTHON_BIN:-/scratch/11447/yangtan7447/conda-envs/trajectory-tracin/bin/python}"
+[[ -x "$python_bin" ]] || { echo "Python executable not found: $python_bin" >&2; exit 1; }
 
 export PYTHONUNBUFFERED=1 XLA_PYTHON_CLIENT_PREALLOCATE=false
 export TF_GPU_ALLOCATOR="${TF_GPU_ALLOCATOR:-cuda_malloc_async}"
@@ -46,7 +46,7 @@ pids=()
 for gpu in 0 1; do
   (
     CUDA_VISIBLE_DEVICES="$gpu" JAX_PLATFORMS=cuda JAX_NUM_DEVICES=1 \
-      python "$shapes/script/score_retrac_endpoint100x1_checkpoint_major.py" \
+      "$python_bin" "$shapes/script/score_retrac_endpoint100x1_checkpoint_major.py" \
         --query-file "$query_file" --query-ids "$query_ids" \
         --experiment "$experiment" --train-seed "$seed" \
         --retrac-event-root "$events" --methods retrac --paper-retrac \
@@ -61,7 +61,7 @@ failed=0
 for pid in "${pids[@]}"; do wait "$pid" || failed=1; done
 (( failed == 0 )) || { echo "score worker failed; inspect $logs" >&2; exit 1; }
 
-JAX_PLATFORMS=cpu python "$shapes/script/run_traj_tracin_lds_cached.py" \
+JAX_PLATFORMS=cpu "$python_bin" "$shapes/script/run_traj_tracin_lds_cached.py" \
   --execute --experiment "$experiment" --train-seed "$seed" \
   --query-file "$query_file" --query-ids "$query_ids" \
   --score-schemes "$score_scheme" \

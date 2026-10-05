@@ -16,8 +16,8 @@ while [[ "$repo" != / && ! -f "$repo/diffusion_jax_refined/3dshapes/script/repla
   repo="$(dirname "$repo")"
 done
 shapes="$repo/diffusion_jax_refined/3dshapes"
-source /scratch/11447/yangtan7447/miniforge3/etc/profile.d/conda.sh
-conda activate /scratch/11447/yangtan7447/conda-envs/trajectory-tracin
+python_bin="${PYTHON_BIN:-/scratch/11447/yangtan7447/conda-envs/trajectory-tracin/bin/python}"
+[[ -x "$python_bin" ]] || { echo "Python executable not found: $python_bin" >&2; exit 1; }
 
 export PYTHONUNBUFFERED=1 XLA_PYTHON_CLIENT_PREALLOCATE=false
 export TF_GPU_ALLOCATOR="${TF_GPU_ALLOCATOR:-cuda_malloc_async}"
@@ -61,7 +61,7 @@ for interval in $(seq "$first" "$last"); do
   for gpu in 0 1; do
     (
       CUDA_VISIBLE_DEVICES="$gpu" JAX_NUM_DEVICES=1 JAX_PLATFORMS=cuda \
-        python "$shapes/script/replay_exact_training_interval.py" \
+        "$python_bin" "$shapes/script/replay_exact_training_interval.py" \
           --experiment "$experiment" --train-seed "$seed" \
           --start-epoch "$start_epoch" --end-epoch "$end_epoch" \
           --saved-event-dir "$saved" --fixed-checkpoint \
