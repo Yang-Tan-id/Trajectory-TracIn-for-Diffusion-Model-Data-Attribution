@@ -12,7 +12,7 @@ import torch.nn.functional as F
 
 from dataset_loader import ColorGridDataset
 from exp_config import *
-import trajectory_tracin_x3_updated as base
+import x3pixel_DM_training as base
 
 
 def load_collect_module():
