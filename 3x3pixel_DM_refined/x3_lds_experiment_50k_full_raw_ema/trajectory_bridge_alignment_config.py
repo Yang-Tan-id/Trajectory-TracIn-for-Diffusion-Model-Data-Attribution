@@ -8,6 +8,7 @@ TBA_DIRECTION_COUNT = 10
 TBA_CONTRACTIONS = ("linear", "termwise_squared", "timestamp_sum_squared")
 TBA_VERSION = 1
 TBA_PURE_IMPLIED_NOISE = False
+TBA_TRAIN_NOISE_MODE = "aligned"
 
 
 def tba_shard_root(shard_index, shard_count):

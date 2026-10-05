@@ -275,6 +275,26 @@ def main():
                 query_count, TBA_DIRECTION_COUNT, NPA_PROJECTION_DIM
             ).detach()
 
+            independent_train_noises = None
+            if TBA_TRAIN_NOISE_MODE == "independent":
+                independent_generator = make_torch_generator(
+                    device,
+                    NPA_NOISE_SEED,
+                    "trajectory_implied_independent_train_noise",
+                    checkpoint_index,
+                    timestamp_index,
+                )
+                independent_train_noises = torch.randn(
+                    (TBA_DIRECTION_COUNT, *endpoints.shape[1:]),
+                    generator=independent_generator,
+                    device=device,
+                    dtype=endpoints.dtype,
+                )
+            elif TBA_TRAIN_NOISE_MODE != "aligned":
+                raise ValueError(
+                    f"unknown trajectory train-noise mode: {TBA_TRAIN_NOISE_MODE}"
+                )
+
             def train_loss(parameter_dict, x0, condition, t_value, noise):
                 xt = base.q_sample(
                     x0.unsqueeze(0), t_value.reshape(1), noise.unsqueeze(0), schedule
@@ -308,7 +328,12 @@ def main():
                             (count * TBA_DIRECTION_COUNT,), timestep,
                             device=device, dtype=torch.long,
                         )
-                        nb = path_noises[query_position][None].expand(
+                        noise_bank = (
+                            path_noises[query_position]
+                            if TBA_TRAIN_NOISE_MODE == "aligned"
+                            else independent_train_noises
+                        )
+                        nb = noise_bank[None].expand(
                             count, TBA_DIRECTION_COUNT, *endpoints.shape[1:]
                         ).reshape(-1, *endpoints.shape[1:])
                         gradients = train_grad_fn(named, xb, cb, tb, nb)
@@ -364,6 +389,7 @@ def main():
             del adam_state, adam_hyper, specs, current, following, delta
             del delta_norm, output_direction, query_chunks, query_matrix
             del query_grad_fn, train_grad_fn, query_scalar, train_loss
+            del independent_train_noises
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
@@ -405,7 +431,12 @@ def main():
                 if TBA_PURE_IMPLIED_NOISE
                 else "linear bridge from fixed random origins to trajectory-implied noise"
             ),
-            "train_noise": "exactly aligned to each query path direction",
+            "train_noise": (
+                "exactly aligned to each query path direction"
+                if TBA_TRAIN_NOISE_MODE == "aligned"
+                else "independent Gaussian noise per checkpoint/timestamp"
+            ),
+            "train_noise_mode": TBA_TRAIN_NOISE_MODE,
         },
     )
     print(f"[done] {root}", flush=True)
