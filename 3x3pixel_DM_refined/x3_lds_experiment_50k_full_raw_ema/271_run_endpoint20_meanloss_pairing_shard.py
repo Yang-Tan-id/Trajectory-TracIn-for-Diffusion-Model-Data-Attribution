@@ -205,7 +205,7 @@ def main():
             list(parameters),
             NPA_PROJECTION_DIM,
             device=device,
-            seed_parts=(TRAIN_SEED, "endpoint20_meanloss_projection", checkpoint_index),
+            seed_parts=(TRAIN_SEED, E20_PROJECTION_NAMESPACE, checkpoint_index),
         )
 
         query_count = len(E20_QUERY_IDS)
@@ -460,6 +460,7 @@ def main():
             "parameter_source": "raw checkpoint pair",
             "optimizer_transform": "full AdamW",
             "projection_dim": NPA_PROJECTION_DIM,
+            "projection_namespace": E20_PROJECTION_NAMESPACE,
             "query_direction": "normalized next-checkpoint predicted-noise delta",
         },
     )

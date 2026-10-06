@@ -9,6 +9,7 @@ E20_TIMESTEPS = tuple(DAS_TIMESTEPS[position] for position in E20_TIMESTAMP_POSI
 E20_MODES = ("per_timestamp_aligned", "mean_noise_mean_loss")
 E20_CONTRACTIONS = ("linear", "termwise_squared", "timestamp_sum_squared")
 E20_VERSION = 1
+E20_PROJECTION_NAMESPACE = "endpoint20_meanloss_projection"
 
 
 def e20_shard_root(checkpoint_shard_index, checkpoint_shard_count):
