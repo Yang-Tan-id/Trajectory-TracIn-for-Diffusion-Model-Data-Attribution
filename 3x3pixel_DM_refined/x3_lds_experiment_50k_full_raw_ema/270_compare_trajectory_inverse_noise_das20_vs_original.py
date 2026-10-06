@@ -3,9 +3,9 @@
 import json
 
 import numpy as np
-from scipy.stats import wilcoxon
+from scipy.stats import spearmanr, wilcoxon
 
-from exp_config import DAS_LAMBDAS, LDS_DIR, LDS_METRICS
+from exp_config import ATTR_DIR, DAS_LAMBDAS, LDS_DIR, LDS_METRICS, MASK_DIR
 from trajectory_inverse_noise_das_config import lambda_tag
 
 
@@ -24,14 +24,10 @@ def original_result_path(metric, lam):
     return LDS_DIR / f"das_ema_{metric}_lambda_{lambda_tag(lam)}.json"
 
 
-def load_original(metric, lam):
+def load_cached_original(metric, lam):
     path = original_result_path(metric, lam)
     if not path.is_file():
-        raise FileNotFoundError(
-            f"missing original DAS LDS result: {path}\n"
-            "Run: python -u 06_lds_eval.py --method das_ema "
-            f"--metric {metric} --lambda {float(lam):g}"
-        )
+        return None
     with open(path) as handle:
         payload = json.load(handle)
     queries = payload["queries"]
@@ -42,6 +38,50 @@ def load_original(metric, lam):
     if sorted(by_query) != list(range(100)):
         raise ValueError(f"original DAS result does not cover q00-q99: {path}")
     return np.asarray([by_query[query_id] for query_id in range(100)])
+
+
+def load_original_scores(lam):
+    scores = []
+    for query_id in range(100):
+        path = (
+            ATTR_DIR
+            / "das_ema"
+            / f"q{query_id:02d}"
+            / f"lambda_{lambda_tag(lam)}"
+            / "scores.npy"
+        )
+        if not path.is_file():
+            raise FileNotFoundError(f"missing original DAS attribution: {path}")
+        scores.append(np.load(path).astype(np.float64))
+    return np.stack(scores, axis=0)
+
+
+def original_results_for_lambda(lam, membership, observed):
+    cached = {
+        metric: load_cached_original(metric, lam)
+        for metric in LDS_METRICS
+    }
+    if all(values is not None for values in cached.values()):
+        print(f"[original DAS] lambda={lam:g} loaded cached LDS", flush=True)
+        return cached
+
+    print(
+        f"[original DAS] lambda={lam:g} cached LDS missing; "
+        "computing from scores.npy",
+        flush=True,
+    )
+    scores = load_original_scores(lam)
+    prediction = -(membership @ scores.T)
+    computed = {}
+    for metric in LDS_METRICS:
+        computed[metric] = np.asarray(
+            [
+                spearmanr(prediction[:, query_id], observed[metric][query_id]).statistic
+                for query_id in range(100)
+            ],
+            dtype=np.float64,
+        )
+    return computed
 
 
 def paired_summary(trajectory, original):
@@ -77,6 +117,17 @@ def main():
         )
     with open(TRAJECTORY_RESULT) as handle:
         trajectory_payload = json.load(handle)
+    membership = np.load(MASK_DIR / "membership.npy").astype(np.float64)
+    observed = {
+        metric: np.load(LDS_DIR / f"observed_{metric}.npy").astype(np.float64)
+        for metric in LDS_METRICS
+    }
+    original_by_lambda = {
+        float(lam): original_results_for_lambda(
+            float(lam), membership, observed
+        )
+        for lam in DAS_LAMBDAS
+    }
 
     result = {
         "trajectory_result": str(TRAJECTORY_RESULT),
@@ -117,7 +168,7 @@ def main():
                 ],
                 dtype=np.float64,
             )
-            original = load_original(metric, lam)
+            original = original_by_lambda[lam][metric]
             if trajectory.shape != (100,) or original.shape != (100,):
                 raise ValueError(f"unexpected per-query shape for {metric}, lambda={lam}")
             summary = paired_summary(trajectory, original)
