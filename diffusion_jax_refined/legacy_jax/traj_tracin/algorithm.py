@@ -3620,6 +3620,15 @@ def run_attribution(cfg: TrajAttributionConfig):
             "TRAJ_TRACIN_RESIDUAL_RMS_STREAM_OUTPUT", ""
         )
         residual_rms_stream = bool(residual_rms_stream_query_artifacts)
+        fused_stream_query_artifacts = [
+            value for value in os.environ.get("TRAJ_TRACIN_FUSED_STREAM_QUERY_ARTIFACTS", "").split(os.pathsep) if value
+        ]
+        fused_stream_output = os.environ.get("TRAJ_TRACIN_FUSED_STREAM_OUTPUT", "")
+        fused_stream = bool(fused_stream_query_artifacts)
+        if fused_stream and (stage_mode != "train" or optimizer_train_transform != "adamw_residual_update"):
+            raise ValueError("fused streaming requires train stage with adamw_residual_update")
+        if fused_stream and not fused_stream_output:
+            raise ValueError("TRAJ_TRACIN_FUSED_STREAM_OUTPUT is required")
         if residual_rms_stream and not reuse_gradient_residual_rms:
             raise ValueError(
                 "TRAJ_TRACIN_RESIDUAL_RMS_STREAM_QUERY_ARTIFACTS requires "
@@ -3747,7 +3756,55 @@ def run_attribution(cfg: TrajAttributionConfig):
                 flush=True,
             )
 
+        fused_queries = fused_query_norms = fused_lookup = fused_timesteps = None
+        fused_linear = fused_termwise = fused_timestamp = None
+        fused_score_indices = None
+        fused_completed_ckpts = []
+        fused_shard_output = None
+        fused_dot_fn = None
+        if fused_stream:
+            features_all = []
+            ref_ckpts = ref_timesteps = None
+            for query_path in fused_stream_query_artifacts:
+                with np.load(query_path, allow_pickle=False) as payload:
+                    features = np.asarray(payload["query_features"], dtype=np.float32)
+                    query_ckpts = np.asarray(payload["ckpt_indices"], dtype=np.int32)
+                    query_timesteps = np.asarray(payload["timesteps"], dtype=np.int32)
+                if features.ndim != 2 or features.shape[1] != proj_dim:
+                    raise ValueError(f"{query_path}: invalid query features {features.shape}")
+                if ref_ckpts is None:
+                    ref_ckpts, ref_timesteps = query_ckpts, query_timesteps
+                elif not (np.array_equal(ref_ckpts, query_ckpts) and np.array_equal(ref_timesteps, query_timesteps)):
+                    raise ValueError(f"fused query metadata mismatch: {query_path}")
+                features_all.append(features)
+            fused_queries = np.stack(features_all)
+            fused_query_norms = np.linalg.norm(fused_queries, axis=2)
+            fused_lookup = {(int(c), int(t)): i for i, (c, t) in enumerate(zip(ref_ckpts, ref_timesteps))}
+            fused_timesteps = np.asarray(list(dict.fromkeys(int(t) for t in ref_timesteps)), dtype=np.int32)
+            shape = (len(features_all), 4, len(picked))
+            fused_linear = np.zeros(shape, dtype=np.float64)
+            fused_termwise = np.zeros(shape, dtype=np.float64)
+            fused_timestamp = np.zeros((len(features_all), 4, len(fused_timesteps), len(picked)), dtype=np.float64)
+            fused_shard_output = f"{fused_stream_output}.shard_{ckpt_shard_index:02d}.npz"
+            fused_dot_fn = jax.jit(
+                lambda query_matrix, train_matrix: jnp.matmul(
+                    query_matrix, train_matrix.T,
+                    precision=jax.lax.Precision.HIGHEST,
+                )
+            )
+            if os.path.isfile(fused_shard_output):
+                with np.load(fused_shard_output, allow_pickle=False) as saved:
+                    fused_linear[...] = saved["linear"]
+                    fused_termwise[...] = saved["termwise_squared"]
+                    fused_timestamp[...] = saved["timestamp_components"]
+                    fused_score_indices = np.asarray(saved["score_indices"], dtype=np.int64)
+                    fused_completed_ckpts = list(np.asarray(saved["completed_ckpts"], dtype=np.int32))
+            print(f"[stage:train] fused AdamW-full stream | queries={len(features_all)}", flush=True)
+
         for ckpt_i, ckpt_path in enumerate(ckpts):
+            if fused_stream and ckpt_i in fused_completed_ckpts:
+                print(f"[stage:train] fused stream skip completed checkpoint {ckpt_i + 1}/{len(ckpts)}", flush=True)
+                continue
             if residual_rms_stream:
                 assert residual_rms_stream_lookup is not None
                 if ckpt_i in residual_rms_stream_completed_ckpts:
@@ -3807,7 +3864,7 @@ def run_attribution(cfg: TrajAttributionConfig):
                 continue
             stage_part_path = (
                 os.path.join(stage_part_dir, f"ckpt_{ckpt_i:04d}.npz")
-                if stage_part_dir is not None and not residual_rms_stream
+                if stage_part_dir is not None and not residual_rms_stream and not fused_stream
                 else None
             )
             if stage_part_path is not None and os.path.isfile(stage_part_path):
@@ -5954,7 +6011,42 @@ def run_attribution(cfg: TrajAttributionConfig):
                                 f"elapsed={format_seconds(time.time() - stage_start_time)}",
                                 flush=True,
                             )
-                    train_phi_terms.append(term_features)
+                    if fused_stream:
+                        assert fused_queries is not None and fused_query_norms is not None
+                        assert fused_lookup is not None and fused_timesteps is not None
+                        assert fused_linear is not None and fused_termwise is not None and fused_timestamp is not None
+                        query_term = fused_lookup.get((int(ckpt_i), int(t_value)))
+                        if query_term is None:
+                            raise ValueError(f"missing fused query term ckpt={ckpt_i} t={int(t_value)}")
+                        if adamw_history_feature is None:
+                            raise RuntimeError("fused AdamW-full stream is missing optimizer history feature")
+                        full_update = term_features + adamw_history_feature[None, :]
+                        direction = full_update / max(abs(float(ckpt_lr_weight)), 1e-20)
+                        query_term_features = fused_queries[:, query_term]
+                        assert fused_dot_fn is not None
+                        dots_device = fused_dot_fn(
+                            array_to_device(jnp.asarray(query_term_features), device),
+                            array_to_device(jnp.asarray(direction), device),
+                        )
+                        dots_device.block_until_ready()
+                        dots = np.asarray(jax.device_get(dots_device), dtype=np.float32)
+                        qnorm = np.maximum(fused_query_norms[:, query_term], cfg.query_normalize_eps)
+                        tnorm = np.maximum(np.linalg.norm(direction, axis=1), cfg.query_normalize_eps)
+                        values = np.stack((
+                            dots,
+                            dots / qnorm[:, None],
+                            dots / tnorm[None, :],
+                            dots / (qnorm[:, None] * tnorm[None, :]),
+                        ), axis=1)
+                        weight = float(ckpt_lr_weight) / float(max(1, len(t_seq)))
+                        slot = int(np.where(fused_timesteps == int(t_value))[0][0])
+                        fused_linear += weight * values
+                        fused_termwise += weight * np.square(values)
+                        fused_timestamp[:, :, slot, :] += weight * values
+                        if fused_score_indices is None:
+                            fused_score_indices = np.asarray(picked, dtype=np.int64)
+                    else:
+                        train_phi_terms.append(term_features)
                     train_ckpt_indices.append(int(ckpt_i))
                     train_timesteps.append(int(t_value))
                     train_snapshot_positions.append(int(pos_seq[snap_id]))
@@ -5970,7 +6062,23 @@ def run_attribution(cfg: TrajAttributionConfig):
                         f"elapsed={format_seconds(time.time() - stage_start_time)}",
                         flush=True,
                     )
-                if stage_part_path is None:
+                if fused_stream:
+                    fused_completed_ckpts.append(ckpt_i)
+                    assert fused_shard_output is not None and fused_score_indices is not None
+                    if len(fused_completed_ckpts) % int(os.environ.get("TRAJ_TRACIN_FUSED_SAVE_EVERY", "5")) == 0:
+                        save_npz_compressed_atomic(
+                            fused_shard_output,
+                            linear=fused_linear,
+                            termwise_squared=fused_termwise,
+                            timestamp_components=fused_timestamp,
+                            score_indices=fused_score_indices,
+                            completed_ckpts=np.asarray(fused_completed_ckpts, dtype=np.int32),
+                            query_artifacts=np.asarray(fused_stream_query_artifacts),
+                            timesteps=fused_timesteps,
+                        )
+                    train_phi_terms.clear()
+                    print(f"[stage:train] fused checkpoint {ckpt_i + 1}/{len(ckpts)} saved", flush=True)
+                elif stage_part_path is None:
                     stage_features.extend(train_phi_terms)
                     stage_ckpt_indices.extend(train_ckpt_indices)
                     stage_timesteps.extend(train_timesteps)
@@ -6030,6 +6138,20 @@ def run_attribution(cfg: TrajAttributionConfig):
                 flush=True,
             )
 
+        if fused_stream:
+            assert fused_shard_output is not None and fused_score_indices is not None
+            save_npz_compressed_atomic(
+                fused_shard_output,
+                linear=fused_linear,
+                termwise_squared=fused_termwise,
+                timestamp_components=fused_timestamp,
+                score_indices=fused_score_indices,
+                completed_ckpts=np.asarray(fused_completed_ckpts, dtype=np.int32),
+                query_artifacts=np.asarray(fused_stream_query_artifacts),
+                timesteps=fused_timesteps,
+            )
+            print(f"[stage:train] completed fused shard: {fused_shard_output}", flush=True)
+            return
         if residual_rms_stream:
             if residual_rms_stream_score_indices is None:
                 raise RuntimeError("Residual-RMS streaming selected no checkpoints")

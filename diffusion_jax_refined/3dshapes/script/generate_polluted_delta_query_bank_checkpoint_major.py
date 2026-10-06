@@ -214,6 +214,7 @@ def main() -> None:
     parser.add_argument("--raw-namespace", required=True)
     parser.add_argument("--normalized-namespace", required=True)
     parser.add_argument("--batch-size", type=int, default=8)
+    parser.add_argument("--timestamp-count", type=int, default=10)
     parser.add_argument("--shard-index", type=int, default=0)
     parser.add_argument("--shard-count", type=int, default=1)
     parser.add_argument("--merge-only", action="store_true")
@@ -226,7 +227,7 @@ def main() -> None:
         JAX_EPOCHS=str(args.epochs),
         TRAJ_PARAMETER_SOURCE="raw",
         TRAJ_QUERY_OBJECTIVE=RAW_OBJECTIVE,
-        TRAJ_NUM_SNAPSHOTS="10",
+        TRAJ_NUM_SNAPSHOTS=str(args.timestamp_count),
         TRAJ_TRACIN_PROJ_DIM="4096",
     )
     cfg_values = attribution_config("traj_tracin")
@@ -242,7 +243,7 @@ def main() -> None:
         epochs=args.epochs,
         parameter_source="raw",
         query_objective=RAW_OBJECTIVE,
-        num_traj_snapshots=10,
+        num_traj_snapshots=args.timestamp_count,
         proj_dim=4096,
         out_dir=str(result_root / "tmp"),
     )
@@ -283,8 +284,7 @@ def main() -> None:
         args.query_file, query_ids, sample_root, reference_checkpoint,
         adapter, dataset, cfg,
     )
-    # These are the same ten DDIM positions used by the existing 10-timestamp run.
-    positions = np.linspace(0, 999, 10, dtype=np.int32)
+    positions = np.linspace(0, 999, args.timestamp_count, dtype=np.int32)
     timesteps = (999 - positions).astype(np.int32)
     alpha_bars = np.asarray(jax.device_get(schedule.alphas_cumprod), dtype=np.float32)
 
