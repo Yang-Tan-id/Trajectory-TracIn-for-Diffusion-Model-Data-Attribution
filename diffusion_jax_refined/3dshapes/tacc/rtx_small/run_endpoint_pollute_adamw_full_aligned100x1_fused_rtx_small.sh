@@ -26,7 +26,7 @@ mkdir -p "$log_root"
 export PYTHONUNBUFFERED=1 TF_GPU_ALLOCATOR="${TF_GPU_ALLOCATOR:-cuda_malloc_async}" XLA_PYTHON_CLIENT_PREALLOCATE=false
 
 bank="$shapes/script/generate_polluted_delta_query_bank_checkpoint_major.py"
-common=(--query-file "$query_file" --query-ids "$query_ids" --experiment "$experiment" --train-seed "$seed" --epochs 200 --raw-namespace "$raw_namespace" --normalized-namespace "$query_namespace" --timestamp-count 100 --batch-size "${QUERY_BATCH_SIZE:-2}" --shard-count 2)
+common=(--query-file "$query_file" --query-ids "$query_ids" --experiment "$experiment" --train-seed "$seed" --epochs 200 --raw-namespace "$raw_namespace" --normalized-namespace "$query_namespace" --timestamp-count 100 --normalized-only --batch-size "${QUERY_BATCH_SIZE:-2}" --shard-count 2)
 for gpu in 0 1; do CUDA_VISIBLE_DEVICES=$gpu JAX_PLATFORMS=cuda JAX_NUM_DEVICES=1 "$python_bin" "$bank" "${common[@]}" --shard-index $gpu >"$log_root/query_gpu_${gpu}.log" 2>&1 & pids[$gpu]=$!; done
 for pid in "${pids[@]}"; do wait "$pid"; done
 JAX_PLATFORMS=cpu "$python_bin" "$bank" "${common[@]}" --merge-only >"$log_root/query_merge.log" 2>&1

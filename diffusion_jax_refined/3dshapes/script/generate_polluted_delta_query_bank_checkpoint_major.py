@@ -215,6 +215,7 @@ def main() -> None:
     parser.add_argument("--normalized-namespace", required=True)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--timestamp-count", type=int, default=10)
+    parser.add_argument("--normalized-only", action="store_true")
     parser.add_argument("--shard-index", type=int, default=0)
     parser.add_argument("--shard-count", type=int, default=1)
     parser.add_argument("--merge-only", action="store_true")
@@ -267,7 +268,8 @@ def main() -> None:
         )
     if args.merge_only:
         for raw, normalized in artifact_pairs:
-            merge_artifact(raw, 49)
+            if not args.normalized_only:
+                merge_artifact(raw, 49)
             merge_artifact(normalized, 49)
         return
 
@@ -293,7 +295,7 @@ def main() -> None:
             continue
         required = []
         for raw, normalized in artifact_pairs:
-            if not raw.is_file():
+            if not args.normalized_only and not raw.is_file():
                 required.append(Path(str(raw) + ".parts") / f"ckpt_{ckpt_i:04d}.npz")
             if not normalized.is_file():
                 required.append(Path(str(normalized) + ".parts") / f"ckpt_{ckpt_i:04d}.npz")
@@ -362,7 +364,7 @@ def main() -> None:
                 raw_artifact, normalized_artifact = artifact_pairs[start + local_i]
                 raw_part = Path(str(raw_artifact) + ".parts") / f"ckpt_{ckpt_i:04d}.npz"
                 normalized_part = Path(str(normalized_artifact) + ".parts") / f"ckpt_{ckpt_i:04d}.npz"
-                if not raw_artifact.is_file() and not raw_part.is_file():
+                if not args.normalized_only and not raw_artifact.is_file() and not raw_part.is_file():
                     save_npz_compressed_atomic(
                         str(raw_part),
                         **common_part_payload(
