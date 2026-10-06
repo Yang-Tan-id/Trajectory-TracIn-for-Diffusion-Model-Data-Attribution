@@ -14,20 +14,38 @@ set -euo pipefail
 repo="${REPO_ROOT:-${SLURM_SUBMIT_DIR:-$PWD}}"
 while [[ "$repo" != / && ! -f "$repo/diffusion_jax_refined/3dshapes/script/generate_polluted_delta_query_bank_checkpoint_major.py" ]]; do repo="$(dirname "$repo")"; done
 shapes="$repo/diffusion_jax_refined/3dshapes"
-python_bin="${PYTHON_BIN:-/scratch/11447/yangtan7447/conda-envs/trajectory-tracin/bin/python}"
+default_python="/scratch/11447/yangtan7447/conda-envs/trajectory-tracin/bin/python"
+[[ -x "$default_python" ]] || default_python="$(command -v python)"
+python_bin="${PYTHON_BIN:-$default_python}"
 experiment="${EXPERIMENT_TAG:-experiment1}"; seed="${TRAIN_SEED:-42}"
+gpu_ids_text="${GPU_IDS:-0,1}"
+IFS=, read -r -a gpu_ids <<< "$gpu_ids_text"
+shard_count="${#gpu_ids[@]}"
+(( shard_count > 0 )) || { echo "GPU_IDS selected no GPUs" >&2; exit 1; }
 query_ids="${QUERY_IDS:-$(seq -s, 0 99)}"
 query_file="$shapes/queries_in_distribution_plus_zero_seed_100_219.json"
 query_namespace="recreate_q0_99_polluted_endpoint_next_delta_l2normalized_100t"
 raw_namespace="recreate_q0_99_polluted_endpoint_next_delta_raw_100t"
-log_root="$shapes/result/$experiment/logs/endpoint_pollute_adamw_full_aligned100x1_fused/${SLURM_JOB_ID}"
+run_tag="${RUN_TAG:-${SLURM_JOB_ID:-manual_$(date +%Y%m%d_%H%M%S)}}"
+log_root="$shapes/result/$experiment/logs/endpoint_pollute_adamw_full_aligned100x1_fused/${run_tag}"
 component_prefix="$log_root/components"
 mkdir -p "$log_root"
 export PYTHONUNBUFFERED=1 TF_GPU_ALLOCATOR="${TF_GPU_ALLOCATOR:-cuda_malloc_async}" XLA_PYTHON_CLIENT_PREALLOCATE=false
 
+if [[ "${PREPARE_SAMPLES:-1}" == "1" ]]; then
+  echo "[sample] verify/generate Q0-Q99 endpoints with GPUs=$gpu_ids_text"
+  CUDA_VISIBLE_DEVICES="$gpu_ids_text" JAX_PLATFORMS=cuda JAX_NUM_DEVICES=1 \
+    "$python_bin" "$shapes/script/run_traj_tracin_queries_and_scores.py" \
+      --execute --experiment "$experiment" --train-seed "$seed" --epochs 200 \
+      --query-file "$query_file" --query-ids "$query_ids" --gpus "$gpu_ids_text" \
+      --python-bin "$python_bin" --skip-query-gradient --skip-score \
+      >"$log_root/sample.log" 2>&1
+fi
+
 bank="$shapes/script/generate_polluted_delta_query_bank_checkpoint_major.py"
-common=(--query-file "$query_file" --query-ids "$query_ids" --experiment "$experiment" --train-seed "$seed" --epochs 200 --raw-namespace "$raw_namespace" --normalized-namespace "$query_namespace" --timestamp-count 100 --normalized-only --batch-size "${QUERY_BATCH_SIZE:-2}" --shard-count 2)
-for gpu in 0 1; do CUDA_VISIBLE_DEVICES=$gpu JAX_PLATFORMS=cuda JAX_NUM_DEVICES=1 "$python_bin" "$bank" "${common[@]}" --shard-index $gpu >"$log_root/query_gpu_${gpu}.log" 2>&1 & pids[$gpu]=$!; done
+common=(--query-file "$query_file" --query-ids "$query_ids" --experiment "$experiment" --train-seed "$seed" --epochs 200 --raw-namespace "$raw_namespace" --normalized-namespace "$query_namespace" --timestamp-count 100 --normalized-only --batch-size "${QUERY_BATCH_SIZE:-2}" --shard-count "$shard_count")
+pids=()
+for shard in "${!gpu_ids[@]}"; do gpu="${gpu_ids[$shard]}"; CUDA_VISIBLE_DEVICES=$gpu JAX_PLATFORMS=cuda JAX_NUM_DEVICES=1 "$python_bin" "$bank" "${common[@]}" --shard-index "$shard" >"$log_root/query_gpu_${gpu}.log" 2>&1 & pids+=("$!"); done
 for pid in "${pids[@]}"; do wait "$pid"; done
 JAX_PLATFORMS=cpu "$python_bin" "$bank" "${common[@]}" --merge-only >"$log_root/query_merge.log" 2>&1
 
@@ -36,13 +54,19 @@ mapfile -t query_artifacts < <(find "$shapes/result/$experiment/sample_ddim_eta0
 query_joined="$(IFS=:; echo "${query_artifacts[*]}")"
 
 stage="$shapes/data_attribution/traj_tracin/01_train_datapoint_gradient.py"
-for gpu in 0 1; do
-  (export CUDA_VISIBLE_DEVICES=$gpu JAX_PLATFORMS=cuda JAX_NUM_DEVICES=1 EXPERIMENT_TAG="$experiment" TRAIN_SEED="$seed" JAX_EPOCHS=200 DATAPOINT_MODEL_MODE=prompted_solo SAMPLE_MODEL_MODE=prompted_solo ATTRIBUTION_SCORE_MODEL_MODE=prompted_solo QUERY=shape_cube,object_hue_0,wall_hue_0,floor_hue_0 INITIAL_SEED=0 SAMPLE_SEED=0 TRAJ_QUERY_OBJECTIVE=trajectory_next_checkpoint_noise_mse TRAJ_PARAMETER_SOURCE=raw TRAJ_NUM_SNAPSHOTS=100 TRAJ_TRAIN_MC_SAMPLES=1 TRAJ_SCORE_BATCH_SIZE="${TRAJ_SCORE_BATCH_SIZE:-16}" TRAJ_TRACIN_PROJ_DIM=4096 TRAJ_TRACIN_TRAIN_AGGREGATE_TIMESTAMPS=0 TRAJ_TRACIN_TRAIN_BATCH_DTYPE=float32 TRAJ_TRACIN_TRAIN_BATCH_MODE=vmap TRAJ_TRACIN_TRAIN_NOISE_MODE=checkpoint_timestamp_shared TRAJ_TRACIN_TRAIN_OPTIMIZER_TRANSFORM=adamw_residual_update TRAJ_TRACIN_STAGE_MODE=train TRAJ_TRACIN_CKPT_SHARD_INDEX=$gpu TRAJ_TRACIN_CKPT_SHARD_COUNT=2 TRAJ_TRACIN_TRAIN_EXCLUDE_FINAL_CHECKPOINT=1 TRAJ_TRACIN_FUSED_STREAM_QUERY_ARTIFACTS="$query_joined" TRAJ_TRACIN_FUSED_STREAM_OUTPUT="$component_prefix"; "$python_bin" "$stage") >"$log_root/train_score_gpu_${gpu}.log" 2>&1 & pids[$gpu]=$!
+pids=()
+for shard in "${!gpu_ids[@]}"; do
+  gpu="${gpu_ids[$shard]}"
+  (export CUDA_VISIBLE_DEVICES=$gpu JAX_PLATFORMS=cuda JAX_NUM_DEVICES=1 EXPERIMENT_TAG="$experiment" TRAIN_SEED="$seed" JAX_EPOCHS=200 DATAPOINT_MODEL_MODE=prompted_solo SAMPLE_MODEL_MODE=prompted_solo ATTRIBUTION_SCORE_MODEL_MODE=prompted_solo QUERY=shape_cube,object_hue_0,wall_hue_0,floor_hue_0 INITIAL_SEED=0 SAMPLE_SEED=0 TRAJ_QUERY_OBJECTIVE=trajectory_next_checkpoint_noise_mse TRAJ_PARAMETER_SOURCE=raw TRAJ_NUM_SNAPSHOTS=100 TRAJ_TRAIN_MC_SAMPLES=1 TRAJ_SCORE_BATCH_SIZE="${TRAJ_SCORE_BATCH_SIZE:-16}" TRAJ_TRACIN_PROJ_DIM=4096 TRAJ_TRACIN_TRAIN_AGGREGATE_TIMESTAMPS=0 TRAJ_TRACIN_TRAIN_BATCH_DTYPE=float32 TRAJ_TRACIN_TRAIN_BATCH_MODE=vmap TRAJ_TRACIN_TRAIN_NOISE_MODE=checkpoint_timestamp_shared TRAJ_TRACIN_TRAIN_OPTIMIZER_TRANSFORM=adamw_residual_update TRAJ_TRACIN_STAGE_MODE=train TRAJ_TRACIN_CKPT_SHARD_INDEX=$shard TRAJ_TRACIN_CKPT_SHARD_COUNT=$shard_count TRAJ_TRACIN_TRAIN_EXCLUDE_FINAL_CHECKPOINT=1 TRAJ_TRACIN_FUSED_STREAM_QUERY_ARTIFACTS="$query_joined" TRAJ_TRACIN_FUSED_STREAM_OUTPUT="$component_prefix"; "$python_bin" "$stage") >"$log_root/train_score_gpu_${gpu}.log" 2>&1 & pids+=("$!")
 done
 for pid in "${pids[@]}"; do wait "$pid"; done
 
-"$python_bin" "$shapes/script/merge_fused_endpoint_pollute_scores.py" --query-file "$query_file" --query-ids "$query_ids" --component-prefix "$component_prefix" --experiment "$experiment" --train-seed "$seed"
+"$python_bin" "$shapes/script/merge_fused_endpoint_pollute_scores.py" --query-file "$query_file" --query-ids "$query_ids" --component-prefix "$component_prefix" --experiment "$experiment" --train-seed "$seed" --shard-count "$shard_count"
 schemes=""
 for reduction in linear termwise_squared timestamp_sum_squared; do schemes+=" recreate_adamw_full_polluted_endpoint_delta_l2normalized_${reduction}_aligned100x1_q0_99"; done
-CUDA_VISIBLE_DEVICES="" JAX_PLATFORMS=cpu "$python_bin" "$shapes/script/run_traj_tracin_lds_cached.py" --execute --experiment "$experiment" --train-seed "$seed" --query-file "$query_file" --query-ids "$query_ids" --score-schemes "$schemes" --prediction-sign 1 >"$log_root/lds.log" 2>&1
+if [[ "${RUN_LDS:-1}" == "1" ]]; then
+  CUDA_VISIBLE_DEVICES="" JAX_PLATFORMS=cpu "$python_bin" "$shapes/script/run_traj_tracin_lds_cached.py" --execute --experiment "$experiment" --train-seed "$seed" --query-file "$query_file" --query-ids "$query_ids" --score-schemes "$schemes" --prediction-sign 1 >"$log_root/lds.log" 2>&1
+else
+  echo "[skip] LDS disabled by RUN_LDS=0"
+fi
 echo "[done] fused endpoint-pollute AdamW-full aligned100x1: 3 reductions x 4 variants x 100 queries"
