@@ -57,6 +57,9 @@ def main():
     parser.add_argument("--query-shard-index", type=int, default=0)
     parser.add_argument("--query-shard-count", type=int, default=1)
     parser.add_argument("--condition-batch-size", type=int, default=64)
+    parser.add_argument(
+        "--timestamp-selection", choices=("99t", "20t"), default="99t"
+    )
     args = parser.parse_args()
     if not 0 <= args.timestamp_shard_index < args.timestamp_shard_count:
         raise ValueError("invalid timestamp shard")
@@ -115,7 +118,12 @@ def main():
     ):
         raise ValueError("q00-q09 trajectory timestamp banks differ")
 
-    included_timestamp_indices = list(range(99))
+    included_timestamp_indices = list(
+        trajectory_inverse_das_timestamp_indices(
+            args.timestamp_selection, trajectory_timesteps
+        )
+    )
+    contract_version = 1 if args.timestamp_selection == "99t" else 2
     selected = (
         included_timestamp_indices[
             args.timestamp_shard_index :: args.timestamp_shard_count
@@ -130,13 +138,16 @@ def main():
         )
         if args.query_scope == "ten"
         else trajectory_inverse_das_100q_shard_root(
-            family, args.query_shard_index, args.query_shard_count
+            family,
+            args.query_shard_index,
+            args.query_shard_count,
+            args.timestamp_selection,
         )
     )
     method = (
         TRAJECTORY_INVERSE_DAS_METHOD
         if args.query_scope == "ten"
-        else TRAJECTORY_INVERSE_DAS_100Q_METHOD
+        else trajectory_inverse_das_100q_method(args.timestamp_selection)
     )
     done_path = root / "done.json"
     if done_path.is_file():
@@ -153,7 +164,7 @@ def main():
     if all(path.is_file() for path in partial_paths.values()) and progress_path.is_file():
         with open(progress_path) as handle:
             progress = json.load(handle)
-        if int(progress.get("contract_version", 0)) != CONTRACT_VERSION:
+        if int(progress.get("contract_version", 0)) != contract_version:
             raise ValueError("partial shard contract changed")
         if int(progress["condition_batch_size"]) != args.condition_batch_size:
             raise ValueError("partial shard condition batch size differs")
@@ -188,7 +199,8 @@ def main():
     started = time.perf_counter()
     print(
         f"[inverse-das gpu={args.gpu}] family={family} query_ids="
-        f"{list(query_ids)} timestamps={len(selected)}/99 "
+        f"{list(query_ids)} timestamps={len(selected)}/"
+        f"{len(included_timestamp_indices)} selection={args.timestamp_selection} "
         f"outer_probes={DAS_NUM_MC} unique_conditions={len(unique_conditions)} "
         f"condition_batch={args.condition_batch_size} projection={dimension} "
         f"final_ema=True endpoint_excluded=True",
@@ -356,7 +368,7 @@ def main():
                 print(
                     f"[inverse-das gpu={args.gpu}] timestamp="
                     f"{shard_position}/{len(remaining)} global="
-                    f"{timestamp_index + 1}/99 q={record['query_id']:02d} "
+                    f"{timestamp_index + 1}/100 q={record['query_id']:02d} "
                     f"probe={mc_index + 1}/{DAS_NUM_MC} "
                     f"term_elapsed={(time.perf_counter()-term_started)/60:.1f}m "
                     f"eta={eta/3600:.2f}h",
@@ -379,11 +391,12 @@ def main():
         atomic_json(
             progress_path,
             {
-                "contract_version": CONTRACT_VERSION,
+                "contract_version": contract_version,
                 "condition_batch_size": args.condition_batch_size,
                 "query_ids": list(query_ids),
                 "query_scope": args.query_scope,
                 "family": family,
+                "timestamp_selection": args.timestamp_selection,
                 "completed_timestamps": completed_timestamps,
                 "included_timestamp_indices": included_timestamp_indices,
                 "endpoint_excluded": True,
@@ -399,11 +412,12 @@ def main():
     atomic_json(
         done_path,
         {
-            "contract_version": CONTRACT_VERSION,
+            "contract_version": contract_version,
             "method": method,
             "query_ids": list(query_ids),
             "query_scope": args.query_scope,
             "family": family,
+            "timestamp_selection": args.timestamp_selection,
             "timestamp_indices": selected,
             "included_timestamp_indices": included_timestamp_indices,
             "trajectory_timesteps": list(trajectory_timesteps),

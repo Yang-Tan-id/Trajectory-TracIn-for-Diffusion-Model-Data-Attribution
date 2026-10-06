@@ -1,5 +1,6 @@
 """Evaluate the 100-query trajectory inverse-noise DAS lambda sweep."""
 
+import argparse
 import json
 
 import numpy as np
@@ -9,9 +10,20 @@ from trajectory_inverse_noise_das_config import *
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--timestamp-selection", choices=("99t", "20t"), default="99t"
+    )
+    args = parser.parse_args()
+    method = trajectory_inverse_das_100q_method(args.timestamp_selection)
+    timestamp_values = list(
+        TRAJECTORY_INVERSE_DAS_20T_VALUES
+        if args.timestamp_selection == "20t"
+        else DAS_TIMESTEPS[1:]
+    )
     membership = np.load(MASK_DIR / "membership.npy").astype(np.float64)
     output = {
-        "method": TRAJECTORY_INVERSE_DAS_100Q_METHOD,
+        "method": method,
         "query_ids": list(TRAJECTORY_INVERSE_DAS_ALL_QUERY_IDS),
         "query_count": 100,
         "families": {"prompted": 75, "unprompted": 25},
@@ -19,7 +31,7 @@ def main():
         "projection_dim": TRAJECTORY_INVERSE_DAS_PROJ_DIM,
         "outer_probe_count": int(DAS_NUM_MC),
         "endpoint_excluded": True,
-        "included_timestamp_indices": list(range(99)),
+        "included_diffusion_timesteps": timestamp_values,
         "lambdas": [float(value) for value in DAS_LAMBDAS],
         "results": {},
     }
@@ -28,7 +40,7 @@ def main():
         scores = [
             np.load(
                 ATTR_DIR
-                / TRAJECTORY_INVERSE_DAS_100Q_METHOD
+                / method
                 / f"q{query_id:02d}"
                 / f"lambda_{lambda_tag(lam)}"
                 / "scores.npy"
@@ -67,7 +79,10 @@ def main():
                 flush=True,
             )
         output["results"][lambda_tag(lam)] = lambda_result
-    path = LDS_DIR / "trajectory_inverse_noise_das_100q_lambda_sweep.json"
+    path = LDS_DIR / (
+        f"trajectory_inverse_noise_das_{args.timestamp_selection}_"
+        "100q_lambda_sweep.json"
+    )
     with open(path, "w") as handle:
         json.dump(output, handle, indent=2)
     print(f"[saved] {path}", flush=True)
