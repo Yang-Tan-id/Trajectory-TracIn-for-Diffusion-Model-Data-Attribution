@@ -99,6 +99,12 @@ def _read_target_cache(path: Path, *, checkpoint: str | None, target_function: s
         cached_sampler = str(payload.get("trajectory_sampler", "ddpm"))
         if cached_sampler != str(trajectory_sampler):
             return None
+        if (
+            target_function == "trajectory_state_mse"
+            and os.environ.get("LDS_REQUIRE_PER_SNAPSHOT", "0") in ("1", "true", "True", "yes", "Yes")
+            and "per_snapshot_mean" not in payload.get("target_details", {})
+        ):
+            return None
         return float(payload["true_f"]), dict(payload.get("target_details", {}))
     except Exception:
         return None

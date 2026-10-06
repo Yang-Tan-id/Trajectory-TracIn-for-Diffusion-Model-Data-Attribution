@@ -949,6 +949,8 @@ class CifarTargetEvaluator:
             "per_snapshot_sum_mean": float(np.mean(per_snapshot_sum)),
             "per_snapshot_sum_max": float(np.max(per_snapshot_sum)),
         }
+        if os.environ.get("LDS_SAVE_PER_SNAPSHOT", "0") in ("1", "true", "True", "yes", "Yes"):
+            details["per_snapshot_mean"] = per_snapshot_mean.astype(np.float64).tolist()
         return value, details
 
     def _trajectory_counterfactual(self, target_adapter: CIFARAdapter, *, endpoint_only: bool) -> Tuple[float, Dict[str, object]]:

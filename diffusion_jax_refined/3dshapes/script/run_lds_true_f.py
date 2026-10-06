@@ -16,6 +16,7 @@ TARGET_FUNCTIONS = (
     "traj_counterfactual",
     "simple_loss",
     "noise_trajectory",
+    "trajectory_state_mse",
 )
 
 
