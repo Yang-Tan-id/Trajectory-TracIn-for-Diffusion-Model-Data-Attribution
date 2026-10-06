@@ -35,7 +35,7 @@ events="$shapes/result/$experiment/$artifact_name"
 logs="$shapes/result/$experiment/logs/paper_retrac_endpoint100x1_scores/${SLURM_JOB_ID}"
 mkdir -p "$logs"
 
-count="$(find "$events" -type f -name 'event_gradient_epoch_*_shard_*_of_02.npz' | wc -l | tr -d ' ')"
+count="$(find -L "$events" -type f -name 'event_gradient_epoch_*_shard_*_of_02.npz' | wc -l | tr -d ' ')"
 [[ "$count" == 392 ]] || { echo "expected 392 event shards, found $count" >&2; exit 1; }
 
 echo "[definition] official ReTrac normalization order; 100 timestamps x MC1"
