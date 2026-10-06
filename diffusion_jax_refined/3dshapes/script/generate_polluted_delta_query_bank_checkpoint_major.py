@@ -215,11 +215,14 @@ def main() -> None:
     parser.add_argument("--normalized-namespace", required=True)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--timestamp-count", type=int, default=10)
+    parser.add_argument("--timestamp-chunk-size", type=int, default=10)
     parser.add_argument("--normalized-only", action="store_true")
     parser.add_argument("--shard-index", type=int, default=0)
     parser.add_argument("--shard-count", type=int, default=1)
     parser.add_argument("--merge-only", action="store_true")
     args = parser.parse_args()
+    if args.timestamp_chunk_size <= 0:
+        raise ValueError("--timestamp-chunk-size must be positive")
 
     query_ids = parse_ints(args.query_ids)
     os.environ.update(
@@ -351,15 +354,39 @@ def main() -> None:
                         axis=0,
                     )
                 )
-            raw_features, norms = batch_fn(
-                params,
-                target_params,
-                array_to_device(jnp.asarray(np.stack(xt), dtype=jnp.float32), device),
-                array_to_device(jnp.asarray(timesteps, dtype=jnp.int32), device),
-                array_to_device(jnp.asarray(conds), device),
-            )
-            raw_features = np.asarray(jax.device_get(raw_features), dtype=np.float32)
-            norms = np.asarray(jax.device_get(norms), dtype=np.float32)
+            xt = np.stack(xt)
+            conds_device = array_to_device(jnp.asarray(conds), device)
+            raw_chunks = []
+            norm_chunks = []
+            for timestamp_start in range(0, len(timesteps), args.timestamp_chunk_size):
+                timestamp_end = min(
+                    timestamp_start + args.timestamp_chunk_size, len(timesteps)
+                )
+                raw_chunk, norm_chunk = batch_fn(
+                    params,
+                    target_params,
+                    array_to_device(
+                        jnp.asarray(
+                            xt[:, timestamp_start:timestamp_end], dtype=jnp.float32
+                        ),
+                        device,
+                    ),
+                    array_to_device(
+                        jnp.asarray(
+                            timesteps[timestamp_start:timestamp_end], dtype=jnp.int32
+                        ),
+                        device,
+                    ),
+                    conds_device,
+                )
+                raw_chunks.append(
+                    np.asarray(jax.device_get(raw_chunk), dtype=np.float32)
+                )
+                norm_chunks.append(
+                    np.asarray(jax.device_get(norm_chunk), dtype=np.float32)
+                )
+            raw_features = np.concatenate(raw_chunks, axis=1)
+            norms = np.concatenate(norm_chunks, axis=1)
             for local_i, item in enumerate(real):
                 raw_artifact, normalized_artifact = artifact_pairs[start + local_i]
                 raw_part = Path(str(raw_artifact) + ".parts") / f"ckpt_{ckpt_i:04d}.npz"

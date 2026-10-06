@@ -43,7 +43,7 @@ if [[ "${PREPARE_SAMPLES:-1}" == "1" ]]; then
 fi
 
 bank="$shapes/script/generate_polluted_delta_query_bank_checkpoint_major.py"
-common=(--query-file "$query_file" --query-ids "$query_ids" --experiment "$experiment" --train-seed "$seed" --epochs 200 --raw-namespace "$raw_namespace" --normalized-namespace "$query_namespace" --timestamp-count 100 --normalized-only --batch-size "${QUERY_BATCH_SIZE:-2}" --shard-count "$shard_count")
+common=(--query-file "$query_file" --query-ids "$query_ids" --experiment "$experiment" --train-seed "$seed" --epochs 200 --raw-namespace "$raw_namespace" --normalized-namespace "$query_namespace" --timestamp-count 100 --timestamp-chunk-size "${QUERY_TIMESTAMP_CHUNK_SIZE:-10}" --normalized-only --batch-size "${QUERY_BATCH_SIZE:-1}" --shard-count "$shard_count")
 pids=()
 for shard in "${!gpu_ids[@]}"; do gpu="${gpu_ids[$shard]}"; CUDA_VISIBLE_DEVICES=$gpu JAX_PLATFORMS=cuda JAX_NUM_DEVICES=1 "$python_bin" "$bank" "${common[@]}" --shard-index "$shard" >"$log_root/query_gpu_${gpu}.log" 2>&1 & pids+=("$!"); done
 for pid in "${pids[@]}"; do wait "$pid"; done
