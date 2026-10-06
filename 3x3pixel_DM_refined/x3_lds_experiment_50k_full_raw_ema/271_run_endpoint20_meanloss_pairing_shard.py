@@ -128,7 +128,11 @@ def main():
     implied_noises = (reference_states - a * endpoints[:, None]) / b.clamp_min(
         NPA_EPS
     )
-    mean_noises = implied_noises.mean(dim=1)
+    mean_noises = (
+        implied_noises.mean(dim=1)
+        if "mean_noise_mean_loss" in E20_MODES
+        else None
+    )
 
     selected_pairs = list(
         NPA_CHECKPOINT_PAIRS[
@@ -356,39 +360,42 @@ def main():
                     ] += dots
                     del dots
 
-                    # Mode 2: one mean-noise, 20-t mean loss gradient, paired
-                    # with every timestamp-specific query term.
-                    nb_mean = mean_noises[query_position][None].expand(
-                        count, *mean_noises.shape[1:]
-                    )
-                    gradients = mean_grad_fn(
-                        named, x_micro, c_micro, nb_mean
-                    )
-                    updates = adamw_full_batched(
-                        gradients, names, named, adam_state, adam_hyper
-                    )
-                    train_matrix = _project_batched_grads(
-                        updates,
-                        names,
-                        specs,
-                        NPA_PROJECTION_DIM,
-                        False,
-                        NPA_EPS,
-                    ).detach()
-                    dots = torch.einsum(
-                        "tp,bp->tb", query_matrix[query_position], train_matrix
-                    )
-                    mode = "mean_noise_mean_loss"
-                    linear[mode][query_position, micro_start:micro_end] += (
-                        dots.mean(dim=0).double()
-                    )
-                    termwise[mode][query_position, micro_start:micro_end] += (
-                        dots.square().mean(dim=0).double()
-                    )
-                    timestamp_response[mode][
-                        query_position, :, micro_start:micro_end
-                    ] += dots
-                    del nb_mean, gradients, updates, train_matrix, dots
+                    if "mean_noise_mean_loss" in E20_MODES:
+                        # Mode 2: one mean-noise, mean loss gradient, paired
+                        # with every timestamp-specific query term.
+                        nb_mean = mean_noises[query_position][None].expand(
+                            count, *mean_noises.shape[1:]
+                        )
+                        gradients = mean_grad_fn(
+                            named, x_micro, c_micro, nb_mean
+                        )
+                        updates = adamw_full_batched(
+                            gradients, names, named, adam_state, adam_hyper
+                        )
+                        train_matrix = _project_batched_grads(
+                            updates,
+                            names,
+                            specs,
+                            NPA_PROJECTION_DIM,
+                            False,
+                            NPA_EPS,
+                        ).detach()
+                        dots = torch.einsum(
+                            "tp,bp->tb",
+                            query_matrix[query_position],
+                            train_matrix,
+                        )
+                        mode = "mean_noise_mean_loss"
+                        linear[mode][query_position, micro_start:micro_end] += (
+                            dots.mean(dim=0).double()
+                        )
+                        termwise[mode][query_position, micro_start:micro_end] += (
+                            dots.square().mean(dim=0).double()
+                        )
+                        timestamp_response[mode][
+                            query_position, :, micro_start:micro_end
+                        ] += dots
+                        del nb_mean, gradients, updates, train_matrix, dots
 
             if (
                 batch_position == 1
