@@ -58,7 +58,7 @@ echo "[parallel] 4 H100 nodes x 4 GPUs = 16 static task shards, 15 retrains per 
 echo "[logs] $log_root"
 
 echo "[preflight] Python, JAX, 3D Shapes adapter, and local H100 visibility"
-python - <<'PY'
+ibrun -n 1 -o 0 env JAX_PLATFORMS=cuda JAX_NUM_DEVICES=1 python - <<'PY'
 import jax
 from DM__training_3DSHAPES_pixel import TrainConfig, train
 

@@ -76,6 +76,15 @@ class RetracEndpointTopKRemovalTest(unittest.TestCase):
         self.assertIn("cfg.use_wandb = False", source)
         self.assertIn('os.environ.get("JAX_BATCH_SIZE"', source)
 
+        launcher = (
+            ROOT
+            / "3dshapes"
+            / "tacc"
+            / "h100"
+            / "run_retrac_endpoint_topk_removal_60q_h100.sh"
+        ).read_text()
+        self.assertIn("ibrun -n 1 -o 0 env JAX_PLATFORMS=cuda", launcher)
+
     def test_dtrak_rtx_workers_use_ibrun(self) -> None:
         launcher = (
             ROOT
