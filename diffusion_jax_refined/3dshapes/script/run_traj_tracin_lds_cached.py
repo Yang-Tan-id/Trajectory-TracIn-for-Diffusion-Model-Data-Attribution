@@ -157,6 +157,8 @@ SCORE_SCHEMES = {
         "traj_tracin_endpoint_tracin_adamw_full_train10x10_query100x1_q0_99",
     "endpoint_tracin_adamw_full_train10x10_query100x1_termwise_squared_lr_after_q0_99":
         "traj_tracin_endpoint_tracin_adamw_full_train10x10_query100x1_termwise_squared_lr_after_q0_99",
+    "endpoint_tracin_adamw_full_train10x10_query100x1_final_score_squared_q0_99":
+        "traj_tracin_endpoint_tracin_adamw_full_train10x10_query100x1_final_score_squared_q0_99",
     "recreate_adamw_full_direction20_mean100t_delta_l2normalized_timestamp_sum_squared_q0_99":
         "traj_tracin_recreate_adamw_full_direction20_mean100t_delta_l2normalized_timestamp_sum_squared_q0_99",
     **{
