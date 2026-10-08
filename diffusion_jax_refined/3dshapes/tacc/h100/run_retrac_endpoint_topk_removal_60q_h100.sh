@@ -57,6 +57,19 @@ echo "[definition] 240 independent retrains; retain final epoch-200 checkpoint; 
 echo "[parallel] 4 H100 nodes x 4 GPUs = 16 static task shards, 15 retrains per GPU"
 echo "[logs] $log_root"
 
+echo "[preflight] Python, JAX, 3D Shapes adapter, and local H100 visibility"
+python - <<'PY'
+import jax
+from DM__training_3DSHAPES_pixel import TrainConfig, train
+
+devices = jax.devices("gpu")
+if len(devices) != 4:
+    raise RuntimeError(f"expected 4 visible H100 GPUs on the launch node, found {devices}")
+if "exclude_indices" not in TrainConfig.__dataclass_fields__:
+    raise RuntimeError("3D Shapes TrainConfig lacks exclude_indices support")
+print(f"[preflight] JAX={jax.__version__}; GPUs={devices}; adapter/train import OK")
+PY
+
 echo "[preflight] validate all 120 score artifacts at maximum topk"
 for method in retrac_adamw_both_l2_neg endpoint_pollute_adamw_timestamp_train_l2; do
   for query_id in $(seq 0 59); do

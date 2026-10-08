@@ -65,6 +65,17 @@ class RetracEndpointTopKRemovalTest(unittest.TestCase):
         self.assertEqual(endpoint.name, "score_train_l2_normalized")
         self.assertIn("timestamp_sum_squared_aligned100x1", str(endpoint))
 
+    def test_topk_worker_uses_3dshapes_adapter_and_validates_inputs(self) -> None:
+        source = SCRIPT.read_text()
+        self.assertIn("from DM__training_3DSHAPES_pixel import TrainConfig", source)
+        self.assertIn("from DM__training_3DSHAPES_pixel import train", source)
+        self.assertNotIn("from DM__training_CIFAR5_MULTI_pixel", source)
+        self.assertIn('reference_sample / "trajectory_pos.npy"', source)
+        self.assertIn('reference_sample / "trajectory_t.npy"', source)
+        self.assertIn("cfg.num_devices = 1", source)
+        self.assertIn("cfg.use_wandb = False", source)
+        self.assertIn('os.environ.get("JAX_BATCH_SIZE"', source)
+
     def test_dtrak_rtx_workers_use_ibrun(self) -> None:
         launcher = (
             ROOT

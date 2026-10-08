@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import gc
 import json
+import os
 import pickle
 import sys
 from dataclasses import asdict
@@ -97,8 +98,20 @@ def select_topk(
     return indices[order], raw[order], ranking[order]
 
 
-def load_training_config(base_checkpoint: Path, output_dir: Path, removed: np.ndarray):
-    from DM__training_CIFAR5_MULTI_pixel import TrainConfig
+def env_bool(name: str, default: bool) -> bool:
+    value = os.environ.get(name)
+    return default if value is None else value.strip().lower() not in ("0", "false", "no", "off")
+
+
+def load_training_config(
+    base_checkpoint: Path,
+    output_dir: Path,
+    removed: np.ndarray,
+    *,
+    train_seed: int,
+    epochs: int,
+):
+    from DM__training_3DSHAPES_pixel import TrainConfig
 
     with base_checkpoint.open("rb") as handle:
         payload = pickle.load(handle)
@@ -109,12 +122,18 @@ def load_training_config(base_checkpoint: Path, output_dir: Path, removed: np.nd
     cfg.exclude_ranges = None
     cfg.exclude_indices = {0: tuple(int(x) for x in removed.tolist())}
     cfg.checkpoint_dir = str(output_dir)
-    cfg.seed = 42
-    cfg.epochs = 200
-    cfg.save_every_epochs = 200
+    cfg.seed = train_seed
+    cfg.epochs = epochs
+    cfg.save_every_epochs = epochs
     cfg.keep_last_k = 1
     cfg.prefer_device = "gpu"
     cfg.use_data_parallel = False
+    cfg.num_devices = 1
+    cfg.use_wandb = False
+    cfg.num_workers = 0
+    cfg.batch_size = int(os.environ.get("JAX_BATCH_SIZE", cfg.batch_size))
+    cfg.prefetch_size = int(os.environ.get("JAX_PREFETCH_SIZE", "1"))
+    cfg.use_bfloat16 = env_bool("JAX_BFLOAT16", cfg.use_bfloat16)
     return cfg
 
 
@@ -165,6 +184,29 @@ def main() -> None:
     removed, raw_scores, ranking_scores = select_topk(
         score_dir, ranking_sign, args.topk
     )
+    base_checkpoint = (
+        result_root
+        / "model"
+        / "prompted_jax"
+        / f"seed_{args.train_seed}_epoch_{args.epochs:04d}.ckpt"
+    )
+    dataset_path = REFINE_ROOT / "dataset" / "3dshapes" / "20000" / "dataset.npz"
+    reference_sample = (
+        sample_root(result_root, record, args.train_seed, args.epochs)
+        / f"seed_{int(record['initial_seed']):06d}"
+    )
+    required_inputs = (
+        base_checkpoint,
+        dataset_path,
+        reference_sample / "decoded_final.npy",
+        reference_sample / "trajectory_pos.npy",
+        reference_sample / "trajectory_t.npy",
+    )
+    missing_inputs = [path for path in required_inputs if not path.is_file()]
+    if missing_inputs:
+        raise FileNotFoundError(
+            "Missing top-k removal input(s): " + ", ".join(map(str, missing_inputs))
+        )
     run_dir = (
         result_root
         / "retrac_endpoint_topk_removal_60q"
@@ -191,6 +233,12 @@ def main() -> None:
         "removed_ranking_scores": [float(x) for x in ranking_scores],
     }
     if args.stage == "validate":
+        # Import through the dataset-specific adapter during preflight so a
+        # broken Python/JAX environment fails before launching 240 retrains.
+        from DM__training_3DSHAPES_pixel import TrainConfig
+
+        if "exclude_indices" not in TrainConfig.__dataclass_fields__:
+            raise RuntimeError("3D Shapes TrainConfig lacks exclude_indices support")
         print(
             f"[valid] {args.method} Q{args.query_id} topk={args.topk} "
             f"score={score_dir}",
@@ -199,23 +247,20 @@ def main() -> None:
         return
     write_json(metadata_path, metadata)
 
-    base_checkpoint = (
-        result_root
-        / "model"
-        / "prompted_jax"
-        / f"seed_{args.train_seed}_epoch_{args.epochs:04d}.ckpt"
-    )
-    if not base_checkpoint.is_file():
-        raise FileNotFoundError(base_checkpoint)
-
     target_checkpoint = final_checkpoint(model_dir, args.train_seed, args.epochs)
     if args.stage in ("train", "all"):
         if target_checkpoint.is_file():
             print(f"[skip] final checkpoint exists: {target_checkpoint}", flush=True)
         else:
-            from DM__training_CIFAR5_MULTI_pixel import train
+            from DM__training_3DSHAPES_pixel import train
 
-            cfg = load_training_config(base_checkpoint, model_dir, removed)
+            cfg = load_training_config(
+                base_checkpoint,
+                model_dir,
+                removed,
+                train_seed=args.train_seed,
+                epochs=args.epochs,
+            )
             metadata["train_config"] = asdict(cfg)
             write_json(metadata_path, metadata)
             print(
