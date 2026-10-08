@@ -37,6 +37,14 @@ def load_percent(item: tuple[tuple[str, str, int, int], Path]):
     return key, float(json.loads(path.read_text())["lds_percent"])
 
 
+def parse_choices(text: str, allowed: tuple[str, ...], label: str) -> tuple[str, ...]:
+    values = tuple(value.strip() for value in text.split(",") if value.strip())
+    invalid = [value for value in values if value not in allowed]
+    if not values or invalid:
+        raise ValueError(f"invalid {label}: {invalid or text!r}; allowed={allowed}")
+    return values
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -47,13 +55,22 @@ def main() -> None:
     parser.add_argument("--experiment", default="experiment1")
     parser.add_argument("--workers", type=int, default=32)
     parser.add_argument("--prediction-sign", choices=("p1", "m1"), default="p1")
+    parser.add_argument("--reductions", default=",".join(REDUCTIONS))
+    parser.add_argument("--variants", default=",".join(VARIANTS))
+    parser.add_argument(
+        "--negate-values",
+        action="store_true",
+        help="Negate stored LDS values, e.g. convert stored P1 Spearman LDS to M1.",
+    )
     args = parser.parse_args()
+    reductions = parse_choices(args.reductions, REDUCTIONS, "reductions")
+    variants = parse_choices(args.variants, VARIANTS, "variants")
 
     queries = json.loads(args.query_file.read_text())["queries"]
     eval_root = SHAPES_ROOT / "result" / args.experiment / "eval" / "prompted_solo"
     items = []
-    for reduction in REDUCTIONS:
-        for variant in VARIANTS:
+    for reduction in reductions:
+        for variant in variants:
             namespace = (
                 "traj_tracin_recreate_adamw_full_"
                 "polluted_endpoint_delta_l2normalized_"
@@ -81,15 +98,22 @@ def main() -> None:
     values = {}
     with ThreadPoolExecutor(max_workers=args.workers) as executor:
         for key, value in executor.map(load_percent, items):
-            values[key] = value
+            values[key] = -value if args.negate_values else value
 
-    for reduction in REDUCTIONS:
-        for variant in VARIANTS:
+    output_sign = (
+        "M1 (CONVERTED FROM STORED P1)"
+        if args.negate_values and args.prediction_sign == "p1"
+        else "P1 (CONVERTED FROM STORED M1)"
+        if args.negate_values and args.prediction_sign == "m1"
+        else args.prediction_sign.upper()
+    )
+    for reduction in reductions:
+        for variant in variants:
             print()
             print(
                 "ADAMW FULL ENDPOINT-POLLUTE 100x1"
                 f" — {reduction.upper()} — {variant.upper()}"
-                f" — {args.prediction_sign.upper()}"
+                f" — {output_sign}"
             )
             print(
                 f"{'QUERY':7s}{'ENDPOINT':>13s}{'TRAJ-CF':>13s}"
