@@ -45,6 +45,12 @@ SCHEME_GROUPS = {
             "traj_tracin_endpoint_tracin_adamw_full_train10x10_query100x1_q0_99",
         ),
     ),
+    "endpoint_tracin_adamw10x10_query100x1_termwise_squared_lr_after": (
+        (
+            "endpoint_tracin_adamw_full_train10x10_query100x1_termwise_squared_lr_after",
+            "traj_tracin_endpoint_tracin_adamw_full_train10x10_query100x1_termwise_squared_lr_after_q0_99",
+        ),
+    ),
     "raw_loss": (
         ("raw_loss_mc10", "traj_tracin_raw_mc10_aligned10x10"),
     ),
@@ -358,6 +364,7 @@ def main() -> None:
             "retrac_endpoint100x1",
             "endpoint_tracin100x1",
             "endpoint_tracin_adamw10x10_query100x1",
+            "endpoint_tracin_adamw10x10_query100x1_termwise_squared_lr_after",
             "raw_loss",
             "raw_next_timestamp_square_ref100q",
             "original",

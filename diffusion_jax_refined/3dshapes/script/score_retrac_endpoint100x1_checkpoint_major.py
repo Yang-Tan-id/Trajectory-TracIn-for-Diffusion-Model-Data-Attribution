@@ -149,6 +149,28 @@ def endpoint_contractions(train: jax.Array, query: jax.Array) -> jax.Array:
 
 
 @jax.jit
+def endpoint_termwise_squared_lr_after_contractions(
+    train: jax.Array, weights: jax.Array, query: jax.Array,
+) -> jax.Array:
+    """Square each train-term/query dot, then apply its LR/MC weight once."""
+    # train [T,K,P], weights [T], query [Q,P] -> [Q,4,K]
+    raw = jnp.einsum("tkp,qp->qtk", train, query, precision=jax.lax.Precision.HIGHEST)
+    qnorm = jnp.maximum(jnp.linalg.norm(query, axis=-1), EPS)[:, None, None]
+    tnorm = jnp.maximum(jnp.linalg.norm(train, axis=-1), EPS)[None, :, :]
+    variants = (
+        raw,
+        raw / qnorm,
+        raw / tnorm,
+        raw / (qnorm * tnorm),
+    )
+    weight = weights[None, :, None]
+    return jnp.stack(
+        [jnp.sum(weight * jnp.square(values), axis=1) for values in variants],
+        axis=1,
+    )
+
+
+@jax.jit
 def retrac_contractions(events: jax.Array, query: jax.Array) -> jax.Array:
     # events [E,K,P], query [Q,P] -> [Q,4,E,K]
     raw = jnp.einsum("ekp,qp->qek", events, query, precision=jax.lax.Precision.HIGHEST)
@@ -192,6 +214,28 @@ def load_adamw_aligned10x10_train_part(
     # Existing term_weights carry the checkpoint LR and timestamp averaging.
     collapsed = np.einsum("t,tkp->kp", weights, features, optimize=True)
     return collapsed.astype(np.float32), indices
+
+
+def load_adamw_aligned10x10_train_terms(
+    path: Path, *, add_optimizer_history: bool,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Load uncollapsed AdamW terms and their once-applied LR/MC weights."""
+    with np.load(path, allow_pickle=False) as payload:
+        features = np.asarray(payload["train_features"], dtype=np.float32)
+        indices = np.asarray(payload["score_indices"], dtype=np.int64)
+        weights = np.asarray(payload["term_weights"], dtype=np.float32).reshape(-1)
+        if features.ndim != 3 or features.shape[1:] != (len(indices), 4096):
+            raise ValueError(f"{path}: unexpected AdamW feature shape {features.shape}")
+        if weights.shape[0] != features.shape[0]:
+            raise ValueError(f"{path}: AdamW weights do not match {features.shape[0]} terms")
+        if add_optimizer_history:
+            if "optimizer_history_features" not in payload:
+                raise ValueError(f"{path}: missing optimizer_history_features for AdamW full")
+            history = np.asarray(payload["optimizer_history_features"], dtype=np.float32)
+            if history.shape != (features.shape[0], features.shape[2]):
+                raise ValueError(f"{path}: optimizer history shape {history.shape} is incompatible")
+            features = features + history[:, None, :]
+    return features, weights, indices
 
 
 def load_event_shard(
@@ -305,6 +349,12 @@ def main() -> None:
         help="Use cached AdamW aligned10x10 train terms, collapsed with stored term weights.",
     )
     parser.add_argument("--endpoint-adamw-full", action="store_true")
+    parser.add_argument(
+        "--endpoint-reduction",
+        choices=("linear", "termwise_squared_lr_after"),
+        default="linear",
+        help="For squared mode, square every train-term/query dot before applying LR once.",
+    )
     parser.add_argument("--retrac-event-root", type=Path, required=True)
     parser.add_argument("--methods", choices=("retrac", "endpoint", "both"), default="both")
     parser.add_argument(
@@ -333,6 +383,14 @@ def main() -> None:
     args = parser.parse_args()
     if args.query_timestamp_count <= 0:
         parser.error("--query-timestamp-count must be positive")
+    if (
+        args.endpoint_reduction == "termwise_squared_lr_after"
+        and not args.endpoint_adamw_aligned10x10
+    ):
+        parser.error(
+            "--endpoint-reduction termwise_squared_lr_after requires "
+            "--endpoint-adamw-aligned10x10"
+        )
     run_retrac = args.methods in ("retrac", "both")
     run_endpoint = args.methods in ("endpoint", "both")
     if run_endpoint and args.endpoint_train_artifact is None:
@@ -456,6 +514,7 @@ def main() -> None:
     )
     for checkpoint in range(49):
         train = None
+        train_weights = None
         events = None
         event_lrs = None
         event_timesteps = None
@@ -464,9 +523,14 @@ def main() -> None:
             assert endpoint_parts is not None
             part_path = endpoint_parts / f"ckpt_{checkpoint:04d}.npz"
             if args.endpoint_adamw_aligned10x10:
-                train, indices = load_adamw_aligned10x10_train_part(
-                    part_path, add_optimizer_history=args.endpoint_adamw_full
-                )
+                if args.endpoint_reduction == "termwise_squared_lr_after":
+                    train, train_weights, indices = load_adamw_aligned10x10_train_terms(
+                        part_path, add_optimizer_history=args.endpoint_adamw_full
+                    )
+                else:
+                    train, indices = load_adamw_aligned10x10_train_part(
+                        part_path, add_optimizer_history=args.endpoint_adamw_full
+                    )
             else:
                 train, indices, stored_timesteps = load_endpoint_train_part(part_path)
                 if not np.array_equal(stored_timesteps, query_timesteps):
@@ -523,6 +587,11 @@ def main() -> None:
         train_device = (
             array_to_device(jnp.asarray(train), device) if run_endpoint else None
         )
+        train_weights_device = (
+            array_to_device(jnp.asarray(train_weights), device)
+            if train_weights is not None
+            else None
+        )
         events_device = (
             array_to_device(jnp.asarray(events), device) if run_retrac else None
         )
@@ -572,10 +641,21 @@ def main() -> None:
             count = len(real)
             if run_endpoint:
                 assert train_device is not None and endpoint_scores is not None
-                endpoint_values = endpoint_contractions(train_device, query_features)
+                if args.endpoint_reduction == "termwise_squared_lr_after":
+                    assert train_weights_device is not None
+                    endpoint_values = endpoint_termwise_squared_lr_after_contractions(
+                        train_device, train_weights_device, query_features
+                    )
+                else:
+                    endpoint_values = endpoint_contractions(train_device, query_features)
                 endpoint_values.block_until_ready()
                 endpoint_scores[start : start + count] += (
-                    (1.0 if args.endpoint_adamw_aligned10x10 else checkpoint_lr)
+                    (
+                        1.0
+                        if args.endpoint_adamw_aligned10x10
+                        or args.endpoint_reduction == "termwise_squared_lr_after"
+                        else checkpoint_lr
+                    )
                     * np.asarray(endpoint_values[:count], dtype=np.float64)
                 )
             if run_retrac:
@@ -666,7 +746,7 @@ def main() -> None:
                         "score_reduction": (
                             args.retrac_reduction
                             if root_key == "retrac_root"
-                            else "linear"
+                            else args.endpoint_reduction
                         ),
                         "prediction_sign_for_loss_utility": -1,
                         "train_definition": (
