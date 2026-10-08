@@ -54,7 +54,7 @@ export DTRAK_EXPLICIT_TIMESTEP_GRID=1 DTRAK_BATCH_SIZE="${DTRAK_BATCH_SIZE:-2}"
 export DTRAK_COUNT_SKETCH_MODE="${DTRAK_COUNT_SKETCH_MODE:-scatter}"
 
 train_stage="$shapes/data_attribution/dtrak/01_train_datapoint_gradient.py"
-query_stage="$shapes/data_attribution/dtrak/02_query_gradient.py"
+query_bank="$shapes/script/generate_dtrak_query_bank_persistent.py"
 model_root="$shapes/result/$experiment/model/prompted_solo/seed_${train_seed}_train_gradient"
 
 # RTX workers must be launched as real Slurm tasks.  Starting CUDA Python
@@ -95,48 +95,22 @@ train_pid1=$!
 wait "$train_pid0"
 wait "$train_pid1"
 
-mapfile -t selected_queries < <(
-  "$python_bin" - "$query_file" "$query_ids" "$shapes" <<'PY'
-import json, sys
-sys.path.insert(0, sys.argv[3])
-from dataset_config import _prompt_tag
-records = json.load(open(sys.argv[1]))["queries"]
-for token in sys.argv[2].replace(",", " ").split():
-    qid = int(token); row = records[qid]
-    print(f"{qid}\t{row['prompt']}\t{int(row.get('initial_seed', row.get('seed')))}\t{_prompt_tag(row['prompt'])}")
-PY
-)
-
-run_query_shard() {
-  local shard="$1" task_offset="$2" gpu="$3" line qid prompt seed prompt_tag model_dir artifact objective
-  for ((position=shard; position<${#selected_queries[@]}; position+=2)); do
-    line="${selected_queries[$position]}"
-    IFS=$'\t' read -r qid prompt seed prompt_tag <<< "$line"
-    model_dir="$SAMPLE_ROOT/cifar/prompt_${prompt_tag}/model_prompted_solo__ckpt_seed_${train_seed}_epoch_0200"
-    [[ -d "$model_dir/seed_$(printf '%06d' "$seed")" ]] || {
-      echo "missing endpoint sample for Q$qid: $model_dir/seed_$(printf '%06d' "$seed")" >&2
-      return 1
-    }
-    for objective in simple_loss square average; do
-      artifact="$model_dir/seed_$(printf '%06d' "$seed")_query_gradient_dtrak_${objective}_100x1/dtrak/query_gradient_artifact.npz"
-      if [[ -f "$artifact" ]]; then
-        echo "[skip] query Q$qid objective=$objective"
-        continue
-      fi
-      echo "[query] Q$qid objective=$objective gpu=$gpu"
-      run_task "$task_offset" "$gpu" \
-        env \
-        QUERY="$prompt" INITIAL_SEED="$seed" SAMPLE_SEED="$seed" \
-        ATTRIBUTION_SAMPLE_DIR="$model_dir" DTRAK_OUTPUT_FUNCTION="$objective" \
-        QUERY_GRADIENT_ARTIFACT_PATH="$artifact" \
-        "$python_bin" "$query_stage"
-    done
-  done
-}
-
-(cd "$repo"; run_query_shard 0 0 "${gpu_ids[0]}") >"$log_root/query_gpu_${gpu_ids[0]}.log" 2>&1 &
+# Each GPU now keeps one Python/JAX process alive.  The final checkpoint,
+# CountSketch projector, and three compiled objectives are reused for all 50
+# queries instead of being rebuilt 150 times per GPU.
+run_task 0 "${gpu_ids[0]}" \
+  "$python_bin" "$query_bank" \
+  --query-file "$query_file" --query-ids "$query_ids" \
+  --sample-root "$SAMPLE_ROOT" --train-seed "$train_seed" --epochs 200 \
+  --shard-index 0 --shard-count 2 \
+  >"$log_root/query_gpu_${gpu_ids[0]}.log" 2>&1 &
 query_pid0=$!
-(cd "$repo"; run_query_shard 1 1 "${gpu_ids[1]}") >"$log_root/query_gpu_${gpu_ids[1]}.log" 2>&1 &
+run_task 1 "${gpu_ids[1]}" \
+  "$python_bin" "$query_bank" \
+  --query-file "$query_file" --query-ids "$query_ids" \
+  --sample-root "$SAMPLE_ROOT" --train-seed "$train_seed" --epochs 200 \
+  --shard-index 1 --shard-count 2 \
+  >"$log_root/query_gpu_${gpu_ids[1]}.log" 2>&1 &
 query_pid1=$!
 wait "$query_pid0"
 wait "$query_pid1"

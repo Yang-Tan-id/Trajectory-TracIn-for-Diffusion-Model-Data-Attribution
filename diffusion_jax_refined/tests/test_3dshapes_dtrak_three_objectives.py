@@ -36,6 +36,20 @@ class DTrakThreeObjectivesTest(unittest.TestCase):
         self.assertIn("run_train_objective square", source)
         self.assertIn("run_train_objective average", source)
         self.assertIn("DTRAK_DAMPING_SWEEP_VALUES", source)
+        self.assertIn("generate_dtrak_query_bank_persistent.py", source)
+        self.assertNotIn('"$python_bin" "$query_stage"', source)
+
+    def test_persistent_query_worker_reuses_checkpoint_projection_and_jit(self) -> None:
+        source = (
+            ROOT / "3dshapes/script/generate_dtrak_query_bank_persistent.py"
+        ).read_text()
+        restore = source.index("adapter.restore_state")
+        query_loop = source.index("for position, query_id")
+        self.assertLess(restore, query_loop)
+        self.assertIn("query_functions = {", source)
+        self.assertIn('seed_parts=(cfg.seed, "dtrak_projection", 0, 0)', source)
+        self.assertIn("valid_artifact", source)
+        self.assertIn("atomic_save", source)
 
 
 if __name__ == "__main__":
