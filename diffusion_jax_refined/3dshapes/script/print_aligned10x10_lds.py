@@ -5,6 +5,7 @@ import argparse
 import json
 import statistics
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 
@@ -322,6 +323,12 @@ def main() -> None:
     )
     parser.add_argument("--query-ids", default="0,1,2,3,4,5,6,7,8,9")
     parser.add_argument(
+        "--workers",
+        type=int,
+        default=32,
+        help="Parallel readers for LDS summary files.",
+    )
+    parser.add_argument(
         "--prediction-sign",
         choices=("p1", "m1"),
         default="p1",
@@ -383,6 +390,7 @@ def main() -> None:
         schemes = SCHEME_GROUPS[args.scheme_group]
     result_root = SHAPES_ROOT / "result" / args.experiment
     values: dict[tuple[str, str, int, str], float] = {}
+    reads: list[tuple[tuple[str, str, int, str], Path]] = []
 
     for query_id in query_ids:
         if query_id < 0 or query_id >= len(records):
@@ -408,22 +416,31 @@ def main() -> None:
                     standard_summary = (
                         target_root / STANDARD_LDS_GROUP / "lds_summary.json"
                     )
-                    # Avoid a Lustre directory scan for every query/variant/target.
-                    # All standard 3D Shapes LDS runs use this deterministic group.
-                    matches = (
-                        [standard_summary]
-                        if standard_summary.is_file()
-                        else list(target_root.glob("*/lds_summary.json"))
+                    reads.append(
+                        ((scheme, variant, query_id, target), standard_summary)
                     )
-                    if len(matches) != 1:
-                        raise RuntimeError(
-                            f"Expected one result for Q{query_id} {scheme}/{variant}/{target}; "
-                            f"found {len(matches)} under {target_root}"
-                        )
-                    payload = json.loads(matches[0].read_text())
-                    values[(scheme, variant, query_id, target)] = float(
-                        payload["lds_percent"]
-                    )
+
+    def read_summary(
+        item: tuple[tuple[str, str, int, str], Path],
+    ) -> tuple[tuple[str, str, int, str], float]:
+        key, standard_summary = item
+        scheme, variant, query_id, target = key
+        if standard_summary.is_file():
+            summary = standard_summary
+        else:
+            target_root = standard_summary.parents[1]
+            matches = list(target_root.glob("*/lds_summary.json"))
+            if len(matches) != 1:
+                raise RuntimeError(
+                    f"Expected one result for Q{query_id} {scheme}/{variant}/{target}; "
+                    f"found {len(matches)} under {target_root}"
+                )
+            summary = matches[0]
+        return key, float(json.loads(summary.read_text())["lds_percent"])
+
+    with ThreadPoolExecutor(max_workers=args.workers) as executor:
+        for key, value in executor.map(read_summary, reads):
+            values[key] = value
 
     for scheme, _ in schemes:
         for variant in VARIANTS:
