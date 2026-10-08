@@ -23,7 +23,9 @@ query_file="$shapes/queries_in_distribution_plus_zero_seed_100_219.json"
 query_ids="${QUERY_IDS:-$(seq -s, 0 99)}"
 experiment="${EXPERIMENT_TAG:-experiment1}"
 train_seed="${TRAIN_SEED:-42}"
-run_tag="${RUN_TAG:-${SLURM_JOB_ID:-manual}}"
+# A login shell can retain an exported RUN_TAG from an earlier submission.
+# Within Slurm, the current job id must win so logs never mix across retries.
+run_tag="${SLURM_JOB_ID:-${RUN_TAG:-manual}}"
 log_root="$shapes/result/$experiment/logs/endpoint_pollute_10x1_per_timestamp_square/$run_tag"
 mkdir -p "$log_root"
 

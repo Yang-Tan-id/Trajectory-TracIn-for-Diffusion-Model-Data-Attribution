@@ -50,6 +50,7 @@ class EndpointPolluteTimestampSquareTest(unittest.TestCase):
         self.assertIn('${PREDICTION_SIGN:-1}', text)
         self.assertIn("summary.txt", text)
         self.assertNotIn("--nodelist", text)
+        self.assertIn('${SLURM_JOB_ID:-${RUN_TAG:-manual}}', text)
 
     def test_all_timestamps_are_registered_for_lds(self) -> None:
         text = LDS_RUNNER.read_text()
