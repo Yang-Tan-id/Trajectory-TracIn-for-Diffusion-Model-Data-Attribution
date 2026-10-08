@@ -145,6 +145,8 @@ SCORE_SCHEMES = {
         "traj_tracin_paper_retrac_exact4_endpoint100x1_q0_99",
     "paper_retrac_adamw_full_exact4_endpoint100x1_q0_99":
         "traj_tracin_paper_retrac_adamw_full_exact4_endpoint100x1_q0_99",
+    "paper_retrac_adamw_full_exact4_endpoint10x1_q0_99":
+        "traj_tracin_paper_retrac_adamw_full_exact4_endpoint10x1_q0_99",
     "retrac_exact4_endpoint100x1_q0_99":
         "traj_tracin_retrac_exact4_endpoint100x1_q0_99",
     "retrac_exact4_endpoint100x1_timestamp_sum_squared_q0_99":
@@ -452,6 +454,7 @@ FOUR_NORM_EXPECTED_SCHEMES = {
 PAPER_RETRAC_SCHEMES = {
     "paper_retrac_exact4_endpoint100x1_q0_99",
     "paper_retrac_adamw_full_exact4_endpoint100x1_q0_99",
+    "paper_retrac_adamw_full_exact4_endpoint10x1_q0_99",
 }
 PAPER_RETRAC_VARIANTS = (("query_train_l2", "score_query_train_l2_normalized"),)
 

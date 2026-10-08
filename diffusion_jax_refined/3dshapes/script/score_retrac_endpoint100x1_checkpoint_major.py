@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Stream exact-event ReTrac and endpoint-TracIn 100x1 scores.
+"""Stream exact-event ReTrac and endpoint-TracIn scores.
 
 The query at checkpoint c is the projected gradient of the mean denoising
-loss of the saved query endpoint over 100 explicit timesteps and one noise
+loss of the saved query endpoint over explicit timesteps and one noise
 draw per timestep.  ReTrac contracts it with the four exact stochastic
 training events between checkpoints c and c+1.  Endpoint-TracIn contracts it
 with the checkpoint-level 100-timestep/MC1 mean-loss train gradient.
@@ -316,6 +316,7 @@ def main() -> None:
         help="Select the pre-projection normalized train feature in paper-ReTrac mode.",
     )
     parser.add_argument("--retrac-namespace", default="retrac_exact4_endpoint100x1_q0_99")
+    parser.add_argument("--query-timestamp-count", type=int, default=100)
     parser.add_argument(
         "--retrac-reduction",
         choices=("linear", "timestamp_sum_squared"),
@@ -330,6 +331,8 @@ def main() -> None:
     parser.add_argument("--shard-index", type=int, default=0)
     parser.add_argument("--shard-count", type=int, default=1)
     args = parser.parse_args()
+    if args.query_timestamp_count <= 0:
+        parser.error("--query-timestamp-count must be positive")
     run_retrac = args.methods in ("retrac", "both")
     run_endpoint = args.methods in ("endpoint", "both")
     if run_endpoint and args.endpoint_train_artifact is None:
@@ -357,7 +360,7 @@ def main() -> None:
         seed=args.train_seed,
         epochs=args.epochs,
         parameter_source="raw",
-        num_traj_snapshots=100,
+        num_traj_snapshots=args.query_timestamp_count,
         proj_dim=4096,
         out_dir=str(result_root / "tmp"),
     )
@@ -415,15 +418,40 @@ def main() -> None:
         int(cfg.timesteps) - 1, 0, int(cfg.ddim_steps), dtype=np.int32
     )
     query_positions = select_snapshot_positions(
-        int(cfg.ddim_steps), 100, cfg.traj_snapshot_positions
+        int(cfg.ddim_steps), args.query_timestamp_count, cfg.traj_snapshot_positions
     )
     query_timesteps = np.asarray(
         [int(ddim_ts[int(position)]) for position in query_positions], dtype=np.int32
     )
+    # Draw the historical 100-timestep noise bank and select matching entries.
+    # This keeps a 10-timestep run directly comparable with the existing 100t
+    # run: shared timesteps use exactly the same MC1 noise.
+    noise_reference_positions = select_snapshot_positions(
+        int(cfg.ddim_steps), 100, None
+    )
+    noise_reference_timesteps = np.asarray(
+        [int(ddim_ts[int(position)]) for position in noise_reference_positions],
+        dtype=np.int32,
+    )
+    noise_reference_lookup = {
+        int(timestep): index
+        for index, timestep in enumerate(noise_reference_timesteps)
+    }
+    try:
+        query_noise_indices = np.asarray(
+            [noise_reference_lookup[int(timestep)] for timestep in query_timesteps],
+            dtype=np.int32,
+        )
+    except KeyError as error:
+        raise ValueError(
+            "query timestep schedule must be a subset of the 100-timestep "
+            f"reference schedule; missing timestep={error.args[0]}"
+        ) from error
 
     print(
         f"[stream] shard={args.shard_index}/{args.shard_count} queries={len(queries)} "
-        "checkpoint pairs=49; query=mean(100 timestamps x MC1); query artifacts=0",
+        f"checkpoint pairs=49; query=mean({args.query_timestamp_count} timestamps x MC1); "
+        "query artifacts=0",
         flush=True,
     )
     for checkpoint in range(49):
@@ -515,8 +543,8 @@ def main() -> None:
                 [
                     np.asarray(
                         jax.device_get(
-                            # One vectorized draw produces the 100 independent
-                            # MC1 noises; do not dispatch 100 tiny RNG kernels.
+                            # Reproduce the existing 100t noise bank, then use
+                            # the entries belonging to this timestamp subset.
                             jax.random.normal(
                                 endpoint_noise_key(
                                     args.train_seed,
@@ -524,9 +552,9 @@ def main() -> None:
                                     checkpoint,
                                     100_001,
                                 ),
-                                (len(timesteps),) + query["endpoint"].shape,
+                                (100,) + query["endpoint"].shape,
                                 dtype=jnp.float32,
-                            )
+                            )[query_noise_indices]
                         ),
                         dtype=np.float32,
                     )
@@ -627,9 +655,11 @@ def main() -> None:
                     extra_manifest={
                         "score_variant": variant,
                         "query_objective": (
-                            "mean_of_full_l2_normalized_endpoint_denoising_gradients_100_timestamps_mc1"
+                            "mean_of_full_l2_normalized_endpoint_denoising_gradients_"
+                            f"{args.query_timestamp_count}_timestamps_mc1"
                             if args.paper_retrac
-                            else "endpoint_denoising_mean_loss_100_timestamps_mc1"
+                            else "endpoint_denoising_mean_loss_"
+                            f"{args.query_timestamp_count}_timestamps_mc1"
                         ),
                         "query_gradient_artifact_written": False,
                         "checkpoint_count": 49,
@@ -646,8 +676,10 @@ def main() -> None:
                             if args.paper_retrac and root_key == "retrac_root"
                             else "four exact training events with saved t/noise/dropout and event LR"
                             if root_key == "retrac_root"
-                            else "mean denoising loss over 100 timestamps x MC1 and checkpoint LR"
+                            else f"mean denoising loss over {args.query_timestamp_count} "
+                            "timestamps x MC1 and checkpoint LR"
                         ),
+                        "query_timestamp_count": args.query_timestamp_count,
                     },
                 )
         print(f"[score] Q{query['id']} complete", flush=True)

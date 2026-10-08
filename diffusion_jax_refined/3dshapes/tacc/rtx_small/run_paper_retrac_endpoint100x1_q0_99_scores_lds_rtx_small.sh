@@ -31,6 +31,7 @@ artifact_name="${PAPER_ARTIFACT_NAME:-paper_retrac_full_l2_normalized_four_event
 train_transform="${PAPER_TRAIN_TRANSFORM:-raw}"
 namespace="${PAPER_NAMESPACE:-paper_retrac_exact4_endpoint100x1_q0_99}"
 score_scheme="${PAPER_SCORE_SCHEME:-paper_retrac_exact4_endpoint100x1_q0_99}"
+query_timestamp_count="${PAPER_QUERY_TIMESTAMP_COUNT:-100}"
 events="$shapes/result/$experiment/$artifact_name"
 logs="$shapes/result/$experiment/logs/paper_retrac_endpoint100x1_scores/${SLURM_JOB_ID}"
 mkdir -p "$logs"
@@ -38,7 +39,7 @@ mkdir -p "$logs"
 count="$(find -L "$events" -type f -name 'event_gradient_epoch_*_shard_*_of_02.npz' | wc -l | tr -d ' ')"
 [[ "$count" == 392 ]] || { echo "expected 392 event shards, found $count" >&2; exit 1; }
 
-echo "[definition] official ReTrac normalization order; 100 timestamps x MC1"
+echo "[definition] official ReTrac normalization order; ${query_timestamp_count} timestamps x MC1"
 echo "[train] normalize each full event gradient before projection"
 echo "[query] normalize each full timestep gradient before projection, then average 100"
 
@@ -51,6 +52,7 @@ for gpu in 0 1; do
         --experiment "$experiment" --train-seed "$seed" \
         --retrac-event-root "$events" --methods retrac --paper-retrac \
         --paper-train-transform "$train_transform" \
+        --query-timestamp-count "$query_timestamp_count" \
         --retrac-namespace "$namespace" \
         --retrac-reduction linear --query-batch-size "${QUERY_BATCH_SIZE:-1}" \
         --shard-index "$gpu" --shard-count 2
