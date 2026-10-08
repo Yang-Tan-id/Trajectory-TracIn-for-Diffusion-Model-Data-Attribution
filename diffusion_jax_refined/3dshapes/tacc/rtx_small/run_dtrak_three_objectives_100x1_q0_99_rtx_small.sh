@@ -48,6 +48,7 @@ export ATTRIBUTION_SAMPLE_MODEL_MODE=prompted_solo ATTRIBUTION_SCORE_MODEL_MODE=
 export SAMPLE_ROOT="$shapes/result/$experiment/sample_ddim_eta0_1000"
 export DTRAK_PROJ_DIM="${DTRAK_PROJ_DIM:-4096}"
 export DTRAK_DAMPING="${DTRAK_DAMPING:-1e-3}"
+export DTRAK_DAMPING_SWEEP_VALUES="${DTRAK_DAMPING_SWEEP_VALUES:-1e-5,3e-5,1e-4,3e-4,1e-3,3e-3,1e-2,3e-2,1e-1,3e-1,1,3,10,30,100,300}"
 export DTRAK_TRAIN_EXPECTATION_SAMPLES=100 DTRAK_QUERY_EXPECTATION_SAMPLES=100
 export DTRAK_EXPLICIT_TIMESTEP_GRID=1 DTRAK_BATCH_SIZE="${DTRAK_BATCH_SIZE:-2}"
 export DTRAK_COUNT_SKETCH_MODE="${DTRAK_COUNT_SKETCH_MODE:-scatter}"
@@ -147,7 +148,19 @@ ibrun -n 1 -o 0 env JAX_PLATFORMS=cpu "$python_bin" "$shapes/script/score_dtrak_
   >"$log_root/score.log" 2>&1
 
 if [[ "${RUN_LDS:-1}" == "1" ]]; then
-  schemes="dtrak_simple_loss_train100x1_query100x1_q0_99 dtrak_square_train100x1_query100x1_q0_99 dtrak_average_train100x1_query100x1_q0_99"
+  schemes="$(
+    "$python_bin" - "$DTRAK_DAMPING_SWEEP_VALUES" <<'PY'
+import sys
+
+values = [float(x) for x in sys.argv[1].replace(",", " ").split()]
+tag = lambda value: f"{value:g}".replace("+", "").replace("-", "neg_").replace(".", "p")
+print(" ".join(
+    f"dtrak_{objective}_train100x1_query100x1_q0_99_lambda_{tag(value)}"
+    for objective in ("simple_loss", "square", "average")
+    for value in values
+))
+PY
+  )"
   ibrun -n 1 -o 0 env JAX_PLATFORMS=cpu "$python_bin" "$shapes/script/run_traj_tracin_lds_cached.py" \
     --execute --experiment "$experiment" --train-seed "$train_seed" \
     --query-file "$query_file" --query-ids "$query_ids" \
@@ -155,4 +168,4 @@ if [[ "${RUN_LDS:-1}" == "1" ]]; then
     >"$log_root/lds.log" 2>&1
 fi
 
-echo "[done] D-TRAK simple_loss/square/average; train=query=100 timestamps x MC1; Q0-Q99"
+echo "[done] D-TRAK simple_loss/square/average lambda sweep; train=query=100 timestamps x MC1; Q0-Q99"

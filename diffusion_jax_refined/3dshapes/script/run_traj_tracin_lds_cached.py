@@ -472,6 +472,26 @@ DTRAK_SCHEMES = {
     "dtrak_square_train100x1_query100x1_q0_99",
     "dtrak_average_train100x1_query100x1_q0_99",
 }
+DTRAK_LAMBDA_VALUES = (
+    1e-5, 3e-5, 1e-4, 3e-4,
+    1e-3, 3e-3, 1e-2, 3e-2,
+    1e-1, 3e-1, 1.0, 3.0,
+    10.0, 30.0, 100.0, 300.0,
+)
+
+
+def _dtrak_lambda_tag(value: float) -> str:
+    return f"{float(value):g}".replace("+", "").replace("-", "neg_").replace(".", "p")
+
+
+for _objective in ("simple_loss", "square", "average"):
+    for _damping in DTRAK_LAMBDA_VALUES:
+        _name = (
+            f"dtrak_{_objective}_train100x1_query100x1_q0_99_"
+            f"lambda_{_dtrak_lambda_tag(_damping)}"
+        )
+        SCORE_SCHEMES[_name] = _name
+        DTRAK_SCHEMES.add(_name)
 DTRAK_VARIANTS = (("raw", "score"),)
 
 
