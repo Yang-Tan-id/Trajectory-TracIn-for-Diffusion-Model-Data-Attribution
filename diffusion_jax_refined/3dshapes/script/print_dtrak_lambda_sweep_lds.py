@@ -98,15 +98,38 @@ def main() -> None:
     parser.add_argument("--query-ids", default=",".join(map(str, range(100))))
     parser.add_argument("--prediction-sign", choices=("p1", "m1"), default="p1")
     parser.add_argument("--workers", type=int, default=12)
+    parser.add_argument(
+        "--objectives",
+        default=",".join(OBJECTIVES),
+        help="Comma/space-separated subset of simple_loss,square,average.",
+    )
+    parser.add_argument(
+        "--lambdas",
+        default=",".join(f"{value:g}" for value in DEFAULT_LAMBDAS),
+        help="Comma/space-separated subset of completed lambda values.",
+    )
+    parser.add_argument(
+        "--per-query",
+        action="store_true",
+        help="Also print one four-target row per query (best used with one objective/lambda).",
+    )
     args = parser.parse_args()
 
     records = json.loads(args.query_file.read_text())["queries"]
     query_ids = parse_ids(args.query_ids)
+    objectives = tuple(args.objectives.replace(",", " ").split())
+    invalid_objectives = sorted(set(objectives) - set(OBJECTIVES))
+    if invalid_objectives:
+        raise ValueError(f"unknown objectives: {invalid_objectives}")
+    lambdas = tuple(float(token) for token in args.lambdas.replace(",", " ").split())
+    invalid_lambdas = [value for value in lambdas if value not in DEFAULT_LAMBDAS]
+    if invalid_lambdas:
+        raise ValueError(f"lambda values were not run: {invalid_lambdas}")
     eval_root = SHAPES_ROOT / "result" / args.experiment / "eval" / "prompted_solo"
 
     tasks = []
-    for objective in OBJECTIVES:
-        for damping in DEFAULT_LAMBDAS:
+    for objective in objectives:
+        for damping in lambdas:
             namespace = (
                 f"dtrak_{objective}_train100x1_query100x1_q0_99_"
                 f"lambda_{lambda_tag(damping)}_raw"
@@ -140,6 +163,29 @@ def main() -> None:
             values[objective, damping, target, query_id] = value
             recovered_count += int(recovered)
 
+    if args.per_query:
+        for objective in objectives:
+            for damping in lambdas:
+                print(
+                    f"D-TRAK {objective} lambda={damping:g} — RAW — "
+                    f"{args.prediction_sign.upper()}"
+                )
+                print(
+                    f"{'QUERY':7s} {'ENDPOINT':>12s} {'TRAJ-CF':>12s} "
+                    f"{'SIMPLE':>12s} {'NOISE':>12s}"
+                )
+                print("-" * 61)
+                for query_id in query_ids:
+                    row = [values[objective, damping, target, query_id] for target in TARGETS]
+                    print(f"Q{query_id:<6d}" + "".join(f" {value:+11.3f}%" for value in row))
+                means_row = [
+                    fmean(values[objective, damping, target, qid] for qid in query_ids)
+                    for target in TARGETS
+                ]
+                print("-" * 61)
+                print(f"{'MEAN':7s}" + "".join(f" {value:+11.3f}%" for value in means_row))
+                print()
+
     print(
         f"D-TRAK 100x1 x 100x1 — RAW — {args.prediction_sign.upper()}\n"
         f"{'OBJECTIVE':15s} {'LAMBDA':>9s}"
@@ -147,8 +193,8 @@ def main() -> None:
     )
     print("-" * 80)
     means = {}
-    for objective in OBJECTIVES:
-        for damping in DEFAULT_LAMBDAS:
+    for objective in objectives:
+        for damping in lambdas:
             row = []
             for target in TARGETS:
                 mean = fmean(values[objective, damping, target, qid] for qid in query_ids)
@@ -162,9 +208,9 @@ def main() -> None:
     print("\nBEST LAMBDA PER OBJECTIVE/TARGET")
     print(f"{'OBJECTIVE':15s} {'TARGET':24s} {'LAMBDA':>10s} {'MEAN':>12s}")
     print("-" * 66)
-    for objective in OBJECTIVES:
+    for objective in objectives:
         for target in TARGETS:
-            best = max(DEFAULT_LAMBDAS, key=lambda damping: means[objective, damping, target])
+            best = max(lambdas, key=lambda damping: means[objective, damping, target])
             print(
                 f"{objective:15s} {target:24s} {best:10g} "
                 f"{means[objective, best, target]:+11.3f}%"
