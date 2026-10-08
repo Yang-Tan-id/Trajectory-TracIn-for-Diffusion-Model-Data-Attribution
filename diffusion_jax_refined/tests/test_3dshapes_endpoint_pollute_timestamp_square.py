@@ -24,7 +24,16 @@ LDS_RUNNER = (
 class EndpointPolluteTimestampSquareTest(unittest.TestCase):
     def test_scorer_contract(self) -> None:
         text = SCORER.read_text()
-        ast.parse(text)
+        tree = ast.parse(text)
+        score_root = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef) and node.name == "score_root"
+        )
+        self.assertTrue(
+            any(isinstance(statement, ast.Return) for statement in score_root.body),
+            "score_root must return its constructed output path",
+        )
         self.assertIn("float(weight) * contribution", text)
         self.assertIn("np.square(np.asarray(jax.device_get(value)", text)
         self.assertLess(

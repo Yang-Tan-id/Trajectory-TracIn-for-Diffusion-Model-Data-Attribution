@@ -77,34 +77,6 @@ def score_root(
         "delta_l2normalized_timestamp_aware_square_"
         f"t{timestep:03d}_q0_99"
     )
-
-
-def query_outputs_complete(
-    result_root: Path,
-    train_seed: int,
-    record: dict[str, object],
-) -> bool:
-    prompt = str(record["prompt"])
-    seed = int(record.get("initial_seed", record.get("seed")))
-    return all(
-        (
-            score_root(result_root, train_seed, prompt, seed, timestep)
-            / directory
-            / "scores.npy"
-        ).is_file()
-        and (
-            score_root(result_root, train_seed, prompt, seed, timestep)
-            / directory
-            / "score_indices.npy"
-        ).is_file()
-        and (
-            score_root(result_root, train_seed, prompt, seed, timestep)
-            / directory
-            / "score_artifact_manifest.json"
-        ).is_file()
-        for timestep in TIMESTAMPS
-        for directory in VARIANT_DIRS.values()
-    )
     return (
         result_root
         / "attribution_score"
@@ -114,6 +86,29 @@ def query_outputs_complete(
         / f"initial_seed_{seed}"
         / namespace
     )
+
+
+def query_outputs_complete(
+    result_root: Path,
+    train_seed: int,
+    record: dict[str, object],
+) -> bool:
+    prompt = str(record["prompt"])
+    seed = int(record.get("initial_seed", record.get("seed")))
+    for timestep in TIMESTAMPS:
+        root = score_root(result_root, train_seed, prompt, seed, timestep)
+        for directory in VARIANT_DIRS.values():
+            target = root / directory
+            if not all(
+                (target / filename).is_file()
+                for filename in (
+                    "scores.npy",
+                    "score_indices.npy",
+                    "score_artifact_manifest.json",
+                )
+            ):
+                return False
+    return True
 
 
 def main() -> None:
