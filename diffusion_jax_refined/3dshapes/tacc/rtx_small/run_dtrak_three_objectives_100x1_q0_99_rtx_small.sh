@@ -56,15 +56,26 @@ train_stage="$shapes/data_attribution/dtrak/01_train_datapoint_gradient.py"
 query_stage="$shapes/data_attribution/dtrak/02_query_gradient.py"
 model_root="$shapes/result/$experiment/model/prompted_solo/seed_${train_seed}_train_gradient"
 
+# RTX workers must be launched as real Slurm tasks.  Starting CUDA Python
+# processes directly from the batch shell triggers TACC's two-minute launch
+# watchdog (CANCELLED by 0 at 00:02:02).
+run_task() {
+  local task_offset="$1" gpu="$2"
+  shift 2
+  ibrun -n 1 -o "$task_offset" env \
+    CUDA_VISIBLE_DEVICES="$gpu" JAX_PLATFORMS=cuda JAX_NUM_DEVICES=1 "$@"
+}
+
 run_train_objective() {
-  local objective="$1" gpu="$2"
+  local objective="$1" task_offset="$2" gpu="$3"
   local artifact="$model_root/dtrak_${objective}_100x1/train_datapoint_gradient_artifact.npz"
   if [[ -f "$artifact" ]]; then
     echo "[skip] train $objective: $artifact"
     return
   fi
   echo "[train] objective=$objective gpu=$gpu artifact=$artifact"
-  CUDA_VISIBLE_DEVICES="$gpu" JAX_PLATFORMS=cuda JAX_NUM_DEVICES=1 \
+  run_task "$task_offset" "$gpu" \
+    env \
     DTRAK_OUTPUT_FUNCTION="$objective" \
     TRAIN_DATAPOINT_GRADIENT_ARTIFACT_PATH="$artifact" \
     "$python_bin" "$train_stage"
@@ -72,12 +83,12 @@ run_train_objective() {
 
 # Two concurrent workers; GPU 0 takes two objectives sequentially and GPU 1 takes one.
 (
-  run_train_objective simple_loss "${gpu_ids[0]}"
-  run_train_objective average "${gpu_ids[0]}"
+  run_train_objective simple_loss 0 "${gpu_ids[0]}"
+  run_train_objective average 0 "${gpu_ids[0]}"
 ) >"$log_root/train_gpu_${gpu_ids[0]}.log" 2>&1 &
 train_pid0=$!
 (
-  run_train_objective square "${gpu_ids[1]}"
+  run_train_objective square 1 "${gpu_ids[1]}"
 ) >"$log_root/train_gpu_${gpu_ids[1]}.log" 2>&1 &
 train_pid1=$!
 wait "$train_pid0"
@@ -96,7 +107,7 @@ PY
 )
 
 run_query_shard() {
-  local shard="$1" gpu="$2" line qid prompt seed prompt_tag model_dir artifact objective
+  local shard="$1" task_offset="$2" gpu="$3" line qid prompt seed prompt_tag model_dir artifact objective
   for ((position=shard; position<${#selected_queries[@]}; position+=2)); do
     line="${selected_queries[$position]}"
     IFS=$'\t' read -r qid prompt seed prompt_tag <<< "$line"
@@ -112,7 +123,8 @@ run_query_shard() {
         continue
       fi
       echo "[query] Q$qid objective=$objective gpu=$gpu"
-      CUDA_VISIBLE_DEVICES="$gpu" JAX_PLATFORMS=cuda JAX_NUM_DEVICES=1 \
+      run_task "$task_offset" "$gpu" \
+        env \
         QUERY="$prompt" INITIAL_SEED="$seed" SAMPLE_SEED="$seed" \
         ATTRIBUTION_SAMPLE_DIR="$model_dir" DTRAK_OUTPUT_FUNCTION="$objective" \
         QUERY_GRADIENT_ARTIFACT_PATH="$artifact" \
@@ -121,22 +133,22 @@ run_query_shard() {
   done
 }
 
-(cd "$repo"; run_query_shard 0 "${gpu_ids[0]}") >"$log_root/query_gpu_${gpu_ids[0]}.log" 2>&1 &
+(cd "$repo"; run_query_shard 0 0 "${gpu_ids[0]}") >"$log_root/query_gpu_${gpu_ids[0]}.log" 2>&1 &
 query_pid0=$!
-(cd "$repo"; run_query_shard 1 "${gpu_ids[1]}") >"$log_root/query_gpu_${gpu_ids[1]}.log" 2>&1 &
+(cd "$repo"; run_query_shard 1 1 "${gpu_ids[1]}") >"$log_root/query_gpu_${gpu_ids[1]}.log" 2>&1 &
 query_pid1=$!
 wait "$query_pid0"
 wait "$query_pid1"
 
 cd "$repo"
-JAX_PLATFORMS=cpu "$python_bin" "$shapes/script/score_dtrak_three_objectives_100x1.py" \
+ibrun -n 1 -o 0 env JAX_PLATFORMS=cpu "$python_bin" "$shapes/script/score_dtrak_three_objectives_100x1.py" \
   --experiment "$experiment" --train-seed "$train_seed" \
   --query-file "$query_file" --query-ids "$query_ids" \
   >"$log_root/score.log" 2>&1
 
 if [[ "${RUN_LDS:-1}" == "1" ]]; then
   schemes="dtrak_simple_loss_train100x1_query100x1_q0_99 dtrak_square_train100x1_query100x1_q0_99 dtrak_average_train100x1_query100x1_q0_99"
-  JAX_PLATFORMS=cpu "$python_bin" "$shapes/script/run_traj_tracin_lds_cached.py" \
+  ibrun -n 1 -o 0 env JAX_PLATFORMS=cpu "$python_bin" "$shapes/script/run_traj_tracin_lds_cached.py" \
     --execute --experiment "$experiment" --train-seed "$train_seed" \
     --query-file "$query_file" --query-ids "$query_ids" \
     --score-schemes "$schemes" --prediction-sign 1 \

@@ -65,6 +65,20 @@ class RetracEndpointTopKRemovalTest(unittest.TestCase):
         self.assertEqual(endpoint.name, "score_train_l2_normalized")
         self.assertIn("timestamp_sum_squared_aligned100x1", str(endpoint))
 
+    def test_dtrak_rtx_workers_use_ibrun(self) -> None:
+        launcher = (
+            ROOT
+            / "3dshapes"
+            / "tacc"
+            / "rtx_small"
+            / "run_dtrak_three_objectives_100x1_q0_99_rtx_small.sh"
+        ).read_text()
+        self.assertIn('ibrun -n 1 -o "$task_offset"', launcher)
+        self.assertIn("run_train_objective simple_loss 0", launcher)
+        self.assertIn("run_train_objective square 1", launcher)
+        self.assertIn("run_query_shard 0 0", launcher)
+        self.assertIn("run_query_shard 1 1", launcher)
+
 
 if __name__ == "__main__":
     unittest.main()
