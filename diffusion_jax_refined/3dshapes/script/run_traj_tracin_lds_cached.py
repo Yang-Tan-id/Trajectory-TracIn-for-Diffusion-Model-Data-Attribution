@@ -717,7 +717,10 @@ def main() -> None:
                             "prediction_sign": args.prediction_sign,
                             "elapsed_sec": time.time() - started,
                         }
-                        (out_dir / "lds_summary.json").write_text(json.dumps(summary, indent=2))
+                        summary_path = out_dir / "lds_summary.json"
+                        temporary_summary = out_dir / f".lds_summary.{os.getpid()}.tmp"
+                        temporary_summary.write_text(json.dumps(summary, indent=2))
+                        os.replace(temporary_summary, summary_path)
                         plot_scatter(
                             str(out_dir / "lds_scatter.png"),
                             predictions,

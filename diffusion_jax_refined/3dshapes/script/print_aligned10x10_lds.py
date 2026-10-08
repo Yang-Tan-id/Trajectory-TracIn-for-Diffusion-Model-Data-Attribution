@@ -2,11 +2,15 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import statistics
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+
+import numpy as np
 
 
 SHAPES_ROOT = Path(__file__).resolve().parents[1]
@@ -311,6 +315,20 @@ def parse_ints(text: str) -> list[int]:
     return [int(value) for value in text.replace(",", " ").split() if value]
 
 
+def _rankdata_average(values: np.ndarray) -> np.ndarray:
+    order = np.argsort(values, kind="mergesort")
+    ranks = np.empty(len(values), dtype=np.float64)
+    sorted_values = values[order]
+    start = 0
+    while start < len(values):
+        end = start + 1
+        while end < len(values) and sorted_values[end] == sorted_values[start]:
+            end += 1
+        ranks[order[start:end]] = 0.5 * (start + end - 1) + 1.0
+        start = end
+    return ranks
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Print per-query residual/full aligned10x10 LDS as four-target tables."
@@ -422,7 +440,7 @@ def main() -> None:
 
     def read_summary(
         item: tuple[tuple[str, str, int, str], Path],
-    ) -> tuple[tuple[str, str, int, str], float]:
+    ) -> tuple[tuple[str, str, int, str], float, Path | None]:
         key, standard_summary = item
         scheme, variant, query_id, target = key
         if standard_summary.is_file():
@@ -436,11 +454,44 @@ def main() -> None:
                     f"found {len(matches)} under {target_root}"
                 )
             summary = matches[0]
-        return key, float(json.loads(summary.read_text())["lds_percent"])
+        for attempt in range(5):
+            try:
+                return key, float(json.loads(summary.read_text())["lds_percent"]), None
+            except (json.JSONDecodeError, OSError):
+                if attempt == 4:
+                    break
+                time.sleep(0.2)
+
+        # A previously interrupted non-atomic JSON write can leave an empty
+        # summary even though the complete per-model CSV is present. Recover
+        # the same Spearman statistic directly instead of rerunning LDS.
+        csv_path = summary.with_name("lds_results.csv")
+        with csv_path.open(newline="") as handle:
+            rows = list(csv.DictReader(handle))
+        prediction = np.asarray(
+            [float(row["pred_sum_tau"]) for row in rows], dtype=np.float64
+        )
+        true = np.asarray([float(row["true_f"]) for row in rows], dtype=np.float64)
+        mask = np.isfinite(prediction) & np.isfinite(true)
+        if int(mask.sum()) < 2:
+            value = float("nan")
+        else:
+            prediction_rank = _rankdata_average(prediction[mask])
+            true_rank = _rankdata_average(true[mask])
+            if prediction_rank.std() == 0.0 or true_rank.std() == 0.0:
+                value = float("nan")
+            else:
+                value = 100.0 * float(np.corrcoef(prediction_rank, true_rank)[0, 1])
+        return key, value, summary
 
     with ThreadPoolExecutor(max_workers=args.workers) as executor:
-        for key, value in executor.map(read_summary, reads):
+        for key, value, recovered_path in executor.map(read_summary, reads):
             values[key] = value
+            if recovered_path is not None:
+                print(
+                    f"[recovered] invalid summary; computed LDS from CSV: {recovered_path}",
+                    file=sys.stderr,
+                )
 
     for scheme, _ in schemes:
         for variant in VARIANTS:
