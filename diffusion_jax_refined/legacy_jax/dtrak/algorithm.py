@@ -619,6 +619,8 @@ class EndpointDTrakJAXConfig:
     batch_size: int = 64
     train_expectation_samples: int = 10
     query_expectation_samples: int = 10
+    output_function: str = "simple_loss"
+    explicit_timestep_grid: bool = False
     progress_every_batches: int = 10
     use_tqdm: bool = True
     use_jax_countsketch: bool = True
@@ -703,20 +705,52 @@ def diffusion_train_loss_expected_jax(
     *,
     rng,
     num_expectation_samples: int,
+    output_function: str = "simple_loss",
+    explicit_timestep_grid: bool = False,
 ):
-    losses = []
-    local_rng = rng
     T = int(schedule.betas.shape[0])
-
-    for _ in range(int(num_expectation_samples)):
-        local_rng, t_rng, noise_rng = jax.random.split(local_rng, 3)
-        t = jax.random.randint(t_rng, (x0.shape[0],), 0, T, dtype=jnp.int32)
-        noise = jax.random.normal(noise_rng, x0.shape, dtype=x0.dtype)
-        xt = q_sample(schedule, x0, t, noise)
-        pred = adapter.eps_apply(model, params, xt, t, cond)
-        losses.append(jnp.mean((pred - noise) ** 2))
-
-    return jnp.mean(jnp.stack(losses))
+    count = int(num_expectation_samples)
+    if count <= 0:
+        raise ValueError("num_expectation_samples must be positive")
+    if x0.shape[0] != 1:
+        raise ValueError(f"D-TRAK expects one datapoint per objective call, got {x0.shape}")
+    if not explicit_timestep_grid:
+        losses = []
+        local_rng = rng
+        for _ in range(count):
+            local_rng, t_rng, noise_rng = jax.random.split(local_rng, 3)
+            t = jax.random.randint(t_rng, (x0.shape[0],), 0, T, dtype=jnp.int32)
+            noise = jax.random.normal(noise_rng, x0.shape, dtype=x0.dtype)
+            xt = q_sample(schedule, x0, t, noise)
+            pred = adapter.eps_apply(model, params, xt, t, cond).astype(jnp.float32)
+            if output_function == "simple_loss":
+                losses.append(jnp.mean((pred - noise.astype(jnp.float32)) ** 2))
+            elif output_function == "square":
+                losses.append(jnp.sum(jnp.square(pred)))
+            elif output_function == "average":
+                losses.append(jnp.mean(pred))
+            else:
+                raise ValueError(f"unknown D-TRAK output_function {output_function!r}")
+        return jnp.mean(jnp.stack(losses))
+    t = jnp.rint(jnp.linspace(0, T - 1, count)).astype(jnp.int32)
+    noise_rng = jax.random.fold_in(rng, 1)
+    x = jnp.repeat(x0, count, axis=0)
+    c = repeat_condition_to_batch(cond, count)
+    noise = jax.random.normal(noise_rng, x.shape, dtype=x.dtype)
+    xt = q_sample(schedule, x, t, noise)
+    pred = adapter.eps_apply(model, params, xt, t, c).astype(jnp.float32)
+    noise = noise.astype(jnp.float32)
+    if output_function == "simple_loss":
+        return jnp.mean((pred - noise) ** 2)
+    if output_function == "square":
+        per_timestep = jnp.sum(jnp.square(pred), axis=tuple(range(1, pred.ndim)))
+        return jnp.mean(per_timestep)
+    if output_function == "average":
+        return jnp.mean(pred)
+    raise ValueError(
+        "output_function must be one of 'simple_loss', 'square', or 'average', "
+        f"got {output_function!r}"
+    )
 
 
 def diffusion_query_loss_expected_jax(
@@ -731,6 +765,8 @@ def diffusion_query_loss_expected_jax(
     t_max: int,
     rng,
     num_expectation_samples: int,
+    output_function: str = "simple_loss",
+    explicit_timestep_grid: bool = False,
 ):
     T = int(schedule.betas.shape[0])
     t_min = max(0, min(T - 1, int(t_min)))
@@ -738,18 +774,50 @@ def diffusion_query_loss_expected_jax(
     if t_max < t_min:
         t_max = t_min
 
-    losses = []
-    local_rng = rng
-
-    for _ in range(int(num_expectation_samples)):
-        local_rng, t_rng, noise_rng = jax.random.split(local_rng, 3)
-        t = jax.random.randint(t_rng, (x0_ref.shape[0],), t_min, t_max + 1, dtype=jnp.int32)
-        noise = jax.random.normal(noise_rng, x0_ref.shape, dtype=x0_ref.dtype)
-        xt_ref = q_sample(schedule, x0_ref, t, noise)
-        pred = adapter.eps_apply(model, params, xt_ref, t, cond)
-        losses.append(jnp.mean((pred - noise) ** 2))
-
-    return jnp.mean(jnp.stack(losses))
+    count = int(num_expectation_samples)
+    if count <= 0:
+        raise ValueError("num_expectation_samples must be positive")
+    if x0_ref.shape[0] != 1:
+        raise ValueError(f"D-TRAK expects one query per objective call, got {x0_ref.shape}")
+    if not explicit_timestep_grid:
+        losses = []
+        local_rng = rng
+        for _ in range(count):
+            local_rng, t_rng, noise_rng = jax.random.split(local_rng, 3)
+            t = jax.random.randint(
+                t_rng, (x0_ref.shape[0],), t_min, t_max + 1, dtype=jnp.int32
+            )
+            noise = jax.random.normal(noise_rng, x0_ref.shape, dtype=x0_ref.dtype)
+            xt_ref = q_sample(schedule, x0_ref, t, noise)
+            pred = adapter.eps_apply(model, params, xt_ref, t, cond).astype(jnp.float32)
+            if output_function == "simple_loss":
+                losses.append(jnp.mean((pred - noise.astype(jnp.float32)) ** 2))
+            elif output_function == "square":
+                losses.append(jnp.sum(jnp.square(pred)))
+            elif output_function == "average":
+                losses.append(jnp.mean(pred))
+            else:
+                raise ValueError(f"unknown D-TRAK output_function {output_function!r}")
+        return jnp.mean(jnp.stack(losses))
+    t = jnp.rint(jnp.linspace(t_min, t_max, count)).astype(jnp.int32)
+    noise_rng = jax.random.fold_in(rng, 1)
+    x = jnp.repeat(x0_ref, count, axis=0)
+    c = repeat_condition_to_batch(cond, count)
+    noise = jax.random.normal(noise_rng, x.shape, dtype=x.dtype)
+    xt_ref = q_sample(schedule, x, t, noise)
+    pred = adapter.eps_apply(model, params, xt_ref, t, c).astype(jnp.float32)
+    noise = noise.astype(jnp.float32)
+    if output_function == "simple_loss":
+        return jnp.mean((pred - noise) ** 2)
+    if output_function == "square":
+        per_timestep = jnp.sum(jnp.square(pred), axis=tuple(range(1, pred.ndim)))
+        return jnp.mean(per_timestep)
+    if output_function == "average":
+        return jnp.mean(pred)
+    raise ValueError(
+        "output_function must be one of 'simple_loss', 'square', or 'average', "
+        f"got {output_function!r}"
+    )
 
 
 # ============================================================
@@ -852,7 +920,7 @@ def grad_feature_phi_jax(
     )
 
 
-def make_query_phi_fn(adapter, model, schedule, projector, *, t_min: int, t_max: int, num_expectation_samples: int):
+def make_query_phi_fn(adapter, model, schedule, projector, *, t_min: int, t_max: int, num_expectation_samples: int, output_function: str = "simple_loss", explicit_timestep_grid: bool = False):
     def query_phi(params, x0_ref, cond, rng):
         def loss_fn(p):
             return diffusion_query_loss_expected_jax(
@@ -866,6 +934,8 @@ def make_query_phi_fn(adapter, model, schedule, projector, *, t_min: int, t_max:
                 t_max=t_max,
                 rng=rng,
                 num_expectation_samples=num_expectation_samples,
+                output_function=output_function,
+                explicit_timestep_grid=explicit_timestep_grid,
             )
 
         L, grads = jax.value_and_grad(loss_fn)(params)
@@ -874,7 +944,7 @@ def make_query_phi_fn(adapter, model, schedule, projector, *, t_min: int, t_max:
     return jax.jit(query_phi)
 
 
-def make_train_phi_fn(adapter, model, schedule, projector, *, num_expectation_samples: int):
+def make_train_phi_fn(adapter, model, schedule, projector, *, num_expectation_samples: int, output_function: str = "simple_loss", explicit_timestep_grid: bool = False):
     def train_phi(params, x0, cond, rng):
         def loss_fn(p):
             return diffusion_train_loss_expected_jax(
@@ -886,6 +956,8 @@ def make_train_phi_fn(adapter, model, schedule, projector, *, num_expectation_sa
                 cond=cond,
                 rng=rng,
                 num_expectation_samples=num_expectation_samples,
+                output_function=output_function,
+                explicit_timestep_grid=explicit_timestep_grid,
             )
 
         grads = jax.grad(loss_fn)(params)
@@ -894,13 +966,15 @@ def make_train_phi_fn(adapter, model, schedule, projector, *, num_expectation_sa
     return jax.jit(train_phi)
 
 
-def make_train_phi_batch_fn(adapter, model, schedule, projector, *, num_expectation_samples: int):
+def make_train_phi_batch_fn(adapter, model, schedule, projector, *, num_expectation_samples: int, output_function: str = "simple_loss", explicit_timestep_grid: bool = False):
     train_phi_fn = make_train_phi_fn(
         adapter,
         model,
         schedule,
         projector,
         num_expectation_samples=num_expectation_samples,
+        output_function=output_function,
+        explicit_timestep_grid=explicit_timestep_grid,
     )
 
     def train_phi_batch(params, x0_batch, cond_batch, rng_batch):
@@ -1283,6 +1357,8 @@ def run_endpoint_dtrak_jax(cfg: EndpointDTrakJAXConfig):
     print(f"batch_size               : {cfg.batch_size}")
     print(f"train_expect_samples     : {cfg.train_expectation_samples}")
     print(f"query_expect_samples     : {cfg.query_expectation_samples}")
+    print(f"output_function          : {cfg.output_function}")
+    print(f"explicit_timestep_grid   : {cfg.explicit_timestep_grid}")
     print(f"progress_every_batches   : {cfg.progress_every_batches}")
     print(f"use_tqdm                 : {cfg.use_tqdm}")
     print(f"use_jax_countsketch      : {cfg.use_jax_countsketch}")
@@ -1462,6 +1538,8 @@ def run_endpoint_dtrak_jax(cfg: EndpointDTrakJAXConfig):
                 t_min=t_min_end,
                 t_max=t_max_end,
                 num_expectation_samples=int(cfg.query_expectation_samples),
+                output_function=str(cfg.output_function),
+                explicit_timestep_grid=bool(cfg.explicit_timestep_grid),
             )
             train_phi_batch_fn = make_train_phi_batch_fn(
                 adapter,
@@ -1469,6 +1547,8 @@ def run_endpoint_dtrak_jax(cfg: EndpointDTrakJAXConfig):
                 schedule,
                 projector,
                 num_expectation_samples=int(cfg.train_expectation_samples),
+                output_function=str(cfg.output_function),
+                explicit_timestep_grid=bool(cfg.explicit_timestep_grid),
             )
 
             if stage_mode != "train":
@@ -1604,6 +1684,9 @@ def run_endpoint_dtrak_jax(cfg: EndpointDTrakJAXConfig):
             sample_indices=np.asarray(stage_sample_indices, dtype=np.int32),
             damping=np.asarray(float(lam), dtype=np.float32),
             proj_dim=np.asarray(int(d), dtype=np.int32),
+            output_function=np.asarray(str(cfg.output_function)),
+            explicit_timestep_grid=np.asarray(bool(cfg.explicit_timestep_grid)),
+            expectation_samples=np.asarray(int(cfg.train_expectation_samples), dtype=np.int32),
         )
         print(f"[saved] D-TRAK train artifact: {stage_artifact_path}")
         return
@@ -1617,6 +1700,9 @@ def run_endpoint_dtrak_jax(cfg: EndpointDTrakJAXConfig):
             sample_indices=np.asarray(stage_sample_indices, dtype=np.int32),
             damping=np.asarray(float(lam), dtype=np.float32),
             proj_dim=np.asarray(int(d), dtype=np.int32),
+            output_function=np.asarray(str(cfg.output_function)),
+            explicit_timestep_grid=np.asarray(bool(cfg.explicit_timestep_grid)),
+            expectation_samples=np.asarray(int(cfg.query_expectation_samples), dtype=np.int32),
         )
         print(f"[saved] D-TRAK query artifact: {stage_artifact_path}")
         return

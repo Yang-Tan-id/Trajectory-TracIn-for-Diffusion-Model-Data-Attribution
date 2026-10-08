@@ -179,6 +179,35 @@ ATTRIBUTION_CONFIGS = {
         "proj_dim": int(os.environ.get("TRAJ_TRACIN_PROJ_DIM", "4096")),
         "progress_every": 256,
     },
+    "dtrak": {
+        **COMMON_CIFAR,
+        "baseline_dir": CHECKPOINT_DIR,
+        "reference_ckpt": REFERENCE_CKPT,
+        "attribution_sample_dir": ATTRIBUTION_SAMPLE_DIR,
+        "attribution_sample_seed": INITIAL_SEED,
+        "attribution_sample_index": 0,
+        "attribution_use_trajectory_endpoint": True,
+        "timesteps": 1000,
+        "ddim_steps": 1000,
+        "t_min_end": 0,
+        "t_max_end_frac": 1.0,
+        "num_checkpoints_to_use": -1,
+        "proj_dim": int(os.environ.get("DTRAK_PROJ_DIM", "4096")),
+        "damping": float(os.environ.get("DTRAK_DAMPING", "1e-3")),
+        "num_samples": 1,
+        "batch_size": int(os.environ.get("DTRAK_BATCH_SIZE", "2")),
+        "train_expectation_samples": int(
+            os.environ.get("DTRAK_TRAIN_EXPECTATION_SAMPLES", "100")
+        ),
+        "query_expectation_samples": int(
+            os.environ.get("DTRAK_QUERY_EXPECTATION_SAMPLES", "100")
+        ),
+        "output_function": os.environ.get("DTRAK_OUTPUT_FUNCTION", "simple_loss"),
+        "explicit_timestep_grid": os.environ.get(
+            "DTRAK_EXPLICIT_TIMESTEP_GRID", "1"
+        ).lower() not in ("0", "false", "no", "off"),
+        "progress_every_batches": int(os.environ.get("DTRAK_PROGRESS_EVERY", "50")),
+    },
 }
 
 

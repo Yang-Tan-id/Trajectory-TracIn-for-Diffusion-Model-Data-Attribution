@@ -141,6 +141,12 @@ PREDICTED_NOISE_JVP_SCHEMES = {
     "predicted_noise_shared_orthogonal_probe8_termwise_square",
 }
 SCORE_SCHEMES = {
+    "dtrak_simple_loss_train100x1_query100x1_q0_99":
+        "dtrak_simple_loss_train100x1_query100x1_q0_99",
+    "dtrak_square_train100x1_query100x1_q0_99":
+        "dtrak_square_train100x1_query100x1_q0_99",
+    "dtrak_average_train100x1_query100x1_q0_99":
+        "dtrak_average_train100x1_query100x1_q0_99",
     "paper_retrac_exact4_endpoint100x1_q0_99":
         "traj_tracin_paper_retrac_exact4_endpoint100x1_q0_99",
     "paper_retrac_adamw_full_exact4_endpoint100x1_q0_99":
@@ -461,6 +467,12 @@ PAPER_RETRAC_SCHEMES = {
     "paper_retrac_adamw_full_exact4_endpoint10x1_q0_99",
 }
 PAPER_RETRAC_VARIANTS = (("query_train_l2", "score_query_train_l2_normalized"),)
+DTRAK_SCHEMES = {
+    "dtrak_simple_loss_train100x1_query100x1_q0_99",
+    "dtrak_square_train100x1_query100x1_q0_99",
+    "dtrak_average_train100x1_query100x1_q0_99",
+}
+DTRAK_VARIANTS = (("raw", "score"),)
 
 
 def parse_ints(text: str) -> list[int]:
@@ -644,7 +656,9 @@ def main() -> None:
             score_namespace = SCORE_SCHEMES[scheme_name]
             score_root = query_score_root / score_namespace
             scheme_variants = (
-                PAPER_RETRAC_VARIANTS
+                DTRAK_VARIANTS
+                if scheme_name in DTRAK_SCHEMES
+                else PAPER_RETRAC_VARIANTS
                 if scheme_name in PAPER_RETRAC_SCHEMES
                 else VARIANTS
                 if scheme_name in FOUR_NORM_EXPECTED_SCHEMES
