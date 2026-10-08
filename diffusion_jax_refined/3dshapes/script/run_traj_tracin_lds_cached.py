@@ -494,6 +494,13 @@ for _objective in ("simple_loss", "square", "average"):
         DTRAK_SCHEMES.add(_name)
 DTRAK_VARIANTS = (("raw", "score"),)
 
+for _timestep in (0, 111, 222, 333, 444, 555, 666, 777, 888, 999):
+    _name = (
+        "recreate_adamw_full_polluted_endpoint_delta_l2normalized_"
+        f"timestamp_aware_square_t{_timestep:03d}_q0_99"
+    )
+    SCORE_SCHEMES[_name] = f"traj_tracin_{_name}"
+
 
 def parse_ints(text: str) -> list[int]:
     return [int(value) for value in text.replace(",", " ").split() if value.strip()]
@@ -608,7 +615,9 @@ def main() -> None:
     if not scheme_names or invalid_schemes:
         raise ValueError(f"Invalid --score-schemes: {invalid_schemes or args.score_schemes!r}")
     expected_results = len(query_ids) * len(TARGETS) * sum(
-        len(PAPER_RETRAC_VARIANTS)
+        len(DTRAK_VARIANTS)
+        if name in DTRAK_SCHEMES
+        else len(PAPER_RETRAC_VARIANTS)
         if name in PAPER_RETRAC_SCHEMES
         else len(VARIANTS)
         if name in FOUR_NORM_EXPECTED_SCHEMES

@@ -51,6 +51,14 @@ class DTrakThreeObjectivesTest(unittest.TestCase):
         self.assertIn("valid_artifact", source)
         self.assertIn("atomic_save", source)
 
+    def test_lds_progress_denominator_uses_the_single_dtrak_variant(self) -> None:
+        source = (ROOT / "3dshapes/script/run_traj_tracin_lds_cached.py").read_text()
+        expected_results = source[source.index("expected_results =") : source.index(
+            "result_root =", source.index("expected_results =")
+        )]
+        self.assertIn("len(DTRAK_VARIANTS)", expected_results)
+        self.assertIn("if name in DTRAK_SCHEMES", expected_results)
+
 
 if __name__ == "__main__":
     unittest.main()
