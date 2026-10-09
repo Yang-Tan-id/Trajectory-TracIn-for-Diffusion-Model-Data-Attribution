@@ -45,6 +45,12 @@ SCHEME_GROUPS = {
             "traj_tracin_endpoint_tracin_adamw_full_train10x10_query100x1_q0_99",
         ),
     ),
+    "endpoint_tracin_adamw100x1_query100x1": (
+        (
+            "endpoint_tracin_adamw_full_train100x1_query100x1",
+            "traj_tracin_endpoint_tracin_adamw_full_train100x1_query100x1_q0_99",
+        ),
+    ),
     "endpoint_tracin_adamw10x10_query100x1_termwise_squared_lr_after": (
         (
             "endpoint_tracin_adamw_full_train10x10_query100x1_termwise_squared_lr_after",
@@ -376,6 +382,7 @@ def main() -> None:
             "retrac_endpoint100x1",
             "endpoint_tracin100x1",
             "endpoint_tracin_adamw10x10_query100x1",
+            "endpoint_tracin_adamw100x1_query100x1",
             "endpoint_tracin_adamw10x10_query100x1_termwise_squared_lr_after",
             "endpoint_tracin_adamw10x10_query100x1_final_score_squared",
             "endpoint_pollute_adamw10x1_timestamp_square_first7",
