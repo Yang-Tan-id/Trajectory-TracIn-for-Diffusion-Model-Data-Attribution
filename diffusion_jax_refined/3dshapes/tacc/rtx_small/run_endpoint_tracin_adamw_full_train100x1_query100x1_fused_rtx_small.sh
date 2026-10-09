@@ -54,14 +54,17 @@ export XLA_PYTHON_CLIENT_PREALLOCATE=false
 run_task() {
   local task_offset="$1" gpu="$2"
   shift 2
-  ibrun -n 1 -o "$task_offset" env \
-    CUDA_VISIBLE_DEVICES="$gpu" JAX_PLATFORMS=cuda JAX_NUM_DEVICES=1 "$@"
+  if [[ "${ENDPOINT_TRACIN_INSIDE_IBRUN:-0}" == "1" ]]; then
+    env CUDA_VISIBLE_DEVICES="$gpu" JAX_PLATFORMS=cuda JAX_NUM_DEVICES=1 "$@"
+  else
+    ibrun -n 1 -o "$task_offset" env \
+      CUDA_VISIBLE_DEVICES="$gpu" JAX_PLATFORMS=cuda JAX_NUM_DEVICES=1 "$@"
+  fi
 }
 
 if [[ "${PREPARE_SAMPLES:-1}" == "1" ]]; then
   echo "[sample] verify/generate Q0-Q99 endpoints"
-  ibrun -n 1 -o 0 env \
-    CUDA_VISIBLE_DEVICES="$gpu_ids_text" JAX_PLATFORMS=cuda JAX_NUM_DEVICES=1 \
+  run_task 0 "$gpu_ids_text" \
     "$python_bin" "$shapes/script/run_traj_tracin_queries_and_scores.py" \
     --execute --experiment "$experiment" --train-seed "$train_seed" --epochs 200 \
     --query-file "$query_file" --query-ids "$query_ids" \
@@ -96,10 +99,17 @@ wait "$query_pid0" || failed=1
 wait "$query_pid1" || failed=1
 (( failed == 0 )) || { echo "query worker failed; inspect $log_root" >&2; exit 1; }
 
-ibrun -n 1 -o 0 env JAX_PLATFORMS=cpu \
-  "$python_bin" "$query_bank" "${query_common[@]}" --merge-only \
-  --artifact-list "$query_artifact_list" \
-  >"$log_root/query_merge.log" 2>&1
+if [[ "${ENDPOINT_TRACIN_INSIDE_IBRUN:-0}" == "1" ]]; then
+  env JAX_PLATFORMS=cpu \
+    "$python_bin" "$query_bank" "${query_common[@]}" --merge-only \
+    --artifact-list "$query_artifact_list" \
+    >"$log_root/query_merge.log" 2>&1
+else
+  ibrun -n 1 -o 0 env JAX_PLATFORMS=cpu \
+    "$python_bin" "$query_bank" "${query_common[@]}" --merge-only \
+    --artifact-list "$query_artifact_list" \
+    >"$log_root/query_merge.log" 2>&1
+fi
 mapfile -t query_artifacts < "$query_artifact_list"
 [[ ${#query_artifacts[@]} == 100 ]] || {
   echo "expected 100 query artifacts, found ${#query_artifacts[@]}" >&2
@@ -157,16 +167,22 @@ for gpu in "${gpu_ids[@]}"; do
   }
 done
 
-ibrun -n 1 -o 0 env JAX_PLATFORMS=cpu \
-  "$python_bin" "$shapes/script/merge_fused_endpoint_tracin100x1_scores.py" \
+run_cpu() {
+  if [[ "${ENDPOINT_TRACIN_INSIDE_IBRUN:-0}" == "1" ]]; then
+    env JAX_PLATFORMS=cpu "$@"
+  else
+    ibrun -n 1 -o 0 env JAX_PLATFORMS=cpu "$@"
+  fi
+}
+
+run_cpu "$python_bin" "$shapes/script/merge_fused_endpoint_tracin100x1_scores.py" \
   --query-file "$query_file" --query-ids "$query_ids" \
   --component-prefix "$component_prefix" --namespace "$score_namespace" \
   --experiment "$experiment" --train-seed "$train_seed" --shard-count 2 \
   >"$log_root/merge.log" 2>&1
 
 if [[ "${RUN_LDS:-1}" == "1" ]]; then
-  ibrun -n 1 -o 0 env JAX_PLATFORMS=cpu \
-    "$python_bin" "$shapes/script/run_traj_tracin_lds_cached.py" \
+  run_cpu "$python_bin" "$shapes/script/run_traj_tracin_lds_cached.py" \
     --execute --experiment "$experiment" --train-seed "$train_seed" \
     --query-file "$query_file" --query-ids "$query_ids" \
     --score-schemes "$score_namespace" --prediction-sign -1 \
