@@ -35,11 +35,15 @@ IFS=, read -r -a gpu_ids <<< "$gpu_ids_text"
 # The current Slurm id must override any stale exported RUN_TAG.
 run_tag="${SLURM_JOB_ID:-${RUN_TAG:-manual_$(date +%Y%m%d_%H%M%S)}}"
 log_root="$shapes/result/$experiment/logs/endpoint_tracin_adamw_full_train100x1_query100x1_fused/$run_tag"
-component_prefix="$log_root/components"
+# A retry can explicitly reuse checkpoint-level score components from an
+# earlier job without mixing the two jobs' logs: export RESUME_TAG=<old_job_id>.
+component_tag="${RESUME_TAG:-$run_tag}"
+component_root="$shapes/result/$experiment/logs/endpoint_tracin_adamw_full_train100x1_query100x1_fused/$component_tag"
+component_prefix="$component_root/components"
 query_artifact_list="$log_root/query_artifacts.txt"
 query_namespace="endpoint_tracin_simple_loss_mean100t_mc1_q0_99"
 score_namespace="endpoint_tracin_adamw_full_train100x1_query100x1_q0_99"
-mkdir -p "$log_root"
+mkdir -p "$log_root" "$component_root"
 
 export PYTHONUNBUFFERED=1
 export TF_GPU_ALLOCATOR="${TF_GPU_ALLOCATOR:-cuda_malloc_async}"
@@ -146,6 +150,12 @@ done
 failed=0
 for pid in "${train_pids[@]}"; do wait "$pid" || failed=1; done
 (( failed == 0 )) || { echo "train/score worker failed; inspect $log_root" >&2; exit 1; }
+for gpu in "${gpu_ids[@]}"; do
+  [[ ! -e "$log_root/no_train_artifact_gpu_${gpu}.npz" ]] || {
+    echo "invariant failed: fused run unexpectedly persisted a train artifact" >&2
+    exit 1
+  }
+done
 
 ibrun -n 1 -o 0 env JAX_PLATFORMS=cpu \
   "$python_bin" "$shapes/script/merge_fused_endpoint_tracin100x1_scores.py" \
