@@ -5716,6 +5716,17 @@ def run_attribution(cfg: TrajAttributionConfig):
                             )
                         ),
                     )
+                    if (
+                        optimizer_train_transform == "adamw_residual_update"
+                        and timestamp_chunk_size != len(train_t_seq)
+                    ):
+                        raise ValueError(
+                            "AdamW aggregation must form the full mean-timestep gradient "
+                            "before applying the nonlinear optimizer transform; set "
+                            "TRAJ_TRACIN_TRAIN_TIMESTAMP_CHUNK_SIZE equal to "
+                            f"TRAJ_TRACIN_TRAIN_AGGREGATE_NUM_TIMESTEPS "
+                            f"({len(train_t_seq)})."
+                        )
                     t_chunks = [
                         array_to_device(
                             jnp.asarray(
@@ -5748,6 +5759,23 @@ def run_attribution(cfg: TrajAttributionConfig):
                             )[0]
 
                         _loss, grads = jax.value_and_grad(loss_fn)(p)
+                        if adam_inverse_rms is not None:
+                            grads = jax.tree_util.tree_map(
+                                lambda grad, inv_rms: -grad.astype(jnp.float32)
+                                * inv_rms,
+                                grads,
+                                adam_inverse_rms,
+                            )
+                        elif adamw_history_update is not None:
+                            adamw_update, _ = state.tx.update(
+                                grads, state.opt_state, p
+                            )
+                            grads = jax.tree_util.tree_map(
+                                lambda update, history: update.astype(jnp.float32)
+                                - history.astype(jnp.float32),
+                                adamw_update,
+                                adamw_history_update,
+                            )
                         return projector(grads)
 
                     train_phi_batch_aggregate_chunk = jax.jit(
@@ -5824,6 +5852,93 @@ def run_attribution(cfg: TrajAttributionConfig):
                         f"elapsed={format_seconds(time.time() - stage_start_time)}",
                         flush=True,
                     )
+                    if fused_stream:
+                        assert fused_queries is not None and fused_query_norms is not None
+                        assert fused_lookup is not None and fused_timesteps is not None
+                        assert fused_linear is not None and fused_termwise is not None
+                        assert fused_timestamp is not None and fused_dot_fn is not None
+                        query_term = fused_lookup.get((int(ckpt_i), -1))
+                        if query_term is None:
+                            raise ValueError(
+                                f"missing fused checkpoint-level query term ckpt={ckpt_i} t=-1"
+                            )
+                        if adamw_history_feature is None:
+                            raise RuntimeError(
+                                "fused AdamW-full checkpoint stream is missing optimizer "
+                                "history feature"
+                            )
+                        # The residual and history projections both contain the
+                        # checkpoint LR exactly once.  Remove that positive scalar
+                        # while forming the four normalization variants, then apply
+                        # it once to the checkpoint contribution.  This is identical
+                        # to contracting the full AdamW update directly for `raw` and
+                        # keeps LR from affecting either L2 denominator.
+                        full_update = term_features + adamw_history_feature[None, :]
+                        direction = full_update / max(
+                            abs(float(ckpt_lr_weight)), 1e-20
+                        )
+                        query_term_features = fused_queries[:, query_term]
+                        dots_device = fused_dot_fn(
+                            array_to_device(jnp.asarray(query_term_features), device),
+                            array_to_device(jnp.asarray(direction), device),
+                        )
+                        dots_device.block_until_ready()
+                        dots = np.asarray(jax.device_get(dots_device), dtype=np.float32)
+                        qnorm = np.maximum(
+                            fused_query_norms[:, query_term], cfg.query_normalize_eps
+                        )
+                        tnorm = np.maximum(
+                            np.linalg.norm(direction, axis=1), cfg.query_normalize_eps
+                        )
+                        values = np.stack(
+                            (
+                                dots,
+                                dots / qnorm[:, None],
+                                dots / tnorm[None, :],
+                                dots / (qnorm[:, None] * tnorm[None, :]),
+                            ),
+                            axis=1,
+                        )
+                        weight = float(ckpt_lr_weight)
+                        fused_linear += weight * values
+                        fused_termwise += weight * np.square(values)
+                        slot = int(np.where(fused_timesteps == -1)[0][0])
+                        fused_timestamp[:, :, slot, :] += weight * values
+                        if fused_score_indices is None:
+                            fused_score_indices = np.asarray(picked, dtype=np.int64)
+                        fused_completed_ckpts.append(ckpt_i)
+                        assert fused_shard_output is not None
+                        if len(fused_completed_ckpts) % int(
+                            os.environ.get("TRAJ_TRACIN_FUSED_SAVE_EVERY", "5")
+                        ) == 0:
+                            save_npz_compressed_atomic(
+                                fused_shard_output,
+                                linear=fused_linear,
+                                termwise_squared=fused_termwise,
+                                timestamp_components=fused_timestamp,
+                                score_indices=fused_score_indices,
+                                completed_ckpts=np.asarray(
+                                    fused_completed_ckpts, dtype=np.int32
+                                ),
+                                query_artifacts=np.asarray(
+                                    fused_stream_query_artifacts
+                                ),
+                                timesteps=fused_timesteps,
+                            )
+                        train_phi_terms.clear()
+                        print(
+                            f"[stage:train] fused checkpoint-level AdamW-full "
+                            f"checkpoint {ckpt_i + 1}/{len(ckpts)} saved",
+                            flush=True,
+                        )
+                        used_ckpts_for_stage.append(ckpt_path)
+                        print(
+                            f"[stage:{stage_mode}] checkpoint {ckpt_i + 1}/{len(ckpts)} "
+                            f"done | elapsed={format_seconds(time.time() - stage_ckpt_start)} | "
+                            f"total_elapsed={format_seconds(time.time() - stage_start_time)}",
+                            flush=True,
+                        )
+                        continue
                     if stage_part_path is None:
                         stage_features.extend(train_phi_terms)
                         stage_ckpt_indices.extend(train_ckpt_indices)

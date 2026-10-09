@@ -507,6 +507,9 @@ _name = (
 )
 SCORE_SCHEMES[_name] = f"traj_tracin_{_name}"
 
+_name = "endpoint_tracin_adamw_full_train100x1_query100x1_q0_99"
+SCORE_SCHEMES[_name] = f"traj_tracin_{_name}"
+
 
 def parse_ints(text: str) -> list[int]:
     return [int(value) for value in text.replace(",", " ").split() if value.strip()]
