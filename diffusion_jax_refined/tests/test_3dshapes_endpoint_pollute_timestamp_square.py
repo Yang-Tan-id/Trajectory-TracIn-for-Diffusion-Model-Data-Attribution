@@ -19,6 +19,11 @@ LDS_RUNNER = (
     REPO_ROOT
     / "diffusion_jax_refined/3dshapes/script/run_traj_tracin_lds_cached.py"
 )
+COMBINER = (
+    REPO_ROOT
+    / "diffusion_jax_refined/3dshapes/script/"
+    "combine_endpoint_pollute_10x1_timestamp_square_first7.py"
+)
 
 
 class EndpointPolluteTimestampSquareTest(unittest.TestCase):
@@ -59,6 +64,16 @@ class EndpointPolluteTimestampSquareTest(unittest.TestCase):
             text,
         )
         self.assertIn("timestamp_aware_square_t{_timestep:03d}_q0_99", text)
+
+    def test_first7_combiner_sums_cached_square_scores(self) -> None:
+        text = COMBINER.read_text()
+        ast.parse(text)
+        self.assertIn("TIMESTAMPS = (0, 111, 222, 333, 444, 555, 666)", text)
+        self.assertIn("total += current_scores", text)
+        self.assertIn(
+            '"formula": "sum_first7(per_timestamp_checkpoint_sum_squared)"',
+            text,
+        )
 
 
 if __name__ == "__main__":

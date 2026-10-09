@@ -501,6 +501,12 @@ for _timestep in (0, 111, 222, 333, 444, 555, 666, 777, 888, 999):
     )
     SCORE_SCHEMES[_name] = f"traj_tracin_{_name}"
 
+_name = (
+    "recreate_adamw_full_polluted_endpoint_delta_l2normalized_"
+    "timestamp_aware_square_first7_q0_99"
+)
+SCORE_SCHEMES[_name] = f"traj_tracin_{_name}"
+
 
 def parse_ints(text: str) -> list[int]:
     return [int(value) for value in text.replace(",", " ").split() if value.strip()]
