@@ -244,7 +244,12 @@ def main() -> None:
         f"|cos|={heldout['mean_abs']:.6f}; cos+={heldout['positive_fraction']:.3f}"
     )
     print("\nPER TIMESTAMP — PAIR COSINE ACROSS 50 CHECKPOINTS")
-    print(f"{'T':>4s} {'MEAN':>10s} {'STD':>10s} {'|COS|':>10s} {'COS+':>8s} {'P20→A':>10s} {'P8→A':>10s}")
+    fresh_anchor_label = f"P{args.fresh_global_probe}→A"
+    old_anchor_label = f"P{args.old_global_probe}→A"
+    print(
+        f"{'T':>4s} {'MEAN':>10s} {'STD':>10s} {'|COS|':>10s} "
+        f"{'COS+':>8s} {fresh_anchor_label:>10s} {old_anchor_label:>10s}"
+    )
     print("-" * 80)
     for row in timestamp_rows:
         print(

@@ -62,6 +62,8 @@ The endpoint TracIn-DAS runner supports `--noise-mode trajectory-cone60`.
 For every query, the fixed cone axis points from its cached final endpoint to
 its cached initial trajectory state. Each checkpoint/timestamp query noise
 keeps a Gaussian radius and samples an angle uniformly from 0 to 60 degrees
-around that axis. Because these noises are query-dependent, this mode must be
-used with `--train-noise-mode independent-mc1`; each training point then uses
-one independent loss-noise draw.
+around that axis. With `--train-noise-mode independent-mc1`, every training
+point uses one independent loss-noise draw. With `--train-noise-mode aligned`,
+each query's cone noise is also used by every training loss for that query;
+this makes the training gradients query-dependent and is roughly ten times
+more expensive for q00-q09.

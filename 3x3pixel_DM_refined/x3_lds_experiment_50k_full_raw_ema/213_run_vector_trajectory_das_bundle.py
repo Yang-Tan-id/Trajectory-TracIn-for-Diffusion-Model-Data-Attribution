@@ -28,6 +28,10 @@ def main():
     parser.add_argument("--query-ids", default="0-9")
     parser.add_argument("--batch-size", type=int, default=DAS_FEATURE_BATCH_SIZE)
     parser.add_argument("--lambda", dest="damping", type=float, default=100.0)
+    parser.add_argument("--train-shard-index", type=int, default=0)
+    parser.add_argument("--train-shard-count", type=int, default=1)
+    parser.add_argument("--train-only", action="store_true")
+    parser.add_argument("--use-train-cache", action="store_true")
     args = parser.parse_args()
     query_ids = bundle.parse_query_ids(args.query_ids)
     device = torch.device(f"cuda:{args.gpu}")
@@ -51,6 +55,7 @@ def main():
     )
     membership = torch.from_numpy(np.load(MASK_DIR / "membership.npy").astype(np.float32)).to(device)
     mask_count = membership.shape[0]
+    cache_root = ROOT / "vector_trajectory_das_bundle_cache" / args.family
     gram = torch.zeros((projection_dim, projection_dim), device=device, dtype=torch.float32)
     subset_features = torch.zeros((mask_count, projection_dim), device=device, dtype=torch.float32)
     train_mc = 10
@@ -64,7 +69,17 @@ def main():
 
     batched_gradient = vmap(grad(point_loss), in_dims=(None, 0, 0, 0, 0))
     batches = math.ceil(N_TRAIN / args.batch_size)
-    for position, start in enumerate(range(0, N_TRAIN, args.batch_size), start=1):
+    if args.use_train_cache:
+        gram.zero_()
+        subset_features.zero_()
+        for shard in range(args.train_shard_count):
+            gram += torch.from_numpy(np.load(cache_root / f"gram_{shard:02d}_of_{args.train_shard_count:02d}.npy")).to(device)
+            subset_features += torch.from_numpy(np.load(cache_root / f"subset_{shard:02d}_of_{args.train_shard_count:02d}.npy")).to(device)
+        print(f"[vector-das] loaded {args.train_shard_count} train shards", flush=True)
+    for batch_index, start in enumerate(range(0, N_TRAIN, args.batch_size)):
+        if args.use_train_cache or batch_index % args.train_shard_count != args.train_shard_index:
+            continue
+        position = batch_index + 1
         end = min(start + args.batch_size, N_TRAIN)
         count = end - start
         x, condition = x_all[start:end], condition_all[start:end]
@@ -80,6 +95,13 @@ def main():
         subset_features.add_(membership[:, start:end] @ features)
         if position == 1 or position == batches or position % max(1, batches // 20) == 0:
             print(f"[vector-das] train batch={position}/{batches} points={end}/{N_TRAIN}", flush=True)
+
+    if args.train_only:
+        cache_root.mkdir(parents=True, exist_ok=True)
+        np.save(cache_root / f"gram_{args.train_shard_index:02d}_of_{args.train_shard_count:02d}.npy", gram.cpu().numpy())
+        np.save(cache_root / f"subset_{args.train_shard_index:02d}_of_{args.train_shard_count:02d}.npy", subset_features.cpu().numpy())
+        print(f"[saved] train shard {args.train_shard_index}/{args.train_shard_count}", flush=True)
+        return
 
     eye = torch.eye(projection_dim, device=device)
     subset_directions = torch.linalg.solve(

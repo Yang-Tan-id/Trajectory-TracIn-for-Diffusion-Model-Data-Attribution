@@ -48,8 +48,10 @@ export OMP_NUM_THREADS="${OMP_NUM_THREADS:-8}"
 export OPENBLAS_NUM_THREADS="${OPENBLAS_NUM_THREADS:-8}"
 export MKL_NUM_THREADS="${MKL_NUM_THREADS:-8}"
 
-echo "3D Shapes LDS true-f: four targets, 10 queries, 192 models"
+echo "3D Shapes LDS true-f"
 echo "repo=${REPO_ROOT}; experiment=${EXPERIMENT_TAG:-experiment1}"
+echo "queries=${QUERY_IDS:-0,1,2,3,4,5,6,7,8,9}; subset_seeds=${LDS_SUBSET_SEEDS:-0,1,2}"
+echo "targets=${LDS_TARGET_FUNCTIONS:-endpoint_counterfactual,traj_counterfactual,simple_loss,noise_trajectory}"
 echo "GPU 0 and GPU 1 each evaluate a disjoint 96-model shard; existing caches are skipped"
 nvidia-smi
 
@@ -59,5 +61,7 @@ cd "${SHAPES_ROOT}"
   --experiment "${EXPERIMENT_TAG:-experiment1}" \
   --train-seed "${TRAIN_SEED:-42}" \
   --query-ids "${QUERY_IDS:-0,1,2,3,4,5,6,7,8,9}" \
+  --subset-seeds "${LDS_SUBSET_SEEDS:-0,1,2}" \
+  --target-functions "${LDS_TARGET_FUNCTIONS:-endpoint_counterfactual,traj_counterfactual,simple_loss,noise_trajectory}" \
   --gpus "${LDS_TRUE_F_GPUS:-0,1}" \
   --python-bin "${PYTHON_BIN}"

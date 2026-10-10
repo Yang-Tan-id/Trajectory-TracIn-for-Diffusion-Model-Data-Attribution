@@ -27,5 +27,6 @@ python "${ANALYZER}" \
   --experiment "${EXPERIMENT_TAG:-experiment1}" \
   --source-run-id "${SOURCE_RUN_ID:-3506389}" \
   --query-id 0 \
+  --subset-seeds "${LDS_SUBSET_SEEDS:-0,1,2}" \
   --repeats "${CROSSFIT_REPEATS:-20}" \
   --random-seed "${CROSSFIT_SEED:-20260916}"

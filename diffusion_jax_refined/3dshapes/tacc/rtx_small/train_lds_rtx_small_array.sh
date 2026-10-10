@@ -10,9 +10,9 @@
 
 set -euo pipefail
 
-SUBSET_SEED="${LDS_SUBSET_SEED:?Set LDS_SUBSET_SEED to 0, 1, or 2}"
-if [[ ! "${SUBSET_SEED}" =~ ^[012]$ ]]; then
-  echo "LDS_SUBSET_SEED must be 0, 1, or 2; got ${SUBSET_SEED}" >&2
+SUBSET_SEED="${LDS_SUBSET_SEED:?Set LDS_SUBSET_SEED to a nonnegative integer}"
+if [[ ! "${SUBSET_SEED}" =~ ^[0-9]+$ ]]; then
+  echo "LDS_SUBSET_SEED must be a nonnegative integer; got ${SUBSET_SEED}" >&2
   exit 2
 fi
 

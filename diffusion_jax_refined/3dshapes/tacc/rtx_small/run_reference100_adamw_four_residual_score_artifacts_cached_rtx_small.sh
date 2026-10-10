@@ -40,13 +40,13 @@ JAX_PLATFORMS=cpu python "$shapes/script/run_adamw_four_event_original_f_scores.
   --save-score-variant query_train_l2 \
   --out-dir "$out_dir"
 
-echo '[plot] reference-next 100t endpoint top12; positive-LDS ordering'
+echo '[plot] reference-next 100t endpoint top12; reverse score ordering for positive LDS'
 python "$shapes/script/plot_endpoint_top6_datapoints.py" \
   --experiment "$experiment" \
   --train-seed "$train_seed" \
   --traj-namespace "$query_namespace" \
   --traj-title 'Reference trajectory 100t · next checkpoint · AdamW FOUR_RESIDUAL · BOTH-L2' \
-  --traj-ranking-sign 1 \
+  --traj-ranking-sign -1 \
   --traj-output-stem reference_trajectory_next_four_residual_both_l2 \
   --only-traj \
   --top-k 12 \

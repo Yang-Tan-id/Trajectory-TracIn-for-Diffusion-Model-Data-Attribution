@@ -129,14 +129,6 @@ def main():
         raise ValueError("query MC must be positive")
     if args.train_noise_mode == "aligned" and args.query_mc != 1:
         raise ValueError("query MC > 1 requires independent train noise")
-    if (
-        args.noise_mode == "trajectory-cone60"
-        and args.train_noise_mode == "aligned"
-    ):
-        raise ValueError(
-            "trajectory-cone60 is query-dependent and requires independent "
-            "train noise"
-        )
     train_mc_count = (
         1
         if args.train_noise_mode in ("aligned", "independent-mc1")
@@ -500,20 +492,24 @@ def main():
                     delta_norms.append(float(delta_norm))
             query_matrix = torch.stack(query_vectors).detach().to(torch.float32)
 
+            query_dependent_aligned_noise = (
+                args.noise_mode == "trajectory-cone60"
+                and args.train_noise_mode == "aligned"
+            )
             if args.train_noise_mode == "aligned":
-                def train_loss(parameter_dict, x0, condition):
+                def train_loss(parameter_dict, x0, condition, aligned_noise):
                     xt = base.q_sample(
-                        x0.unsqueeze(0), t_query, query_noises[0, 0], schedule
+                        x0.unsqueeze(0), t_query, aligned_noise, schedule
                     )
                     prediction = functional_call(
                         model,
                         parameter_dict,
                         (xt, t_query, condition.unsqueeze(0)),
                     )
-                    return (prediction - query_noises[0, 0]).square().mean()
+                    return (prediction - aligned_noise).square().mean()
 
                 batched_gradient = vmap(
-                    grad(train_loss), in_dims=(None, 0, 0)
+                    grad(train_loss), in_dims=(None, 0, 0, None)
                 )
             else:
                 train_mc = train_mc_count
@@ -572,35 +568,66 @@ def main():
                         device=device,
                         dtype=x_all.dtype,
                     )
-                gradients = (
-                    batched_gradient(
-                        named,
-                        x_all[start:end],
-                        cond_all[start:end],
+                if query_dependent_aligned_noise:
+                    dot_rows = []
+                    for query_position in range(len(records)):
+                        gradients = batched_gradient(
+                            named,
+                            x_all[start:end],
+                            cond_all[start:end],
+                            query_noises[query_position, 0],
+                        )
+                        train_matrix = (
+                            _project_batched_grads(
+                                gradients,
+                                names,
+                                projection_specs,
+                                TRACIN_PROJ_DIM,
+                                False,
+                                1e-8,
+                            )
+                            if projection_specs is not None
+                            else flatten_batched_gradients(gradients, names)
+                        ).detach()
+                        dot_rows.append(
+                            train_matrix @ query_matrix[query_position]
+                        )
+                        del gradients, train_matrix
+                    dots = torch.stack(dot_rows, dim=0).unsqueeze(1).to(
+                        torch.float64
                     )
-                    if args.train_noise_mode == "aligned"
-                    else batched_gradient(
-                        named,
-                        x_all[start:end],
-                        cond_all[start:end],
-                        train_noises,
+                    del dot_rows
+                else:
+                    gradients = (
+                        batched_gradient(
+                            named,
+                            x_all[start:end],
+                            cond_all[start:end],
+                            query_noises[0, 0],
+                        )
+                        if args.train_noise_mode == "aligned"
+                        else batched_gradient(
+                            named,
+                            x_all[start:end],
+                            cond_all[start:end],
+                            train_noises,
+                        )
                     )
-                )
-                train_matrix = (
-                    _project_batched_grads(
-                        gradients,
-                        names,
-                        projection_specs,
-                        TRACIN_PROJ_DIM,
-                        False,
-                        1e-8,
-                    )
-                    if projection_specs is not None
-                    else flatten_batched_gradients(gradients, names)
-                ).detach()
-                dots = (train_matrix @ query_matrix.T).T.reshape(
-                    len(records), args.query_mc, end - start
-                ).to(torch.float64)
+                    train_matrix = (
+                        _project_batched_grads(
+                            gradients,
+                            names,
+                            projection_specs,
+                            TRACIN_PROJ_DIM,
+                            False,
+                            1e-8,
+                        )
+                        if projection_specs is not None
+                        else flatten_batched_gradients(gradients, names)
+                    ).detach()
+                    dots = (train_matrix @ query_matrix.T).T.reshape(
+                        len(records), args.query_mc, end - start
+                    ).to(torch.float64)
                 linear_dots = dots.mean(dim=1)
                 squared_dots = dots.square().mean(dim=1)
                 for group in active_groups:
@@ -633,7 +660,9 @@ def main():
             del named, parameters, query_vectors, query_matrix
             del projection_specs
             del current_prediction, next_prediction, direction, projected_prediction, query_gradient
-            del batched_gradient, gradients, train_matrix, dots, query_noises, query_xt
+            del batched_gradient, dots, query_noises, query_xt
+            if not query_dependent_aligned_noise:
+                del gradients, train_matrix
             if args.noise_mode != "trajectory-cone60":
                 del shared_noises
             del linear_dots, squared_dots

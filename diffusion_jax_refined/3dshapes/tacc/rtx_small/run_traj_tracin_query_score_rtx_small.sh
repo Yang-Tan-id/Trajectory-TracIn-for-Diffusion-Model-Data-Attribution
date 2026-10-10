@@ -50,6 +50,7 @@ export MKL_NUM_THREADS="${MKL_NUM_THREADS:-8}"
 
 echo "3D Shapes Traj TracIn query-gradient + four-variant score"
 echo "repo=${REPO_ROOT}; experiment=${EXPERIMENT_TAG:-experiment1}; query_ids=${QUERY_IDS:-0,1,2,3,4,5,6,7,8,9}"
+echo "query_file=${QUERY_FILE:-${SHAPES_ROOT}/queries_seed_0_9.json}"
 echo "GPU 0 and GPU 1 split queries; DDIM eta=0 saves 1000 states; query terms align to 10 timestamps"
 nvidia-smi
 
@@ -59,6 +60,7 @@ args=(
   --experiment "${EXPERIMENT_TAG:-experiment1}"
   --train-seed "${TRAIN_SEED:-42}"
   --epochs "${JAX_EPOCHS:-200}"
+  --query-file "${QUERY_FILE:-${SHAPES_ROOT}/queries_seed_0_9.json}"
   --query-ids "${QUERY_IDS:-0,1,2,3,4,5,6,7,8,9}"
   --gpus "${QUERY_GPUS:-0,1}"
   --python-bin "${PYTHON_BIN}"

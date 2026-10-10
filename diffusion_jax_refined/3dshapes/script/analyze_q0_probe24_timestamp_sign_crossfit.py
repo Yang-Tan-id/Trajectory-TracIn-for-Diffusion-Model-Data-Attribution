@@ -6,12 +6,13 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import re
 
 import numpy as np
 
 from analyze_predicted_noise_old_fresh_term_signs import write_csv
 from analyze_predicted_noise_probe12_sign_flips import rowwise_spearman, sign_matrix
-from analyze_predicted_noise_probe8_choose4 import cache_group, load_target_data
+from analyze_predicted_noise_probe8_choose4 import load_target_data
 
 
 SHAPES_ROOT = Path(__file__).resolve().parents[1]
@@ -19,7 +20,34 @@ BANKS = ("old12", "fresh12")
 CF_TARGETS = ("endpoint_contarfactual", "traj_contarfactual")
 
 
-def target_data(args, score_indices):
+def parse_ints(text):
+    return [int(value) for value in text.replace(",", " ").split() if value.strip()]
+
+
+def cache_group_for_subset_seeds(eval_root, subset_seeds):
+    parent = eval_root / "lds_target_cache" / "ddim_eta0"
+    matches = []
+    for group in sorted(parent.iterdir()) if parent.is_dir() else []:
+        paths = sorted((group / CF_TARGETS[0]).glob("target_*.json"))
+        if len(paths) != 64 * len(subset_seeds):
+            continue
+        found = set()
+        for path in paths:
+            payload = json.loads(path.read_text())
+            match = re.search(r"subset_seed_(\d+)", str(payload.get("subset_dir", "")))
+            if match:
+                found.add(int(match.group(1)))
+        if found == set(subset_seeds):
+            matches.append(group)
+    if len(matches) != 1:
+        raise RuntimeError(
+            f"expected one target-cache group for subset seeds {subset_seeds} "
+            f"under {parent}; found {matches}"
+        )
+    return matches[0]
+
+
+def target_data(args, score_indices, subset_seeds):
     records = json.loads((SHAPES_ROOT / "queries_seed_0_9.json").read_text())["queries"]
     record = records[args.query_id]
     eval_root = (
@@ -31,7 +59,8 @@ def target_data(args, score_indices):
         / f"query_{str(record['prompt']).replace(',', '_')}"
         / f"initial_seed_{int(record['initial_seed'])}"
     )
-    return load_target_data(cache_group(eval_root), score_indices)
+    group = cache_group_for_subset_seeds(eval_root, subset_seeds)
+    return load_target_data(group, score_indices, targets=CF_TARGETS)
 
 
 def lds_rows(predictions, endpoint, trajectory):
@@ -55,10 +84,14 @@ def main():
     parser.add_argument("--experiment", default="experiment1")
     parser.add_argument("--source-run-id", default="3506389")
     parser.add_argument("--query-id", type=int, default=0)
+    parser.add_argument("--subset-seeds", default="0,1,2")
     parser.add_argument("--repeats", type=int, default=20)
     parser.add_argument("--random-seed", type=int, default=20260916)
     parser.add_argument("--out-dir", type=Path)
     args = parser.parse_args()
+    subset_seeds = parse_ints(args.subset_seeds)
+    if not subset_seeds or len(set(subset_seeds)) != len(subset_seeds):
+        raise ValueError("--subset-seeds must contain distinct integer seeds")
 
     source = (
         SHAPES_ROOT
@@ -87,7 +120,7 @@ def main():
         if values.shape != expected:
             raise ValueError(f"{bank}: expected {expected}, got {values.shape}")
 
-    incidence, true_values = target_data(args, score_indices)
+    incidence, true_values = target_data(args, score_indices, subset_seeds)
     endpoint = true_values[CF_TARGETS[0]]
     trajectory = true_values[CF_TARGETS[1]]
     num_models = len(endpoint)
@@ -214,6 +247,7 @@ def main():
         / "eval"
         / "q0_probe24_timestamp_sign_crossfit"
         / f"source_run_{args.source_run_id}"
+        / ("subset_seeds_" + "_".join(str(seed) for seed in subset_seeds))
     )
     write_csv(out_dir / "per_split.csv", split_rows)
     write_csv(out_dir / "summary.csv", summary_rows)

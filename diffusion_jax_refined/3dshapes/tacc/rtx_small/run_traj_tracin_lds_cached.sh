@@ -54,5 +54,6 @@ cd "${SHAPES_ROOT}"
   --execute \
   --experiment "${EXPERIMENT_TAG:-experiment1}" \
   --train-seed "${TRAIN_SEED:-42}" \
+  --query-file "${QUERY_FILE:-${SHAPES_ROOT}/queries_seed_0_9.json}" \
   --query-ids "${QUERY_IDS:-0,1,2,3,4,5,6,7,8,9}" \
   --python-bin "${PYTHON_BIN}"

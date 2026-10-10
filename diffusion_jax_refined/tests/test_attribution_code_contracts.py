@@ -124,6 +124,20 @@ class TestAttributionCodeContracts(unittest.TestCase):
         self.assertIn('"query_gradient_l2_normalized"', text)
         self.assertIn('"train_gradient": "none"', text)
 
+    def test_cifar5_norm_sweep_can_select_timestep_regions(self):
+        runner = (
+            ROOT
+            / "cifar5_multi"
+            / "script"
+            / "run_cifar5_multi_traj_tracin_norm_sweep.py"
+        ).read_text()
+        scorer = (ROOT / "common" / "stage_artifact_runner.py").read_text()
+        self.assertIn('"--timestep-region"', runner)
+        self.assertIn('"--region-terms"', runner)
+        self.assertIn('"TRACIN_SCORE_TIMESTEP_ALLOWLIST"', runner)
+        self.assertIn('"TRACIN_SCORE_TIMESTEP_ALLOWLIST"', scorer)
+        self.assertIn("int(timestep) not in timestep_allowlist", scorer)
+
     def test_cifar2_traj_tracin_saved_trajectory_is_env_tunable_for_projected_cache(self):
         text = (ROOT / "cifar2" / "dataset_config.py").read_text()
         self.assertIn("TRAJ_USE_SAVED_TRAJECTORY", text)

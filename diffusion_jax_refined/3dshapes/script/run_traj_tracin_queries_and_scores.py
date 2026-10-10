@@ -232,13 +232,13 @@ def main() -> None:
         DIFFUSION_TRAJECTORY_SAMPLER="ddim_eta0",
         SAMPLE_TRAJECTORY_STEPS="1000",
         SAVE_TRAJECTORY_PNGS="0",
-        SAMPLE_PREFER_DEVICE="gpu",
+        SAMPLE_PREFER_DEVICE=os.environ.get("SAMPLE_PREFER_DEVICE", "gpu"),
         SAMPLE_BATCH_SIZE="1",
         SAMPLE_ROOT=str(sample_root),
         TF_GPU_ALLOCATOR=os.environ.get("TF_GPU_ALLOCATOR", "cuda_malloc_async"),
         PYTHONUNBUFFERED="1",
         JAX_NUM_DEVICES="1",
-        JAX_PLATFORMS="cuda",
+        JAX_PLATFORMS=os.environ.get("JAX_PLATFORMS", "cuda"),
     )
     if args.predicted_noise_probe_seed is not None:
         base_env["TRAJ_PREDICTED_NOISE_PROBE_SEED"] = str(
