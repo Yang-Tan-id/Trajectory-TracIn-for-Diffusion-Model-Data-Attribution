@@ -3,6 +3,9 @@
 Prepared data is written to `10000/` by
 `../../celeba/script/prepare_celeba.py`. Raw CelebA archives are not committed.
 
+The conditional 40-attribute variant is written to `10000_attr40/` when
+`--attributes list_attr_celeba.txt` is supplied.
+
 The prepared contract contains:
 
 - `dataset.npz`: 10,000 RGB uint8 images at 64x64 plus source filenames;

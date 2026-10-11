@@ -31,6 +31,40 @@ def read_partition(path: Path) -> dict[str, int]:
     return partitions
 
 
+def read_attributes(path: Path) -> tuple[tuple[str, ...], dict[str, np.ndarray]]:
+    with path.open("r", encoding="utf-8") as handle:
+        count_line = handle.readline().strip()
+        if not count_line:
+            raise ValueError(f"Missing image count in {path}")
+        declared_count = int(count_line)
+        names = tuple(handle.readline().split())
+        if len(names) != 40:
+            raise ValueError(f"Expected 40 CelebA attributes, found {len(names)}")
+
+        attributes: dict[str, np.ndarray] = {}
+        for line_number, line in enumerate(handle, start=3):
+            fields = line.split()
+            if not fields:
+                continue
+            if len(fields) != len(names) + 1:
+                raise ValueError(
+                    f"Malformed attribute row {line_number}: expected {len(names) + 1} fields, "
+                    f"found {len(fields)}"
+                )
+            filename = fields[0]
+            values = np.asarray([int(value) for value in fields[1:]], dtype=np.int8)
+            if not np.all(np.isin(values, (-1, 1))):
+                raise ValueError(f"Attribute row {line_number} contains values other than -1/+1")
+            if filename in attributes:
+                raise ValueError(f"Duplicate attribute filename: {filename}")
+            attributes[filename] = values
+    if len(attributes) != declared_count:
+        raise ValueError(
+            f"Attribute header declares {declared_count:,} images, found {len(attributes):,} rows"
+        )
+    return names, attributes
+
+
 def select_training_filenames(
     partitions: dict[str, int], seed: int, train_size: int
 ) -> np.ndarray:
@@ -83,6 +117,12 @@ def main() -> None:
     parser.add_argument("--images-zip", type=Path, required=True)
     parser.add_argument("--partition", type=Path, required=True)
     parser.add_argument(
+        "--attributes",
+        type=Path,
+        default=None,
+        help="Optional official list_attr_celeba.txt for 40-way conditional labels.",
+    )
+    parser.add_argument(
         "--out-root",
         type=Path,
         default=Path(__file__).resolve().parents[2] / "dataset" / "celeba" / "10000",
@@ -107,6 +147,23 @@ def main() -> None:
 
     partitions = read_partition(args.partition)
     filenames = select_training_filenames(partitions, args.seed, args.train_size)
+    if args.attributes is None:
+        label_names = np.asarray(["face"])
+        labels = np.ones((args.train_size, 1), dtype=np.uint8)
+        raw_attributes = None
+    else:
+        attribute_names, attribute_rows = read_attributes(args.attributes)
+        missing_attributes = [name for name in filenames if str(name) not in attribute_rows]
+        if missing_attributes:
+            raise FileNotFoundError(
+                f"Attribute file is missing {len(missing_attributes)} selected files; "
+                f"first missing: {missing_attributes[0]}"
+            )
+        raw_attributes = np.stack(
+            [attribute_rows[str(filename)] for filename in filenames], axis=0
+        ).astype(np.int8)
+        labels = (raw_attributes > 0).astype(np.uint8)
+        label_names = np.asarray(attribute_names)
     images = np.empty((args.train_size, args.image_size, args.image_size, 3), dtype=np.uint8)
 
     with zipfile.ZipFile(args.images_zip, "r") as archive:
@@ -131,13 +188,15 @@ def main() -> None:
     attribution_mask[attribution_indices] = True
 
     args.out_root.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(
-        args.out_root / "dataset.npz",
-        images=images,
-        labels=np.ones((args.train_size, 1), dtype=np.uint8),
-        source_filenames=filenames,
-        label_names=np.asarray(["face"]),
-    )
+    dataset_payload = {
+        "images": images,
+        "labels": labels,
+        "source_filenames": filenames,
+        "label_names": label_names,
+    }
+    if raw_attributes is not None:
+        dataset_payload["raw_attributes"] = raw_attributes
+    np.savez_compressed(args.out_root / "dataset.npz", **dataset_payload)
     np.save(args.out_root / "celeba_10k_source_filenames.npy", filenames)
     np.save(args.out_root / "attribution_5k_indices.npy", attribution_indices)
     np.save(args.out_root / "attribution_5k_mask.npy", attribution_mask)
@@ -151,7 +210,15 @@ def main() -> None:
         "size": args.train_size,
         "crop": f"center {args.crop_size}x{args.crop_size}",
         "resize": f"{args.image_size}x{args.image_size} bicubic",
-        "conditioning": "unconditional",
+        "conditioning": (
+            "unconditional"
+            if args.attributes is None
+            else "40-way multi-hot positive CelebA attributes"
+        ),
+        "source_attributes": (
+            None if args.attributes is None else str(args.attributes.resolve())
+        ),
+        "attribute_names": label_names.tolist(),
         "attribution_subset_seed": args.seed,
         "attribution_subset_size": args.attribution_size,
     }

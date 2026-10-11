@@ -3,6 +3,10 @@
 This framework mirrors the 3D Shapes pixel-DDPM training contract, while using
 CelebA's official training partition and no class conditioning.
 
+The optional Attr40 runner creates a separate conditionally trained model from
+the official `list_attr_celeba.txt`; the original unconditional experiment is
+kept intact.
+
 ## Fixed experiment contract
 
 - Read the official `list_eval_partition.txt`; only split `0` is eligible.
@@ -62,3 +66,16 @@ bash script/run_lds_4gpu_all_seeds.sh
 
 The three subset seeds run sequentially because all four GPUs participate in
 each seed. The launcher is resumable: completed final checkpoints are skipped.
+
+## Conditional 40-attribute training
+
+```bash
+python script/run_celeba_attr40_experiment.py \
+  --images-zip /path/to/img_align_celeba.zip \
+  --partition /path/to/list_eval_partition.txt \
+  --attributes /path/to/list_attr_celeba.txt \
+  --execute
+```
+
+This writes a separate prepared dataset at `dataset/celeba/10000_attr40/` and
+checkpoints below `result/attr40_experiment1/model/prompted_jax/`.

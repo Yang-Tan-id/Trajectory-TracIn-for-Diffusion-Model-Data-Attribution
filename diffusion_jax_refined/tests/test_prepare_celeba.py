@@ -37,3 +37,16 @@ def test_center_crop_uses_exact_140_square_before_resize():
     assert int(array[0, 0, 1]) == 39
     assert int(array[-1, -1, 0]) == 158
     assert int(array[-1, -1, 1]) == 178
+
+
+def test_read_attributes_parses_signed_values(tmp_path):
+    names = [f"attr_{index}" for index in range(40)]
+    values = ["1" if index % 2 else "-1" for index in range(40)]
+    path = tmp_path / "list_attr_celeba.txt"
+    path.write_text(
+        "1\n" + " ".join(names) + "\n" + "000001.jpg " + " ".join(values) + "\n"
+    )
+    parsed_names, rows = MODULE.read_attributes(path)
+    assert parsed_names == tuple(names)
+    assert rows["000001.jpg"].dtype == np.int8
+    assert rows["000001.jpg"].tolist() == [(-1 if index % 2 == 0 else 1) for index in range(40)]
