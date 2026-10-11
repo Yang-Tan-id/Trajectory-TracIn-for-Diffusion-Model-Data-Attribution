@@ -79,3 +79,10 @@ python script/run_celeba_attr40_experiment.py \
 
 This writes a separate prepared dataset at `dataset/celeba/10000_attr40/` and
 checkpoints below `result/attr40_experiment1/model/prompted_jax/`.
+
+After the conditional epoch-200 checkpoint exists, its separate four-GPU LDS
+bank uses the same three-seed, 64-model, 2,500-of-5,000 contract:
+
+```bash
+bash script/run_lds_attr40_4gpu_all_seeds.sh
+```
