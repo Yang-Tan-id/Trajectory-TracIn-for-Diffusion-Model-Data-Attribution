@@ -161,6 +161,40 @@ def selected_timesteps_evenly(total_timesteps: int, num_steps: int) -> List[int]
     return out
 
 
+def inference_timesteps(total_timesteps: int, num_inference_steps: int) -> List[int]:
+    """Return descending model-evaluation timesteps for accelerated DDIM sampling."""
+    if total_timesteps <= 0:
+        raise ValueError("total_timesteps must be positive")
+    if num_inference_steps <= 0 or num_inference_steps > total_timesteps:
+        raise ValueError(
+            f"num_inference_steps must be in [1, {total_timesteps}], got {num_inference_steps}"
+        )
+    if total_timesteps % num_inference_steps == 0:
+        stride = total_timesteps // num_inference_steps
+        return list(range(total_timesteps - 1, -1, -stride))
+    values = np.linspace(total_timesteps - 1, 0, num_inference_steps)
+    return [int(round(value)) for value in values]
+
+
+def selected_inference_timesteps(timesteps: Sequence[int], num_steps: int) -> List[int]:
+    """Select trajectory frames from the actual inference schedule, including final x0."""
+    values = [int(value) for value in timesteps]
+    if not values:
+        raise ValueError("timesteps must not be empty")
+    if num_steps <= 1:
+        return [0]
+    slots = max(1, num_steps - 1) if values[-1] != 0 else num_steps
+    indices = np.linspace(0, len(values) - 1, min(slots, len(values)))
+    selected = []
+    for index in indices:
+        value = values[int(round(index))]
+        if value not in selected:
+            selected.append(value)
+    if selected[-1] != 0:
+        selected.append(0)
+    return selected
+
+
 def make_image_grid(
     images: List[np.ndarray],
     labels: List[str],
@@ -277,7 +311,18 @@ class ModelAdapter(ABC):
         prompt: str,
         batch_size: int,
         save_timesteps: List[int],
+        sampler: str = "ddpm",
+        num_inference_steps: Optional[int] = None,
     ) -> Tuple[np.ndarray, Dict[int, np.ndarray]]:
+        sampler = str(sampler).strip().lower()
+        if sampler not in ("ddpm", "ddim_eta0"):
+            raise ValueError("sampler must be 'ddpm' or 'ddim_eta0'")
+        inference_steps = int(num_inference_steps or self.cfg.timesteps)
+        if sampler == "ddpm" and inference_steps != int(self.cfg.timesteps):
+            raise ValueError("Fewer inference steps require sampler='ddim_eta0'")
+        inference_ts = inference_timesteps(int(self.cfg.timesteps), inference_steps)
+        previous_ts = inference_ts[1:] + [-1]
+
         rng = jax.random.PRNGKey(seed)
         y = self.make_condition(prompt=prompt, batch_size=batch_size)
         shape = self.sample_shape(batch_size)
@@ -286,14 +331,16 @@ class ModelAdapter(ABC):
         alphas = self.schedule.alphas
         alphas_cumprod = self.schedule.alphas_cumprod
         cond_y = y if getattr(self.cfg, "class_cond", True) else None
-        t_seq = jnp.arange(self.cfg.timesteps - 1, -1, -1, dtype=jnp.int32)
+        t_seq = jnp.asarray(inference_ts, dtype=jnp.int32)
+        prev_t_seq = jnp.asarray(previous_ts, dtype=jnp.int32)
 
         @jax.jit
         def _sample_scan_loop(init_rng: jax.Array):
             init_x = jax.random.normal(init_rng, shape)
 
-            def body_fn(carry, i):
+            def body_fn(carry, step):
                 x, loop_rng = carry
+                i, prev_i = step
                 t = jnp.full((shape[0],), i, dtype=jnp.int32)
                 pred = self.model.apply(
                     {"params": self.state.ema_params},
@@ -308,24 +355,38 @@ class ModelAdapter(ABC):
                     x - jnp.sqrt(alphas_cumprod[i]) * x0_pred
                 ) / jnp.sqrt(1.0 - alphas_cumprod[i])
 
-                alpha_t = alphas[i]
-                abar_t = alphas_cumprod[i]
-                beta_t = betas[i]
-                coef1 = 1.0 / jnp.sqrt(alpha_t)
-                coef2 = beta_t / jnp.sqrt(1.0 - abar_t)
-                mean = coef1 * (x - coef2 * eps)
+                if sampler == "ddim_eta0":
+                    abar_prev = jax.lax.cond(
+                        prev_i >= 0,
+                        lambda _: alphas_cumprod[jnp.maximum(prev_i, 0)],
+                        lambda _: jnp.asarray(1.0, dtype=alphas_cumprod.dtype),
+                        operand=None,
+                    )
+                    next_x = (
+                        jnp.sqrt(abar_prev) * x0_pred
+                        + jnp.sqrt(jnp.maximum(1.0 - abar_prev, 0.0)) * eps
+                    )
+                else:
+                    alpha_t = alphas[i]
+                    abar_t = alphas_cumprod[i]
+                    beta_t = betas[i]
+                    coef1 = 1.0 / jnp.sqrt(alpha_t)
+                    coef2 = beta_t / jnp.sqrt(1.0 - abar_t)
+                    mean = coef1 * (x - coef2 * eps)
 
-                loop_rng, step_rng = jax.random.split(loop_rng)
-                noise = jax.random.normal(step_rng, shape)
-                next_x = jax.lax.cond(
-                    i > 0,
-                    lambda _: mean + jnp.sqrt(beta_t) * noise,
-                    lambda _: mean,
-                    operand=None,
-                )
+                    loop_rng, step_rng = jax.random.split(loop_rng)
+                    noise = jax.random.normal(step_rng, shape)
+                    next_x = jax.lax.cond(
+                        i > 0,
+                        lambda _: mean + jnp.sqrt(beta_t) * noise,
+                        lambda _: mean,
+                        operand=None,
+                    )
                 return (next_x, loop_rng), x0_pred
 
-            (final_x, _), x0_preds = jax.lax.scan(body_fn, (init_x, init_rng), t_seq)
+            (final_x, _), x0_preds = jax.lax.scan(
+                body_fn, (init_x, init_rng), (t_seq, prev_t_seq)
+            )
             return final_x, x0_preds
 
         final_x, x0_preds_seq = _sample_scan_loop(rng)
@@ -333,11 +394,16 @@ class ModelAdapter(ABC):
         saved: Dict[int, np.ndarray] = {}
         x0_preds_seq_np = np.array(x0_preds_seq)
 
+        timestep_to_position = {timestep: position for position, timestep in enumerate(inference_ts)}
         for i in save_timesteps:
-            if i < 0 or i >= self.cfg.timesteps:
+            if i == 0 and i not in timestep_to_position:
+                saved[0] = np.array(final_images)
                 continue
-            seq_idx = self.cfg.timesteps - 1 - i
-            saved[i] = np.array(self.decode_samples(x0_preds_seq_np[seq_idx]))
+            if i not in timestep_to_position:
+                continue
+            saved[i] = np.array(
+                self.decode_samples(x0_preds_seq_np[timestep_to_position[i]])
+            )
 
         if 0 not in saved:
             saved[0] = np.array(final_images)
@@ -846,6 +912,18 @@ def main():
     )
     parser.add_argument("--num-trajectory-steps", type=int, default=9,
                         help="Number of evenly spaced reverse timesteps to save, including near start and final.")
+    parser.add_argument(
+        "--sampler",
+        choices=("ddpm", "ddim_eta0"),
+        default="ddpm",
+        help="Reverse sampler. Use ddim_eta0 for accelerated skipped-step sampling.",
+    )
+    parser.add_argument(
+        "--num-inference-steps",
+        type=int,
+        default=None,
+        help="Number of model noise predictions. Defaults to all training timesteps.",
+    )
     parser.add_argument("--print-metadata", action="store_true")
     parser.add_argument(
         "--cifar-data-root",
@@ -883,7 +961,13 @@ def main():
     result_dir = os.path.join(args.outdir, f"result_{safe_prompt}_seed{args.seed}")
     os.makedirs(result_dir, exist_ok=True)
 
-    save_timesteps = selected_timesteps_evenly(adapter.cfg.timesteps, args.num_trajectory_steps)
+    num_inference_steps = int(args.num_inference_steps or adapter.cfg.timesteps)
+    inference_ts = inference_timesteps(int(adapter.cfg.timesteps), num_inference_steps)
+    if args.sampler == "ddpm" and num_inference_steps != int(adapter.cfg.timesteps):
+        parser.error("--num-inference-steps below the training timestep count requires --sampler ddim_eta0")
+    save_timesteps = selected_inference_timesteps(
+        inference_ts, args.num_trajectory_steps
+    )
 
     generation_start_time = time.time()
     final_images, saved = adapter.sample_with_trajectory(
@@ -891,6 +975,8 @@ def main():
         prompt=args.prompt,
         batch_size=args.batch_size,
         save_timesteps=save_timesteps,
+        sampler=args.sampler,
+        num_inference_steps=num_inference_steps,
     )
     generation_end_time = time.time()
     generation_seconds = float(generation_end_time - generation_start_time)
@@ -907,6 +993,9 @@ def main():
         "prompt": args.prompt,
         "batch_size": args.batch_size,
         "num_trajectory_steps_requested": args.num_trajectory_steps,
+        "sampler": args.sampler,
+        "num_inference_steps": num_inference_steps,
+        "inference_timesteps": inference_ts,
         "saved_timesteps": save_timesteps,
         "result_dir": result_dir,
         "generation_seconds_total": generation_seconds,
