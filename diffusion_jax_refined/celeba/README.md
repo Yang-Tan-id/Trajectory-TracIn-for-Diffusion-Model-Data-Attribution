@@ -12,7 +12,8 @@ CelebA's official training partition and no class conditioning.
   integer indices and a boolean mask.
 - Train the same epsilon-prediction pixel UNet used by 3D Shapes for 200 epochs,
   with 1,000 DDPM steps and cosine learning-rate decay after 10% warmup.
-- LDS is intentionally not part of this stage.
+- The initial runner stops after data preparation and base training; LDS has a
+  separate four-GPU launcher for the later stage.
 
 Prepare data and the attribution mask locally:
 
@@ -46,3 +47,18 @@ On TACC RTX-small, place the raw archive and partition file under
 ```bash
 sbatch diffusion_jax_refined/celeba/tacc/rtx_small/train_base_rtx_small.sh
 ```
+
+## Four-GPU LDS training
+
+After the epoch-200 base checkpoint exists, train the Shape3D-compatible LDS
+bank with three subset seeds. Each seed owns 64 independently trained random
+2,500-of-5,000 subset models; four GPUs receive 16 models each. Only epoch 200
+is retained for each subset model:
+
+```bash
+cd diffusion_jax_refined/celeba
+bash script/run_lds_4gpu_all_seeds.sh
+```
+
+The three subset seeds run sequentially because all four GPUs participate in
+each seed. The launcher is resumable: completed final checkpoints are skipped.
