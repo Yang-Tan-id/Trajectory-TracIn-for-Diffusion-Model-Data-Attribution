@@ -28,6 +28,7 @@ from dataset_config import _prompt_tag
 METHODS = (
     "retrac_adamw_both_l2_neg",
     "endpoint_pollute_adamw_timestamp_train_l2",
+    "endpoint_tracin_adamw_full_100x1_raw_neg",
 )
 TOPKS = (400, 1000)
 FULL_TRAIN_SIZE = 20_000
@@ -69,6 +70,20 @@ def score_spec(
             / "score_train_l2_normalized",
             1,
             "stored AdamW-full endpoint-pollute timestamp-square train-L2 score",
+        )
+    if method == "endpoint_tracin_adamw_full_100x1_raw_neg":
+        return (
+            root
+            / (
+                "traj_tracin_endpoint_tracin_adamw_full_"
+                "train100x1_query100x1_q0_99"
+            )
+            / "score",
+            -1,
+            (
+                "negative of stored AdamW-full endpoint-TracIn "
+                "train100x1/query100x1 raw score"
+            ),
         )
     raise ValueError(method)
 
