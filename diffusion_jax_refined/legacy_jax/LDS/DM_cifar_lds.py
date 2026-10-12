@@ -168,7 +168,7 @@ import jax
 import jax.numpy as jnp
 
 from DM__training_CIFAR10_pixel import TrainConfig, train
-from DM___sampler import CIFARAdapter
+from DM___sampler import CIFARAdapter, inference_timesteps
 from DM_counterfactual_retrain_from_attribution import (
     build_filtered_index_to_cifar_row_map,
     combine_attribution_scores,
@@ -736,6 +736,14 @@ class CifarTargetEvaluator:
                     f"saved={saved_sampler!r}, requested={self.trajectory_sampler!r}."
                 )
         self.target_meta["trajectory_sampler"] = self.trajectory_sampler
+        sample_manifest = self.target_meta.get("manifest", {})
+        sample_seed_info = self.target_meta.get("seed_info", {})
+        self.num_inference_steps = int(
+            sample_seed_info.get(
+                "num_inference_steps",
+                sample_manifest.get("num_inference_steps", self.base_adapter.cfg.timesteps),
+            )
+        )
 
         self._noise_fn = jax.jit(self._noise_objective)
         self._projected_fn = jax.jit(self._projected_trajectory_objective)
@@ -850,14 +858,20 @@ class CifarTargetEvaluator:
         betas = adapter.schedule.betas
         alphas = adapter.schedule.alphas
         alphas_cumprod = adapter.schedule.alphas_cumprod
-        t_seq = jnp.arange(adapter.cfg.timesteps - 1, -1, -1, dtype=jnp.int32)
+        inference_ts = inference_timesteps(
+            int(adapter.cfg.timesteps), int(self.num_inference_steps)
+        )
+        previous_ts = inference_ts[1:] + [-1]
+        t_seq = jnp.asarray(inference_ts, dtype=jnp.int32)
+        prev_t_seq = jnp.asarray(previous_ts, dtype=jnp.int32)
 
         @jax.jit
         def sample_scan(init_rng):
             init_x = jax.random.normal(init_rng, shape, dtype=jnp.float32)
 
-            def body_fn(carry, i):
+            def body_fn(carry, step):
                 x, loop_rng = carry
+                i, prev_i = step
                 t = jnp.full((shape[0],), i, dtype=jnp.int32)
                 pred = adapter.model.apply(
                     {"params": adapter.state.ema_params},
@@ -872,10 +886,9 @@ class CifarTargetEvaluator:
                 ) / jnp.sqrt(1.0 - alphas_cumprod[i])
 
                 if self.trajectory_sampler == "ddim_eta0":
-                    prev_i = jnp.maximum(i - 1, 0)
                     abar_prev = jax.lax.cond(
-                        i > 0,
-                        lambda _: alphas_cumprod[prev_i],
+                        prev_i >= 0,
+                        lambda _: alphas_cumprod[jnp.maximum(prev_i, 0)],
                         lambda _: jnp.asarray(1.0, dtype=alphas_cumprod.dtype),
                         operand=None,
                     )
@@ -901,17 +914,29 @@ class CifarTargetEvaluator:
                     )
                 return (next_x, loop_rng), x
 
-            (_final_x, _), xt_seq = jax.lax.scan(body_fn, (init_x, init_rng), t_seq)
-            return xt_seq
+            (final_x, _), xt_seq = jax.lax.scan(
+                body_fn, (init_x, init_rng), (t_seq, prev_t_seq)
+            )
+            return final_x, xt_seq
 
-        xt_seq_np = np.asarray(sample_scan(rng), dtype=np.float32)
+        final_x_np, xt_seq_np = sample_scan(rng)
+        final_x_np = np.asarray(final_x_np, dtype=np.float32)
+        xt_seq_np = np.asarray(xt_seq_np, dtype=np.float32)
+        timestep_to_position = {
+            timestep: position for position, timestep in enumerate(inference_ts)
+        }
         saved = []
         for timestep in timesteps_to_save:
             t_value = int(timestep)
-            if t_value < 0 or t_value >= int(adapter.cfg.timesteps):
-                raise ValueError(f"Cannot save timestep {t_value}; valid range is [0, {int(adapter.cfg.timesteps) - 1}]")
-            seq_idx = int(adapter.cfg.timesteps) - 1 - t_value
-            saved.append(xt_seq_np[seq_idx])
+            if t_value == 0 and t_value not in timestep_to_position:
+                saved.append(final_x_np)
+            elif t_value in timestep_to_position:
+                saved.append(xt_seq_np[timestep_to_position[t_value]])
+            else:
+                raise ValueError(
+                    f"Saved reference timestep {t_value} is not in the "
+                    f"{self.num_inference_steps}-step inference schedule"
+                )
         return np.stack(saved, axis=0).astype(np.float32)
 
     def _trajectory_state_mse(self, target_adapter: CIFARAdapter) -> Tuple[float, Dict[str, object]]:

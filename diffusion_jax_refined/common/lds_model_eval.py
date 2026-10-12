@@ -375,6 +375,9 @@ def main() -> None:
     cache_root = Path(require_attr(dataset_cfg, eval_root_attr)) / "lds_target_cache"
     if args.trajectory_sampler != "ddpm":
         cache_root = cache_root / args.trajectory_sampler
+    cache_namespace = os.environ.get("LDS_TARGET_CACHE_NAMESPACE", "").strip()
+    if cache_namespace:
+        cache_root = cache_root / cache_namespace
     cache_root = cache_root / names
     cache_dirs = {target: cache_root / target for target in target_functions}
     for cache_dir in cache_dirs.values():

@@ -86,3 +86,32 @@ bank uses the same three-seed, 64-model, 2,500-of-5,000 contract:
 ```bash
 bash script/run_lds_attr40_4gpu_all_seeds.sh
 ```
+
+## Attr40 validation-label query100 and LDS targets
+
+Create 25 deterministic labels from the official validation split (excluding
+`Blurry`, with 4--14 positive attributes), then pair every label with initial
+seeds 0--3 to obtain 100 queries:
+
+```bash
+python script/build_attr40_query100.py \
+  --partition ../dataset/celeba/list_eval_partition.txt \
+  --attributes ../dataset/celeba/list_attr_celeba.txt
+```
+
+After all 192 conditional LDS checkpoints exist, GPUs 4--7 can sample the 100
+queries with 50-step DDIM and cache the four reusable true-f targets. Endpoint
+and trajectory counterfactual are computed together from one subset-model
+trajectory. The run is resumable and exports one long CSV plus one CSV per
+target:
+
+```bash
+python script/run_attr40_query100_sample_lds.py \
+  --execute \
+  --query-file queries_attr40_val25_x4.json \
+  --gpus 4,5,6,7
+```
+
+Outputs are written below `result/attr40_experiment1/sample_ddim_eta0_50/`,
+the per-query LDS target cache below `result/attr40_experiment1/eval/`, and
+the CSV files below `result/attr40_experiment1/query100_lds_csv_ddim50/`.

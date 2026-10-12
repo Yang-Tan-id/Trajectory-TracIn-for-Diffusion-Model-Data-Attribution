@@ -87,10 +87,16 @@ def sample_model_space_trajectory(
     batch_size: int,
     save_timesteps: Sequence[int],
     trajectory_sampler: str = "ddpm",
+    num_inference_steps: Optional[int] = None,
 ) -> Tuple[np.ndarray, Dict[int, np.ndarray], np.ndarray]:
     trajectory_sampler = str(trajectory_sampler).strip().lower()
     if trajectory_sampler not in ("ddpm", "ddim_eta0"):
         raise ValueError("trajectory_sampler must be 'ddpm' or 'ddim_eta0'.")
+    inference_steps = int(num_inference_steps or adapter.cfg.timesteps)
+    if trajectory_sampler == "ddpm" and inference_steps != int(adapter.cfg.timesteps):
+        raise ValueError("Fewer inference steps require trajectory_sampler='ddim_eta0'.")
+    inference_ts = sampler.inference_timesteps(int(adapter.cfg.timesteps), inference_steps)
+    previous_ts = inference_ts[1:] + [-1]
     rng = jax.random.PRNGKey(seed)
     cond = adapter.make_condition(prompt=prompt, batch_size=batch_size)
     shape = adapter.sample_shape(batch_size)
@@ -99,14 +105,16 @@ def sample_model_space_trajectory(
     alphas = adapter.schedule.alphas
     alphas_cumprod = adapter.schedule.alphas_cumprod
     cond_y = cond if getattr(adapter.cfg, "class_cond", True) else None
-    t_seq = jnp.arange(adapter.cfg.timesteps - 1, -1, -1, dtype=jnp.int32)
+    t_seq = jnp.asarray(inference_ts, dtype=jnp.int32)
+    prev_t_seq = jnp.asarray(previous_ts, dtype=jnp.int32)
 
     @jax.jit
     def _sample_scan_loop(init_rng: jax.Array):
         init_x = jax.random.normal(init_rng, shape)
 
-        def body_fn(carry, i):
+        def body_fn(carry, step):
             x_t, loop_rng = carry
+            i, prev_i = step
             t = jnp.full((shape[0],), i, dtype=jnp.int32)
             pred = adapter.model.apply(
                 {"params": adapter.state.ema_params},
@@ -122,10 +130,9 @@ def sample_model_space_trajectory(
             ) / jnp.sqrt(1.0 - alphas_cumprod[i])
 
             if trajectory_sampler == "ddim_eta0":
-                prev_i = jnp.maximum(i - 1, 0)
                 abar_prev = jax.lax.cond(
-                    i > 0,
-                    lambda _: alphas_cumprod[prev_i],
+                    prev_i >= 0,
+                    lambda _: alphas_cumprod[jnp.maximum(prev_i, 0)],
                     lambda _: jnp.asarray(1.0, dtype=alphas_cumprod.dtype),
                     operand=None,
                 )
@@ -151,7 +158,9 @@ def sample_model_space_trajectory(
                 )
             return (next_x, loop_rng), x_t
 
-        (final_x, _), xt_seq = jax.lax.scan(body_fn, (init_x, init_rng), t_seq)
+        (final_x, _), xt_seq = jax.lax.scan(
+            body_fn, (init_x, init_rng), (t_seq, prev_t_seq)
+        )
         return final_x, xt_seq
 
     final_x, xt_seq = _sample_scan_loop(rng)
@@ -159,11 +168,13 @@ def sample_model_space_trajectory(
     xt_seq_np = np.asarray(xt_seq)
 
     saved = {}
+    timestep_to_position = {timestep: position for position, timestep in enumerate(inference_ts)}
     for timestep in save_timesteps:
-        if timestep < 0 or timestep >= adapter.cfg.timesteps:
-            continue
-        seq_idx = adapter.cfg.timesteps - 1 - int(timestep)
-        saved[int(timestep)] = np.asarray(xt_seq_np[seq_idx])
+        timestep = int(timestep)
+        if timestep == 0 and timestep not in timestep_to_position:
+            saved[0] = np.asarray(final_x_np)
+        elif timestep in timestep_to_position:
+            saved[timestep] = np.asarray(xt_seq_np[timestep_to_position[timestep]])
 
     if 0 not in saved:
         saved[0] = np.asarray(final_x_np)
@@ -187,6 +198,7 @@ def save_seed_outputs(
     max_png_side: int,
     trajectory_sampler: str,
     save_trajectory_pngs: bool,
+    num_inference_steps: int,
 ):
     os.makedirs(seed_dir, exist_ok=True)
 
@@ -238,6 +250,7 @@ def save_seed_outputs(
         "final_state_shape": list(final_state.shape),
         "decoded_final_shape": list(decoded_final.shape),
         "trajectory_sampler": trajectory_sampler,
+        "num_inference_steps": int(num_inference_steps),
         "trajectory_pngs_saved": bool(save_trajectory_pngs),
     }
     with open(os.path.join(seed_dir, "seed_info.json"), "w") as f:
@@ -264,6 +277,12 @@ def main():
     parser.add_argument("--prefer-device", type=str, default="auto", choices=["auto", "cpu", "gpu"])
     parser.add_argument("--outdir", type=str, default="./attribution_samples")
     parser.add_argument("--num-trajectory-steps", type=int, default=100)
+    parser.add_argument(
+        "--num-inference-steps",
+        type=int,
+        default=None,
+        help="Number of model noise predictions. Fewer than training timesteps requires DDIM eta=0.",
+    )
     parser.add_argument(
         "--save-trajectory-pngs",
         action="store_true",
@@ -298,7 +317,13 @@ def main():
     )
     adapter.setup()
 
-    save_timesteps = sampler.selected_timesteps_evenly(adapter.cfg.timesteps, args.num_trajectory_steps)
+    num_inference_steps = int(args.num_inference_steps or adapter.cfg.timesteps)
+    inference_ts = sampler.inference_timesteps(int(adapter.cfg.timesteps), num_inference_steps)
+    if args.trajectory_sampler == "ddpm" and num_inference_steps != int(adapter.cfg.timesteps):
+        parser.error("--num-inference-steps below the training timestep count requires --trajectory-sampler ddim_eta0")
+    save_timesteps = sampler.selected_inference_timesteps(
+        inference_ts, args.num_trajectory_steps
+    )
     ordered_timesteps = sorted(save_timesteps, reverse=True)
 
     run_root = resolve_output_root(
@@ -322,6 +347,8 @@ def main():
         "num_trajectory_steps_requested": int(args.num_trajectory_steps),
         "saved_timesteps": [int(x) for x in ordered_timesteps],
         "trajectory_sampler": args.trajectory_sampler,
+        "num_inference_steps": num_inference_steps,
+        "inference_timesteps": inference_ts,
         "save_trajectory_pngs": bool(args.save_trajectory_pngs),
         "metadata": adapter.metadata(),
     }
@@ -348,6 +375,7 @@ def main():
             batch_size=args.batch_size,
             save_timesteps=ordered_timesteps,
             trajectory_sampler=args.trajectory_sampler,
+            num_inference_steps=num_inference_steps,
         )
 
         seed_dir = os.path.join(run_root, f"seed_{seed:06d}")
@@ -366,6 +394,7 @@ def main():
             max_png_side=args.max_png_side,
             trajectory_sampler=args.trajectory_sampler,
             save_trajectory_pngs=args.save_trajectory_pngs,
+            num_inference_steps=num_inference_steps,
         )
 
         elapsed = time.time() - seed_start

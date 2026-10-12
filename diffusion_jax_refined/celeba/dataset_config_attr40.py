@@ -1,7 +1,14 @@
 from __future__ import annotations
 
 import os
+import re
 from pathlib import Path
+
+
+def _prompt_path_tag(prompt: str) -> str:
+    text = str(prompt).strip().replace(",", "__")
+    text = re.sub(r"[^A-Za-z0-9._-]+", "_", text)
+    return re.sub(r"_+", "_", text).strip("_")[:80] or "empty_prompt"
 
 
 ATTRIBUTES = (
@@ -43,6 +50,7 @@ MODEL_ROOT = RESULT_ROOT / "model"
 LDS_MODEL_ROOT = RESULT_ROOT / "lds_model"
 ATTRIBUTION_ROOT = RESULT_ROOT / "attribution_score"
 EVAL_ROOT = RESULT_ROOT / "eval"
+SAMPLE_ROOT = Path(os.environ.get("SAMPLE_ROOT", str(RESULT_ROOT / "sample_ddim_eta0_50")))
 PROMPTED_JAX_MODEL_ROOT = MODEL_ROOT / "prompted_jax"
 CHECKPOINT_DIR = str(PROMPTED_JAX_MODEL_ROOT)
 
@@ -51,6 +59,34 @@ JAX_EPOCHS = int(os.environ.get("JAX_EPOCHS", "200"))
 PROMPTED_CKPT_STEM = f"seed_{TRAIN_SEED}_epoch_{JAX_EPOCHS:04d}"
 REFERENCE_CKPT = str(PROMPTED_JAX_MODEL_ROOT / f"{PROMPTED_CKPT_STEM}.ckpt")
 QUERY = os.environ.get("QUERY", "Smiling,Young")
+INITIAL_SEED = int(os.environ.get("INITIAL_SEED", os.environ.get("SAMPLE_SEED", "0")))
+SAMPLE_MODEL_MODE = os.environ.get("SAMPLE_MODEL_MODE", "prompted_solo")
+ATTRIBUTION_SCORE_MODEL_MODE = os.environ.get(
+    "ATTRIBUTION_SCORE_MODEL_MODE",
+    os.environ.get("ATTRIBUTION_SAMPLE_MODEL_MODE", SAMPLE_MODEL_MODE),
+)
+ATTRIBUTION_RUN_ROOT = (
+    ATTRIBUTION_ROOT
+    / ATTRIBUTION_SCORE_MODEL_MODE
+    / f"train_seed_{TRAIN_SEED}"
+    / f"query_{_prompt_path_tag(QUERY)}"
+    / f"initial_seed_{INITIAL_SEED}"
+)
+EVAL_RUN_ROOT = (
+    EVAL_ROOT
+    / ATTRIBUTION_SCORE_MODEL_MODE
+    / f"query_{_prompt_path_tag(QUERY)}"
+    / f"initial_seed_{INITIAL_SEED}"
+)
+ATTRIBUTION_SAMPLE_DIR = os.environ.get(
+    "ATTRIBUTION_SAMPLE_DIR",
+    str(
+        SAMPLE_ROOT
+        / "cifar"
+        / f"prompt_{_prompt_path_tag(QUERY)}"
+        / f"model_{os.environ.get('ATTRIBUTION_SAMPLE_MODEL_MODE', SAMPLE_MODEL_MODE)}__ckpt_{Path(REFERENCE_CKPT).stem}"
+    ),
+)
 
 COMMON_CIFAR = {
     "task_type": "cifar10",
