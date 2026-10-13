@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
-"""CelebA endpoint-pollute and endpoint-TracIn, aligned 1x50.
+"""CelebA endpoint-pollute timewise 1x50 and endpoint-TracIn mean-50.
 
-The unit of normalization in this runner is one full-parameter loss gradient
-at one (checkpoint, timestamp, example) event.  Normalization therefore occurs
-before CountSketch projection and before summing timestamps/checkpoints.
+Endpoint-pollute keeps aligned per-timestamp contractions.  Endpoint-TracIn does
+not: its raw query is the mean of 50 simple-loss gradients, while its normalized
+query is the ReTrac definition (normalize every full-parameter timestamp loss
+gradient, then project and average).  Its train feature is the gradient of the
+mean 50-timestamp loss; AdamW is applied once to that mean gradient.
 
-One train gradient evaluation produces both the raw-gradient feature and the
-full hypothetical AdamW update from the restored checkpoint optimizer state.
-The train feature is streamed directly into all query scores and is never
-persisted.  Both raw and full-L2-normalized query features are persisted so the
-endpoint simple-loss bank can later be reused by ReTrac.
+Each train pass produces both the raw-gradient feature and the full hypothetical
+AdamW update from the restored checkpoint optimizer state.  Train features are
+streamed directly into scores and never persisted.  Raw per-loss queries and
+per-loss full-L2-normalized queries are persisted for later ReTrac reuse.
 """
 
 from __future__ import annotations
@@ -241,6 +242,41 @@ def make_train_fn(adapter, model, schedule, projector, state, params):
     return jax.jit(jax.vmap(one, in_axes=(0, 0, None, None)))
 
 
+def make_endpoint_train_mean_fn(adapter, model, schedule, projector, state, params):
+    """Gradient of mean-50 loss, followed by exactly one AdamW update."""
+
+    def one(x0, cond, noises, timesteps):
+        x0 = x0[None, ...]
+        cond = cond[None, ...] if cond.ndim else cond[None]
+        initial = jax.tree_util.tree_map(jnp.zeros_like, params)
+
+        def body(total, inputs):
+            noise, timestep = inputs
+            t = jnp.full((1,), timestep, dtype=jnp.int32)
+
+            def loss_fn(candidate):
+                xt = q_sample(schedule, x0, t, noise)
+                pred = adapter.eps_apply(model, candidate, xt, t, cond)
+                return jnp.mean(jnp.square(pred - noise))
+
+            grad = jax.grad(loss_fn)(params)
+            total = jax.tree_util.tree_map(jnp.add, total, grad)
+            return total, None
+
+        total, _ = jax.lax.scan(body, initial, (noises, timesteps))
+        denominator = jnp.asarray(timesteps.shape[0], dtype=jnp.float32)
+        mean_grad = jax.tree_util.tree_map(lambda value: value / denominator, total)
+        update, _ = state.tx.update(mean_grad, state.opt_state, params)
+        return (
+            projector(mean_grad).astype(jnp.float32),
+            tree_l2_norm(mean_grad).astype(jnp.float32),
+            projector(update).astype(jnp.float32),
+            tree_l2_norm(update).astype(jnp.float32),
+        )
+
+    return jax.jit(jax.vmap(one, in_axes=(0, 0, None, None)))
+
+
 def load_or_compute_query_checkpoint(
     *,
     checkpoint_index: int,
@@ -323,6 +359,7 @@ def update_scores(
     timestamp_slot: int,
     raw_weight: float,
     adamw_weight: float,
+    objective_slice: slice = slice(None),
 ) -> None:
     objective_count, query_count, proj_dim = query_raw.shape
     batch_size = raw_train.shape[0]
@@ -360,14 +397,63 @@ def update_scores(
         )
         for variant_slot, value in enumerate(values):
             contribution = float(weight) * value
-            key = (slice(None), transform_slot, variant_slot, slice(None), destination)
+            key = (objective_slice, transform_slot, variant_slot, slice(None), destination)
             linear_scores[key] += contribution
             # Match the established endpoint-pollute convention: apply the
             # checkpoint/timestamp weight after squaring the individual dot.
             termwise_squared_scores[key] += float(weight) * np.square(value)
             timestamp_components[
-                :, transform_slot, variant_slot, :, timestamp_slot, destination
+                objective_slice,
+                transform_slot,
+                variant_slot,
+                :,
+                timestamp_slot,
+                destination,
             ] += contribution.astype(np.float32)
+
+
+def update_endpoint_scores(
+    linear_scores: np.ndarray,
+    *,
+    query_raw: jax.Array,
+    query_retrac: jax.Array,
+    raw_train: jax.Array,
+    raw_train_normalized: jax.Array,
+    adamw_train: jax.Array,
+    adamw_train_normalized: jax.Array,
+    destination: slice,
+    raw_weight: float,
+) -> None:
+    """Checkpoint-level Endpoint-TracIn; there is no timestamp pairing here."""
+    batch_size = raw_train.shape[0]
+    train_all = jnp.concatenate(
+        (raw_train, raw_train_normalized, adamw_train, adamw_train_normalized),
+        axis=0,
+    )
+    raw_dots = jnp.matmul(query_raw, train_all.T, precision=jax.lax.Precision.HIGHEST)
+    retrac_dots = jnp.matmul(
+        query_retrac, train_all.T, precision=jax.lax.Precision.HIGHEST
+    )
+    retrac_dots.block_until_ready()
+    raw_host = np.asarray(jax.device_get(raw_dots), dtype=np.float32).reshape(
+        query_raw.shape[0], 4, batch_size
+    )
+    retrac_host = np.asarray(jax.device_get(retrac_dots), dtype=np.float32).reshape(
+        query_raw.shape[0], 4, batch_size
+    )
+    for transform_slot, (raw_block, normalized_block, weight) in enumerate(
+        ((0, 1, raw_weight), (2, 3, 1.0))
+    ):
+        values = (
+            raw_host[:, raw_block],
+            retrac_host[:, raw_block],
+            raw_host[:, normalized_block],
+            retrac_host[:, normalized_block],
+        )
+        for variant_slot, value in enumerate(values):
+            linear_scores[
+                1, transform_slot, variant_slot, :, destination
+            ] += float(weight) * value
 
 
 def merge_query_bank(
@@ -492,10 +578,18 @@ def merge_scores(
         for objective_slot, objective in enumerate(OBJECTIVES):
             for transform_slot, transform in enumerate(TRANSFORMS):
                 for reduction, reduction_scores in reductions.items():
-                    namespace = (
-                        f"celeba_{objective}_{transform}_train1x50_query1x50_"
-                        f"{reduction}"
-                    )
+                    if objective == "endpoint_tracin" and reduction != "linear":
+                        continue
+                    if objective == "endpoint_tracin":
+                        namespace = (
+                            f"celeba_endpoint_tracin_{transform}_"
+                            "train_mean50_query_retrac50_linear"
+                        )
+                    else:
+                        namespace = (
+                            f"celeba_{objective}_{transform}_train1x50_query1x50_"
+                            f"{reduction}"
+                        )
                     root = (
                         result_root
                         / "attribution_score"
@@ -528,9 +622,11 @@ def merge_scores(
                                 "train_mc_per_timestamp": 1,
                                 "query_mc_per_timestamp": 1,
                                 "normalization_order": (
-                                    "normalize_each full-parameter loss/update event "
-                                    "before CountSketch and before any timestamp/checkpoint "
-                                    "aggregation"
+                                    "endpoint_pollute: normalize each full-parameter event "
+                                    "before projection; endpoint_tracin query_l2: normalize "
+                                    "each query loss before projection then average; "
+                                    "endpoint_tracin train_l2: normalize the mean-50 train "
+                                    "gradient/update before projection"
                                 ),
                                 "reduction_semantics": (
                                     "linear=sum(weight*dot); "
@@ -539,9 +635,10 @@ def merge_scores(
                                 ),
                                 "persistent_train_gradient_artifact": False,
                                 "adamw_full_semantics": (
-                                    "state.tx.update(per_timestamp_per_example_gradient, "
-                                    "restored_opt_state, params); includes moments, checkpoint "
-                                    "learning rate, clipping and decoupled weight decay"
+                                    "endpoint_pollute: update each timestamp gradient; "
+                                    "endpoint_tracin: update the mean-50 loss gradient once; "
+                                    "both use restored optimizer state and include moments, "
+                                    "checkpoint learning rate, clipping and weight decay"
                                 ),
                             },
                         )
@@ -558,6 +655,7 @@ def main() -> None:
     parser.add_argument("--timestamp-count", type=int, default=50)
     parser.add_argument("--proj-dim", type=int, default=4096)
     parser.add_argument("--train-batch-size", type=int, default=16)
+    parser.add_argument("--endpoint-train-batch-size", type=int, default=2)
     parser.add_argument("--shard-index", type=int, default=0)
     parser.add_argument("--shard-count", type=int, default=1)
     parser.add_argument("--component-prefix", type=Path, required=True)
@@ -768,8 +866,8 @@ def main() -> None:
                     linear_scores,
                     termwise_squared_scores,
                     timestamp_components,
-                    query_raw=query_raw_device[:, :, timestamp_slot],
-                    query_normalized=query_norm_device[:, :, timestamp_slot],
+                    query_raw=query_raw_device[0:1, :, timestamp_slot],
+                    query_normalized=query_norm_device[0:1, :, timestamp_slot],
                     raw_train=raw_train,
                     raw_train_normalized=raw_train_normalized,
                     adamw_train=adamw_train,
@@ -778,12 +876,83 @@ def main() -> None:
                     timestamp_slot=timestamp_slot,
                     raw_weight=float(raw_checkpoint_weight) / len(timesteps),
                     adamw_weight=1.0 / len(timesteps),
+                    objective_slice=slice(0, 1),
                 )
             print(
                 f"[train+score] checkpoint {checkpoint_index + 1}/49 "
                 f"timestamp {timestamp_slot + 1}/50 t={int(timestep)}",
                 flush=True,
             )
+
+        # Endpoint-TracIn has one feature per checkpoint, not one contraction
+        # per timestamp.  Query-L2 follows paper ReTrac: normalize every query
+        # loss gradient in full parameter space, then project and average.
+        endpoint_query_raw = array_to_device(
+            jnp.asarray(
+                np.mean(query_raw[1], axis=1, dtype=np.float64).astype(np.float32)
+            ),
+            device,
+        )
+        endpoint_query_retrac = array_to_device(
+            jnp.asarray(
+                np.mean(query_normalized[1], axis=1, dtype=np.float64).astype(np.float32)
+            ),
+            device,
+        )
+        endpoint_noises = array_to_device(
+            jnp.stack(
+                [
+                    jax.random.normal(
+                        checkpoint_timestamp_shared_noise_key(
+                            args.train_seed, checkpoint_index, int(timestep)
+                        ),
+                        queries[0]["endpoint"].shape,
+                        dtype=jnp.float32,
+                    )
+                    for timestep in timesteps
+                ],
+                axis=0,
+            ),
+            device,
+        )
+        endpoint_timesteps = array_to_device(jnp.asarray(timesteps), device)
+        endpoint_train_fn = make_endpoint_train_mean_fn(
+            adapter, model, schedule, projector, state, params
+        )
+        endpoint_batch_size = args.endpoint_train_batch_size
+        for start in range(0, len(attribution_indices), endpoint_batch_size):
+            end = min(len(attribution_indices), start + endpoint_batch_size)
+            real_indices = attribution_indices[start:end]
+            padded = pad_indices_to_batch(real_indices, endpoint_batch_size)
+            x_batch, cond_batch = make_train_batch(
+                adapter, dataset, padded, device, use_bfloat16=False
+            )
+            raw_train, raw_norms, adamw_train, adamw_norms = endpoint_train_fn(
+                x_batch, cond_batch, endpoint_noises, endpoint_timesteps
+            )
+            raw_train.block_until_ready()
+            real_count = end - start
+            raw_train = raw_train[:real_count]
+            adamw_train = adamw_train[:real_count]
+            update_endpoint_scores(
+                linear_scores,
+                query_raw=endpoint_query_raw,
+                query_retrac=endpoint_query_retrac,
+                raw_train=raw_train,
+                raw_train_normalized=raw_train
+                / jnp.maximum(raw_norms[:real_count, None], EPS),
+                adamw_train=adamw_train,
+                adamw_train_normalized=adamw_train
+                / jnp.maximum(adamw_norms[:real_count, None], EPS),
+                destination=slice(start, end),
+                raw_weight=float(raw_checkpoint_weight),
+            )
+            if start == 0 or end == len(attribution_indices) or end % 500 == 0:
+                print(
+                    f"[endpoint train+score] checkpoint {checkpoint_index + 1}/49 "
+                    f"datapoints={end}/{len(attribution_indices)}",
+                    flush=True,
+                )
 
         completed.append(checkpoint_index)
         timestamp_components.flush()

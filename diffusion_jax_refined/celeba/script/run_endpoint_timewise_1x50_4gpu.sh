@@ -16,7 +16,7 @@ shard_count="${#gpu_ids[@]}"
 
 run_tag="${RUN_TAG:-manual_$(date +%Y%m%d_%H%M%S)}"
 result_root="$celeba_root/result/$experiment"
-log_root="$result_root/logs/endpoint_timewise_1x50/$run_tag"
+log_root="$result_root/logs/endpoint_pollute_timewise_endpoint_mean_1x50/$run_tag"
 component_prefix="$log_root/components"
 query_part_root="$result_root/query_bank_endpoint_timewise_1x50_parts"
 mkdir -p "$log_root" "$query_part_root"
@@ -25,10 +25,11 @@ export PYTHONUNBUFFERED=1
 export TF_GPU_ALLOCATOR="${TF_GPU_ALLOCATOR:-cuda_malloc_async}"
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 
-echo "[definition] CelebA Attr40 endpoint-pollute + endpoint-TracIn"
-echo "[definition] train/query=MC1 x 50 timestamps; reductions=linear,termwise_squared,timestamp_sum_squared"
+echo "[definition] CelebA Attr40 endpoint-pollute timewise + endpoint-TracIn checkpoint-level mean50"
+echo "[definition] pollute reductions=linear,termwise_squared,timestamp_sum_squared; endpoint reduction=linear"
 echo "[definition] train transforms=raw_gradient,adamw_full; variants=raw,query_l2,train_l2,query_train_l2"
-echo "[definition] every full-parameter loss/update event is normalized before CountSketch and aggregation"
+echo "[definition] endpoint query_l2=mean_t(project(grad_t/full_L2(grad_t))) (paper ReTrac query)"
+echo "[definition] endpoint train=grad(mean50 loss), then AdamW exactly once; no timestamp-paired contraction"
 echo "[definition] raw and normalized query banks are persisted; train gradients are streamed and discarded"
 echo "[gpus] $gpu_ids_text"
 echo "[logs] $log_root"
@@ -42,6 +43,7 @@ common=(
   --timestamp-count 50
   --proj-dim "${TRAJ_TRACIN_PROJ_DIM:-4096}"
   --train-batch-size "${TRAJ_SCORE_BATCH_SIZE:-16}"
+  --endpoint-train-batch-size "${ENDPOINT_TRAJ_SCORE_BATCH_SIZE:-2}"
   --shard-count "$shard_count"
   --component-prefix "$component_prefix"
   --query-part-root "$query_part_root"
