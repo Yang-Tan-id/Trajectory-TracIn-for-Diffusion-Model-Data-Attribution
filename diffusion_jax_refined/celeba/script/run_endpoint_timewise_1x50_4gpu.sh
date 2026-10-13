@@ -18,7 +18,7 @@ run_tag="${RUN_TAG:-manual_$(date +%Y%m%d_%H%M%S)}"
 result_root="$celeba_root/result/$experiment"
 log_root="$result_root/logs/endpoint_pollute_timewise_endpoint_mean_1x50_shape3d_semantics/$run_tag"
 component_prefix="$log_root/components"
-query_part_root="$result_root/query_bank_endpoint_timewise_1x50_parts"
+query_part_root="${QUERY_PART_ROOT:-$result_root/query_bank_endpoint_timewise_1x50_shape3d_semantics_parts}"
 mkdir -p "$log_root" "$query_part_root"
 
 export PYTHONUNBUFFERED=1
@@ -36,6 +36,7 @@ echo "[definition] endpoint train=grad(mean50 loss), then AdamW exactly once; no
 echo "[definition] separate per-loss full-L2 query bank is persisted for later paper ReTrac; it is not used by endpoint scores"
 echo "[gpus] $gpu_ids_text"
 echo "[logs] $log_root"
+echo "[query parts] $query_part_root"
 
 common=(
   --query-file "$query_file"
