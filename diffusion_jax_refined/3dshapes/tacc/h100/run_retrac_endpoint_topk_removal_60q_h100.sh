@@ -34,6 +34,7 @@ export REPO_ROOT="$repo"
 export EXPERIMENT_TAG="${EXPERIMENT_TAG:-experiment1}"
 export TRAIN_SEED="${TRAIN_SEED:-42}"
 export JAX_EPOCHS="${JAX_EPOCHS:-200}"
+export PYTHONPATH="$shapes:$repo/diffusion_jax_refined:$repo/diffusion_jax_refined/legacy_jax${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONUNBUFFERED=1
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 export TF_GPU_ALLOCATOR="${TF_GPU_ALLOCATOR:-cuda_malloc_async}"
@@ -63,8 +64,8 @@ import jax
 from DM__training_3DSHAPES_pixel import TrainConfig, train
 
 devices = jax.devices("gpu")
-if len(devices) != 4:
-    raise RuntimeError(f"expected 4 visible H100 GPUs on the launch node, found {devices}")
+if not devices:
+    raise RuntimeError("the preflight Slurm task cannot see an H100 GPU")
 if "exclude_indices" not in TrainConfig.__dataclass_fields__:
     raise RuntimeError("3D Shapes TrainConfig lacks exclude_indices support")
 print(f"[preflight] JAX={jax.__version__}; GPUs={devices}; adapter/train import OK")
