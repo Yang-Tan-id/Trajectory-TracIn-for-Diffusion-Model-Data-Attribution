@@ -24,6 +24,9 @@ mkdir -p "$log_root" "$query_part_root"
 export PYTHONUNBUFFERED=1
 export TF_GPU_ALLOCATOR="${TF_GPU_ALLOCATOR:-cuda_malloc_async}"
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
+# Never inherit the debugging switch that disables JIT.  It makes the nested
+# gradient/vmap workload orders of magnitude slower while GPUs remain visible.
+export JAX_DISABLE_JIT=0
 
 echo "[definition] CelebA Attr40 endpoint-pollute timewise + endpoint-TracIn checkpoint-level mean50"
 echo "[definition] pollute reductions=linear,termwise_squared,timestamp_sum_squared; endpoint reduction=linear"
@@ -35,6 +38,7 @@ echo "[definition] endpoint score variants normalize checkpoint-level projected 
 echo "[definition] endpoint train=grad(mean50 loss), then AdamW exactly once; no timestamp-paired contraction"
 echo "[definition] separate per-loss full-L2 query bank is persisted for later paper ReTrac; it is not used by endpoint scores"
 echo "[gpus] $gpu_ids_text"
+echo "[runtime] JAX_DISABLE_JIT=$JAX_DISABLE_JIT; JAX_PLATFORMS=cuda per worker"
 echo "[logs] $log_root"
 echo "[query parts] $query_part_root"
 
