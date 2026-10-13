@@ -21,6 +21,7 @@ import os
 from pathlib import Path
 import shutil
 import sys
+import time
 from typing import Any
 
 import numpy as np
@@ -89,6 +90,22 @@ QUERY_KEYS = (
     ),
 )
 EPS = 1e-12
+
+
+def format_duration(seconds: float) -> str:
+    seconds = max(0, int(round(seconds)))
+    hours, remainder = divmod(seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if hours:
+        return f"{hours}h{minutes:02d}m{seconds:02d}s"
+    if minutes:
+        return f"{minutes}m{seconds:02d}s"
+    return f"{seconds}s"
+
+
+def progress_bar(current: int, total: int, width: int = 24) -> str:
+    filled = min(width, int(width * current / max(total, 1)))
+    return "[" + "=" * filled + ">" * (filled < width) + "." * max(0, width - filled - 1) + "]"
 
 
 def parse_ints(text: str) -> list[int]:
@@ -762,6 +779,7 @@ def main() -> None:
     parser.add_argument("--proj-dim", type=int, default=4096)
     parser.add_argument("--train-batch-size", type=int, default=16)
     parser.add_argument("--endpoint-train-batch-size", type=int, default=2)
+    parser.add_argument("--progress-every-batches", type=int, default=25)
     parser.add_argument("--shard-index", type=int, default=0)
     parser.add_argument("--shard-count", type=int, default=1)
     parser.add_argument("--component-prefix", type=Path, required=True)
@@ -773,6 +791,8 @@ def main() -> None:
         raise ValueError("this experiment contract requires exactly 50 timestamps")
     if not (0 <= args.shard_index < args.shard_count):
         raise ValueError("invalid checkpoint shard")
+    if args.progress_every_batches <= 0:
+        raise ValueError("--progress-every-batches must be positive")
 
     query_ids = parse_ints(args.query_ids)
     os.environ.update(
@@ -968,7 +988,19 @@ def main() -> None:
         )
         active_checkpoint_path.write_text(f"{checkpoint_index}\n")
 
+        timestamp_batch_count = (
+            len(attribution_indices) + args.train_batch_size - 1
+        ) // args.train_batch_size
         for timestamp_slot, timestep in enumerate(timesteps):
+            timestamp_started = time.monotonic()
+            print(
+                f"[timestamp progress] checkpoint={checkpoint_index + 1}/49 "
+                f"timestamp={timestamp_slot + 1}/50 t={int(timestep)} "
+                f"{progress_bar(0, timestamp_batch_count)} "
+                f"batch=0/{timestamp_batch_count} datapoints=0/{len(attribution_indices)} "
+                "elapsed=0s eta=warming-up",
+                flush=True,
+            )
             noise = jax.random.normal(
                 checkpoint_timestamp_shared_noise_key(
                     args.train_seed, checkpoint_index, int(timestep)
@@ -976,7 +1008,9 @@ def main() -> None:
                 queries[0]["endpoint"].shape,
                 dtype=jnp.float32,
             )
-            for start in range(0, len(attribution_indices), args.train_batch_size):
+            for batch_index, start in enumerate(
+                range(0, len(attribution_indices), args.train_batch_size), start=1
+            ):
                 end = min(len(attribution_indices), start + args.train_batch_size)
                 real_indices = attribution_indices[start:end]
                 padded = pad_indices_to_batch(real_indices, args.train_batch_size)
@@ -1016,9 +1050,27 @@ def main() -> None:
                     adamw_weight=float(raw_checkpoint_weight) / len(timesteps),
                     objective_slice=slice(0, 1),
                 )
+                if (
+                    batch_index == 1
+                    or batch_index == timestamp_batch_count
+                    or batch_index % args.progress_every_batches == 0
+                ):
+                    elapsed = time.monotonic() - timestamp_started
+                    eta = elapsed / batch_index * (timestamp_batch_count - batch_index)
+                    print(
+                        f"[timestamp progress] checkpoint={checkpoint_index + 1}/49 "
+                        f"timestamp={timestamp_slot + 1}/50 t={int(timestep)} "
+                        f"{progress_bar(batch_index, timestamp_batch_count)} "
+                        f"batch={batch_index}/{timestamp_batch_count} "
+                        f"datapoints={end}/{len(attribution_indices)} "
+                        f"elapsed={format_duration(elapsed)} "
+                        f"eta={format_duration(eta)}",
+                        flush=True,
+                    )
             print(
                 f"[train+score] checkpoint {checkpoint_index + 1}/49 "
-                f"timestamp {timestamp_slot + 1}/50 t={int(timestep)}",
+                f"timestamp {timestamp_slot + 1}/50 t={int(timestep)} "
+                f"elapsed={format_duration(time.monotonic() - timestamp_started)}",
                 flush=True,
             )
 

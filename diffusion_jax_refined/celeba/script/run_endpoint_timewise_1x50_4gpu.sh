@@ -52,6 +52,7 @@ common=(
   --proj-dim "${TRAJ_TRACIN_PROJ_DIM:-4096}"
   --train-batch-size "${TRAJ_SCORE_BATCH_SIZE:-16}"
   --endpoint-train-batch-size "${ENDPOINT_TRAJ_SCORE_BATCH_SIZE:-2}"
+  --progress-every-batches "${PROGRESS_EVERY_BATCHES:-25}"
   --shard-count "$shard_count"
   --component-prefix "$component_prefix"
   --query-part-root "$query_part_root"
