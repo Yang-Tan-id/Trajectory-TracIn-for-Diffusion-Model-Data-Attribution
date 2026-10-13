@@ -2,9 +2,9 @@
 """CelebA endpoint-pollute timewise 1x50 and endpoint-TracIn mean-50.
 
 Endpoint-pollute keeps aligned per-timestamp contractions.  Endpoint-TracIn does
-not: its raw query is the mean of 50 simple-loss gradients, while its normalized
-query is the ReTrac definition (normalize every full-parameter timestamp loss
-gradient, then project and average).  Its train feature is the gradient of the
+not: its query is the projected gradient of the mean 50-timestamp loss, and its
+four variants normalize that checkpoint-level projected feature exactly as in
+the Shape3D endpoint implementation.  Its train feature is the gradient of the
 mean 50-timestamp loss; AdamW is applied once to that mean gradient.
 
 Each train pass produces both the raw-gradient feature and the full hypothetical
@@ -60,6 +60,7 @@ from traj_tracin.algorithm import (
     save_npz_compressed_atomic,
     schedule_to_device,
     select_state_params,
+    train_losses_at_t_sequence_mc_vectorized,
     tracin_checkpoint_lr_weight,
     tree_l2_norm,
     tree_to_device,
@@ -79,12 +80,12 @@ QUERY_KEYS = (
     ("endpoint_pollute_raw", "celeba_endpoint_pollute_raw_1x50"),
     (
         "endpoint_pollute_normalized",
-        "celeba_endpoint_pollute_full_l2_normalized_1x50",
+        "celeba_endpoint_pollute_delta_l2_normalized_1x50",
     ),
-    ("endpoint_tracin_raw", "celeba_endpoint_tracin_simple_loss_raw_1x50"),
+    ("endpoint_tracin_raw", "celeba_endpoint_tracin_simple_loss_mean50_mc1"),
     (
         "endpoint_tracin_normalized",
-        "celeba_endpoint_tracin_simple_loss_full_l2_normalized_1x50",
+        "celeba_paper_retrac_endpoint_simple_loss_mean50_of_full_l2_1x50",
     ),
 )
 EPS = 1e-12
@@ -92,6 +93,14 @@ EPS = 1e-12
 
 def parse_ints(text: str) -> list[int]:
     return [int(value) for value in text.replace(",", " ").split() if value]
+
+
+def endpoint_noise_key(train_seed: int, query_id: int, checkpoint: int, timestep: int):
+    """Exact seed construction used by Shape3D endpoint query banks."""
+    key = jax.random.PRNGKey(int(train_seed) + 487_301)
+    for value in (query_id, checkpoint, timestep):
+        key = jax.random.fold_in(key, int(value))
+    return key
 
 
 def make_config(args: argparse.Namespace) -> TrajAttributionConfig:
@@ -189,23 +198,27 @@ def query_artifact_path(
 
 
 def make_query_fn(adapter, model, schedule, projector):
-    def one(params, target_params, endpoint, cond, noise, timestep):
+    def one(params, target_params, endpoint, cond, pollute_noise, simple_noise, timestep):
         t = jnp.full((endpoint.shape[0],), timestep, dtype=jnp.int32)
-        xt = q_sample(schedule, endpoint, t, noise)
+        pollute_xt = q_sample(schedule, endpoint, t, pollute_noise)
+        simple_xt = q_sample(schedule, endpoint, t, simple_noise)
 
         def simple_loss(candidate):
-            pred = adapter.eps_apply(model, candidate, xt, t, cond)
-            return jnp.mean(jnp.square(pred - noise))
+            pred = adapter.eps_apply(model, candidate, simple_xt, t, cond)
+            return jnp.mean(jnp.square(pred - simple_noise))
 
         def pollute_loss(candidate):
-            pred = adapter.eps_apply(model, candidate, xt, t, cond)
+            pred = adapter.eps_apply(model, candidate, pollute_xt, t, cond)
             target = jax.lax.stop_gradient(
-                adapter.eps_apply(model, target_params, xt, t, cond)
+                adapter.eps_apply(model, target_params, pollute_xt, t, cond)
             )
             delta = jax.lax.stop_gradient(target - pred)
-            return jnp.mean(pred * delta)
+            delta_norm = jnp.sqrt(jnp.sum(jnp.square(delta), dtype=jnp.float32))
+            return jnp.mean(pred * delta), delta_norm
 
-        pollute_grad = jax.grad(pollute_loss)(params)
+        (_pollute_value, delta_norm), pollute_grad = jax.value_and_grad(
+            pollute_loss, has_aux=True
+        )(params)
         simple_grad = jax.grad(simple_loss)(params)
         pollute_norm = tree_l2_norm(pollute_grad)
         simple_norm = tree_l2_norm(simple_grad)
@@ -214,12 +227,15 @@ def make_query_fn(adapter, model, schedule, projector):
             pollute_norm.astype(jnp.float32),
             projector(simple_grad).astype(jnp.float32),
             simple_norm.astype(jnp.float32),
+            delta_norm.astype(jnp.float32),
         )
 
     return jax.jit(one)
 
 
-def make_train_fn(adapter, model, schedule, projector, state, params):
+def make_train_fn(
+    adapter, model, schedule, projector, state, params, adamw_history_update
+):
     def one(x0, cond, noise, timestep):
         x0 = x0[None, ...]
         cond = cond[None, ...] if cond.ndim else cond[None]
@@ -232,49 +248,60 @@ def make_train_fn(adapter, model, schedule, projector, state, params):
 
         grad = jax.grad(loss_fn)(params)
         update, _ = state.tx.update(grad, state.opt_state, params)
+        residual_update = jax.tree_util.tree_map(
+            lambda value, history: value.astype(jnp.float32)
+            - history.astype(jnp.float32),
+            update,
+            adamw_history_update,
+        )
         return (
             projector(grad).astype(jnp.float32),
             tree_l2_norm(grad).astype(jnp.float32),
-            projector(update).astype(jnp.float32),
-            tree_l2_norm(update).astype(jnp.float32),
+            projector(residual_update).astype(jnp.float32),
+            tree_l2_norm(residual_update).astype(jnp.float32),
         )
 
     return jax.jit(jax.vmap(one, in_axes=(0, 0, None, None)))
 
 
-def make_endpoint_train_mean_fn(adapter, model, schedule, projector, state, params):
+def make_endpoint_train_mean_fn(
+    adapter, model, schedule, projector, state, params, adamw_history_update
+):
     """Gradient of mean-50 loss, followed by exactly one AdamW update."""
 
-    def one(x0, cond, noises, timesteps):
+    def one(x0, cond, rng, timesteps):
         x0 = x0[None, ...]
         cond = cond[None, ...] if cond.ndim else cond[None]
-        initial = jax.tree_util.tree_map(jnp.zeros_like, params)
 
-        def body(total, inputs):
-            noise, timestep = inputs
-            t = jnp.full((1,), timestep, dtype=jnp.int32)
+        def loss_fn(candidate):
+            return train_losses_at_t_sequence_mc_vectorized(
+                adapter=adapter,
+                model=model,
+                params=candidate,
+                schedule=schedule,
+                x0_batch=x0,
+                cond_batch=cond,
+                t_values=timesteps,
+                num_mc_samples=1,
+                rng=rng,
+            )[0]
 
-            def loss_fn(candidate):
-                xt = q_sample(schedule, x0, t, noise)
-                pred = adapter.eps_apply(model, candidate, xt, t, cond)
-                return jnp.mean(jnp.square(pred - noise))
-
-            grad = jax.grad(loss_fn)(params)
-            total = jax.tree_util.tree_map(jnp.add, total, grad)
-            return total, None
-
-        total, _ = jax.lax.scan(body, initial, (noises, timesteps))
-        denominator = jnp.asarray(timesteps.shape[0], dtype=jnp.float32)
-        mean_grad = jax.tree_util.tree_map(lambda value: value / denominator, total)
+        mean_grad = jax.grad(loss_fn)(params)
         update, _ = state.tx.update(mean_grad, state.opt_state, params)
+        residual_update = jax.tree_util.tree_map(
+            lambda value, history: value.astype(jnp.float32)
+            - history.astype(jnp.float32),
+            update,
+            adamw_history_update,
+        )
         return (
             projector(mean_grad).astype(jnp.float32),
             tree_l2_norm(mean_grad).astype(jnp.float32),
-            projector(update).astype(jnp.float32),
-            tree_l2_norm(update).astype(jnp.float32),
+            projector(residual_update).astype(jnp.float32),
+            tree_l2_norm(residual_update).astype(jnp.float32),
         )
 
-    return jax.jit(jax.vmap(one, in_axes=(0, 0, None, None)))
+    return jax.jit(jax.vmap(one, in_axes=(0, 0, 0, None)))
 
 
 def load_or_compute_query_checkpoint(
@@ -289,59 +316,88 @@ def load_or_compute_query_checkpoint(
     train_seed: int,
     device: Any,
     proj_dim: int,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     paths = [query_part_path(query_part_root, int(q["id"]), checkpoint_index) for q in queries]
-    if all(path.is_file() for path in paths):
+    cache_compatible = all(path.is_file() for path in paths)
+    if cache_compatible:
+        for path in paths:
+            with np.load(path, allow_pickle=False) as payload:
+                if "pollute_delta_l2_norms" not in payload.files:
+                    cache_compatible = False
+                    break
+    if cache_compatible:
         raw = np.empty((2, len(queries), len(timesteps), proj_dim), dtype=np.float32)
         norms = np.empty((2, len(queries), len(timesteps)), dtype=np.float32)
+        delta_norms = np.empty((len(queries), len(timesteps)), dtype=np.float32)
         for query_slot, path in enumerate(paths):
             with np.load(path, allow_pickle=False) as payload:
                 raw[:, query_slot] = payload["raw_features"]
                 norms[:, query_slot] = payload["full_l2_norms"]
+                delta_norms[query_slot] = payload["pollute_delta_l2_norms"]
         print(f"[query] checkpoint {checkpoint_index + 1}: loaded cached parts", flush=True)
-        return raw, norms
+        return raw, norms, delta_norms
 
     raw = np.empty((2, len(queries), len(timesteps), proj_dim), dtype=np.float32)
     norms = np.empty((2, len(queries), len(timesteps)), dtype=np.float32)
+    delta_norms = np.empty((len(queries), len(timesteps)), dtype=np.float32)
     endpoint_shape = queries[0]["endpoint"].shape
     for query_slot, query in enumerate(queries):
         endpoint = array_to_device(jnp.asarray(query["endpoint"]), device)
         cond = array_to_device(jnp.asarray(query["cond"]), device)
+        simple_noises = jax.random.normal(
+            endpoint_noise_key(train_seed, int(query["id"]), checkpoint_index, 100_001),
+            (len(timesteps),) + endpoint_shape,
+            dtype=jnp.float32,
+        )
         for timestamp_slot, timestep in enumerate(timesteps):
-            noise = jax.random.normal(
+            pollute_noise = jax.random.normal(
                 checkpoint_timestamp_shared_noise_key(
                     train_seed, checkpoint_index, int(timestep)
                 ),
                 endpoint_shape,
                 dtype=jnp.float32,
             )
-            pollute, pollute_norm, simple, simple_norm = query_fn(
-                params, target_params, endpoint, cond, noise, jnp.asarray(timestep)
+            pollute, pollute_norm, simple, simple_norm, delta_norm = query_fn(
+                params,
+                target_params,
+                endpoint,
+                cond,
+                pollute_noise,
+                simple_noises[timestamp_slot],
+                jnp.asarray(timestep),
             )
             simple.block_until_ready()
             raw[0, query_slot, timestamp_slot] = np.asarray(pollute, dtype=np.float32)
             raw[1, query_slot, timestamp_slot] = np.asarray(simple, dtype=np.float32)
             norms[0, query_slot, timestamp_slot] = float(pollute_norm)
             norms[1, query_slot, timestamp_slot] = float(simple_norm)
+            delta_norms[query_slot, timestamp_slot] = float(delta_norm)
         path = paths[query_slot]
-        if not path.is_file():
-            save_npz_compressed_atomic(
-                str(path),
-                raw_features=raw[:, query_slot],
-                full_l2_norms=norms[:, query_slot],
-                objective_names=np.asarray(OBJECTIVES),
-                checkpoint_index=np.asarray(checkpoint_index, dtype=np.int32),
-                timesteps=timesteps,
-                normalization=np.asarray(
-                    "full_parameter_l2_per_checkpoint_timestamp_loss_before_projection"
-                ),
-            )
+        save_npz_compressed_atomic(
+            str(path),
+            raw_features=raw[:, query_slot],
+            full_l2_norms=norms[:, query_slot],
+            pollute_delta_l2_norms=delta_norms[query_slot],
+            objective_names=np.asarray(OBJECTIVES),
+            checkpoint_index=np.asarray(checkpoint_index, dtype=np.int32),
+            timesteps=timesteps,
+            normalization=np.asarray(
+                "endpoint_retrac=full_parameter_l2_per_loss_before_projection; "
+                "pollute=delta_l2_before_projected_variant_normalization"
+            ),
+            endpoint_noise_seed_rule=np.asarray(
+                "endpoint_noise_key(train_seed,query_id,checkpoint,100001)"
+            ),
+            pollute_noise_seed_rule=np.asarray(
+                "checkpoint_timestamp_shared_noise_key(train_seed,checkpoint,timestep)"
+            ),
+        )
         print(
             f"[query] checkpoint {checkpoint_index + 1} "
             f"query {query_slot + 1}/{len(queries)} Q{query['id']}",
             flush=True,
         )
-    return raw, norms
+    return raw, norms, delta_norms
 
 
 def update_scores(
@@ -416,13 +472,14 @@ def update_endpoint_scores(
     linear_scores: np.ndarray,
     *,
     query_raw: jax.Array,
-    query_retrac: jax.Array,
+    query_normalized: jax.Array,
     raw_train: jax.Array,
     raw_train_normalized: jax.Array,
     adamw_train: jax.Array,
     adamw_train_normalized: jax.Array,
     destination: slice,
     raw_weight: float,
+    adamw_weight: float,
 ) -> None:
     """Checkpoint-level Endpoint-TracIn; there is no timestamp pairing here."""
     batch_size = raw_train.shape[0]
@@ -431,24 +488,26 @@ def update_endpoint_scores(
         axis=0,
     )
     raw_dots = jnp.matmul(query_raw, train_all.T, precision=jax.lax.Precision.HIGHEST)
-    retrac_dots = jnp.matmul(
-        query_retrac, train_all.T, precision=jax.lax.Precision.HIGHEST
+    normalized_dots = jnp.matmul(
+        query_normalized, train_all.T, precision=jax.lax.Precision.HIGHEST
     )
-    retrac_dots.block_until_ready()
+    normalized_dots.block_until_ready()
     raw_host = np.asarray(jax.device_get(raw_dots), dtype=np.float32).reshape(
         query_raw.shape[0], 4, batch_size
     )
-    retrac_host = np.asarray(jax.device_get(retrac_dots), dtype=np.float32).reshape(
+    normalized_host = np.asarray(
+        jax.device_get(normalized_dots), dtype=np.float32
+    ).reshape(
         query_raw.shape[0], 4, batch_size
     )
     for transform_slot, (raw_block, normalized_block, weight) in enumerate(
-        ((0, 1, raw_weight), (2, 3, 1.0))
+        ((0, 1, raw_weight), (2, 3, adamw_weight))
     ):
         values = (
             raw_host[:, raw_block],
-            retrac_host[:, raw_block],
+            normalized_host[:, raw_block],
             raw_host[:, normalized_block],
-            retrac_host[:, normalized_block],
+            normalized_host[:, normalized_block],
         )
         for variant_slot, value in enumerate(values):
             linear_scores[
@@ -478,16 +537,36 @@ def merge_query_bank(
             )
         features_by_key: dict[str, list[np.ndarray]] = {key: [] for key, _ in QUERY_KEYS}
         norms_by_objective: list[list[np.ndarray]] = [[], []]
+        pollute_delta_norms: list[np.ndarray] = []
         for path in paths:
             with np.load(path, allow_pickle=False) as payload:
                 raw = np.asarray(payload["raw_features"], dtype=np.float32)
                 norms = np.asarray(payload["full_l2_norms"], dtype=np.float32)
-            for objective_slot, prefix in enumerate(("endpoint_pollute", "endpoint_tracin")):
-                features_by_key[f"{prefix}_raw"].append(raw[objective_slot])
-                features_by_key[f"{prefix}_normalized"].append(
-                    raw[objective_slot] / np.maximum(norms[objective_slot, :, None], EPS)
+                delta_norms = np.asarray(
+                    payload["pollute_delta_l2_norms"], dtype=np.float32
                 )
-                norms_by_objective[objective_slot].append(norms[objective_slot])
+            features_by_key["endpoint_pollute_raw"].append(raw[0])
+            features_by_key["endpoint_pollute_normalized"].append(
+                raw[0] / np.maximum(delta_norms[:, None], EPS)
+            )
+            # Shape3D endpoint query: gradient of mean loss (projection is linear).
+            features_by_key["endpoint_tracin_raw"].append(
+                np.mean(raw[1], axis=0, keepdims=True, dtype=np.float64).astype(np.float32)
+            )
+            # Extra paper-ReTrac bank: normalize every full-space loss gradient,
+            # project it, then average timestamps.  This is not used by the
+            # standard Endpoint-TracIn score.
+            features_by_key["endpoint_tracin_normalized"].append(
+                np.mean(
+                    raw[1] / np.maximum(norms[1, :, None], EPS),
+                    axis=0,
+                    keepdims=True,
+                    dtype=np.float64,
+                ).astype(np.float32)
+            )
+            norms_by_objective[0].append(norms[0])
+            norms_by_objective[1].append(norms[1])
+            pollute_delta_norms.append(delta_norms)
 
         ckpt_indices = np.repeat(np.arange(checkpoint_count, dtype=np.int32), len(timesteps))
         tiled_timesteps = np.tile(timesteps, checkpoint_count)
@@ -498,27 +577,55 @@ def merge_query_bank(
             artifact = query_artifact_path(
                 sample_root, reference_checkpoint, query, namespace
             )
-            if not artifact.is_file():
-                objective_slot = 0 if key.startswith("endpoint_pollute") else 1
-                save_npz_compressed_atomic(
-                    str(artifact),
-                    query_features=np.concatenate(features_by_key[key], axis=0),
-                    query_full_l2_norms=np.concatenate(norms_by_objective[objective_slot]),
-                    ckpt_indices=ckpt_indices,
-                    timesteps=tiled_timesteps,
-                    term_weights=term_weights,
-                    proj_dim=np.asarray(proj_dim, dtype=np.int32),
-                    query_objective=np.asarray(OBJECTIVES[objective_slot]),
-                    query_normalized=np.asarray(key.endswith("normalized")),
-                    normalization=np.asarray(
-                        "full_parameter_l2_per_checkpoint_timestamp_loss_before_projection"
-                    ),
-                    query_timestamp_count=np.asarray(len(timesteps), dtype=np.int32),
-                    query_mc_per_timestamp=np.asarray(1, dtype=np.int32),
-                    projection_seed_rule=np.asarray(
-                        "(train_seed,'traj_tracin_projection',checkpoint_index)"
-                    ),
-                )
+            objective_slot = 0 if key.startswith("endpoint_pollute") else 1
+            is_endpoint = key.startswith("endpoint_tracin")
+            artifact_ckpts = (
+                np.arange(checkpoint_count, dtype=np.int32)
+                if is_endpoint
+                else ckpt_indices
+            )
+            artifact_timesteps = (
+                np.full(checkpoint_count, -1, dtype=np.int32)
+                if is_endpoint
+                else tiled_timesteps
+            )
+            artifact_weights = (
+                np.ones(checkpoint_count, dtype=np.float32)
+                if is_endpoint
+                else term_weights
+            )
+            if key == "endpoint_pollute_normalized":
+                normalization = "prediction_delta_l2_before_projected_variant_normalization"
+            elif key == "endpoint_tracin_normalized":
+                normalization = "mean_t(project(full_parameter_l2_normalize(grad_loss_t)))"
+            elif key == "endpoint_tracin_raw":
+                normalization = "project(gradient(mean_50_timestamp_loss))"
+            else:
+                normalization = "none"
+            save_npz_compressed_atomic(
+                str(artifact),
+                query_features=np.concatenate(features_by_key[key], axis=0),
+                query_event_full_l2_norms=np.concatenate(
+                    norms_by_objective[objective_slot]
+                ),
+                pollute_delta_l2_norms=(
+                    np.concatenate(pollute_delta_norms)
+                    if objective_slot == 0
+                    else np.asarray([], dtype=np.float32)
+                ),
+                ckpt_indices=artifact_ckpts,
+                timesteps=artifact_timesteps,
+                term_weights=artifact_weights,
+                proj_dim=np.asarray(proj_dim, dtype=np.int32),
+                query_objective=np.asarray(OBJECTIVES[objective_slot]),
+                query_normalized=np.asarray(key.endswith("normalized")),
+                normalization=np.asarray(normalization),
+                query_timestamp_count=np.asarray(len(timesteps), dtype=np.int32),
+                query_mc_per_timestamp=np.asarray(1, dtype=np.int32),
+                projection_seed_rule=np.asarray(
+                    "(train_seed,'traj_tracin_projection',checkpoint_index)"
+                ),
+            )
             artifacts.append(artifact)
         if remove_parts:
             shutil.rmtree(query_part_root / f"q{query_id:03d}")
@@ -583,12 +690,12 @@ def merge_scores(
                     if objective == "endpoint_tracin":
                         namespace = (
                             f"celeba_endpoint_tracin_{transform}_"
-                            "train_mean50_query_retrac50_linear"
+                            "train_mean50_query_mean50_linear_shape3d_semantics"
                         )
                     else:
                         namespace = (
                             f"celeba_{objective}_{transform}_train1x50_query1x50_"
-                            f"{reduction}"
+                            f"{reduction}_shape3d_semantics"
                         )
                     root = (
                         result_root
@@ -622,11 +729,10 @@ def merge_scores(
                                 "train_mc_per_timestamp": 1,
                                 "query_mc_per_timestamp": 1,
                                 "normalization_order": (
-                                    "endpoint_pollute: normalize each full-parameter event "
-                                    "before projection; endpoint_tracin query_l2: normalize "
-                                    "each query loss before projection then average; "
-                                    "endpoint_tracin train_l2: normalize the mean-50 train "
-                                    "gradient/update before projection"
+                                    "Shape3D semantics: endpoint_pollute query first divides "
+                                    "by prediction-delta L2, then four variants use projected "
+                                    "query/train norms; endpoint_tracin forms checkpoint-level "
+                                    "mean-50 projected features first, then uses projected norms"
                                 ),
                                 "reduction_semantics": (
                                     "linear=sum(weight*dot); "
@@ -812,8 +918,19 @@ def main() -> None:
             seed_parts=(args.train_seed, "traj_tracin_projection", checkpoint_index),
             device=device,
         )
+        zero_grads = jax.tree_util.tree_map(jnp.zeros_like, params)
+        adamw_history_update, _ = state.tx.update(
+            zero_grads, state.opt_state, params
+        )
+        adamw_history_update = tree_to_device(adamw_history_update, device)
+        adamw_history_feature = np.asarray(
+            projector(adamw_history_update), dtype=np.float32
+        )
+        adamw_history_feature_device = array_to_device(
+            jnp.asarray(adamw_history_feature), device
+        )
         query_fn = make_query_fn(adapter, model, schedule, projector)
-        query_raw, query_norms = load_or_compute_query_checkpoint(
+        query_raw, query_norms, pollute_delta_norms = load_or_compute_query_checkpoint(
             checkpoint_index=checkpoint_index,
             query_part_root=args.query_part_root,
             queries=queries,
@@ -825,10 +942,27 @@ def main() -> None:
             device=device,
             proj_dim=args.proj_dim,
         )
-        query_normalized = query_raw / np.maximum(query_norms[..., None], EPS)
-        query_raw_device = array_to_device(jnp.asarray(query_raw), device)
-        query_norm_device = array_to_device(jnp.asarray(query_normalized), device)
-        train_fn = make_train_fn(adapter, model, schedule, projector, state, params)
+        # Shape3D endpoint-pollute starts from the delta-L2-normalized query,
+        # then its four variants use norms of the projected query/train vectors.
+        pollute_query = query_raw[0] / np.maximum(
+            pollute_delta_norms[..., None], EPS
+        )
+        pollute_query_normalized = pollute_query / np.maximum(
+            np.linalg.norm(pollute_query, axis=-1, keepdims=True), EPS
+        )
+        pollute_query_device = array_to_device(jnp.asarray(pollute_query), device)
+        pollute_query_norm_device = array_to_device(
+            jnp.asarray(pollute_query_normalized), device
+        )
+        train_fn = make_train_fn(
+            adapter,
+            model,
+            schedule,
+            projector,
+            state,
+            params,
+            adamw_history_update,
+        )
         raw_checkpoint_weight = tracin_checkpoint_lr_weight(
             cfg, checkpoints[checkpoint_index], checkpoint_index, len(checkpoints), len(dataset)
         )
@@ -849,33 +983,37 @@ def main() -> None:
                 x_batch, cond_batch = make_train_batch(
                     adapter, dataset, padded, device, use_bfloat16=False
                 )
-                raw_train, raw_norms, adamw_train, adamw_norms = train_fn(
+                raw_train, raw_norms, adamw_residual, adamw_residual_norms = train_fn(
                     x_batch, cond_batch, noise, jnp.asarray(timestep)
                 )
                 raw_train.block_until_ready()
                 raw_train = raw_train[: end - start]
-                adamw_train = adamw_train[: end - start]
+                adamw_residual = adamw_residual[: end - start]
+                adamw_train = adamw_residual + adamw_history_feature_device[None, :]
                 raw_train_normalized = raw_train / jnp.maximum(
-                    raw_norms[: end - start, None], EPS
+                    jnp.linalg.norm(raw_train, axis=-1, keepdims=True), EPS
                 )
-                adamw_train_normalized = adamw_train / jnp.maximum(
-                    adamw_norms[: end - start, None], EPS
+                adamw_direction = adamw_train / max(
+                    abs(float(raw_checkpoint_weight)), 1e-20
+                )
+                adamw_train_normalized = adamw_direction / jnp.maximum(
+                    jnp.linalg.norm(adamw_direction, axis=-1, keepdims=True), EPS
                 )
                 destination = slice(start, end)
                 update_scores(
                     linear_scores,
                     termwise_squared_scores,
                     timestamp_components,
-                    query_raw=query_raw_device[0:1, :, timestamp_slot],
-                    query_normalized=query_norm_device[0:1, :, timestamp_slot],
+                    query_raw=pollute_query_device[None, :, timestamp_slot],
+                    query_normalized=pollute_query_norm_device[None, :, timestamp_slot],
                     raw_train=raw_train,
                     raw_train_normalized=raw_train_normalized,
-                    adamw_train=adamw_train,
+                    adamw_train=adamw_direction,
                     adamw_train_normalized=adamw_train_normalized,
                     destination=destination,
                     timestamp_slot=timestamp_slot,
                     raw_weight=float(raw_checkpoint_weight) / len(timesteps),
-                    adamw_weight=1.0 / len(timesteps),
+                    adamw_weight=float(raw_checkpoint_weight) / len(timesteps),
                     objective_slice=slice(0, 1),
                 )
             print(
@@ -885,39 +1023,28 @@ def main() -> None:
             )
 
         # Endpoint-TracIn has one feature per checkpoint, not one contraction
-        # per timestamp.  Query-L2 follows paper ReTrac: normalize every query
-        # loss gradient in full parameter space, then project and average.
+        # per timestamp.  Its four score variants match Shape3D endpoint:
+        # aggregate first, then normalize the checkpoint-level projected vector.
+        # The separate per-loss-normalized query artifact remains available for
+        # a later, actual paper-ReTrac run, but is not used in these scores.
         endpoint_query_raw = array_to_device(
             jnp.asarray(
                 np.mean(query_raw[1], axis=1, dtype=np.float64).astype(np.float32)
             ),
             device,
         )
-        endpoint_query_retrac = array_to_device(
-            jnp.asarray(
-                np.mean(query_normalized[1], axis=1, dtype=np.float64).astype(np.float32)
-            ),
-            device,
-        )
-        endpoint_noises = array_to_device(
-            jnp.stack(
-                [
-                    jax.random.normal(
-                        checkpoint_timestamp_shared_noise_key(
-                            args.train_seed, checkpoint_index, int(timestep)
-                        ),
-                        queries[0]["endpoint"].shape,
-                        dtype=jnp.float32,
-                    )
-                    for timestep in timesteps
-                ],
-                axis=0,
-            ),
-            device,
+        endpoint_query_normalized = endpoint_query_raw / jnp.maximum(
+            jnp.linalg.norm(endpoint_query_raw, axis=-1, keepdims=True), EPS
         )
         endpoint_timesteps = array_to_device(jnp.asarray(timesteps), device)
         endpoint_train_fn = make_endpoint_train_mean_fn(
-            adapter, model, schedule, projector, state, params
+            adapter,
+            model,
+            schedule,
+            projector,
+            state,
+            params,
+            adamw_history_update,
         )
         endpoint_batch_size = args.endpoint_train_batch_size
         for start in range(0, len(attribution_indices), endpoint_batch_size):
@@ -927,25 +1054,49 @@ def main() -> None:
             x_batch, cond_batch = make_train_batch(
                 adapter, dataset, padded, device, use_bfloat16=False
             )
-            raw_train, raw_norms, adamw_train, adamw_norms = endpoint_train_fn(
-                x_batch, cond_batch, endpoint_noises, endpoint_timesteps
+            endpoint_rngs = array_to_device(
+                jnp.stack(
+                    [
+                        jax.random.PRNGKey(
+                            args.train_seed
+                            + 700_000 * (checkpoint_index + 1)
+                            + start
+                            + offset
+                        )
+                        for offset in range(endpoint_batch_size)
+                    ],
+                    axis=0,
+                ),
+                device,
+            )
+            raw_train, raw_norms, adamw_residual, adamw_residual_norms = endpoint_train_fn(
+                x_batch, cond_batch, endpoint_rngs, endpoint_timesteps
             )
             raw_train.block_until_ready()
             real_count = end - start
             raw_train = raw_train[:real_count]
-            adamw_train = adamw_train[:real_count]
+            adamw_residual = adamw_residual[:real_count]
+            adamw_train = adamw_residual + adamw_history_feature_device[None, :]
+            adamw_direction = adamw_train / max(
+                abs(float(raw_checkpoint_weight)), 1e-20
+            )
             update_endpoint_scores(
                 linear_scores,
                 query_raw=endpoint_query_raw,
-                query_retrac=endpoint_query_retrac,
+                query_normalized=endpoint_query_normalized,
                 raw_train=raw_train,
                 raw_train_normalized=raw_train
-                / jnp.maximum(raw_norms[:real_count, None], EPS),
-                adamw_train=adamw_train,
-                adamw_train_normalized=adamw_train
-                / jnp.maximum(adamw_norms[:real_count, None], EPS),
+                / jnp.maximum(
+                    jnp.linalg.norm(raw_train, axis=-1, keepdims=True), EPS
+                ),
+                adamw_train=adamw_direction,
+                adamw_train_normalized=adamw_direction
+                / jnp.maximum(
+                    jnp.linalg.norm(adamw_direction, axis=-1, keepdims=True), EPS
+                ),
                 destination=slice(start, end),
                 raw_weight=float(raw_checkpoint_weight),
+                adamw_weight=float(raw_checkpoint_weight),
             )
             if start == 0 or end == len(attribution_indices) or end % 500 == 0:
                 print(
@@ -967,7 +1118,8 @@ def main() -> None:
             train_transforms=np.asarray(TRANSFORMS),
             variants=np.asarray([variant for _, variant in VARIANTS]),
             normalization=np.asarray(
-                "full_parameter_l2_per_checkpoint_timestamp_loss_before_projection"
+                "Shape3D score semantics: pollute delta-L2 plus projected variants; "
+                "endpoint aggregate-first projected variants"
             ),
         )
         active_checkpoint_path.unlink(missing_ok=True)
