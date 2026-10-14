@@ -15,6 +15,7 @@ import gc
 import json
 import os
 from pathlib import Path
+import re
 import sys
 import time
 
@@ -34,11 +35,27 @@ from evaluate_removal_target_relationships import (
     load_queries,
     parse_ints,
     sample_root,
-    selected_metric_paths,
 )
 
 
 SIDECAR_NAME = "noise_timestamp_relationship_metrics.npz"
+
+
+def selected_manifest_paths(args: argparse.Namespace, selected_ids: set[int]) -> list[Path]:
+    """Select exact manifest entries without opening every JSON in every worker."""
+    paths = [
+        Path(line)
+        for line in args.metrics_manifest.read_text().splitlines()
+        if line.strip()
+    ]
+    selected = []
+    for path in paths:
+        match = re.search(r"/query_(\d+)_seed_", path.as_posix())
+        if match is None:
+            raise ValueError(f"cannot recover query ID from manifest path: {path}")
+        if int(match.group(1)) in selected_ids:
+            selected.append(path)
+    return sorted(selected)
 
 
 def atomic_npz(path: Path, **arrays: np.ndarray) -> None:
@@ -88,7 +105,7 @@ def evaluate(args: argparse.Namespace) -> None:
     selected_ids = set(parse_ints(args.query_ids))
     result_root = SHAPES_ROOT / "result" / args.experiment
     removal_root = result_root / "retrac_endpoint_topk_removal_60q"
-    inputs = selected_metric_paths(args, removal_root, selected_ids)
+    inputs = selected_manifest_paths(args, selected_ids)
     assigned = [path for index, path in enumerate(inputs) if index % args.shard_count == args.shard_index]
     print(
         f"[scan] completed={len(inputs)} assigned={len(assigned)} "
@@ -172,7 +189,7 @@ def summarize(args: argparse.Namespace) -> None:
     selected_ids = set(parse_ints(args.query_ids))
     result_root = SHAPES_ROOT / "result" / args.experiment
     removal_root = result_root / "retrac_endpoint_topk_removal_60q"
-    inputs = selected_metric_paths(args, removal_root, selected_ids)
+    inputs = selected_manifest_paths(args, selected_ids)
     rows = []
     missing = []
     reference_timesteps = None

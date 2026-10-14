@@ -60,6 +60,9 @@ for ((slot=0; slot<worker_count; slot++)); do
       --shard-count "$worker_count" \
       >"$log_root/worker_${slot}.log" 2>&1 &
   pids+=("$!")
+  # Avoid a metadata/read storm against /work2 while eight Python/JAX
+  # processes initialize and open their first checkpoint.
+  sleep 1
 done
 
 failed=0
