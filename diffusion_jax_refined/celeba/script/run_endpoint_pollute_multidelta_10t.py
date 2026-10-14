@@ -152,10 +152,16 @@ def score_batch(
     return result
 
 
-def namespace(transform: str, direction_label: str, direction_count: int) -> str:
+def namespace(
+    transform: str,
+    direction_label: str,
+    direction_count: int,
+    timestep_tag: str,
+) -> str:
+    timestep_part = f"_{timestep_tag}" if timestep_tag else ""
     return (
         f"celeba_endpoint_pollute_{transform}_train1x10_"
-        f"query{direction_count}directionx10_linear_deltaensemble_"
+        f"query{direction_count}directionx10_linear{timestep_part}_deltaensemble_"
         f"shape3d_semantics_{direction_label}"
     )
 
@@ -191,7 +197,12 @@ def merge(args: argparse.Namespace, queries: list[dict[str, Any]], result_root: 
     namespaces = []
     for label, values in zip(labels, arrays, strict=True):
         for transform_slot, transform in enumerate(TRANSFORMS):
-            score_namespace = namespace(transform, label, args.direction_count)
+            score_namespace = namespace(
+                transform,
+                label,
+                args.direction_count,
+                args.timestep_tag,
+            )
             namespaces.append(score_namespace)
             for query_slot, query_id in enumerate(query_ids):
                 query = record_by_id[int(query_id)]
@@ -216,6 +227,8 @@ def merge(args: argparse.Namespace, queries: list[dict[str, Any]], result_root: 
                             "query_direction_count": args.direction_count,
                             "query_timestamp_count": 10,
                             "train_timestamp_count": 10,
+                            "timesteps": [int(value) for value in args.timesteps],
+                            "timestep_tag": args.timestep_tag or "uniform_999_to_0",
                             "train_mc_per_timestamp": 1,
                             "query_mc_per_timestamp": args.direction_count,
                             "score_variant": variant,
@@ -243,6 +256,16 @@ def main() -> None:
     parser.add_argument("--train-seed", type=int, default=42)
     parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--timestamp-count", type=int, default=10)
+    parser.add_argument(
+        "--timesteps",
+        default=",".join(str(value) for value in np.linspace(999, 0, 10, dtype=np.int32)),
+        help="Exactly 10 comma-separated diffusion timesteps.",
+    )
+    parser.add_argument(
+        "--timestep-tag",
+        default="",
+        help="Optional filesystem-safe namespace tag distinguishing a custom timestep set.",
+    )
     parser.add_argument("--direction-count", type=int, default=4)
     parser.add_argument("--proj-dim", type=int, default=4096)
     parser.add_argument("--train-batch-size", type=int, default=16)
@@ -258,6 +281,15 @@ def main() -> None:
         raise ValueError("--direction-count must be at least 2")
     if not (0 <= args.shard_index < args.shard_count):
         raise ValueError("invalid shard")
+    args.timesteps = parse_ints(args.timesteps)
+    if len(args.timesteps) != 10:
+        raise ValueError(f"--timesteps must contain exactly 10 values, got {args.timesteps}")
+    if len(set(args.timesteps)) != len(args.timesteps):
+        raise ValueError(f"--timesteps must be unique, got {args.timesteps}")
+    if any(value < 0 or value >= 1000 for value in args.timesteps):
+        raise ValueError(f"--timesteps must be in [0, 999], got {args.timesteps}")
+    if args.timestep_tag and not args.timestep_tag.replace("_", "").isalnum():
+        raise ValueError("--timestep-tag may contain only letters, digits, and underscores")
 
     query_ids = parse_ints(args.query_ids)
     os.environ.update(
@@ -293,7 +325,8 @@ def main() -> None:
     schedule = schedule_to_device(
         make_diffusion_schedule(cfg.timesteps, cfg.beta_start, cfg.beta_end), device
     )
-    timesteps = np.linspace(999, 0, 10, dtype=np.int32)
+    timesteps = np.asarray(args.timesteps, dtype=np.int32)
+    print(f"[timesteps] {','.join(str(int(value)) for value in timesteps)}", flush=True)
     component_path = Path(
         f"{args.component_prefix}.shard_{args.shard_index:02d}.npz"
     )
