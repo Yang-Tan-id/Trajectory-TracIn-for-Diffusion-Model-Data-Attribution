@@ -41,7 +41,12 @@ log_root="$shapes/result/$experiment/logs/endpoint_removal_four_target_relations
 mkdir -p "$log_root"
 removal_root="$shapes/result/$experiment/retrac_endpoint_topk_removal_60q/endpoint_tracin_adamw_full_100x1_raw_neg"
 manifest="$log_root/completed_metrics_snapshot.txt"
-find "$removal_root" -type f -name counterfactual_metrics.json -print | sort > "$manifest"
+if [[ -n "${METRICS_MANIFEST:-}" ]]; then
+  [[ -f "$METRICS_MANIFEST" ]] || { echo "missing METRICS_MANIFEST: $METRICS_MANIFEST" >&2; exit 1; }
+  cp "$METRICS_MANIFEST" "$manifest"
+else
+  find "$removal_root" -type f -name counterfactual_metrics.json -print | sort > "$manifest"
+fi
 snapshot_count="$(wc -l < "$manifest" | tr -d ' ')"
 (( snapshot_count > 0 )) || { echo "no completed removal checkpoints found" >&2; exit 1; }
 
