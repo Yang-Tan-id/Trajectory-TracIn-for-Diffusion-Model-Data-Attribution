@@ -186,6 +186,11 @@ def main() -> None:
     parser.add_argument("--experiment", default="attr40_experiment1")
     parser.add_argument("--train-seed", type=int, default=42)
     parser.add_argument("--prediction-sign", type=float, default=-1.0)
+    parser.add_argument(
+        "--write-result-csv",
+        action="store_true",
+        help="Also write the 192-row lds_results.csv beside every summary (many files).",
+    )
     parser.add_argument("--strict", action="store_true")
     args = parser.parse_args()
 
@@ -267,17 +272,18 @@ def main() -> None:
                         / "lds" / algorithm / target / f"pred_kept_sign_{sign_tag}"
                         / MODEL_GROUP
                     )
-                    result_rows = []
-                    for source, predicted in zip(target_rows, prediction, strict=True):
-                        result_rows.append(
-                            dict(source)
-                            | {
-                                "prediction_subset": "kept",
-                                "prediction_sign": args.prediction_sign,
-                                "pred_sum_tau": float(predicted),
-                            }
-                        )
-                    atomic_csv(out_dir / "lds_results.csv", result_rows)
+                    if args.write_result_csv:
+                        result_rows = []
+                        for source, predicted in zip(target_rows, prediction, strict=True):
+                            result_rows.append(
+                                dict(source)
+                                | {
+                                    "prediction_subset": "kept",
+                                    "prediction_sign": args.prediction_sign,
+                                    "pred_sum_tau": float(predicted),
+                                }
+                            )
+                        atomic_csv(out_dir / "lds_results.csv", result_rows)
                     summary = {
                         "algorithm": algorithm,
                         "score_source": str(score_dir.resolve()),
