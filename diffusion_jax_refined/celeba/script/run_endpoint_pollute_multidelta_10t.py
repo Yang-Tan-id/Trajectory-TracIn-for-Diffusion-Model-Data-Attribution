@@ -156,12 +156,13 @@ def namespace(
     transform: str,
     direction_label: str,
     direction_count: int,
+    reduction: str,
     timestep_tag: str,
 ) -> str:
     timestep_part = f"_{timestep_tag}" if timestep_tag else ""
     return (
         f"celeba_endpoint_pollute_{transform}_train1x10_"
-        f"query{direction_count}directionx10_linear{timestep_part}_deltaensemble_"
+        f"query{direction_count}directionx10_{reduction}{timestep_part}_deltaensemble_"
         f"shape3d_semantics_{direction_label}"
     )
 
@@ -185,63 +186,93 @@ def merge(args: argparse.Namespace, queries: list[dict[str, Any]], result_root: 
             range(shard["shard_index"].item(), 49, args.shard_count)
         ):
             raise ValueError(f"incomplete shard {shard['shard_index'].item()}")
-    scores = sum(
+    linear_scores = sum(
         (shard["scores"] for shard in shards),
         np.zeros_like(shards[0]["scores"], dtype=np.float64),
     )
+    termwise_squared_scores = sum(
+        (shard["termwise_squared_scores"] for shard in shards),
+        np.zeros_like(shards[0]["termwise_squared_scores"], dtype=np.float64),
+    )
+    timestamp_linear_scores = sum(
+        (shard["timestamp_linear_scores"] for shard in shards),
+        np.zeros_like(shards[0]["timestamp_linear_scores"], dtype=np.float64),
+    )
+    timesteps = shards[0]["timesteps"].astype(np.int32)
+    for shard in shards[1:]:
+        if not np.array_equal(shard["timesteps"], timesteps):
+            raise ValueError("timesteps differ between shards")
     labels = [f"direction{index}" for index in range(args.direction_count)]
-    arrays = [scores[index] for index in range(args.direction_count)]
+    reductions: list[tuple[str, np.ndarray]] = [
+        ("linear", linear_scores),
+        ("termwise_squared", termwise_squared_scores),
+    ]
+    reductions.extend(
+        (f"timestamp_linear_t{int(timestep):04d}", timestamp_linear_scores[..., slot])
+        for slot, timestep in enumerate(timesteps)
+    )
     labels.append("direction_mean")
-    arrays.append(np.mean(scores, axis=0, dtype=np.float64))
     record_by_id = {int(query["id"]): query for query in queries}
     namespaces = []
-    for label, values in zip(labels, arrays, strict=True):
-        for transform_slot, transform in enumerate(TRANSFORMS):
-            score_namespace = namespace(
-                transform,
-                label,
-                args.direction_count,
-                args.timestep_tag,
-            )
-            namespaces.append(score_namespace)
-            for query_slot, query_id in enumerate(query_ids):
-                query = record_by_id[int(query_id)]
-                root = (
-                    result_root / "attribution_score" / "prompted_solo"
-                    / f"train_seed_{args.train_seed}"
-                    / f"query_{_prompt_path_tag(query['prompt'])}"
-                    / f"initial_seed_{int(query['seed'])}"
-                    / f"traj_tracin_{score_namespace}"
+    for reduction, reduction_scores in reductions:
+        arrays = [
+            reduction_scores[index] for index in range(args.direction_count)
+        ]
+        arrays.append(np.mean(reduction_scores, axis=0, dtype=np.float64))
+        for label, values in zip(labels, arrays, strict=True):
+            for transform_slot, transform in enumerate(TRANSFORMS):
+                score_namespace = namespace(
+                    transform,
+                    label,
+                    args.direction_count,
+                    reduction,
+                    args.timestep_tag,
                 )
-                for variant_slot, (directory, variant) in enumerate(VARIANTS):
-                    _write_score_outputs(
-                        root / directory,
-                        values[transform_slot, variant_slot, query_slot],
-                        score_indices,
-                        train_dir=args.component_prefix.parent,
-                        query_dir=result_root / "sample_ddim_eta0_50",
-                        algorithm="traj_tracin",
-                        extra_manifest={
-                            "query_objective": "endpoint_pollute",
-                            "query_direction": label,
-                            "query_direction_count": args.direction_count,
-                            "query_timestamp_count": 10,
-                            "train_timestamp_count": 10,
-                            "timesteps": [int(value) for value in args.timesteps],
-                            "timestep_tag": args.timestep_tag or "uniform_999_to_0",
-                            "train_mc_per_timestamp": 1,
-                            "query_mc_per_timestamp": args.direction_count,
-                            "score_variant": variant,
-                            "score_contraction": "linear",
-                            "train_feature": transform,
-                            "normalization_order": (
-                                "per-direction output delta L2; optional per-direction "
-                                "projected query L2; score directions separately; average scores"
-                            ),
-                            "persistent_train_gradient_artifact": False,
-                        },
+                namespaces.append(score_namespace)
+                for query_slot, query_id in enumerate(query_ids):
+                    query = record_by_id[int(query_id)]
+                    root = (
+                        result_root / "attribution_score" / "prompted_solo"
+                        / f"train_seed_{args.train_seed}"
+                        / f"query_{_prompt_path_tag(query['prompt'])}"
+                        / f"initial_seed_{int(query['seed'])}"
+                        / f"traj_tracin_{score_namespace}"
                     )
-        print(f"[write] {label} complete", flush=True)
+                    for variant_slot, (directory, variant) in enumerate(VARIANTS):
+                        _write_score_outputs(
+                            root / directory,
+                            values[transform_slot, variant_slot, query_slot],
+                            score_indices,
+                            train_dir=args.component_prefix.parent,
+                            query_dir=result_root / "sample_ddim_eta0_50",
+                            algorithm="traj_tracin",
+                            extra_manifest={
+                                "query_objective": "endpoint_pollute",
+                                "query_direction": label,
+                                "query_direction_count": args.direction_count,
+                                "query_timestamp_count": 10,
+                                "train_timestamp_count": 10,
+                                "timesteps": [int(value) for value in args.timesteps],
+                                "timestep_tag": args.timestep_tag or "uniform_999_to_0",
+                                "train_mc_per_timestamp": 1,
+                                "query_mc_per_timestamp": args.direction_count,
+                                "score_variant": variant,
+                                "score_contraction": reduction,
+                                "train_feature": transform,
+                                "normalization_order": (
+                                    "per-direction output delta L2; optional per-direction "
+                                    "projected query L2; score directions separately; average scores"
+                                ),
+                                "reduction_semantics": (
+                                    "linear=sum(weight*dot); "
+                                    "termwise_squared=sum(weight*dot^2); "
+                                    "timestamp_linear_tXXXX=sum_checkpoint(weight*dot) "
+                                    "for one selected diffusion timestep"
+                                ),
+                                "persistent_train_gradient_artifact": False,
+                            },
+                        )
+            print(f"[write] {reduction} {label} complete", flush=True)
     namespace_path = args.component_prefix.parent / "score_namespaces.txt"
     namespace_path.write_text("\n".join(namespaces) + "\n")
     print(f"[done] wrote {len(namespaces)} namespaces", flush=True)
@@ -338,12 +369,20 @@ def main() -> None:
         len(attribution_indices),
     )
     scores = np.zeros(score_shape, dtype=np.float64)
+    termwise_squared_scores = np.zeros(score_shape, dtype=np.float64)
+    timestamp_linear_scores = np.zeros(score_shape + (len(timesteps),), dtype=np.float64)
     completed: list[int] = []
     if component_path.is_file():
         with np.load(component_path, allow_pickle=False) as payload:
             if tuple(payload["scores"].shape) != score_shape:
                 raise ValueError(f"resume shape mismatch: {payload['scores'].shape} != {score_shape}")
             scores[...] = payload["scores"]
+            termwise_squared_scores[...] = payload["termwise_squared_scores"]
+            timestamp_linear_scores[...] = payload["timestamp_linear_scores"]
+            if not np.array_equal(payload["timesteps"], timesteps):
+                raise ValueError(
+                    f"resume timesteps mismatch: {payload['timesteps']} != {timesteps}"
+                )
             completed = [int(value) for value in payload["completed_checkpoints"]]
         print(f"[resume] completed checkpoints={completed}", flush=True)
 
@@ -471,9 +510,10 @@ def main() -> None:
                     adamw_direction,
                     adamw_train_normalized,
                 )
-                scores[..., start:end] += (
-                    float(checkpoint_weight) / len(timesteps)
-                ) * values
+                weight = float(checkpoint_weight) / len(timesteps)
+                scores[..., start:end] += weight * values
+                termwise_squared_scores[..., start:end] += weight * np.square(values)
+                timestamp_linear_scores[..., start:end, timestamp_slot] += weight * values
                 if (
                     batch_index == 1
                     or batch_index == total_batches
@@ -493,6 +533,8 @@ def main() -> None:
         save_npz_compressed_atomic(
             str(component_path),
             scores=scores,
+            termwise_squared_scores=termwise_squared_scores,
+            timestamp_linear_scores=timestamp_linear_scores,
             score_indices=attribution_indices,
             query_ids=np.asarray(query_ids, dtype=np.int32),
             completed_checkpoints=np.asarray(completed, dtype=np.int32),

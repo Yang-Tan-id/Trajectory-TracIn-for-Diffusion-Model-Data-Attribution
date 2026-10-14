@@ -32,6 +32,7 @@ export JAX_DISABLE_JIT=0
 echo "[definition] endpoint-pollute | 10 timestamps | ${direction_count} delta-induced query gradients"
 echo "[timesteps] $timesteps${timestep_tag:+ | tag=$timestep_tag}"
 echo "[definition] train gradient once; raw-gradient + AdamW-full; four normalization variants"
+echo "[definition] reductions=linear,termwise_squared,per-timestamp-linear"
 echo "[definition] per-direction scores + direction-mean score; no persistent train gradients"
 echo "[queries] $query_ids"
 echo "[gpus] $gpu_ids_text"
