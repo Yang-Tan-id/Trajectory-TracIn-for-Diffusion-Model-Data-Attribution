@@ -68,6 +68,7 @@ for ((slot=0; slot<worker_count; slot++)); do
       --query-file "$query_file" \
       --query-ids "$query_ids" \
       --metrics-manifest "$manifest" \
+      --noise-chunk-size "${NOISE_CHUNK_SIZE:-8}" \
       --shard-index "$slot" \
       --shard-count "$worker_count" \
       >"$log_root/worker_${slot}.log" 2>&1 &

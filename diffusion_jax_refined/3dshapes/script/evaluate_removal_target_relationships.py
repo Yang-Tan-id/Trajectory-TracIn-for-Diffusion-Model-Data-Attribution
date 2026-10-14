@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import gc
 import json
 import math
 import os
@@ -97,6 +98,49 @@ def selected_metric_paths(args: argparse.Namespace, root: Path, query_ids: set[i
     return sorted(selected)
 
 
+def evaluate_noise_chunked(evaluator, target_adapter, chunk_size: int):
+    """Evaluate the exact full-trajectory noise target without a giant vmap.
+
+    ``CifarTargetEvaluator._noise_objective`` vmaps across every saved
+    trajectory state.  With a 1000-step trajectory that asks XLA for roughly
+    56 GiB in one allocation on CPU.  A weighted average of chunk means is
+    mathematically identical for the configured mean reduction.
+    """
+    import jax
+    import jax.numpy as jnp
+
+    evaluator._target_adapter_for_jit = target_adapter
+    target_params = target_adapter.state.ema_params
+    base_params = evaluator.base_adapter.state.ema_params
+    count = int(len(evaluator.t_seq))
+    weighted = 0.0
+    for start in range(0, count, chunk_size):
+        stop = min(start + chunk_size, count)
+        value = evaluator._noise_fn(
+            target_params,
+            base_params,
+            evaluator.xt_ref[start:stop],
+            jax.device_put(
+                jnp.asarray(evaluator.t_seq[start:stop], dtype=jnp.int32),
+                evaluator.device,
+            ),
+        )
+        value_float = float(jax.device_get(value))
+        if evaluator.trajectory_reduction == "sum":
+            weighted += value_float
+        else:
+            weighted += value_float * (stop - start)
+    if evaluator.trajectory_reduction != "sum":
+        weighted /= count
+    return weighted, {
+        "target_function": "noise_trajectory",
+        "num_trajectory_steps": count,
+        "trajectory_reduction": evaluator.trajectory_reduction,
+        "evaluation": "exact weighted aggregation of chunked trajectory vmaps",
+        "chunk_size": chunk_size,
+    }
+
+
 def evaluate(args: argparse.Namespace) -> None:
     records = load_queries(args.query_file)
     selected_ids = set(parse_ints(args.query_ids))
@@ -164,12 +208,21 @@ def evaluate(args: argparse.Namespace) -> None:
             simple_loss_mc_seed=0,
             trajectory_sampler="ddim_eta0",
         )
-        removal_values = evaluator.evaluate_many(
-            str(checkpoint), ("noise_trajectory", "simple_loss")
-        )
-        base_values = evaluator.evaluate_many(str(base_checkpoint), ("simple_loss",))
-        simple_loss = float(removal_values["simple_loss"][0])
-        base_simple_loss = float(base_values["simple_loss"][0])
+        target_adapter = evaluator._make_adapter(str(checkpoint))
+        original_target = evaluator.target_function
+        try:
+            evaluator.target_function = "simple_loss"
+            simple_loss, simple_details = evaluator._evaluate_with_adapter(target_adapter)
+            base_simple_loss, base_simple_details = evaluator._evaluate_with_adapter(
+                evaluator.base_adapter
+            )
+            noise_value, noise_details = evaluate_noise_chunked(
+                evaluator, target_adapter, args.noise_chunk_size
+            )
+        finally:
+            evaluator.target_function = original_target
+        simple_loss = float(simple_loss)
+        base_simple_loss = float(base_simple_loss)
         output = {
             "method": METHOD,
             "topk": int(source["topk"]),
@@ -180,18 +233,20 @@ def evaluate(args: argparse.Namespace) -> None:
             "counterfactual_metrics_source": str(metrics_path.resolve()),
             "endpoint_difference": float(source["endpoint_difference"]),
             "trajectory_difference": float(source["trajectory_difference"]),
-            "noise_trajectory": float(removal_values["noise_trajectory"][0]),
+            "noise_trajectory": float(noise_value),
             "simple_loss": simple_loss,
             "base_simple_loss": base_simple_loss,
             "simple_loss_delta": simple_loss - base_simple_loss,
             "abs_simple_loss_delta": abs(simple_loss - base_simple_loss),
             "target_details": {
-                "noise_trajectory": removal_values["noise_trajectory"][1],
-                "simple_loss": removal_values["simple_loss"][1],
-                "base_simple_loss": base_values["simple_loss"][1],
+                "noise_trajectory": noise_details,
+                "simple_loss": simple_details,
+                "base_simple_loss": base_simple_details,
             },
         }
         atomic_json(sidecar, output)
+        del evaluator, target_adapter
+        gc.collect()
         elapsed = time.time() - started
         eta = elapsed / position * (len(assigned) - position)
         print(
@@ -374,10 +429,13 @@ def main() -> None:
     parser.add_argument("--shard-index", type=int, default=0)
     parser.add_argument("--shard-count", type=int, default=1)
     parser.add_argument("--metrics-manifest", type=Path, default=None)
+    parser.add_argument("--noise-chunk-size", type=int, default=8)
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
     if not 0 <= args.shard_index < args.shard_count:
         parser.error("--shard-index must be in [0, shard-count)")
+    if args.noise_chunk_size <= 0:
+        parser.error("--noise-chunk-size must be positive")
     if args.mode == "evaluate":
         evaluate(args)
     else:
