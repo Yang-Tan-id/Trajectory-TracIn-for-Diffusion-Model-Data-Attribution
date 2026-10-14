@@ -197,10 +197,20 @@ def main() -> None:
         help="Only evaluate namespaces containing this text.",
     )
     parser.add_argument(
+        "--namespaces",
+        default="",
+        help="Comma-separated explicit score namespaces; overrides the built-in list.",
+    )
+    parser.add_argument(
         "--score-transform",
         choices=("identity", "square"),
         default="identity",
         help="Optional elementwise transform applied to each datapoint score.",
+    )
+    parser.add_argument(
+        "--output-tag",
+        default="",
+        help="Suffix for aggregate CSV names so separate experiments do not overwrite them.",
     )
     parser.add_argument("--prediction-sign", type=float, default=-1.0)
     parser.add_argument(
@@ -243,8 +253,13 @@ def main() -> None:
         "p1" if args.prediction_sign == 1.0 else str(args.prediction_sign).replace(".", "p")
     )
 
+    candidate_namespaces = (
+        [value for value in args.namespaces.replace(",", " ").split() if value]
+        if args.namespaces
+        else namespaces()
+    )
     selected_namespaces = [
-        namespace for namespace in namespaces()
+        namespace for namespace in candidate_namespaces
         if args.namespace_filter in namespace
     ]
     if not selected_namespaces:
@@ -361,10 +376,17 @@ def main() -> None:
             str(row["target_function"]), int(row["query_id"]),
         )
     )
-    output_infix = (
-        "" if args.score_transform == "identity"
-        else f"_{args.score_transform}"
-    )
+    output_parts = []
+    if args.score_transform != "identity":
+        output_parts.append(args.score_transform)
+    if args.output_tag:
+        output_parts.append(
+            "".join(
+                character if character.isalnum() or character in "-_" else "_"
+                for character in args.output_tag
+            ).strip("_")
+        )
+    output_infix = "_" + "_".join(output_parts) if output_parts else ""
     all_results_path = output_root / f"all_results{output_infix}_sign_{sign_tag}.csv"
     mean_results_path = output_root / f"mean_results{output_infix}_sign_{sign_tag}.csv"
     atomic_csv(all_results_path, all_rows)
