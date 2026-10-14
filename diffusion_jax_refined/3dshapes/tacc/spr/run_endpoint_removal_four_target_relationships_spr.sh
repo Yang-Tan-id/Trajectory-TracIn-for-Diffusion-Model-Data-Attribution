@@ -57,7 +57,11 @@ echo "[logs] $log_root"
 
 pids=()
 for ((slot=0; slot<worker_count; slot++)); do
-  ibrun -n 1 -o "$slot" env \
+  # This is a single-node CPU job.  Launching several concurrent ibrun
+  # instances can deadlock in Hydra before Python starts; the batch shell
+  # already owns the allocated CPU set, so direct child processes are the
+  # correct execution model here.
+  env \
     JAX_PLATFORMS=cpu JAX_NUM_DEVICES=1 \
     OMP_NUM_THREADS="$OMP_NUM_THREADS" \
     MKL_NUM_THREADS="$MKL_NUM_THREADS" \
@@ -79,7 +83,7 @@ failed=0
 for pid in "${pids[@]}"; do wait "$pid" || failed=1; done
 (( failed == 0 )) || { echo "one or more workers failed; inspect $log_root" >&2; exit 1; }
 
-ibrun -n 1 -o 0 env JAX_PLATFORMS=cpu JAX_NUM_DEVICES=1 \
+env JAX_PLATFORMS=cpu JAX_NUM_DEVICES=1 \
   "$python_bin" "$script" \
     --mode summarize \
     --experiment "$experiment" \
