@@ -8,7 +8,12 @@ import numpy as np
 from scipy.stats import binomtest, pearsonr, spearmanr
 
 
-TARGETS = ("trajectory_mse", "endpoint_mse")
+TARGETS = (
+    "trajectory_mse",
+    "endpoint_mse",
+    "simple_loss_abs_change",
+    "simple_loss_increase",
+)
 SCOPES = {
     "all": lambda row: True,
     "prompted": lambda row: row["family"] == "prompted",
@@ -43,15 +48,21 @@ def correlation(x, y):
     rho = spearmanr(x, y)
     raw = pearsonr(x, y)
     tiny = np.finfo(np.float64).tiny
-    log = pearsonr(np.log10(np.maximum(x, tiny)), np.log10(np.maximum(y, tiny)))
+    if np.all(x > 0.0) and np.all(y > 0.0):
+        log = pearsonr(np.log10(np.maximum(x, tiny)), np.log10(np.maximum(y, tiny)))
+        log_statistic = float(log.statistic)
+        log_pvalue = float(log.pvalue)
+    else:
+        log_statistic = float("nan")
+        log_pvalue = float("nan")
     return {
         "n": int(len(x)),
         "spearman": float(rho.statistic),
         "spearman_p_two_sided": float(rho.pvalue),
         "pearson": float(raw.statistic),
         "pearson_p_two_sided": float(raw.pvalue),
-        "log_pearson": float(log.statistic),
-        "log_pearson_p_two_sided": float(log.pvalue),
+        "log_pearson": log_statistic,
+        "log_pearson_p_two_sided": log_pvalue,
     }
 
 
@@ -88,9 +99,9 @@ def main():
         path = Path(job["job_dir"]) / "evaluation.json"
         with open(path) as handle:
             row = json.load(handle)
-        if "noise_trajectory_mse" not in row:
+        if "noise_trajectory_mse" not in row or "simple_loss_increase" not in row:
             raise KeyError(
-                f"{path} has no noise_trajectory_mse; rerun the Top-K launcher "
+                f"{path} lacks the current alignment metrics; rerun the Top-K launcher "
                 "with --skip-prepare --eval-only"
             )
         row["removal_fraction_tag"] = job["removal_fraction_tag"]
@@ -103,6 +114,10 @@ def main():
             "noise_trajectory_mse is the mean predicted-noise MSE between the "
             "removal EMA model and base EMA model on the 100 saved base-model "
             "trajectory states"
+        ),
+        "simple_loss_definition": (
+            "removal-minus-base EMA simple loss on the same query endpoint and "
+            "the fixed LDS 10-timestep x MC4 bank"
         ),
         "correlations": {},
         "pairwise_method_difference_alignment": {},
@@ -118,7 +133,7 @@ def main():
         lines.extend(
             [
                 f"SCOPE: {scope}",
-                "method                                  remove target           n  spearman       p-rho  pearson  log-pearson",
+                "method                                  remove target                    n  spearman       p-rho  pearson  log-pearson",
             ]
         )
         result["correlations"][scope] = {}
@@ -139,7 +154,7 @@ def main():
                     entry = correlation(noise, [row[target] for row in selected])
                     result["correlations"][scope][method][tag][target] = entry
                     lines.append(
-                        f"{method:39s} {100*fraction:>5.0f}% {target:14s} "
+                        f"{method:39s} {100*fraction:>5.0f}% {target:23s} "
                         f"{entry['n']:3d} {entry['spearman']:+.4f} "
                         f"{entry['spearman_p_two_sided']:.3g} "
                         f"{entry['pearson']:+.4f} {entry['log_pearson']:+.4f}"
@@ -154,7 +169,7 @@ def main():
         [
             "PAIRWISE METHOD-DIFFERENCE ALIGNMENT (all 100 queries)",
             "right-minus-left: does the method that changes predicted noise more also change the generated output more?",
-            "left -> right                            remove target           rho       p-rho  sign-agree       p>0.5",
+            "left -> right                            remove target                    rho       p-rho  sign-agree       p>0.5",
         ]
     )
     for left_index, left in enumerate(methods):
@@ -179,14 +194,14 @@ def main():
                     result["pairwise_method_difference_alignment"][pair][tag][target] = entry
                     lines.append(
                         f"{left[:17]:17s}->{right[:17]:17s} {100*fraction:>5.0f}% "
-                        f"{target:14s} {entry['spearman']:+.4f} "
+                        f"{target:23s} {entry['spearman']:+.4f} "
                         f"{entry['spearman_p_two_sided']:.3g} "
                         f"{entry['sign_agreement']:.3f} "
                         f"{entry['sign_agreement_p_greater_than_half']:.3g}"
                     )
 
-    json_path = prepare.OUT_ROOT / "noise_endpoint_trajectory_alignment.json"
-    text_path = prepare.OUT_ROOT / "noise_endpoint_trajectory_alignment.txt"
+    json_path = prepare.OUT_ROOT / "noise_output_simple_loss_alignment.json"
+    text_path = prepare.OUT_ROOT / "noise_output_simple_loss_alignment.txt"
     with open(json_path, "w") as handle:
         json.dump(result, handle, indent=2)
     with open(text_path, "w") as handle:

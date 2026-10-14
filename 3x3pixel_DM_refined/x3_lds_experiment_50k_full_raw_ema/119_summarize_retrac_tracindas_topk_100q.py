@@ -19,6 +19,10 @@ METRICS = (
     "endpoint_rmse",
     "endpoint_l2",
     "endpoint_max_abs",
+    "simple_loss_base",
+    "simple_loss_removal",
+    "simple_loss_increase",
+    "simple_loss_abs_change",
 )
 
 

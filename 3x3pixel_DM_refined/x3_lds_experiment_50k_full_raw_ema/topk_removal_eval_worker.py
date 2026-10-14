@@ -7,6 +7,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 
 import x3pixel_DM_training as base
 from dataset_loader import ColorGridDataset
@@ -27,6 +28,43 @@ def condition_for(query, dataset, device):
         for label in query["labels"]:
             condition[0, dataset.vocab[label]] = 1.0
     return condition
+
+
+@torch.no_grad()
+def simple_loss_metric(model, x0, condition, schedule, query_id):
+    """Match the fixed query-side simple-loss bank used by LDS evaluation."""
+    noisy_inputs = []
+    noises = []
+    timesteps = []
+    for timestep_value in LDS_EVAL_TIMESTEPS:
+        timestep_value = int(timestep_value)
+        for mc_index in range(int(LDS_EVAL_MC)):
+            generator = torch.Generator(device=str(x0.device))
+            generator.manual_seed(
+                90000000
+                + int(query_id) * 10000
+                + timestep_value * 10
+                + mc_index
+            )
+            noise = torch.randn(
+                x0.shape,
+                generator=generator,
+                device=x0.device,
+                dtype=x0.dtype,
+            )
+            timestep = torch.tensor(
+                [timestep_value], device=x0.device, dtype=torch.long
+            )
+            noisy = base.q_sample(x0, timestep, noise, schedule)
+            noisy_inputs.append(noisy)
+            noises.append(noise)
+            timesteps.append(timestep)
+    noisy_inputs = torch.cat(noisy_inputs, dim=0)
+    noises = torch.cat(noises, dim=0)
+    timesteps = torch.cat(timesteps, dim=0)
+    conditions = condition.expand(noisy_inputs.shape[0], -1)
+    predictions = model(noisy_inputs, timesteps, conditions)
+    return float(F.mse_loss(predictions, noises).item())
 
 
 def trajectory(model, schedule, condition, x_T, device):
@@ -90,7 +128,7 @@ def main():
     args = parser.parse_args()
     job_dir = Path(args.job_dir)
     result_path = job_dir / "evaluation.json"
-    evaluation_version = 3
+    evaluation_version = 4
     if result_path.is_file():
         with open(result_path) as handle:
             existing = json.load(handle)
@@ -118,6 +156,16 @@ def main():
     reference_path = MODEL_DIR / "base" / query["family"] / f"epoch_{EPOCHS:04d}.pt"
     reference_model = build_model(reference_path, source, device, dataset)
     schedule = base.make_linear_schedule(T, device=device)
+    endpoint = torch.from_numpy(np.load(query_dir / "final_state.npy")).to(
+        device=device, dtype=torch.float32
+    )
+    base_simple_loss = simple_loss_metric(
+        reference_model, endpoint, condition, schedule, int(job["query_id"])
+    )
+    removal_simple_loss = simple_loss_metric(
+        removal_model, endpoint, condition, schedule, int(job["query_id"])
+    )
+    simple_loss_increase = removal_simple_loss - base_simple_loss
 
     cached_removal_trajectory = job_dir / "removal_trajectory.npy"
     if cached_removal_trajectory.is_file():
@@ -186,6 +234,14 @@ def main():
             "mean over the 100 saved base-EMA trajectory states of the "
             "predicted-noise MSE between removal EMA and base EMA"
         ),
+        "simple_loss_base": base_simple_loss,
+        "simple_loss_removal": removal_simple_loss,
+        "simple_loss_increase": simple_loss_increase,
+        "simple_loss_abs_change": abs(simple_loss_increase),
+        "simple_loss_definition": (
+            "query endpoint simple loss averaged over the fixed LDS bank of "
+            "10 timesteps x MC4 noises; removal and base EMA share every sample"
+        ),
         "reference": "saved_base_ema_query_trajectory",
     }
     atomic_json(payload, result_path)
@@ -193,7 +249,8 @@ def main():
         f"[evaluated] {job['method_tag']} q{int(job['query_id']):02d} "
         f"trajectory_mse={payload['trajectory_mse']:.8g} "
         f"endpoint_mse={payload['endpoint_mse']:.8g} "
-        f"noise_trajectory_mse={payload['noise_trajectory_mse']:.8g}",
+        f"noise_trajectory_mse={payload['noise_trajectory_mse']:.8g} "
+        f"simple_loss_increase={payload['simple_loss_increase']:+.8g}",
         flush=True,
     )
 
