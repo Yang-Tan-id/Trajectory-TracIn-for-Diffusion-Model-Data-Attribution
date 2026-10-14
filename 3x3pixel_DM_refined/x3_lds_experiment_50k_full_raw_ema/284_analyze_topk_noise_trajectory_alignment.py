@@ -1,4 +1,4 @@
-"""Relate Top-K predicted-noise changes to endpoint and trajectory changes."""
+"""Compare noise-trajectory and simple-loss proxies for Top-K output change."""
 
 import json
 from importlib.util import module_from_spec, spec_from_file_location
@@ -8,12 +8,8 @@ import numpy as np
 from scipy.stats import binomtest, pearsonr, spearmanr
 
 
-TARGETS = (
-    "trajectory_mse",
-    "endpoint_mse",
-    "simple_loss_abs_change",
-    "simple_loss_increase",
-)
+PROXIES = ("noise_trajectory_mse", "simple_loss_abs_change")
+TARGETS = ("trajectory_mse", "endpoint_mse")
 SCOPES = {
     "all": lambda row: True,
     "prompted": lambda row: row["family"] == "prompted",
@@ -119,12 +115,12 @@ def main():
             "removal-minus-base EMA simple loss on the same query endpoint and "
             "the fixed LDS 10-timestep x MC4 bank"
         ),
-        "correlations": {},
+        "proxy_to_output_correlations": {},
         "pairwise_method_difference_alignment": {},
     }
     lines = [
-        "TOP-K NOISE-TRAJECTORY ALIGNMENT",
-        "noise = removal-EMA vs base-EMA predicted-noise MSE on the fixed base trajectory",
+        "TOP-K PROXY-TO-OUTPUT ALIGNMENT",
+        "proxies: predicted-noise trajectory MSE and absolute simple-loss change",
         "correlations are across queries within each fixed method and removal fraction",
         "",
     ]
@@ -133,12 +129,12 @@ def main():
         lines.extend(
             [
                 f"SCOPE: {scope}",
-                "method                                  remove target                    n  spearman       p-rho  pearson  log-pearson",
+                "method                                  remove proxy                   target           n  spearman       p-rho  pearson  log-pearson",
             ]
         )
-        result["correlations"][scope] = {}
+        result["proxy_to_output_correlations"][scope] = {}
         for method in methods:
-            result["correlations"][scope][method] = {}
+            result["proxy_to_output_correlations"][scope][method] = {}
             for fraction in prepare.REMOVAL_FRACTIONS:
                 tag = prepare.fraction_tag(fraction)
                 selected = [
@@ -148,17 +144,22 @@ def main():
                     and row["removal_fraction_tag"] == tag
                     and predicate(row)
                 ]
-                result["correlations"][scope][method][tag] = {}
-                noise = [row["noise_trajectory_mse"] for row in selected]
-                for target in TARGETS:
-                    entry = correlation(noise, [row[target] for row in selected])
-                    result["correlations"][scope][method][tag][target] = entry
-                    lines.append(
-                        f"{method:39s} {100*fraction:>5.0f}% {target:23s} "
-                        f"{entry['n']:3d} {entry['spearman']:+.4f} "
-                        f"{entry['spearman_p_two_sided']:.3g} "
-                        f"{entry['pearson']:+.4f} {entry['log_pearson']:+.4f}"
-                    )
+                result["proxy_to_output_correlations"][scope][method][tag] = {}
+                for proxy in PROXIES:
+                    result["proxy_to_output_correlations"][scope][method][tag][proxy] = {}
+                    proxy_values = [row[proxy] for row in selected]
+                    for target in TARGETS:
+                        entry = correlation(
+                            proxy_values, [row[target] for row in selected]
+                        )
+                        result["proxy_to_output_correlations"][scope][method][tag][proxy][target] = entry
+                        lines.append(
+                            f"{method:39s} {100*fraction:>5.0f}% "
+                            f"{proxy:23s} {target:14s} "
+                            f"{entry['n']:3d} {entry['spearman']:+.4f} "
+                            f"{entry['spearman_p_two_sided']:.3g} "
+                            f"{entry['pearson']:+.4f} {entry['log_pearson']:+.4f}"
+                        )
         lines.append("")
 
     by_key = {
@@ -168,8 +169,8 @@ def main():
     lines.extend(
         [
             "PAIRWISE METHOD-DIFFERENCE ALIGNMENT (all 100 queries)",
-            "right-minus-left: does the method that changes predicted noise more also change the generated output more?",
-            "left -> right                            remove target                    rho       p-rho  sign-agree       p>0.5",
+            "right-minus-left: does the method with the larger proxy also change the generated output more?",
+            "left -> right                            remove proxy                   target           rho       p-rho  sign-agree       p>0.5",
         ]
     )
     for left_index, left in enumerate(methods):
@@ -180,25 +181,30 @@ def main():
                 tag = prepare.fraction_tag(fraction)
                 left_rows = [by_key[(left, tag, query_id)] for query_id in range(100)]
                 right_rows = [by_key[(right, tag, query_id)] for query_id in range(100)]
-                noise_difference = [
-                    right_row["noise_trajectory_mse"] - left_row["noise_trajectory_mse"]
-                    for left_row, right_row in zip(left_rows, right_rows)
-                ]
                 result["pairwise_method_difference_alignment"][pair][tag] = {}
-                for target in TARGETS:
-                    target_difference = [
-                        right_row[target] - left_row[target]
+                for proxy in PROXIES:
+                    proxy_difference = [
+                        right_row[proxy] - left_row[proxy]
                         for left_row, right_row in zip(left_rows, right_rows)
                     ]
-                    entry = difference_alignment(noise_difference, target_difference)
-                    result["pairwise_method_difference_alignment"][pair][tag][target] = entry
-                    lines.append(
-                        f"{left[:17]:17s}->{right[:17]:17s} {100*fraction:>5.0f}% "
-                        f"{target:23s} {entry['spearman']:+.4f} "
-                        f"{entry['spearman_p_two_sided']:.3g} "
-                        f"{entry['sign_agreement']:.3f} "
-                        f"{entry['sign_agreement_p_greater_than_half']:.3g}"
-                    )
+                    result["pairwise_method_difference_alignment"][pair][tag][proxy] = {}
+                    for target in TARGETS:
+                        target_difference = [
+                            right_row[target] - left_row[target]
+                            for left_row, right_row in zip(left_rows, right_rows)
+                        ]
+                        entry = difference_alignment(
+                            proxy_difference, target_difference
+                        )
+                        result["pairwise_method_difference_alignment"][pair][tag][proxy][target] = entry
+                        lines.append(
+                            f"{left[:17]:17s}->{right[:17]:17s} "
+                            f"{100*fraction:>5.0f}% {proxy:23s} {target:14s} "
+                            f"{entry['spearman']:+.4f} "
+                            f"{entry['spearman_p_two_sided']:.3g} "
+                            f"{entry['sign_agreement']:.3f} "
+                            f"{entry['sign_agreement_p_greater_than_half']:.3g}"
+                        )
 
     json_path = prepare.OUT_ROOT / "noise_output_simple_loss_alignment.json"
     text_path = prepare.OUT_ROOT / "noise_output_simple_loss_alignment.txt"
