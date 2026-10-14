@@ -191,6 +191,17 @@ def main() -> None:
         default=None,
         help="Override the default query100 cached true-f CSV.",
     )
+    parser.add_argument(
+        "--namespace-filter",
+        default="",
+        help="Only evaluate namespaces containing this text.",
+    )
+    parser.add_argument(
+        "--score-transform",
+        choices=("identity", "square"),
+        default="identity",
+        help="Optional elementwise transform applied to each datapoint score.",
+    )
     parser.add_argument("--prediction-sign", type=float, default=-1.0)
     parser.add_argument(
         "--write-result-csv",
@@ -232,10 +243,17 @@ def main() -> None:
         "p1" if args.prediction_sign == 1.0 else str(args.prediction_sign).replace(".", "p")
     )
 
+    selected_namespaces = [
+        namespace for namespace in namespaces()
+        if args.namespace_filter in namespace
+    ]
+    if not selected_namespaces:
+        raise ValueError(f"no namespace matches filter: {args.namespace_filter!r}")
+
     membership_cache: dict[str, np.ndarray] = {}
     all_rows: list[dict[str, object]] = []
     missing: list[str] = []
-    expected_per_query = len(namespaces()) * len(VARIANTS)
+    expected_per_query = len(selected_namespaces) * len(VARIANTS)
     started = time.time()
 
     for query_number, record in enumerate(selected, start=1):
@@ -246,7 +264,7 @@ def main() -> None:
             attribution_root / f"query_{prompt_tag}" / f"initial_seed_{seed}"
         )
         completed = 0
-        for namespace in namespaces():
+        for namespace in selected_namespaces:
             scheme_root = query_score_root / f"traj_tracin_{namespace}"
             for score_directory, variant in VARIANTS:
                 score_dir = scheme_root / score_directory
@@ -256,6 +274,8 @@ def main() -> None:
                     missing.append(f"Q{qid} {namespace}/{variant}")
                     continue
                 scores = np.asarray(np.load(score_path), dtype=np.float64).reshape(-1)
+                if args.score_transform == "square":
+                    scores = np.square(scores)
                 score_indices = np.asarray(np.load(index_path), dtype=np.int64).reshape(-1)
                 if scores.shape != score_indices.shape:
                     raise ValueError(f"score/index shape mismatch: {score_dir}")
@@ -265,7 +285,11 @@ def main() -> None:
                         score_indices, subset_dirs, lds_model_root
                     )
                 prediction = args.prediction_sign * (membership_cache[digest] @ scores)
-                algorithm = f"traj_tracin_{namespace}_{variant}"
+                transform_suffix = (
+                    "" if args.score_transform == "identity"
+                    else "_final_score_squared"
+                )
+                algorithm = f"traj_tracin_{namespace}{transform_suffix}_{variant}"
                 for target in TARGETS:
                     target_rows = targets_by_key.get((qid, target))
                     if target_rows is None:
@@ -299,6 +323,7 @@ def main() -> None:
                         "initial_seed": seed,
                         "target_function": target,
                         "score_variant": variant,
+                        "score_transform": args.score_transform,
                         "prediction_subset": "kept",
                         "prediction_sign": args.prediction_sign,
                         "num_models": len(target_rows),
@@ -336,10 +361,16 @@ def main() -> None:
             str(row["target_function"]), int(row["query_id"]),
         )
     )
-    atomic_csv(output_root / f"all_results_sign_{sign_tag}.csv", all_rows)
+    output_infix = (
+        "" if args.score_transform == "identity"
+        else f"_{args.score_transform}"
+    )
+    all_results_path = output_root / f"all_results{output_infix}_sign_{sign_tag}.csv"
+    mean_results_path = output_root / f"mean_results{output_infix}_sign_{sign_tag}.csv"
+    atomic_csv(all_results_path, all_rows)
 
     mean_rows: list[dict[str, object]] = []
-    for namespace in namespaces():
+    for namespace in selected_namespaces:
         for _, variant in VARIANTS:
             for target in TARGETS:
                 values = [
@@ -360,7 +391,7 @@ def main() -> None:
                             "std_lds_percent": float(np.std(values)),
                         }
                     )
-    atomic_csv(output_root / f"mean_results_sign_{sign_tag}.csv", mean_rows)
+    atomic_csv(mean_results_path, mean_rows)
 
     print("\nNAMESPACE / VARIANT / TARGET                         N       MEAN        STD")
     print("-" * 100)
@@ -372,8 +403,8 @@ def main() -> None:
             f"{float(row['std_lds_percent']):8.3f}%"
         )
     print(f"\n[done] LDS summaries={len(all_rows)} missing score variants={len(missing)}")
-    print(f"[saved] {output_root / f'all_results_sign_{sign_tag}.csv'}")
-    print(f"[saved] {output_root / f'mean_results_sign_{sign_tag}.csv'}")
+    print(f"[saved] {all_results_path}")
+    print(f"[saved] {mean_results_path}")
     if missing:
         print("[missing preview]")
         for item in missing[:20]:
