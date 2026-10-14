@@ -11,6 +11,7 @@ from pathlib import Path
 
 
 METRICS = (
+    "noise_trajectory_mse",
     "trajectory_mse",
     "trajectory_rmse",
     "trajectory_max_abs",

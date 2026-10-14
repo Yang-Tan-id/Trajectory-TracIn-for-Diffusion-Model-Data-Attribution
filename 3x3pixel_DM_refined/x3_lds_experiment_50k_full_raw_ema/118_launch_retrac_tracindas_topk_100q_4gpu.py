@@ -38,6 +38,11 @@ def main():
         help="independent train/eval subprocesses allowed concurrently on each GPU",
     )
     parser.add_argument("--skip-prepare", action="store_true")
+    parser.add_argument(
+        "--eval-only",
+        action="store_true",
+        help="reuse trained removal checkpoints and only refresh evaluation metrics",
+    )
     args = parser.parse_args()
     gpus = [int(value) for value in args.gpus.split(",") if value.strip()]
     if not gpus:
@@ -82,18 +87,20 @@ def main():
             )
             try:
                 print(f"[gpu {gpu} slot {slot}] START {label}", flush=True)
-                code = run_logged(
-                    [
-                        sys.executable,
-                        "-u",
-                        "topk_removal_train_worker.py",
-                        "--job-dir",
-                        str(job_dir),
-                        "--gpu",
-                        str(gpu),
-                    ],
-                    log_path,
-                )
+                code = 0
+                if not args.eval_only:
+                    code = run_logged(
+                        [
+                            sys.executable,
+                            "-u",
+                            "topk_removal_train_worker.py",
+                            "--job-dir",
+                            str(job_dir),
+                            "--gpu",
+                            str(gpu),
+                        ],
+                        log_path,
+                    )
                 if code == 0:
                     code = run_logged(
                         [
@@ -150,6 +157,10 @@ def main():
         )
     subprocess.run(
         [sys.executable, "-u", "119_summarize_retrac_tracindas_topk_100q.py"],
+        check=True,
+    )
+    subprocess.run(
+        [sys.executable, "-u", "284_analyze_topk_noise_trajectory_alignment.py"],
         check=True,
     )
     print("[done] all 900 removal models evaluated and summarized", flush=True)

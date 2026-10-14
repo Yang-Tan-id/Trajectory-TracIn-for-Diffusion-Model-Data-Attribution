@@ -46,6 +46,36 @@ def trajectory(model, schedule, condition, x_T, device):
     return np.stack([value.detach().cpu().numpy() for value in values], axis=0)
 
 
+@torch.no_grad()
+def predicted_noise_trajectory_metrics(
+    removal_model,
+    reference_model,
+    reference_traj,
+    trajectory_t,
+    condition,
+    device,
+):
+    states = torch.from_numpy(reference_traj).to(device=device, dtype=torch.float32)
+    states = states.reshape(-1, *states.shape[-3:])
+    timesteps = torch.from_numpy(trajectory_t).to(device=device, dtype=torch.long)
+    timesteps = timesteps.reshape(-1)
+    if states.shape[0] != timesteps.shape[0]:
+        raise ValueError(
+            f"trajectory state/timestep mismatch: {states.shape[0]} vs "
+            f"{timesteps.shape[0]}"
+        )
+    conditions = condition.expand(states.shape[0], -1)
+    removal_prediction = removal_model(states, timesteps, conditions)
+    reference_prediction = reference_model(states, timesteps, conditions)
+    delta = removal_prediction.double() - reference_prediction.double()
+    per_snapshot_mse = delta.square().flatten(1).mean(dim=1)
+    per_snapshot_l2_squared = delta.square().flatten(1).sum(dim=1)
+    return (
+        per_snapshot_mse.cpu().numpy(),
+        per_snapshot_l2_squared.cpu().numpy(),
+    )
+
+
 def atomic_json(payload, path):
     temporary = path.with_suffix(path.suffix + ".tmp")
     with open(temporary, "w") as handle:
@@ -60,7 +90,7 @@ def main():
     args = parser.parse_args()
     job_dir = Path(args.job_dir)
     result_path = job_dir / "evaluation.json"
-    evaluation_version = 2
+    evaluation_version = 3
     if result_path.is_file():
         with open(result_path) as handle:
             existing = json.load(handle)
@@ -78,15 +108,26 @@ def main():
     condition = condition_for(query, dataset, device)
     query_dir = Path(query["dir"])
     reference_traj = np.load(query_dir / "trajectory_xt.npy")
+    trajectory_t = np.load(query_dir / "trajectory_t.npy").astype(np.int64)
     x_T = torch.from_numpy(reference_traj[0]).to(device=device, dtype=torch.float32)
     source = job["eval_param_source"]
     if source != "ema":
         raise ValueError(f"top-k removal evaluation must use EMA, got {source!r}")
     removal_path = Path(job["model_dir"]) / f"epoch_{EPOCHS:04d}.pt"
     removal_model = build_model(removal_path, source, device, dataset)
+    reference_path = MODEL_DIR / "base" / query["family"] / f"epoch_{EPOCHS:04d}.pt"
+    reference_model = build_model(reference_path, source, device, dataset)
     schedule = base.make_linear_schedule(T, device=device)
 
-    removal_traj = trajectory(removal_model, schedule, condition, x_T, device)
+    cached_removal_trajectory = job_dir / "removal_trajectory.npy"
+    if cached_removal_trajectory.is_file():
+        removal_traj = np.load(cached_removal_trajectory)
+        print(
+            f"[reuse] removal trajectory: {cached_removal_trajectory}",
+            flush=True,
+        )
+    else:
+        removal_traj = trajectory(removal_model, schedule, condition, x_T, device)
     if removal_traj.shape != reference_traj.shape:
         raise ValueError(
             f"trajectory shape mismatch removal={removal_traj.shape} "
@@ -95,10 +136,25 @@ def main():
     delta = removal_traj.astype(np.float64) - reference_traj.astype(np.float64)
     per_snapshot_mse = np.mean(delta ** 2, axis=tuple(range(1, delta.ndim)))
     endpoint_delta = delta[-1]
+    noise_mse_per_snapshot, noise_l2_squared_per_snapshot = (
+        predicted_noise_trajectory_metrics(
+            removal_model,
+            reference_model,
+            reference_traj,
+            trajectory_t,
+            condition,
+            device,
+        )
+    )
 
     np.save(job_dir / "removal_trajectory.npy", removal_traj)
     np.save(job_dir / "per_snapshot_mse.npy", per_snapshot_mse)
     np.save(job_dir / "endpoint_delta.npy", endpoint_delta)
+    np.save(job_dir / "predicted_noise_mse_per_snapshot.npy", noise_mse_per_snapshot)
+    np.save(
+        job_dir / "predicted_noise_l2_squared_per_snapshot.npy",
+        noise_l2_squared_per_snapshot,
+    )
     payload = {
         "evaluation_version": evaluation_version,
         "job_id": int(job["job_id"]),
@@ -122,13 +178,22 @@ def main():
         "endpoint_rmse": float(np.sqrt(np.mean(endpoint_delta ** 2))),
         "endpoint_l2": float(np.linalg.norm(endpoint_delta.reshape(-1))),
         "endpoint_max_abs": float(np.max(np.abs(endpoint_delta))),
+        "noise_trajectory_mse": float(np.mean(noise_mse_per_snapshot)),
+        "noise_trajectory_l2_squared": float(
+            np.mean(noise_l2_squared_per_snapshot)
+        ),
+        "noise_trajectory_definition": (
+            "mean over the 100 saved base-EMA trajectory states of the "
+            "predicted-noise MSE between removal EMA and base EMA"
+        ),
         "reference": "saved_base_ema_query_trajectory",
     }
     atomic_json(payload, result_path)
     print(
         f"[evaluated] {job['method_tag']} q{int(job['query_id']):02d} "
         f"trajectory_mse={payload['trajectory_mse']:.8g} "
-        f"endpoint_mse={payload['endpoint_mse']:.8g}",
+        f"endpoint_mse={payload['endpoint_mse']:.8g} "
+        f"noise_trajectory_mse={payload['noise_trajectory_mse']:.8g}",
         flush=True,
     )
 
