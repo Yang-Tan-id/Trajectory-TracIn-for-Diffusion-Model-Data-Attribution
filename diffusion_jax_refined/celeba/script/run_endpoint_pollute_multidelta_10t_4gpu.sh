@@ -10,8 +10,11 @@ experiment="${EXPERIMENT_TAG:-attr40_experiment1}"
 gpu_ids_text="${GPU_IDS:-4,5,6,7}"
 direction_count="${QUERY_DIRECTION_COUNT:-4}"
 timesteps="${TIMESTEPS:-999,888,777,666,555,444,333,222,111,0}"
+IFS=, read -r -a timestep_values <<< "$timesteps"
+timestamp_count="${#timestep_values[@]}"
 timestep_tag="${TIMESTEP_TAG:-}"
 loss_side_aggregate_qvp="${LOSS_SIDE_AGGREGATE_QVP:-0}"
+aggregate_only="${AGGREGATE_ONLY:-0}"
 checkpoint_indices="${CHECKPOINT_INDICES:-0,5,10,16,21,26,32,37,42,48}"
 if [[ "$loss_side_aggregate_qvp" == "1" ]]; then
   direction_count=1
@@ -23,9 +26,9 @@ shard_count="${#gpu_ids[@]}"
 
 run_tag="${RUN_TAG:-manual_$(date +%Y%m%d_%H%M%S)}"
 result_root="$celeba_root/result/$experiment"
-log_group="endpoint_pollute_multidelta${direction_count}_10t"
+log_group="endpoint_pollute_multidelta${direction_count}_${timestamp_count}t"
 if [[ "$loss_side_aggregate_qvp" == "1" ]]; then
-  log_group="endpoint_pollute_loss_aggregated_qvp_10x10"
+  log_group="endpoint_pollute_loss_aggregated_qvp_${timestamp_count}x${timestamp_count}"
 fi
 [[ -z "$timestep_tag" ]] || log_group="${log_group}_${timestep_tag}"
 log_root="$result_root/logs/$log_group/$run_tag"
@@ -37,11 +40,15 @@ export TF_GPU_ALLOCATOR="${TF_GPU_ALLOCATOR:-cuda_malloc_async}"
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 export JAX_DISABLE_JIT=0
 
-echo "[definition] endpoint-pollute | 10 timestamps | ${direction_count} query feature(s)"
+echo "[definition] endpoint-pollute | ${timestamp_count} timestamps | ${direction_count} query feature(s)"
 echo "[timesteps] $timesteps${timestep_tag:+ | tag=$timestep_tag}"
 echo "[checkpoints] source pair indices=$checkpoint_indices"
 echo "[definition] train gradient once; raw-gradient + AdamW-full; four normalization variants"
-echo "[definition] reductions=linear,termwise_squared,per-timestamp-linear"
+if [[ "$aggregate_only" == "1" ]]; then
+  echo "[definition] reductions=linear,termwise_squared,timestamp_sum_squared"
+else
+  echo "[definition] reductions=linear,termwise_squared,timestamp_sum_squared,per-timestamp-linear"
+fi
 echo "[definition] per-direction scores + direction-mean score; no persistent train gradients"
 echo "[queries] $query_ids"
 echo "[gpus] $gpu_ids_text"
@@ -53,7 +60,7 @@ common=(
   --experiment "$experiment"
   --train-seed "${TRAIN_SEED:-42}"
   --epochs "${JAX_EPOCHS:-200}"
-  --timestamp-count 10
+  --timestamp-count "$timestamp_count"
   --timesteps "$timesteps"
   --timestep-tag "$timestep_tag"
   --direction-count "$direction_count"
@@ -66,6 +73,9 @@ common=(
 )
 if [[ "$loss_side_aggregate_qvp" == "1" ]]; then
   common+=(--loss-side-aggregate-qvp)
+fi
+if [[ "$aggregate_only" == "1" ]]; then
+  common+=(--aggregate-only)
 fi
 
 pids=()

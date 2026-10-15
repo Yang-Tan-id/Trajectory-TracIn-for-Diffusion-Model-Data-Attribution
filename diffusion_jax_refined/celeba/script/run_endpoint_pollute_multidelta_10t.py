@@ -156,6 +156,7 @@ def namespace(
     transform: str,
     direction_label: str,
     direction_count: int,
+    timestamp_count: int,
     reduction: str,
     timestep_tag: str,
     loss_side_aggregate_qvp: bool = False,
@@ -163,13 +164,13 @@ def namespace(
     timestep_part = f"_{timestep_tag}" if timestep_tag else ""
     if loss_side_aggregate_qvp:
         return (
-            f"celeba_endpoint_pollute_{transform}_trainmean10_"
-            f"query10x1_{reduction}{timestep_part}_loss_aggregated_qvp_"
+            f"celeba_endpoint_pollute_{transform}_trainmean{timestamp_count}_"
+            f"query{timestamp_count}x1_{reduction}{timestep_part}_loss_aggregated_qvp_"
             f"shape3d_semantics"
         )
     return (
-        f"celeba_endpoint_pollute_{transform}_train1x10_"
-        f"query{direction_count}directionx10_{reduction}{timestep_part}_deltaensemble_"
+        f"celeba_endpoint_pollute_{transform}_train1x{timestamp_count}_"
+        f"query{direction_count}directionx{timestamp_count}_{reduction}{timestep_part}_deltaensemble_"
         f"shape3d_semantics_{direction_label}"
     )
 
@@ -220,10 +221,11 @@ def merge(args: argparse.Namespace, queries: list[dict[str, Any]], result_root: 
         ("termwise_squared", termwise_squared_scores),
         ("timestamp_sum_squared", timestamp_sum_squared_scores),
     ]
-    reductions.extend(
-        (f"timestamp_linear_t{int(timestep):04d}", timestamp_linear_scores[..., slot])
-        for slot, timestep in enumerate(timesteps)
-    )
+    if not args.aggregate_only:
+        reductions.extend(
+            (f"timestamp_linear_t{int(timestep):04d}", timestamp_linear_scores[..., slot])
+            for slot, timestep in enumerate(timesteps)
+        )
     if not args.loss_side_aggregate_qvp:
         labels.append("direction_mean")
     record_by_id = {int(query["id"]): query for query in queries}
@@ -238,6 +240,7 @@ def merge(args: argparse.Namespace, queries: list[dict[str, Any]], result_root: 
                     transform,
                     label,
                     args.direction_count,
+                    len(timesteps),
                     reduction,
                     args.timestep_tag,
                     args.loss_side_aggregate_qvp,
@@ -264,8 +267,8 @@ def merge(args: argparse.Namespace, queries: list[dict[str, Any]], result_root: 
                                 "query_objective": "endpoint_pollute",
                                 "query_direction": label,
                                 "query_direction_count": args.direction_count,
-                                "query_timestamp_count": 10,
-                                "train_timestamp_count": 10,
+                                "query_timestamp_count": len(timesteps),
+                                "train_timestamp_count": len(timesteps),
                                 "timesteps": [int(value) for value in args.timesteps],
                                 "timestep_tag": args.timestep_tag or "uniform_999_to_0",
                                 "train_mc_per_timestamp": 1,
@@ -324,13 +327,18 @@ def main() -> None:
     parser.add_argument("--merge-only", action="store_true")
     parser.add_argument("--loss-side-aggregate-qvp", action="store_true")
     parser.add_argument(
+        "--aggregate-only",
+        action="store_true",
+        help="Write only linear, termwise_squared and timestamp_sum_squared outputs.",
+    )
+    parser.add_argument(
         "--checkpoint-indices",
         default="",
         help="Comma-separated zero-based source indices among the 49 adjacent checkpoint pairs.",
     )
     args = parser.parse_args()
-    if args.timestamp_count != 10:
-        raise ValueError("this pilot requires exactly 10 timestamps")
+    if args.timestamp_count <= 0:
+        raise ValueError("--timestamp-count must be positive")
     if args.loss_side_aggregate_qvp and args.direction_count != 1:
         raise ValueError("--loss-side-aggregate-qvp requires --direction-count 1")
     if not args.loss_side_aggregate_qvp and args.direction_count < 2:
@@ -338,8 +346,11 @@ def main() -> None:
     if not (0 <= args.shard_index < args.shard_count):
         raise ValueError("invalid shard")
     args.timesteps = parse_ints(args.timesteps)
-    if len(args.timesteps) != 10:
-        raise ValueError(f"--timesteps must contain exactly 10 values, got {args.timesteps}")
+    if len(args.timesteps) != args.timestamp_count:
+        raise ValueError(
+            f"--timesteps must contain exactly {args.timestamp_count} values, "
+            f"got {args.timesteps}"
+        )
     if len(set(args.timesteps)) != len(args.timesteps):
         raise ValueError(f"--timesteps must be unique, got {args.timesteps}")
     if any(value < 0 or value >= 1000 for value in args.timesteps):
