@@ -510,7 +510,7 @@ def main() -> None:
                     query_eta = query_elapsed / query_done * (len(queries) - query_done)
                     print(
                         f"[query directions] checkpoint={checkpoint_index + 1}/49 "
-                        f"timestamp={timestamp_slot + 1}/10 "
+                        f"timestamp={timestamp_slot + 1}/{len(timesteps)} "
                         f"queries={query_done}/{len(queries)} "
                         f"directions={args.direction_count} "
                         f"elapsed={format_duration(query_elapsed)} "
@@ -530,7 +530,7 @@ def main() -> None:
             train_noise = noises[0]
             print(
                 f"[timestamp] checkpoint={checkpoint_index + 1}/49 "
-                f"timestamp={timestamp_slot + 1}/10 t={int(timestep)} "
+                f"timestamp={timestamp_slot + 1}/{len(timesteps)} t={int(timestep)} "
                 f"directions={args.direction_count} queries={len(queries)}",
                 flush=True,
             )
@@ -583,7 +583,7 @@ def main() -> None:
                         eta = elapsed / batch_index * (total_batches - batch_index)
                         print(
                             f"[loss aggregate] checkpoint={checkpoint_index + 1}/49 "
-                            f"timestamp={timestamp_slot + 1}/10 "
+                            f"timestamp={timestamp_slot + 1}/{len(timesteps)} "
                             f"{progress_bar(batch_index, total_batches)} "
                             f"batch={batch_index}/{total_batches} datapoints={end}/5000 "
                             f"elapsed={format_duration(elapsed)} eta={format_duration(eta)}",
@@ -611,7 +611,7 @@ def main() -> None:
                     eta = elapsed / batch_index * (total_batches - batch_index)
                     print(
                         f"[timestamp progress] checkpoint={checkpoint_index + 1}/49 "
-                        f"timestamp={timestamp_slot + 1}/10 "
+                        f"timestamp={timestamp_slot + 1}/{len(timesteps)} "
                         f"{progress_bar(batch_index, total_batches)} "
                         f"batch={batch_index}/{total_batches} datapoints={end}/5000 "
                         f"elapsed={format_duration(elapsed)} eta={format_duration(eta)}",
