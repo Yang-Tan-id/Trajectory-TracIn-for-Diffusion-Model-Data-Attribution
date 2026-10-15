@@ -158,8 +158,15 @@ def namespace(
     direction_count: int,
     reduction: str,
     timestep_tag: str,
+    loss_side_aggregate_qvp: bool = False,
 ) -> str:
     timestep_part = f"_{timestep_tag}" if timestep_tag else ""
+    if loss_side_aggregate_qvp:
+        return (
+            f"celeba_endpoint_pollute_{transform}_trainmean10_"
+            f"query10x1_{reduction}{timestep_part}_loss_aggregated_qvp_"
+            f"shape3d_semantics"
+        )
     return (
         f"celeba_endpoint_pollute_{transform}_train1x10_"
         f"query{direction_count}directionx10_{reduction}{timestep_part}_deltaensemble_"
@@ -182,9 +189,8 @@ def merge(args: argparse.Namespace, queries: list[dict[str, Any]], result_root: 
             raise ValueError("score indices differ between shards")
         if not np.array_equal(shard["query_ids"], query_ids):
             raise ValueError("query ids differ between shards")
-        if len(shard["completed_checkpoints"]) != len(
-            range(shard["shard_index"].item(), 49, args.shard_count)
-        ):
+        expected = args.checkpoint_indices[shard["shard_index"].item() :: args.shard_count]
+        if sorted(int(value) for value in shard["completed_checkpoints"]) != sorted(expected):
             raise ValueError(f"incomplete shard {shard['shard_index'].item()}")
     linear_scores = sum(
         (shard["scores"] for shard in shards),
@@ -202,23 +208,30 @@ def merge(args: argparse.Namespace, queries: list[dict[str, Any]], result_root: 
     for shard in shards[1:]:
         if not np.array_equal(shard["timesteps"], timesteps):
             raise ValueError("timesteps differ between shards")
-    labels = [f"direction{index}" for index in range(args.direction_count)]
+    timestamp_sum_squared_scores = np.sum(
+        np.square(timestamp_linear_scores), axis=-1, dtype=np.float64
+    )
+    labels = (
+        ["qvp"] if args.loss_side_aggregate_qvp
+        else [f"direction{index}" for index in range(args.direction_count)]
+    )
     reductions: list[tuple[str, np.ndarray]] = [
         ("linear", linear_scores),
         ("termwise_squared", termwise_squared_scores),
+        ("timestamp_sum_squared", timestamp_sum_squared_scores),
     ]
     reductions.extend(
         (f"timestamp_linear_t{int(timestep):04d}", timestamp_linear_scores[..., slot])
         for slot, timestep in enumerate(timesteps)
     )
-    labels.append("direction_mean")
+    if not args.loss_side_aggregate_qvp:
+        labels.append("direction_mean")
     record_by_id = {int(query["id"]): query for query in queries}
     namespaces = []
     for reduction, reduction_scores in reductions:
-        arrays = [
-            reduction_scores[index] for index in range(args.direction_count)
-        ]
-        arrays.append(np.mean(reduction_scores, axis=0, dtype=np.float64))
+        arrays = [reduction_scores[index] for index in range(args.direction_count)]
+        if not args.loss_side_aggregate_qvp:
+            arrays.append(np.mean(reduction_scores, axis=0, dtype=np.float64))
         for label, values in zip(labels, arrays, strict=True):
             for transform_slot, transform in enumerate(TRANSFORMS):
                 score_namespace = namespace(
@@ -227,6 +240,7 @@ def merge(args: argparse.Namespace, queries: list[dict[str, Any]], result_root: 
                     args.direction_count,
                     reduction,
                     args.timestep_tag,
+                    args.loss_side_aggregate_qvp,
                 )
                 namespaces.append(score_namespace)
                 for query_slot, query_id in enumerate(query_ids):
@@ -260,6 +274,9 @@ def merge(args: argparse.Namespace, queries: list[dict[str, Any]], result_root: 
                                 "score_contraction": reduction,
                                 "train_feature": transform,
                                 "normalization_order": (
+                                    "each timestep is normalized before loss-side averaging; "
+                                    "query timestamps remain separate"
+                                    if args.loss_side_aggregate_qvp else
                                     "per-direction output delta L2; optional per-direction "
                                     "projected query L2; score directions separately; average scores"
                                 ),
@@ -305,11 +322,19 @@ def main() -> None:
     parser.add_argument("--shard-count", type=int, default=1)
     parser.add_argument("--component-prefix", type=Path, required=True)
     parser.add_argument("--merge-only", action="store_true")
+    parser.add_argument("--loss-side-aggregate-qvp", action="store_true")
+    parser.add_argument(
+        "--checkpoint-indices",
+        default="",
+        help="Comma-separated zero-based source indices among the 49 adjacent checkpoint pairs.",
+    )
     args = parser.parse_args()
     if args.timestamp_count != 10:
         raise ValueError("this pilot requires exactly 10 timestamps")
-    if args.direction_count < 2:
-        raise ValueError("--direction-count must be at least 2")
+    if args.loss_side_aggregate_qvp and args.direction_count != 1:
+        raise ValueError("--loss-side-aggregate-qvp requires --direction-count 1")
+    if not args.loss_side_aggregate_qvp and args.direction_count < 2:
+        raise ValueError("multidelta mode requires --direction-count at least 2")
     if not (0 <= args.shard_index < args.shard_count):
         raise ValueError("invalid shard")
     args.timesteps = parse_ints(args.timesteps)
@@ -323,6 +348,15 @@ def main() -> None:
         raise ValueError("--timestep-tag may contain only letters, digits, and underscores")
 
     query_ids = parse_ints(args.query_ids)
+    checkpoint_indices = (
+        parse_ints(args.checkpoint_indices)
+        if args.checkpoint_indices else list(range(49))
+    )
+    if not checkpoint_indices or len(set(checkpoint_indices)) != len(checkpoint_indices):
+        raise ValueError("--checkpoint-indices must be nonempty and unique")
+    if any(index < 0 or index >= 49 for index in checkpoint_indices):
+        raise ValueError("--checkpoint-indices values must be in [0, 48]")
+    args.checkpoint_indices = checkpoint_indices
     os.environ.update(
         EXPERIMENT_TAG=args.experiment,
         TRAIN_SEED=str(args.train_seed),
@@ -388,8 +422,8 @@ def main() -> None:
 
     endpoint_shape = tuple(queries[0]["endpoint"].shape)
     total_batches = (len(attribution_indices) + args.train_batch_size - 1) // args.train_batch_size
-    for checkpoint_index in range(49):
-        if checkpoint_index % args.shard_count != args.shard_index:
+    for checkpoint_slot, checkpoint_index in enumerate(checkpoint_indices):
+        if checkpoint_slot % args.shard_count != args.shard_index:
             continue
         if checkpoint_index in completed:
             print(f"[skip] checkpoint {checkpoint_index + 1}/49", flush=True)
@@ -417,6 +451,14 @@ def main() -> None:
         checkpoint_weight = tracin_checkpoint_lr_weight(
             cfg, checkpoints[checkpoint_index], checkpoint_index, len(checkpoints), len(dataset)
         )
+
+        aggregate_train = None
+        query_feature_bank = []
+        query_normalized_bank = []
+        if args.loss_side_aggregate_qvp:
+            aggregate_train = np.zeros(
+                (4, len(attribution_indices), args.proj_dim), dtype=np.float32
+            )
 
         for timestamp_slot, timestep in enumerate(timesteps):
             timestamp_started = time.monotonic()
@@ -470,6 +512,9 @@ def main() -> None:
             )
             query_device = array_to_device(jnp.asarray(query_features), device)
             query_norm_device = array_to_device(jnp.asarray(query_normalized), device)
+            if args.loss_side_aggregate_qvp:
+                query_feature_bank.append(query_features[0].copy())
+                query_normalized_bank.append(query_normalized[0].copy())
 
             train_noise = noises[0]
             print(
@@ -502,6 +547,38 @@ def main() -> None:
                 adamw_train_normalized = adamw_direction / jnp.maximum(
                     jnp.linalg.norm(adamw_direction, axis=-1, keepdims=True), EPS
                 )
+                if args.loss_side_aggregate_qvp:
+                    aggregate_train[0, start:end] += (
+                        np.asarray(raw_train[:count], dtype=np.float32) / len(timesteps)
+                    )
+                    aggregate_train[1, start:end] += (
+                        np.asarray(raw_train_normalized[:count], dtype=np.float32)
+                        / len(timesteps)
+                    )
+                    aggregate_train[2, start:end] += (
+                        np.asarray(adamw_direction[:count], dtype=np.float32)
+                        / len(timesteps)
+                    )
+                    aggregate_train[3, start:end] += (
+                        np.asarray(adamw_train_normalized[:count], dtype=np.float32)
+                        / len(timesteps)
+                    )
+                    if (
+                        batch_index == 1
+                        or batch_index == total_batches
+                        or batch_index % args.progress_every_batches == 0
+                    ):
+                        elapsed = time.monotonic() - timestamp_started
+                        eta = elapsed / batch_index * (total_batches - batch_index)
+                        print(
+                            f"[loss aggregate] checkpoint={checkpoint_index + 1}/49 "
+                            f"timestamp={timestamp_slot + 1}/10 "
+                            f"{progress_bar(batch_index, total_batches)} "
+                            f"batch={batch_index}/{total_batches} datapoints={end}/5000 "
+                            f"elapsed={format_duration(elapsed)} eta={format_duration(eta)}",
+                            flush=True,
+                        )
+                    continue
                 values = score_batch(
                     query_device,
                     query_norm_device,
@@ -529,6 +606,32 @@ def main() -> None:
                         f"elapsed={format_duration(elapsed)} eta={format_duration(eta)}",
                         flush=True,
                     )
+        if args.loss_side_aggregate_qvp:
+            query_device = array_to_device(
+                jnp.asarray(np.stack(query_feature_bank, axis=0)), device
+            )
+            query_norm_device = array_to_device(
+                jnp.asarray(np.stack(query_normalized_bank, axis=0)), device
+            )
+            for start in range(0, len(attribution_indices), args.train_batch_size):
+                end = min(len(attribution_indices), start + args.train_batch_size)
+                train = aggregate_train[:, start:end]
+                values = score_batch(
+                    query_device,
+                    query_norm_device,
+                    array_to_device(jnp.asarray(train[0]), device),
+                    array_to_device(jnp.asarray(train[1]), device),
+                    array_to_device(jnp.asarray(train[2]), device),
+                    array_to_device(jnp.asarray(train[3]), device),
+                )
+                weight = float(checkpoint_weight) / len(timesteps)
+                scores[0, ..., start:end] += weight * np.sum(values, axis=0)
+                termwise_squared_scores[0, ..., start:end] += (
+                    weight * np.sum(np.square(values), axis=0)
+                )
+                timestamp_linear_scores[0, ..., start:end, :] += (
+                    weight * np.moveaxis(values, 0, -1)
+                )
         completed.append(checkpoint_index)
         save_npz_compressed_atomic(
             str(component_path),
@@ -541,6 +644,8 @@ def main() -> None:
             shard_index=np.asarray(args.shard_index, dtype=np.int32),
             direction_count=np.asarray(args.direction_count, dtype=np.int32),
             timesteps=timesteps,
+            selected_checkpoint_indices=np.asarray(checkpoint_indices, dtype=np.int32),
+            loss_side_aggregate_qvp=np.asarray(args.loss_side_aggregate_qvp, dtype=np.int8),
         )
         print(f"[checkpoint] {checkpoint_index + 1}/49 saved", flush=True)
     print(f"[done] shard={args.shard_index}/{args.shard_count}", flush=True)
