@@ -22,6 +22,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--direction-shard-count", type=int, default=2)
     parser.add_argument("--direction-count", type=int, default=D20_DIRECTION_COUNT)
+    parser.add_argument("--train-shard-count", type=int, default=1)
     parser.add_argument(
         "--noise-pairing",
         choices=("aligned-shared-direction", "independent-per-t"),
@@ -61,29 +62,46 @@ def main():
             }
             for mode in query_modes
         }
+        train_ranges = []
         for shard_index in range(args.direction_shard_count):
-            root = d20_shard_root(
-                family,
-                shard_index,
-                args.direction_shard_count,
-                args.noise_pairing,
-                args.direction_count,
-                query_modes,
-            )
-            with open(root / "done.json") as handle:
-                info = json.load(handle)
-            if info["query_ids"] != query_ids:
-                raise ValueError(f"query mismatch in {root}")
-            covered.extend(int(value) for value in info["direction_indices"])
-            for mode in query_modes:
-                for variant in D20_VARIANTS:
-                    family_values[mode][variant] += np.load(
-                        root / f"{mode}_{variant}.npy"
-                    ).astype(np.float64)
-        if sorted(covered) != list(range(args.direction_count)):
+            for train_shard_index in range(args.train_shard_count):
+                root = d20_shard_root(
+                    family,
+                    shard_index,
+                    args.direction_shard_count,
+                    args.noise_pairing,
+                    args.direction_count,
+                    query_modes,
+                    train_shard_index,
+                    args.train_shard_count,
+                )
+                with open(root / "done.json") as handle:
+                    info = json.load(handle)
+                if info["query_ids"] != query_ids:
+                    raise ValueError(f"query mismatch in {root}")
+                covered.extend(int(value) for value in info["direction_indices"])
+                train_ranges.append(tuple(int(value) for value in info["train_range"]))
+                for mode in query_modes:
+                    for variant in D20_VARIANTS:
+                        family_values[mode][variant] += np.load(
+                            root / f"{mode}_{variant}.npy"
+                        ).astype(np.float64)
+        expected_directions = sorted(
+            list(range(args.direction_count)) * args.train_shard_count
+        )
+        if sorted(covered) != expected_directions:
             raise ValueError(
                 f"{family} shards do not cover all {args.direction_count} banks"
             )
+        expected_ranges = [
+            (
+                N_TRAIN * index // args.train_shard_count,
+                N_TRAIN * (index + 1) // args.train_shard_count,
+            )
+            for index in range(args.train_shard_count)
+        ] * args.direction_shard_count
+        if sorted(train_ranges) != sorted(expected_ranges):
+            raise ValueError(f"{family} train shards do not cover the dataset")
         for mode in query_modes:
             for variant in D20_VARIANTS:
                 values = family_values[mode][variant]

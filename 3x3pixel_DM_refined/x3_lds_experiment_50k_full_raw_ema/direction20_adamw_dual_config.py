@@ -55,6 +55,8 @@ def d20_shard_root(
     noise_pairing="aligned-shared-direction",
     direction_count=D20_DIRECTION_COUNT,
     query_modes=D20_QUERY_MODES,
+    train_shard_index=0,
+    train_shard_count=1,
 ):
     if noise_pairing == "aligned-shared-direction" and int(direction_count) == 20:
         experiment = "direction20_mean100t_adamw_full_dual"
@@ -63,9 +65,17 @@ def d20_shard_root(
         experiment = f"bank{int(direction_count)}_100x1_adamw_full_{modes}_independent"
     else:
         experiment = f"direction{int(direction_count)}_mean100t_adamw_full_dual"
+    train_suffix = (
+        ""
+        if int(train_shard_count) == 1
+        else f"_train_{int(train_shard_index):02d}_of_{int(train_shard_count):02d}"
+    )
     return (
         ATTR_DIR
         / f"_{experiment}_100q_shards"
         / family
-        / f"shard_{int(shard_index):02d}_of_{int(shard_count):02d}"
+        / (
+            f"shard_{int(shard_index):02d}_of_{int(shard_count):02d}"
+            f"{train_suffix}"
+        )
     )

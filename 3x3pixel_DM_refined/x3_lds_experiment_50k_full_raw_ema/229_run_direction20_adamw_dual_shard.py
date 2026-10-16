@@ -137,6 +137,8 @@ def main():
     parser.add_argument("--family", choices=FAMILIES, required=True)
     parser.add_argument("--direction-shard-index", type=int, required=True)
     parser.add_argument("--direction-shard-count", type=int, default=2)
+    parser.add_argument("--train-shard-index", type=int, default=0)
+    parser.add_argument("--train-shard-count", type=int, default=1)
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--grad-microbatch-size", type=int, default=8)
     parser.add_argument("--query-term-batch-size", type=int, default=128)
@@ -154,6 +156,8 @@ def main():
     args = parser.parse_args()
     if not 0 <= args.direction_shard_index < args.direction_shard_count:
         raise ValueError("invalid direction shard")
+    if not 0 <= args.train_shard_index < args.train_shard_count:
+        raise ValueError("invalid train shard")
     if (
         args.batch_size <= 0
         or args.grad_microbatch_size <= 0
@@ -164,6 +168,8 @@ def main():
     query_modes = (
         D20_QUERY_MODES if args.query_mode == "dual" else (args.query_mode,)
     )
+    train_range_start = N_TRAIN * args.train_shard_index // args.train_shard_count
+    train_range_end = N_TRAIN * (args.train_shard_index + 1) // args.train_shard_count
 
     device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
     if torch.cuda.is_available():
@@ -243,6 +249,8 @@ def main():
         args.noise_pairing,
         args.direction_count,
         query_modes,
+        args.train_shard_index,
+        args.train_shard_count,
     )
     done_path = root / "done.json"
     if done_path.is_file():
@@ -277,6 +285,10 @@ def main():
             raise ValueError("partial direction count differs")
         if tuple(progress.get("query_modes", D20_QUERY_MODES)) != tuple(query_modes):
             raise ValueError("partial query modes differ")
+        if int(progress.get("train_shard_index", 0)) != args.train_shard_index:
+            raise ValueError("partial train shard index differs")
+        if int(progress.get("train_shard_count", 1)) != args.train_shard_count:
+            raise ValueError("partial train shard count differs")
         completed = [int(value) for value in progress["completed_directions"]]
         scores = {
             mode: {
@@ -303,6 +315,7 @@ def main():
         f"[direction20 gpu={args.gpu}] family={args.family} queries={query_ids[0]}..{query_ids[-1]} "
         f"directions={len(directions)}/{args.direction_count} train_t=100(mean) query_t=100 "
         f"noise_pairing={args.noise_pairing} query_modes={list(query_modes)} "
+        f"train_range=[{train_range_start},{train_range_end}) "
         f"full_adamw=true projection=4096 batch={args.batch_size} "
         f"grad_microbatch={args.grad_microbatch_size}",
         flush=True,
@@ -467,12 +480,14 @@ def main():
                     None if args.noise_pairing == "aligned-shared-direction" else 0,
                 ),
             )
-            num_batches = math.ceil(N_TRAIN / args.batch_size)
+            num_batches = math.ceil(
+                (train_range_end - train_range_start) / args.batch_size
+            )
             progress_every = max(1, num_batches // 10)
             for batch_position, start in enumerate(
-                range(0, N_TRAIN, args.batch_size), start=1
+                range(train_range_start, train_range_end, args.batch_size), start=1
             ):
-                end = min(start + args.batch_size, N_TRAIN)
+                end = min(start + args.batch_size, train_range_end)
                 for micro_start in range(start, end, args.grad_microbatch_size):
                     micro_end = min(
                         micro_start + args.grad_microbatch_size, end
@@ -582,6 +597,9 @@ def main():
                 "noise_pairing": args.noise_pairing,
                 "direction_count": args.direction_count,
                 "query_modes": list(query_modes),
+                "train_shard_index": args.train_shard_index,
+                "train_shard_count": args.train_shard_count,
+                "train_range": [train_range_start, train_range_end],
                 "batch_size": args.batch_size,
                 "grad_microbatch_size": args.grad_microbatch_size,
                 "query_term_batch_size": args.query_term_batch_size,
@@ -623,6 +641,9 @@ def main():
             ),
             "noise_pairing": args.noise_pairing,
             "query_modes": list(query_modes),
+            "train_shard_index": args.train_shard_index,
+            "train_shard_count": args.train_shard_count,
+            "train_range": [train_range_start, train_range_end],
             "contraction": "checkpoint-sum then square; mean over direction and timestamp",
             "projection_dim": D20_PROJECTION_DIM,
             "batch_size": args.batch_size,

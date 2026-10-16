@@ -36,18 +36,22 @@ def main():
     gpus = parse_gpus(args.gpus)
     if args.direction_count == 1:
         assignments = (
-            ("prompted", 0, 1, gpus[0]),
-            ("unprompted", 0, 1, gpus[1]),
+            ("prompted", 0, 1, 0, 2, gpus[0]),
+            ("prompted", 0, 1, 1, 2, gpus[1]),
+            ("unprompted", 0, 1, 0, 2, gpus[2]),
+            ("unprompted", 0, 1, 1, 2, gpus[3]),
         )
         direction_shard_count = 1
+        train_shard_count = 2
     else:
         assignments = (
-            ("prompted", 0, 2, gpus[0]),
-            ("prompted", 1, 2, gpus[1]),
-            ("unprompted", 0, 2, gpus[2]),
-            ("unprompted", 1, 2, gpus[3]),
+            ("prompted", 0, 2, 0, 1, gpus[0]),
+            ("prompted", 1, 2, 0, 1, gpus[1]),
+            ("unprompted", 0, 2, 0, 1, gpus[2]),
+            ("unprompted", 1, 2, 0, 1, gpus[3]),
         )
         direction_shard_count = 2
+        train_shard_count = 1
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     run_tag = (
         "direction20_mean100t_dual_aligned"
@@ -64,8 +68,18 @@ def main():
             f"noise_pairing={args.noise_pairing}; query_mode={args.query_mode}; "
             "full AdamW; normalized next delta; norm4; q00-q99\n"
         )
-        for family, shard_index, shard_count, gpu in assignments:
-            label = f"{family}-direction-shard-{shard_index}"
+        for (
+            family,
+            shard_index,
+            shard_count,
+            train_shard_index,
+            worker_train_shard_count,
+            gpu,
+        ) in assignments:
+            label = (
+                f"{family}-direction-shard-{shard_index}-"
+                f"train-shard-{train_shard_index}"
+            )
             command = [
                 sys.executable,
                 "-u",
@@ -78,6 +92,10 @@ def main():
                 str(shard_index),
                 "--direction-shard-count",
                 str(shard_count),
+                "--train-shard-index",
+                str(train_shard_index),
+                "--train-shard-count",
+                str(worker_train_shard_count),
                 "--batch-size",
                 str(args.batch_size),
                 "--grad-microbatch-size",
@@ -122,6 +140,8 @@ def main():
                 str(direction_shard_count),
                 "--direction-count",
                 str(args.direction_count),
+                "--train-shard-count",
+                str(train_shard_count),
                 "--noise-pairing",
                 args.noise_pairing,
                 "--query-mode",
