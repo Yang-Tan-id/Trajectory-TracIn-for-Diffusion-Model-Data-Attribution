@@ -15,19 +15,21 @@ import argparse
 import json
 import os
 from pathlib import Path
+import sys
 import time
 from typing import Any
-
-import jax
-import jax.numpy as jnp
-import numpy as np
 
 SCRIPT_DIR = Path(__file__).resolve().parent
 CELEBA_ROOT = SCRIPT_DIR.parent
 REFINED_ROOT = CELEBA_ROOT.parent
-for path in (SCRIPT_DIR, CELEBA_ROOT, REFINED_ROOT):
-    if str(path) not in os.sys.path:
-        os.sys.path.insert(0, str(path))
+LEGACY_ROOT = REFINED_ROOT / "legacy_jax"
+for path in (SCRIPT_DIR, CELEBA_ROOT, REFINED_ROOT, LEGACY_ROOT):
+    if str(path) not in sys.path:
+        sys.path.insert(0, str(path))
+
+import jax
+import jax.numpy as jnp
+import numpy as np
 
 from common.stage_artifact_runner import _write_score_outputs
 from dataset_config_attr40 import (
