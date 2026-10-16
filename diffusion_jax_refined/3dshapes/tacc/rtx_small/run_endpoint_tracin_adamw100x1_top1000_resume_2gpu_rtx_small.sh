@@ -4,8 +4,8 @@
 #SBATCH -e 3d-end100-t1k-%j.err
 #SBATCH -p rtx-small
 #SBATCH -A IRI26004
-#SBATCH -N 3
-#SBATCH -n 6
+#SBATCH -N 1
+#SBATCH -n 2
 #SBATCH --ntasks-per-node=2
 #SBATCH --cpus-per-task=8
 #SBATCH -t 48:00:00
@@ -26,7 +26,7 @@ done
 shapes="$repo/diffusion_jax_refined/3dshapes"
 slot_worker="$shapes/tacc/rtx_small/run_endpoint_tracin_adamw100x1_top1000_resume_slot.sh"
 python_bin="/scratch/11447/yangtan7447/conda-envs/trajectory-tracin/bin/python"
-slot_count=6
+slot_count=2
 
 [[ -x "$python_bin" ]] || { echo "missing Python: $python_bin" >&2; exit 1; }
 [[ -f "$slot_worker" ]] || { echo "missing worker: $slot_worker" >&2; exit 1; }
@@ -50,7 +50,7 @@ mkdir -p "$log_root"
 
 echo "[definition] resume Endpoint-TracIn AdamW-full top-1000 only; Q0-Q59"
 echo "[definition] existing checkpoints and evaluations are skipped"
-echo "[parallel] 3 RTX nodes x 2 GPUs = $slot_count static query shards"
+echo "[parallel] 1 RTX node x 2 GPUs = $slot_count static query shards"
 echo "[logs] $log_root"
 
 # Start a real Slurm step immediately and validate every score artifact before
@@ -60,9 +60,8 @@ ibrun -n 1 -o 0 env JAX_PLATFORMS=cpu \
 
 pids=()
 for ((slot=0; slot<slot_count; slot+=1)); do
-  local_gpu="$((slot % 2))"
   ibrun -n 1 -o "$slot" env \
-    CUDA_VISIBLE_DEVICES="$local_gpu" \
+    CUDA_VISIBLE_DEVICES="$slot" \
     JAX_PLATFORMS=cuda \
     JAX_NUM_DEVICES=1 \
     bash "$slot_worker" run "$slot" "$slot_count" \
