@@ -23,9 +23,9 @@ export TF_GPU_ALLOCATOR="${TF_GPU_ALLOCATOR:-cuda_malloc_async}"
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 export JAX_DISABLE_JIT=0
 
-echo "[definition] CelebA paper ReTrac 1x50; 49 checkpoint pairs"
+echo "[definition] CelebA paper ReTrac exact4 x query-50; 49 checkpoint intervals"
 echo "[definition] query: normalize each of 50 full-space loss gradients, project, then mean"
-echo "[definition] train: normalize each full-space loss gradient before projection/contraction"
+echo "[definition] train: replay 4 exact training events; normalize each full-space loss gradient"
 echo "[definition] transforms=raw_gradient,adamw_full; reduction=linear; no persistent train gradients"
 echo "[queries] $query_ids"
 echo "[gpus] $gpu_ids_text"
@@ -39,6 +39,7 @@ common=(
   --epochs "${JAX_EPOCHS:-200}"
   --proj-dim "${TRAJ_TRACIN_PROJ_DIM:-4096}"
   --train-batch-size "${TRAJ_SCORE_BATCH_SIZE:-16}"
+  --event-chunk-size "${RETRAC_EVENT_CHUNK_SIZE:-4}"
   --progress-every-batches "${PROGRESS_EVERY_BATCHES:-25}"
   --shard-count "$shard_count"
   --component-prefix "$component_prefix"

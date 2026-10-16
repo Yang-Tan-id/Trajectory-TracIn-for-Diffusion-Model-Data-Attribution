@@ -3,20 +3,23 @@
 
 The query side reuses the 49-checkpoint bank produced by
 run_endpoint_timewise_1x50.py.  Each stored checkpoint feature is the mean of
-50 independently normalized query-loss gradients.  The train side evaluates
-one loss gradient at each of the same 50 timesteps, normalizes every gradient
-in full parameter space, projects it, and contracts it with the query feature.
-Train gradients are never persisted.
+50 independently normalized query-loss gradients.  The train side replays the
+four exact training events between adjacent checkpoints, evaluates every event
+at the fixed interval-start checkpoint, normalizes each gradient in full
+parameter space, and contracts it with the query feature.  Train gradients are
+never persisted.
 """
 
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import os
 from pathlib import Path
 import sys
 import time
+from types import SimpleNamespace
 from typing import Any
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -113,36 +116,58 @@ def make_config(args: argparse.Namespace) -> TrajAttributionConfig:
     return TrajAttributionConfig(**values)
 
 
-def make_retrac_train_fn(
-    adapter: Any,
-    model: Any,
-    schedule: Any,
-    projector: Any,
-    state: Any,
-    params: Any,
+def make_exact_event_fn(
+    *, schedule: Any, projector: Any, state: Any, cfg: Any, chunk_size: int
 ):
-    """Return projected raw/AdamW-full features and their full-space norms."""
+    """Extract raw and AdamW-full normalized features for exact batch events."""
 
-    def one(x0, cond, noise, timestep):
-        x0 = x0[None, ...]
-        cond = cond[None, ...] if cond.ndim else cond[None]
-        t = jnp.full((1,), timestep, dtype=jnp.int32)
-
-        def loss_fn(candidate):
-            xt = q_sample(schedule, x0, t, noise)
-            pred = adapter.eps_apply(model, candidate, xt, t, cond)
-            return jnp.mean(jnp.square(pred - noise))
-
-        grad = jax.grad(loss_fn)(params)
-        update, _ = state.tx.update(grad, state.opt_state, params)
-        return (
-            projector(grad).astype(jnp.float32),
-            tree_l2_norm(grad).astype(jnp.float32),
-            projector(update).astype(jnp.float32),
-            tree_l2_norm(update).astype(jnp.float32),
+    def per_example_losses(params, x, y, noise, timesteps, dropout_rng):
+        xt = q_sample(schedule, x, timesteps, noise)
+        target = x if cfg.predict_x0 else noise
+        pred = state.apply_fn(
+            {"params": params},
+            xt,
+            timesteps,
+            y if cfg.class_cond else None,
+            train=True,
+            rngs={"dropout": dropout_rng},
         )
+        axes = tuple(range(1, pred.ndim))
+        return jnp.mean(jnp.square(pred - target), axis=axes)
 
-    return jax.jit(jax.vmap(one, in_axes=(0, 0, None, None)))
+    def one(params, opt_state, x, y, noise, timesteps, dropout_rng, position):
+        def selected_loss(candidate):
+            return per_example_losses(
+                candidate, x, y, noise, timesteps, dropout_rng
+            )[position]
+
+        grad = jax.grad(selected_loss)(params)
+        update, _ = state.tx.update(grad, opt_state, params)
+
+        def normalized_project(tree):
+            norm = tree_l2_norm(tree)
+            normalized = jax.tree_util.tree_map(
+                lambda leaf: leaf / jnp.maximum(norm, EPS).astype(leaf.dtype), tree
+            )
+            return projector(normalized).astype(jnp.float32)
+
+        return normalized_project(grad), normalized_project(update)
+
+    def chunk(params, opt_state, x, y, noise, timesteps, dropout_rng, positions):
+        return jax.vmap(
+            lambda position: one(
+                params,
+                opt_state,
+                x,
+                y,
+                noise,
+                timesteps,
+                dropout_rng,
+                position,
+            )
+        )(positions)
+
+    return jax.jit(chunk)
 
 
 def load_query_features(
@@ -194,7 +219,15 @@ def score_shard(
     schedule = schedule_to_device(
         make_diffusion_schedule(cfg.timesteps, cfg.beta_start, cfg.beta_end), device
     )
-    timesteps = np.linspace(999, 0, 50, dtype=np.int32)
+    module = importlib.import_module("DM__training_CIFAR5_MULTI_pixel")
+    steps_per_epoch = len(dataset) // int(cfg.batch_size)
+    total_steps = steps_per_epoch * int(cfg.epochs)
+    lr_cfg = SimpleNamespace(**vars(cfg))
+    lr_cfg.lr_schedule = cfg.tracin_lr_schedule
+    lr_cfg.lr_warmup_ratio = cfg.tracin_warmup_ratio
+    lr_schedule = module.make_learning_rate_schedule(lr_cfg, total_steps)
+    score_row = np.full((len(dataset),), -1, dtype=np.int64)
+    score_row[attribution_indices] = np.arange(len(attribution_indices), dtype=np.int64)
     scores = np.zeros(
         (len(TRANSFORMS), len(queries), len(attribution_indices)), dtype=np.float64
     )
@@ -230,78 +263,104 @@ def score_shard(
             seed_parts=(args.train_seed, "traj_tracin_projection", checkpoint_index),
             device=device,
         )
-        train_fn = make_retrac_train_fn(
-            adapter, model, schedule, projector, state, params
+        event_fn = make_exact_event_fn(
+            schedule=schedule,
+            projector=projector,
+            state=state,
+            cfg=cfg,
+            chunk_size=args.event_chunk_size,
         )
         query_device = array_to_device(
             jnp.asarray(query_features[checkpoint_index]), device
         )
-        checkpoint_lr = float(
-            tracin_checkpoint_lr_weight(
-                cfg,
-                checkpoints[checkpoint_index],
-                checkpoint_index,
-                len(checkpoints),
-                len(dataset),
-            )
-        )
-        batch_count = (
-            len(attribution_indices) + args.train_batch_size - 1
-        ) // args.train_batch_size
-
-        for timestamp_slot, timestep in enumerate(timesteps):
-            started = time.monotonic()
-            noise = jax.random.normal(
-                checkpoint_timestamp_shared_noise_key(
-                    args.train_seed, checkpoint_index, int(timestep)
-                ),
-                queries[0]["endpoint"].shape,
-                dtype=jnp.float32,
-            )
-            for batch_index, start in enumerate(
-                range(0, len(attribution_indices), args.train_batch_size), start=1
+        start_epoch = 4 * (checkpoint_index + 1)
+        rng = state.rng
+        completed_events = 0
+        checkpoint_started = time.monotonic()
+        for event_slot, epoch in enumerate(range(start_epoch + 1, start_epoch + 5)):
+            indices = np.arange(len(dataset), dtype=np.int64)
+            np.random.default_rng(int(cfg.seed) + epoch).shuffle(indices)
+            for batch_no, start in enumerate(
+                range(0, steps_per_epoch * int(cfg.batch_size), int(cfg.batch_size))
             ):
-                end = min(len(attribution_indices), start + args.train_batch_size)
-                real = attribution_indices[start:end]
-                padded = pad_indices_to_batch(real, args.train_batch_size)
-                x_batch, cond_batch = make_train_batch(
-                    adapter, dataset, padded, device, use_bfloat16=False
+                selected = indices[start : start + int(cfg.batch_size)]
+                next_rng, noise_rng, t_rng, dropout_rng = jax.random.split(rng, 4)
+                rng = next_rng
+                rows = score_row[selected]
+                positions = np.flatnonzero(rows >= 0)
+                if not len(positions):
+                    continue
+                x = jax.device_put(
+                    module.maybe_to_dtype(
+                        jnp.asarray(dataset.images[selected]), cfg.use_bfloat16
+                    ),
+                    device,
                 )
-                raw, raw_norm, adamw, adamw_norm = train_fn(
-                    x_batch, cond_batch, noise, jnp.asarray(timestep)
+                y = jax.device_put(jnp.asarray(dataset.labels[selected]), device)
+                noise = jax.random.normal(noise_rng, x.shape, dtype=x.dtype)
+                timesteps = jax.random.randint(
+                    t_rng, (int(cfg.batch_size),), 0, int(cfg.timesteps)
                 )
-                raw.block_until_ready()
-                count = end - start
-                raw = raw[:count] / jnp.maximum(raw_norm[:count, None], EPS)
-                adamw = adamw[:count] / jnp.maximum(
-                    adamw_norm[:count, None], EPS
+                event_step = (epoch - 1) * steps_per_epoch + batch_no
+                event_lr = float(
+                    np.asarray(jax.device_get(lr_schedule(jnp.asarray(event_step))))
                 )
-                train = jnp.concatenate((raw, adamw), axis=0)
-                dots = jnp.matmul(
-                    query_device, train.T, precision=jax.lax.Precision.HIGHEST
-                )
-                dots.block_until_ready()
-                host = np.asarray(jax.device_get(dots), dtype=np.float32).reshape(
-                    len(queries), len(TRANSFORMS), count
-                )
-                weight = checkpoint_lr / len(timesteps)
-                scores[0, :, start:end] += weight * host[:, 0]
-                scores[1, :, start:end] += weight * host[:, 1]
+                for offset in range(0, len(positions), args.event_chunk_size):
+                    real_positions = positions[offset : offset + args.event_chunk_size]
+                    real_count = len(real_positions)
+                    padded_positions = np.pad(
+                        real_positions,
+                        (0, args.event_chunk_size - real_count),
+                        mode="edge",
+                    )
+                    raw, adamw = event_fn(
+                        params,
+                        state.opt_state,
+                        x,
+                        y,
+                        noise,
+                        timesteps,
+                        dropout_rng,
+                        jnp.asarray(padded_positions, dtype=jnp.int32),
+                    )
+                    raw.block_until_ready()
+                    train = jnp.concatenate(
+                        (raw[:real_count], adamw[:real_count]), axis=0
+                    )
+                    dots = jnp.matmul(
+                        query_device,
+                        train.T,
+                        precision=jax.lax.Precision.HIGHEST,
+                    )
+                    dots.block_until_ready()
+                    host = np.asarray(jax.device_get(dots), dtype=np.float32).reshape(
+                        len(queries), len(TRANSFORMS), real_count
+                    )
+                    destination = rows[real_positions]
+                    scores[0, :, destination] += event_lr * host[:, 0]
+                    scores[1, :, destination] += event_lr * host[:, 1]
+                    completed_events += real_count
                 if (
-                    batch_index == 1
-                    or batch_index == batch_count
-                    or batch_index % args.progress_every_batches == 0
+                    batch_no == 0
+                    or batch_no + 1 == steps_per_epoch
+                    or (batch_no + 1) % args.progress_every_batches == 0
                 ):
-                    elapsed = time.monotonic() - started
-                    eta = elapsed / batch_index * (batch_count - batch_index)
+                    elapsed = time.monotonic() - checkpoint_started
+                    expected_events = 4 * len(attribution_indices)
+                    eta = (
+                        elapsed / completed_events * (expected_events - completed_events)
+                        if completed_events
+                        else 0.0
+                    )
                     print(
                         f"[progress] checkpoint={checkpoint_index + 1}/49 "
-                        f"timestamp={timestamp_slot + 1}/50 t={int(timestep)} "
-                        f"{progress_bar(batch_index, batch_count)} "
-                        f"batch={batch_index}/{batch_count} datapoints={end}/5000 "
+                        f"event={event_slot + 1}/4 epoch={epoch} "
+                        f"batch={batch_no + 1}/{steps_per_epoch} "
+                        f"attribution_events={completed_events}/{expected_events} "
                         f"elapsed={format_duration(elapsed)} eta={format_duration(eta)}",
                         flush=True,
                     )
+            rng, _, _ = jax.random.split(rng, 3)
 
         completed.append(checkpoint_index)
         save_npz_compressed_atomic(
@@ -333,7 +392,7 @@ def merge(
     for query_slot, query in enumerate(queries):
         for transform_slot, transform in enumerate(TRANSFORMS):
             namespace = (
-                f"celeba_paper_retrac_{transform}_train1x50_"
+                f"celeba_paper_retrac_{transform}_train_exact4_"
                 "query_mean50_of_full_l2_linear_shape3d_semantics"
             )
             root = (
@@ -363,9 +422,8 @@ def merge(
                     "train_normalization": (
                         "full_parameter_l2_normalize(each_train_loss_gradient)"
                     ),
-                    "train_timestamp_count": 50,
+                    "train_event_count": 4,
                     "query_timestamp_count": 50,
-                    "train_mc_per_timestamp": 1,
                     "query_mc_per_timestamp": 1,
                     "checkpoint_count": 49,
                     "persistent_train_gradient_artifact": False,
@@ -384,6 +442,7 @@ def main() -> None:
     parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--proj-dim", type=int, default=4096)
     parser.add_argument("--train-batch-size", type=int, default=16)
+    parser.add_argument("--event-chunk-size", type=int, default=4)
     parser.add_argument("--progress-every-batches", type=int, default=25)
     parser.add_argument("--shard-index", type=int, default=0)
     parser.add_argument("--shard-count", type=int, default=1)
@@ -407,6 +466,16 @@ def main() -> None:
         raise ValueError(f"expected 50 checkpoints, found {len(checkpoints)}")
     reference_checkpoint = Path(cfg.reference_ckpt or checkpoints[-1])
     apply_checkpoint_config(cfg, str(reference_checkpoint))
+    configured_devices = getattr(cfg, "num_devices", None)
+    requested_devices = int(configured_devices) if configured_devices is not None else 1
+    use_data_parallel = bool(getattr(cfg, "use_data_parallel", False))
+    if use_data_parallel and requested_devices > 1:
+        raise RuntimeError(
+            "exact event replay currently requires checkpoints trained with a "
+            "single-device RNG topology; checkpoint config reports "
+            f"use_data_parallel={use_data_parallel}, "
+            f"num_devices={configured_devices}"
+        )
     adapter = get_adapter(cfg)
     dataset = adapter.iter_dataset(cfg)
     query_ids = parse_ints(args.query_ids)
