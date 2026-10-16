@@ -71,10 +71,23 @@ def make_query_fn(adapter, model, schedule, projector):
     return jax.jit(one)
 
 
-def namespace(transform: str, timestep_tag: str, checkpoint_count: int, timestamp_count: int) -> str:
+def namespace(
+    transform: str,
+    timestep_tag: str,
+    checkpoint_count: int,
+    timestamp_count: int,
+    reduction: str = "linear",
+    per_timestep_query: bool = False,
+) -> str:
+    if not per_timestep_query:
+        return (
+            f"celeba_endpoint_tracin_{transform}_"
+            f"train_mean{timestamp_count}_query_mean{timestamp_count}_linear_"
+            f"{timestep_tag}_checkpoint{checkpoint_count}_shape3d_semantics"
+        )
     return (
         f"celeba_endpoint_tracin_{transform}_"
-        f"train_mean{timestamp_count}_query_mean{timestamp_count}_linear_"
+        f"train_mean{timestamp_count}_query_per_timestep_raw_or_l2_{reduction}_"
         f"{timestep_tag}_checkpoint{checkpoint_count}_shape3d_semantics"
     )
 
@@ -109,65 +122,104 @@ def merge(args: argparse.Namespace, queries: list[dict], result_root: Path) -> N
                 f"incomplete shard {shard_index}: {completed.tolist()} != {expected.tolist()}"
             )
 
-    scores = sum(
-        (shard["scores"] for shard in shards),
-        np.zeros_like(shards[0]["scores"], dtype=np.float64),
-    )
+    if args.per_timestep_query_reductions:
+        linear = sum(
+            (shard["linear_scores"] for shard in shards),
+            np.zeros_like(shards[0]["linear_scores"], dtype=np.float64),
+        )
+        termwise_squared = sum(
+            (shard["termwise_squared_scores"] for shard in shards),
+            np.zeros_like(shards[0]["termwise_squared_scores"], dtype=np.float64),
+        )
+        timestamp_components = sum(
+            (shard["timestamp_components"] for shard in shards),
+            np.zeros_like(shards[0]["timestamp_components"], dtype=np.float64),
+        )
+        reductions = {
+            "linear": linear,
+            "termwise_squared": termwise_squared,
+            "timestamp_sum_squared": np.sum(
+                np.square(timestamp_components), axis=-2, dtype=np.float64
+            ),
+            "total_sum_squared": np.square(linear),
+        }
+    else:
+        scores = sum(
+            (shard["scores"] for shard in shards),
+            np.zeros_like(shards[0]["scores"], dtype=np.float64),
+        )
+        reductions = {"linear": scores}
     record_by_id = {int(query["id"]): query for query in queries}
     namespaces = []
-    for transform_slot, transform in enumerate(TRANSFORMS):
-        score_namespace = namespace(
-            transform,
-            args.timestep_tag,
-            len(checkpoint_indices),
-            len(timesteps),
-        )
-        namespaces.append(score_namespace)
-        for query_slot, query_id in enumerate(query_ids):
-            query = record_by_id[int(query_id)]
-            root = (
-                result_root
-                / "attribution_score"
-                / "prompted_solo"
-                / f"train_seed_{args.train_seed}"
-                / f"query_{base._prompt_path_tag(query['prompt'])}"
-                / f"initial_seed_{int(query['seed'])}"
-                / f"traj_tracin_{score_namespace}"
+    for reduction, reduction_scores in reductions.items():
+        for transform_slot, transform in enumerate(TRANSFORMS):
+            score_namespace = namespace(
+                transform,
+                args.timestep_tag,
+                len(checkpoint_indices),
+                len(timesteps),
+                reduction=reduction,
+                per_timestep_query=args.per_timestep_query_reductions,
             )
-            for variant_slot, (directory, variant) in enumerate(VARIANTS):
-                _write_score_outputs(
-                    root / directory,
-                    scores[transform_slot, variant_slot, query_slot],
-                    score_indices,
-                    train_dir=args.component_prefix.parent,
-                    query_dir=result_root / "sample_ddim_eta0_50",
-                    algorithm="traj_tracin",
-                    extra_manifest={
-                        "query_objective": "endpoint_tracin",
-                        "train_feature": transform,
-                        "score_variant": variant,
-                        "score_contraction": "linear",
-                        "timesteps": [int(value) for value in timesteps],
-                        "timestep_tag": args.timestep_tag,
-                        "selected_checkpoint_indices": [
-                            int(value) for value in checkpoint_indices
-                        ],
-                        "train_timestamp_count": len(timesteps),
-                        "query_timestamp_count": len(timesteps),
-                        "train_mc_per_timestamp": 1,
-                        "query_mc_per_timestamp": 1,
-                        "normalization_order": (
-                            "mean selected-timestep projected gradients first; "
-                            "then optional projected query/train L2 normalization"
-                        ),
-                        "adamw_full_semantics": (
-                            "apply restored checkpoint AdamW exactly once to the "
-                            "gradient of the mean selected-timestep train loss"
-                        ),
-                        "persistent_train_gradient_artifact": False,
-                    },
+            namespaces.append(score_namespace)
+            for query_slot, query_id in enumerate(query_ids):
+                query = record_by_id[int(query_id)]
+                root = (
+                    result_root
+                    / "attribution_score"
+                    / "prompted_solo"
+                    / f"train_seed_{args.train_seed}"
+                    / f"query_{base._prompt_path_tag(query['prompt'])}"
+                    / f"initial_seed_{int(query['seed'])}"
+                    / f"traj_tracin_{score_namespace}"
                 )
-        print(f"[write] {transform} complete", flush=True)
+                for variant_slot, (directory, variant) in enumerate(VARIANTS):
+                    _write_score_outputs(
+                        root / directory,
+                        reduction_scores[transform_slot, variant_slot, query_slot],
+                        score_indices,
+                        train_dir=args.component_prefix.parent,
+                        query_dir=result_root / "sample_ddim_eta0_50",
+                        algorithm="traj_tracin",
+                        extra_manifest={
+                            "query_objective": "endpoint_tracin",
+                            "train_feature": transform,
+                            "score_variant": variant,
+                            "score_contraction": reduction,
+                            "timesteps": [int(value) for value in timesteps],
+                            "timestep_tag": args.timestep_tag,
+                            "selected_checkpoint_indices": [
+                                int(value) for value in checkpoint_indices
+                            ],
+                            "train_timestamp_count": len(timesteps),
+                            "query_timestamp_count": len(timesteps),
+                            "train_mc_per_timestamp": 1,
+                            "query_mc_per_timestamp": 1,
+                            "normalization_order": (
+                                "query raw variant: project each timestep gradient without "
+                                "normalization; query_l2 variant: full-parameter L2-normalize "
+                                "each timestep gradient before projection; train variants: "
+                                "optionally projected-L2-normalize the gradient of the mean "
+                                "selected-timestep train loss"
+                                if args.per_timestep_query_reductions
+                                else "mean selected-timestep projected gradients first; "
+                                "then optional projected query/train L2 normalization"
+                            ),
+                            "reduction_semantics": (
+                                "linear=sum_ckpt(weight*mean_t(dot)); "
+                                "termwise_squared=sum_ckpt(weight*mean_t(dot^2)); "
+                                "timestamp_sum_squared=sum_t((sum_ckpt "
+                                "weight*dot/num_timestamps)^2); "
+                                "total_sum_squared=(sum_ckpt(weight*mean_t(dot)))^2"
+                            ),
+                            "adamw_full_semantics": (
+                                "apply restored checkpoint AdamW exactly once to the "
+                                "gradient of the mean selected-timestep train loss"
+                            ),
+                            "persistent_train_gradient_artifact": False,
+                        },
+                    )
+            print(f"[write] {transform} {reduction} complete", flush=True)
 
     namespace_path = args.component_prefix.parent / "score_namespaces.txt"
     namespace_path.write_text("\n".join(namespaces) + "\n")
@@ -192,6 +244,15 @@ def main() -> None:
     parser.add_argument("--shard-count", type=int, default=1)
     parser.add_argument("--component-prefix", type=Path, required=True)
     parser.add_argument("--merge-only", action="store_true")
+    parser.add_argument(
+        "--per-timestep-query-reductions",
+        action="store_true",
+        help=(
+            "Keep query timestep gradients separate and write linear, termwise-squared, "
+            "timestamp-sum-squared, and total-sum-squared scores. Query-L2 variants "
+            "normalize every full-space timestep gradient before projection."
+        ),
+    )
     args = parser.parse_args()
 
     if not args.timesteps or len(set(args.timesteps)) != len(args.timesteps):
@@ -266,6 +327,18 @@ def main() -> None:
         len(attribution_indices),
     )
     scores = np.zeros(score_shape, dtype=np.float64)
+    termwise_squared_scores = (
+        np.zeros(score_shape, dtype=np.float64)
+        if args.per_timestep_query_reductions
+        else None
+    )
+    timestamp_components = (
+        np.zeros(
+            score_shape[:-1] + (len(timesteps), score_shape[-1]), dtype=np.float64
+        )
+        if args.per_timestep_query_reductions
+        else None
+    )
     completed: list[int] = []
     if component_path.is_file():
         with np.load(component_path, allow_pickle=False) as payload:
@@ -275,7 +348,19 @@ def main() -> None:
                 payload["selected_checkpoint_indices"], checkpoint_indices
             ):
                 raise ValueError("resume checkpoint selection does not match")
-            scores[...] = payload["scores"]
+            if args.per_timestep_query_reductions:
+                linear_key = "linear_scores"
+                if linear_key not in payload:
+                    raise ValueError(
+                        "resume component predates --per-timestep-query-reductions"
+                    )
+                scores[...] = payload[linear_key]
+                assert termwise_squared_scores is not None
+                assert timestamp_components is not None
+                termwise_squared_scores[...] = payload["termwise_squared_scores"]
+                timestamp_components[...] = payload["timestamp_components"]
+            else:
+                scores[...] = payload["scores"]
             completed = [int(value) for value in payload["completed_checkpoints"]]
         print(f"[resume] completed checkpoints={completed}", flush=True)
 
@@ -311,6 +396,11 @@ def main() -> None:
         query_features = np.empty(
             (len(queries), len(timesteps), args.proj_dim), dtype=np.float32
         )
+        query_full_norms = (
+            np.empty((len(queries), len(timesteps)), dtype=np.float32)
+            if args.per_timestep_query_reductions
+            else None
+        )
         for query_slot, query in enumerate(queries):
             endpoint = array_to_device(jnp.asarray(query["endpoint"]), device)
             cond = array_to_device(jnp.asarray(query["cond"]), device)
@@ -325,7 +415,7 @@ def main() -> None:
                 dtype=jnp.float32,
             )
             for timestep_slot, timestep in enumerate(timesteps):
-                feature, _full_norm = query_fn(
+                feature, full_norm = query_fn(
                     params,
                     endpoint,
                     cond,
@@ -336,6 +426,8 @@ def main() -> None:
                 query_features[query_slot, timestep_slot] = np.asarray(
                     feature, dtype=np.float32
                 )
+                if query_full_norms is not None:
+                    query_full_norms[query_slot, timestep_slot] = float(full_norm)
             done = query_slot + 1
             if done == 1 or done == len(queries) or done % 12 == 0:
                 elapsed = time.monotonic() - checkpoint_started
@@ -347,13 +439,25 @@ def main() -> None:
                     flush=True,
                 )
 
-        query_mean = np.mean(query_features, axis=1, dtype=np.float64).astype(
-            np.float32
-        )
+        query_mean = np.mean(query_features, axis=1, dtype=np.float64).astype(np.float32)
         query_mean_device = array_to_device(jnp.asarray(query_mean), device)
         query_mean_normalized = query_mean_device / jnp.maximum(
             jnp.linalg.norm(query_mean_device, axis=-1, keepdims=True), EPS
         )
+        if args.per_timestep_query_reductions:
+            assert query_full_norms is not None
+            query_raw_terms = array_to_device(
+                jnp.asarray(query_features.reshape(-1, args.proj_dim)), device
+            )
+            query_l2_terms = array_to_device(
+                jnp.asarray(
+                    (
+                        query_features
+                        / np.maximum(query_full_norms[..., None], EPS)
+                    ).reshape(-1, args.proj_dim)
+                ),
+                device,
+            )
 
         endpoint_train_fn = base.make_endpoint_train_mean_fn(
             adapter,
@@ -427,36 +531,77 @@ def main() -> None:
                 ),
                 axis=0,
             )
-            raw_dots = jnp.matmul(
-                query_mean_device,
-                train_all.T,
-                precision=jax.lax.Precision.HIGHEST,
-            )
-            normalized_dots = jnp.matmul(
-                query_mean_normalized,
-                train_all.T,
-                precision=jax.lax.Precision.HIGHEST,
-            )
+            if args.per_timestep_query_reductions:
+                raw_dots = jnp.matmul(
+                    query_raw_terms,
+                    train_all.T,
+                    precision=jax.lax.Precision.HIGHEST,
+                )
+                normalized_dots = jnp.matmul(
+                    query_l2_terms,
+                    train_all.T,
+                    precision=jax.lax.Precision.HIGHEST,
+                )
+            else:
+                raw_dots = jnp.matmul(
+                    query_mean_device,
+                    train_all.T,
+                    precision=jax.lax.Precision.HIGHEST,
+                )
+                normalized_dots = jnp.matmul(
+                    query_mean_normalized,
+                    train_all.T,
+                    precision=jax.lax.Precision.HIGHEST,
+                )
             normalized_dots.block_until_ready()
+            host_shape = (
+                (len(queries), len(timesteps), 4, count)
+                if args.per_timestep_query_reductions
+                else (len(queries), 4, count)
+            )
             raw_host = np.asarray(jax.device_get(raw_dots), dtype=np.float32).reshape(
-                len(queries), 4, count
+                host_shape
             )
             normalized_host = np.asarray(
                 jax.device_get(normalized_dots), dtype=np.float32
-            ).reshape(len(queries), 4, count)
+            ).reshape(host_shape)
             for transform_slot, (raw_block, normalized_block) in enumerate(
                 ((0, 1), (2, 3))
             ):
-                values = (
-                    raw_host[:, raw_block],
-                    normalized_host[:, raw_block],
-                    raw_host[:, normalized_block],
-                    normalized_host[:, normalized_block],
-                )
-                for variant_slot, value in enumerate(values):
-                    scores[transform_slot, variant_slot, :, start:end] += (
-                        float(checkpoint_weight) * value
+                if args.per_timestep_query_reductions:
+                    values = (
+                        raw_host[:, :, raw_block],
+                        normalized_host[:, :, raw_block],
+                        raw_host[:, :, normalized_block],
+                        normalized_host[:, :, normalized_block],
                     )
+                else:
+                    values = (
+                        raw_host[:, raw_block],
+                        normalized_host[:, raw_block],
+                        raw_host[:, normalized_block],
+                        normalized_host[:, normalized_block],
+                    )
+                for variant_slot, value in enumerate(values):
+                    if args.per_timestep_query_reductions:
+                        assert termwise_squared_scores is not None
+                        assert timestamp_components is not None
+                        weighted = float(checkpoint_weight) * value
+                        scores[transform_slot, variant_slot, :, start:end] += np.mean(
+                            weighted, axis=1, dtype=np.float64
+                        )
+                        termwise_squared_scores[
+                            transform_slot, variant_slot, :, start:end
+                        ] += float(checkpoint_weight) * np.mean(
+                            np.square(value), axis=1, dtype=np.float64
+                        )
+                        timestamp_components[
+                            transform_slot, variant_slot, :, :, start:end
+                        ] += weighted / len(timesteps)
+                    else:
+                        scores[transform_slot, variant_slot, :, start:end] += (
+                            float(checkpoint_weight) * value
+                        )
 
             if (
                 batch_index == 1
@@ -475,9 +620,7 @@ def main() -> None:
                 )
 
         completed.append(checkpoint_index)
-        save_npz_compressed_atomic(
-            str(component_path),
-            scores=scores,
+        component_payload = dict(
             score_indices=attribution_indices,
             query_ids=np.asarray(query_ids, dtype=np.int32),
             completed_checkpoints=np.asarray(completed, dtype=np.int32),
@@ -485,6 +628,17 @@ def main() -> None:
             timesteps=timesteps,
             shard_index=np.asarray(args.shard_index, dtype=np.int32),
         )
+        if args.per_timestep_query_reductions:
+            assert termwise_squared_scores is not None
+            assert timestamp_components is not None
+            component_payload.update(
+                linear_scores=scores,
+                termwise_squared_scores=termwise_squared_scores,
+                timestamp_components=timestamp_components,
+            )
+        else:
+            component_payload["scores"] = scores
+        save_npz_compressed_atomic(str(component_path), **component_payload)
         print(
             f"[checkpoint] {checkpoint_index}->{checkpoint_index + 1} saved "
             f"({local_slot}/{len(selected_for_shard)})",
