@@ -140,6 +140,17 @@ def main():
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--grad-microbatch-size", type=int, default=8)
     parser.add_argument("--query-term-batch-size", type=int, default=128)
+    parser.add_argument("--direction-count", type=int, default=D20_DIRECTION_COUNT)
+    parser.add_argument(
+        "--noise-pairing",
+        choices=("aligned-shared-direction", "independent-per-t"),
+        default="aligned-shared-direction",
+    )
+    parser.add_argument(
+        "--query-mode",
+        choices=("dual", "trajectory", "endpoint"),
+        default="dual",
+    )
     args = parser.parse_args()
     if not 0 <= args.direction_shard_index < args.direction_shard_count:
         raise ValueError("invalid direction shard")
@@ -147,8 +158,12 @@ def main():
         args.batch_size <= 0
         or args.grad_microbatch_size <= 0
         or args.query_term_batch_size <= 0
+        or args.direction_count <= 0
     ):
         raise ValueError("batch sizes must be positive")
+    query_modes = (
+        D20_QUERY_MODES if args.query_mode == "dual" else (args.query_mode,)
+    )
 
     device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
     if torch.cuda.is_available():
@@ -217,12 +232,17 @@ def main():
     directions = list(
         range(
             args.direction_shard_index,
-            D20_DIRECTION_COUNT,
+            args.direction_count,
             args.direction_shard_count,
         )
     )
     root = d20_shard_root(
-        args.family, args.direction_shard_index, args.direction_shard_count
+        args.family,
+        args.direction_shard_index,
+        args.direction_shard_count,
+        args.noise_pairing,
+        args.direction_count,
+        query_modes,
     )
     done_path = root / "done.json"
     if done_path.is_file():
@@ -235,7 +255,7 @@ def main():
             variant: root / f"partial_{mode}_{variant}.npy"
             for variant in D20_VARIANTS
         }
-        for mode in D20_QUERY_MODES
+        for mode in query_modes
     }
     progress_path = root / "progress.json"
     completed = []
@@ -251,6 +271,12 @@ def main():
             raise ValueError("partial gradient microbatch size differs")
         if progress["query_ids"] != query_ids:
             raise ValueError("partial query IDs differ")
+        if progress.get("noise_pairing", "aligned-shared-direction") != args.noise_pairing:
+            raise ValueError("partial noise pairing differs")
+        if int(progress.get("direction_count", D20_DIRECTION_COUNT)) != args.direction_count:
+            raise ValueError("partial direction count differs")
+        if tuple(progress.get("query_modes", D20_QUERY_MODES)) != tuple(query_modes):
+            raise ValueError("partial query modes differ")
         completed = [int(value) for value in progress["completed_directions"]]
         scores = {
             mode: {
@@ -268,14 +294,15 @@ def main():
                 variant: torch.zeros(expected_shape, device=device, dtype=torch.float64)
                 for variant in D20_VARIANTS
             }
-            for mode in D20_QUERY_MODES
+            for mode in query_modes
         }
 
     remaining = [value for value in directions if value not in set(completed)]
     started = time.perf_counter()
     print(
         f"[direction20 gpu={args.gpu}] family={args.family} queries={query_ids[0]}..{query_ids[-1]} "
-        f"directions={len(directions)}/20 train_t=100(mean) query_t=100 "
+        f"directions={len(directions)}/{args.direction_count} train_t=100(mean) query_t=100 "
+        f"noise_pairing={args.noise_pairing} query_modes={list(query_modes)} "
         f"full_adamw=true projection=4096 batch={args.batch_size} "
         f"grad_microbatch={args.grad_microbatch_size}",
         flush=True,
@@ -292,7 +319,7 @@ def main():
                 )
                 for variant in D20_VARIANTS
             }
-            for mode in D20_QUERY_MODES
+            for mode in query_modes
         }
 
         for checkpoint_index in range(49):
@@ -318,16 +345,26 @@ def main():
             generator = make_torch_generator(
                 device,
                 D20_NOISE_SEED,
-                "direction20_checkpoint_noise",
+                "direction20_checkpoint_noise"
+                if args.noise_pairing == "aligned-shared-direction"
+                else "mean100t_independent_query_noise",
                 checkpoint_index,
                 direction_index,
             )
-            noise = torch.randn(
-                endpoints.shape[1:],
-                generator=generator,
-                device=device,
-                dtype=endpoints.dtype,
-            )
+            if args.noise_pairing == "aligned-shared-direction":
+                query_noise_by_t = torch.randn(
+                    endpoints.shape[1:],
+                    generator=generator,
+                    device=device,
+                    dtype=endpoints.dtype,
+                ).unsqueeze(0).expand(timestamp_count, *endpoints.shape[1:])
+            else:
+                query_noise_by_t = torch.randn(
+                    (timestamp_count, *endpoints.shape[1:]),
+                    generator=generator,
+                    device=device,
+                    dtype=endpoints.dtype,
+                )
 
             endpoint_bank = endpoints[:, None].expand(
                 query_count, timestamp_count, *endpoints.shape[1:]
@@ -341,6 +378,9 @@ def main():
             condition_bank = conditions[:, None].expand(
                 query_count, timestamp_count, conditions.shape[-1]
             ).reshape(-1, conditions.shape[-1])
+            endpoint_noise_bank = query_noise_by_t.unsqueeze(0).expand(
+                query_count, timestamp_count, *endpoints.shape[1:]
+            ).reshape_as(endpoint_bank)
             query_inputs = {
                 "trajectory": (
                     trajectories.reshape(
@@ -352,11 +392,15 @@ def main():
                     base.q_sample(
                         endpoint_bank,
                         endpoint_timestep_bank,
-                        noise.unsqueeze(0).expand_as(endpoint_bank),
+                        endpoint_noise_bank,
                         schedule,
                     ),
                     endpoint_timestep_bank,
                 ),
+            }
+            query_inputs = {
+                mode: value for mode, value in query_inputs.items()
+                if mode in query_modes
             }
 
             def query_scalar(parameter_dict, xt, timestep, condition, output_direction):
@@ -404,18 +448,25 @@ def main():
                 delta_ranges[mode] = (float(delta_norm.min()), float(delta_norm.max()))
                 del current, following, delta, delta_norm, output_direction, chunks
 
-            def mean100_loss(parameter_dict, x0, condition, aligned_noise):
+            def mean100_loss(parameter_dict, x0, condition, noise_bank):
                 count = train_t.shape[0]
                 x_bank = x0.unsqueeze(0).expand(count, *x0.shape)
                 condition_local = condition.unsqueeze(0).expand(count, condition.shape[-1])
-                noise_bank = aligned_noise.unsqueeze(0).expand_as(x_bank)
                 xt = base.q_sample(x_bank, train_t, noise_bank, schedule)
                 prediction = functional_call(
                     model, parameter_dict, (xt, train_t, condition_local)
                 )
                 return (prediction - noise_bank).square().mean()
 
-            train_grad_fn = vmap(grad(mean100_loss), in_dims=(None, 0, 0, None))
+            train_grad_fn = vmap(
+                grad(mean100_loss),
+                in_dims=(
+                    None,
+                    0,
+                    0,
+                    None if args.noise_pairing == "aligned-shared-direction" else 0,
+                ),
+            )
             num_batches = math.ceil(N_TRAIN / args.batch_size)
             progress_every = max(1, num_batches // 10)
             for batch_position, start in enumerate(
@@ -426,11 +477,32 @@ def main():
                     micro_end = min(
                         micro_start + args.grad_microbatch_size, end
                     )
+                    if args.noise_pairing == "aligned-shared-direction":
+                        train_noise_bank = query_noise_by_t
+                    else:
+                        train_generator = make_torch_generator(
+                            device,
+                            D20_NOISE_SEED,
+                            "mean100t_independent_train_noise",
+                            checkpoint_index,
+                            direction_index,
+                            micro_start,
+                        )
+                        train_noise_bank = torch.randn(
+                            (
+                                micro_end - micro_start,
+                                len(train_t),
+                                *x_all.shape[1:],
+                            ),
+                            generator=train_generator,
+                            device=device,
+                            dtype=x_all.dtype,
+                        )
                     gradients = train_grad_fn(
                         named,
                         x_all[micro_start:micro_end],
                         cond_all[micro_start:micro_end],
-                        noise,
+                        train_noise_bank,
                     )
                     updates = adamw_full_batched(
                         gradients, names, named, adam_state, adam_hyper
@@ -443,7 +515,7 @@ def main():
                         False,
                         1e-8,
                     ).detach()
-                    for mode in D20_QUERY_MODES:
+                    for mode in query_modes:
                         variants = normalized_dots(
                             query_matrices[mode], train_matrix
                         )
@@ -457,41 +529,48 @@ def main():
                             )
                         del variants
                     del gradients, updates, train_matrix
+                    if args.noise_pairing == "independent-per-t":
+                        del train_noise_bank
                 if (
                     batch_position == 1
                     or batch_position % progress_every == 0
                     or batch_position == num_batches
                 ):
                     print(
-                        f"[direction20 gpu={args.gpu}] direction={direction_index+1}/20 "
+                        f"[direction20 gpu={args.gpu}] direction={direction_index+1}/{args.direction_count} "
                         f"pair={checkpoint_index+1}/49 batch={batch_position}/{num_batches}",
                         flush=True,
                     )
 
+            delta_text = " ".join(
+                f"{mode}_delta=[{bounds[0]:.2e},{bounds[1]:.2e}]"
+                for mode, bounds in delta_ranges.items()
+            )
             print(
-                f"[direction20 gpu={args.gpu}] direction={direction_index+1}/20 "
+                f"[direction20 gpu={args.gpu}] direction={direction_index+1}/{args.direction_count} "
                 f"pair={checkpoint_index+1}/49 elapsed={(time.perf_counter()-pair_started)/60:.1f}m "
-                f"traj_delta=[{delta_ranges['trajectory'][0]:.2e},{delta_ranges['trajectory'][1]:.2e}] "
-                f"endpoint_delta=[{delta_ranges['endpoint'][0]:.2e},{delta_ranges['endpoint'][1]:.2e}]",
+                f"{delta_text}",
                 flush=True,
             )
             del model, target, checkpoint, named, names, parameters
-            del adam_state, adam_hyper, specs, noise, endpoint_bank
+            del adam_state, adam_hyper, specs, query_noise_by_t, endpoint_bank
+            del endpoint_noise_bank
             del trajectory_timestep_bank, endpoint_timestep_bank
             del timestep_bank, condition_bank, query_inputs, query_matrices
+            del delta_text
             del query_grad_fn, train_grad_fn, query_scalar, mean100_loss
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
 
-        weight = 1.0 / float(D20_DIRECTION_COUNT * timestamp_count)
-        for mode in D20_QUERY_MODES:
+        weight = 1.0 / float(args.direction_count * timestamp_count)
+        for mode in query_modes:
             for variant in D20_VARIANTS:
                 scores[mode][variant] += weight * accumulators[mode][variant].square().sum(
                     dim=1
                 ).to(torch.float64)
         completed.append(direction_index)
         completed.sort()
-        for mode in D20_QUERY_MODES:
+        for mode in query_modes:
             for variant, path in partial_paths[mode].items():
                 atomic_numpy(path, scores[mode][variant].cpu().numpy())
         atomic_json(
@@ -500,6 +579,9 @@ def main():
                 "contract_version": D20_CONTRACT_VERSION,
                 "family": args.family,
                 "query_ids": query_ids,
+                "noise_pairing": args.noise_pairing,
+                "direction_count": args.direction_count,
+                "query_modes": list(query_modes),
                 "batch_size": args.batch_size,
                 "grad_microbatch_size": args.grad_microbatch_size,
                 "query_term_batch_size": args.query_term_batch_size,
@@ -518,7 +600,7 @@ def main():
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
-    for mode in D20_QUERY_MODES:
+    for mode in query_modes:
         for variant in D20_VARIANTS:
             atomic_numpy(root / f"{mode}_{variant}.npy", scores[mode][variant].cpu().numpy())
     atomic_json(
@@ -528,13 +610,19 @@ def main():
             "family": args.family,
             "query_ids": query_ids,
             "direction_indices": directions,
-            "direction_count": D20_DIRECTION_COUNT,
+            "direction_count": args.direction_count,
             "train_timesteps": list(D20_TRAIN_TIMESTAMPS),
             "trajectory_query_timesteps": [int(value) for value in trajectory_t[0]],
             "endpoint_query_timesteps": list(D20_QUERY_TIMESTAMPS),
             "checkpoint_transitions": 49,
-            "train_feature": "full saved-state AdamW update of mean100t aligned-direction loss",
-            "query_modes": list(D20_QUERY_MODES),
+            "train_feature": (
+                "full saved-state AdamW update of one mean100t loss; one "
+                "independent noise per train timestamp"
+                if args.noise_pairing == "independent-per-t"
+                else "full saved-state AdamW update of mean100t aligned-direction loss"
+            ),
+            "noise_pairing": args.noise_pairing,
+            "query_modes": list(query_modes),
             "contraction": "checkpoint-sum then square; mean over direction and timestamp",
             "projection_dim": D20_PROJECTION_DIM,
             "batch_size": args.batch_size,

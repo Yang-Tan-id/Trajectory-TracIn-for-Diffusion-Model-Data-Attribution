@@ -21,7 +21,21 @@ def atomic_json(path, value):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--direction-shard-count", type=int, default=2)
+    parser.add_argument("--direction-count", type=int, default=D20_DIRECTION_COUNT)
+    parser.add_argument(
+        "--noise-pairing",
+        choices=("aligned-shared-direction", "independent-per-t"),
+        default="aligned-shared-direction",
+    )
+    parser.add_argument(
+        "--query-mode",
+        choices=("dual", "trajectory", "endpoint"),
+        default="dual",
+    )
     args = parser.parse_args()
+    query_modes = (
+        D20_QUERY_MODES if args.query_mode == "dual" else (args.query_mode,)
+    )
     with open(QUERY_DIR / "manifest.json") as handle:
         manifest = json.load(handle)
     by_id = {int(record["query_id"]): record for record in manifest}
@@ -30,7 +44,7 @@ def main():
             variant: np.zeros((100, N_TRAIN), dtype=np.float64)
             for variant in D20_VARIANTS
         }
-        for mode in D20_QUERY_MODES
+        for mode in query_modes
     }
 
     for family in FAMILIES:
@@ -45,27 +59,38 @@ def main():
                 variant: np.zeros((len(query_ids), N_TRAIN), dtype=np.float64)
                 for variant in D20_VARIANTS
             }
-            for mode in D20_QUERY_MODES
+            for mode in query_modes
         }
         for shard_index in range(args.direction_shard_count):
-            root = d20_shard_root(family, shard_index, args.direction_shard_count)
+            root = d20_shard_root(
+                family,
+                shard_index,
+                args.direction_shard_count,
+                args.noise_pairing,
+                args.direction_count,
+                query_modes,
+            )
             with open(root / "done.json") as handle:
                 info = json.load(handle)
             if info["query_ids"] != query_ids:
                 raise ValueError(f"query mismatch in {root}")
             covered.extend(int(value) for value in info["direction_indices"])
-            for mode in D20_QUERY_MODES:
+            for mode in query_modes:
                 for variant in D20_VARIANTS:
                     family_values[mode][variant] += np.load(
                         root / f"{mode}_{variant}.npy"
                     ).astype(np.float64)
-        if sorted(covered) != list(range(D20_DIRECTION_COUNT)):
-            raise ValueError(f"{family} shards do not cover all 20 directions")
-        for mode in D20_QUERY_MODES:
+        if sorted(covered) != list(range(args.direction_count)):
+            raise ValueError(
+                f"{family} shards do not cover all {args.direction_count} banks"
+            )
+        for mode in query_modes:
             for variant in D20_VARIANTS:
                 values = family_values[mode][variant]
                 merged[mode][variant][query_ids] = values
-                method = d20_method(mode, variant)
+                method = d20_method(
+                    mode, variant, args.noise_pairing, args.direction_count
+                )
                 for position, query_id in enumerate(query_ids):
                     output = ATTR_DIR / method / f"q{query_id:02d}"
                     output.mkdir(parents=True, exist_ok=True)
@@ -77,7 +102,7 @@ def main():
                             "method": method,
                             "query_mode": mode,
                             "normalization": variant,
-                            "direction_count": 20,
+                            "direction_count": args.direction_count,
                             "train_timestamps": 100,
                             "query_timestamps": 100,
                             "checkpoint_transitions": 49,
@@ -89,10 +114,12 @@ def main():
 
     membership = np.load(MASK_DIR / "membership.npy").astype(np.float64)
     result = {"query_ids": list(range(100)), "modes": {}}
-    for mode in D20_QUERY_MODES:
+    for mode in query_modes:
         result["modes"][mode] = {}
         for variant in D20_VARIANTS:
-            method = d20_method(mode, variant)
+            method = d20_method(
+                mode, variant, args.noise_pairing, args.direction_count
+            )
             scores = merged[mode][variant]
             entry = {"method": method, "targets": {}}
             print(f"\nMETHOD: {method}", flush=True)
@@ -123,7 +150,12 @@ def main():
                 )
             result["modes"][mode][variant] = entry
 
-    output = LDS_DIR / "direction20_mean100t_adamw_full_dual_q00_q99.json"
+    output = LDS_DIR / (
+        f"bank{args.direction_count}_100x1_adamw_full_{args.query_mode}_"
+        f"{args.noise_pairing}_q00_q99.json"
+        if args.noise_pairing == "independent-per-t"
+        else "direction20_mean100t_adamw_full_dual_q00_q99.json"
+    )
     atomic_json(output, result)
     print(f"[saved] {output}", flush=True)
 

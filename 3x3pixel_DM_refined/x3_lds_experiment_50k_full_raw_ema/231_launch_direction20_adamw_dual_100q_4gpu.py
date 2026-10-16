@@ -21,21 +21,48 @@ def main():
     parser.add_argument("--batch-size", type=int, default=4)
     parser.add_argument("--grad-microbatch-size", type=int, default=8)
     parser.add_argument("--query-term-batch-size", type=int, default=128)
+    parser.add_argument("--direction-count", type=int, default=20)
+    parser.add_argument(
+        "--noise-pairing",
+        choices=("aligned-shared-direction", "independent-per-t"),
+        default="aligned-shared-direction",
+    )
+    parser.add_argument(
+        "--query-mode",
+        choices=("dual", "trajectory", "endpoint"),
+        default="dual",
+    )
     args = parser.parse_args()
     gpus = parse_gpus(args.gpus)
-    assignments = (
-        ("prompted", 0, 2, gpus[0]),
-        ("prompted", 1, 2, gpus[1]),
-        ("unprompted", 0, 2, gpus[2]),
-        ("unprompted", 1, 2, gpus[3]),
-    )
+    if args.direction_count == 1:
+        assignments = (
+            ("prompted", 0, 1, gpus[0]),
+            ("unprompted", 0, 1, gpus[1]),
+        )
+        direction_shard_count = 1
+    else:
+        assignments = (
+            ("prompted", 0, 2, gpus[0]),
+            ("prompted", 1, 2, gpus[1]),
+            ("unprompted", 0, 2, gpus[2]),
+            ("unprompted", 1, 2, gpus[3]),
+        )
+        direction_shard_count = 2
     LOG_DIR.mkdir(parents=True, exist_ok=True)
-    log_path = LOG_DIR / "direction20_mean100t_adamw_full_dual_100q_4gpu.log"
+    run_tag = (
+        "direction20_mean100t_dual_aligned"
+        if args.noise_pairing == "aligned-shared-direction"
+        and args.direction_count == 20
+        and args.query_mode == "dual"
+        else f"bank{args.direction_count}_100x1_{args.query_mode}_{args.noise_pairing}"
+    )
+    log_path = LOG_DIR / f"{run_tag}_adamw_full_100q_4gpu.log"
     active = {}
     with open(log_path, "a", buffering=1) as stream:
         stream.write(
-            "\n[launcher] direction20 x mean100t; full AdamW; normalized next delta; "
-            "trajectory nonaligned + endpoint-polluted aligned; norm4; q00-q99\n"
+            f"\n[launcher] direction_count={args.direction_count}; mean100t; "
+            f"noise_pairing={args.noise_pairing}; query_mode={args.query_mode}; "
+            "full AdamW; normalized next delta; norm4; q00-q99\n"
         )
         for family, shard_index, shard_count, gpu in assignments:
             label = f"{family}-direction-shard-{shard_index}"
@@ -57,6 +84,12 @@ def main():
                 str(args.grad_microbatch_size),
                 "--query-term-batch-size",
                 str(args.query_term_batch_size),
+                "--direction-count",
+                str(args.direction_count),
+                "--noise-pairing",
+                args.noise_pairing,
+                "--query-mode",
+                args.query_mode,
             ]
             stream.write(f"[launcher] {label}: {' '.join(command)}\n")
             process = subprocess.Popen(
@@ -86,7 +119,13 @@ def main():
                 "-u",
                 "230_merge_eval_direction20_adamw_dual.py",
                 "--direction-shard-count",
-                "2",
+                str(direction_shard_count),
+                "--direction-count",
+                str(args.direction_count),
+                "--noise-pairing",
+                args.noise_pairing,
+                "--query-mode",
+                args.query_mode,
             ],
             stdout=stream,
             stderr=subprocess.STDOUT,
