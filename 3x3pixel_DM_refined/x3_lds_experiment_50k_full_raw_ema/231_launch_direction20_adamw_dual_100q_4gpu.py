@@ -24,7 +24,11 @@ def main():
     parser.add_argument("--direction-count", type=int, default=20)
     parser.add_argument(
         "--noise-pairing",
-        choices=("aligned-shared-direction", "independent-per-t"),
+        choices=(
+            "aligned-shared-direction",
+            "aligned-per-t",
+            "independent-per-t",
+        ),
         default="aligned-shared-direction",
     )
     parser.add_argument(

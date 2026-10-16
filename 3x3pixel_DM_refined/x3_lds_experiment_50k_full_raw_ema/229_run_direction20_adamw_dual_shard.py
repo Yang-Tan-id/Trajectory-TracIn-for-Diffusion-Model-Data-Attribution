@@ -145,7 +145,11 @@ def main():
     parser.add_argument("--direction-count", type=int, default=D20_DIRECTION_COUNT)
     parser.add_argument(
         "--noise-pairing",
-        choices=("aligned-shared-direction", "independent-per-t"),
+        choices=(
+            "aligned-shared-direction",
+            "aligned-per-t",
+            "independent-per-t",
+        ),
         default="aligned-shared-direction",
     )
     parser.add_argument(
@@ -358,9 +362,11 @@ def main():
             generator = make_torch_generator(
                 device,
                 D20_NOISE_SEED,
-                "direction20_checkpoint_noise"
-                if args.noise_pairing == "aligned-shared-direction"
-                else "mean100t_independent_query_noise",
+                (
+                    "direction20_checkpoint_noise"
+                    if args.noise_pairing == "aligned-shared-direction"
+                    else f"mean100t_{args.noise_pairing}_query_noise"
+                ),
                 checkpoint_index,
                 direction_index,
             )
@@ -477,7 +483,11 @@ def main():
                     None,
                     0,
                     0,
-                    None if args.noise_pairing == "aligned-shared-direction" else 0,
+                    (
+                        0
+                        if args.noise_pairing == "independent-per-t"
+                        else None
+                    ),
                 ),
             )
             num_batches = math.ceil(
@@ -492,7 +502,10 @@ def main():
                     micro_end = min(
                         micro_start + args.grad_microbatch_size, end
                     )
-                    if args.noise_pairing == "aligned-shared-direction":
+                    if args.noise_pairing in (
+                        "aligned-shared-direction",
+                        "aligned-per-t",
+                    ):
                         train_noise_bank = query_noise_by_t
                     else:
                         train_generator = make_torch_generator(
@@ -635,9 +648,14 @@ def main():
             "checkpoint_transitions": 49,
             "train_feature": (
                 "full saved-state AdamW update of one mean100t loss; one "
-                "independent noise per train timestamp"
+                "independent noise per datapoint and train timestamp"
                 if args.noise_pairing == "independent-per-t"
-                else "full saved-state AdamW update of mean100t aligned-direction loss"
+                else (
+                    "full saved-state AdamW update of one mean100t loss; "
+                    "one noise per timestamp shared by query and train"
+                    if args.noise_pairing == "aligned-per-t"
+                    else "full saved-state AdamW update of mean100t aligned-direction loss"
+                )
             ),
             "noise_pairing": args.noise_pairing,
             "query_modes": list(query_modes),

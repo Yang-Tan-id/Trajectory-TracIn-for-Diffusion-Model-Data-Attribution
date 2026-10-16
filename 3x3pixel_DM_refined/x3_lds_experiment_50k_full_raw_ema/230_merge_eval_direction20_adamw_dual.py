@@ -25,7 +25,11 @@ def main():
     parser.add_argument("--train-shard-count", type=int, default=1)
     parser.add_argument(
         "--noise-pairing",
-        choices=("aligned-shared-direction", "independent-per-t"),
+        choices=(
+            "aligned-shared-direction",
+            "aligned-per-t",
+            "independent-per-t",
+        ),
         default="aligned-shared-direction",
     )
     parser.add_argument(
@@ -171,7 +175,7 @@ def main():
     output = LDS_DIR / (
         f"bank{args.direction_count}_100x1_adamw_full_{args.query_mode}_"
         f"{args.noise_pairing}_q00_q99.json"
-        if args.noise_pairing == "independent-per-t"
+        if args.noise_pairing in ("independent-per-t", "aligned-per-t")
         else "direction20_mean100t_adamw_full_dual_q00_q99.json"
     )
     atomic_json(output, result)

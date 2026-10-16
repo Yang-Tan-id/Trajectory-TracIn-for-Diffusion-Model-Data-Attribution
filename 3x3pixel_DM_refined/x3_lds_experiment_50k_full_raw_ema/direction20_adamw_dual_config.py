@@ -31,11 +31,11 @@ def d20_method(
             else "endpoint_polluted_direction_aligned"
         )
         experiment = f"direction{int(direction_count)}_mean100t"
-    elif noise_pairing == "independent-per-t":
+    elif noise_pairing in ("independent-per-t", "aligned-per-t"):
         query = (
-            "reference_trajectory_independent_mean100t_loss"
+            f"reference_trajectory_{noise_pairing.replace('-', '_')}_mean100t_loss"
             if mode == "trajectory"
-            else "endpoint_polluted_independent_mean100t_loss"
+            else f"endpoint_polluted_{noise_pairing.replace('-', '_')}_mean100t_loss"
         )
         experiment = f"bank{int(direction_count)}_100x1"
     else:
@@ -60,9 +60,12 @@ def d20_shard_root(
 ):
     if noise_pairing == "aligned-shared-direction" and int(direction_count) == 20:
         experiment = "direction20_mean100t_adamw_full_dual"
-    elif noise_pairing == "independent-per-t":
+    elif noise_pairing in ("independent-per-t", "aligned-per-t"):
         modes = "_".join(query_modes)
-        experiment = f"bank{int(direction_count)}_100x1_adamw_full_{modes}_independent"
+        pairing = noise_pairing.replace("-", "_")
+        experiment = (
+            f"bank{int(direction_count)}_100x1_adamw_full_{modes}_{pairing}"
+        )
     else:
         experiment = f"direction{int(direction_count)}_mean100t_adamw_full_dual"
     train_suffix = (
