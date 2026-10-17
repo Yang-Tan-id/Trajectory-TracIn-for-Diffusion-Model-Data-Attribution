@@ -28,9 +28,9 @@ export JAX_COMPILATION_CACHE_DIR="$compile_cache"
 export JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS=0
 export JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES=0
 
-echo "[definition] CelebA paper ReTrac exact4 x query-50; 49 checkpoint intervals"
+echo "[definition] CelebA ReTrac replay4 batch-one x query-50; 49 checkpoint intervals"
 echo "[definition] query: normalize each of 50 full-space loss gradients, project, then mean"
-echo "[definition] train: replay 4 exact training events; normalize each full-space loss gradient"
+echo "[definition] train: pollute-style batch-one grad with replayed sample/noise/timestep; full-space L2"
 echo "[definition] transforms=raw_gradient,adamw_full; reduction=linear; no persistent train gradients"
 echo "[queries] $query_ids"
 echo "[gpus] $gpu_ids_text"
@@ -51,7 +51,7 @@ common=(
   --component-prefix "$component_prefix"
 )
 
-echo "[warm-up] compiling exact-event kernel once on GPU ${gpu_ids[0]}"
+echo "[warm-up] compiling pollute-style batch-one kernel once on GPU ${gpu_ids[0]}"
 CUDA_VISIBLE_DEVICES="${gpu_ids[0]}" JAX_PLATFORMS=cuda JAX_NUM_DEVICES=1 \
   "$python_bin" "$script_dir/run_retrac_1x50.py" \
     "${common[@]}" --shard-index 0 --compile-only \

@@ -3,11 +3,11 @@
 
 The query side reuses the 49-checkpoint bank produced by
 run_endpoint_timewise_1x50.py.  Each stored checkpoint feature is the mean of
-50 independently normalized query-loss gradients.  The train side replays the
-four exact training events between adjacent checkpoints, evaluates every event
-at the fixed interval-start checkpoint, normalizes each gradient in full
-parameter space, and contracts it with the query feature.  Train gradients are
-never persisted.
+50 independently normalized query-loss gradients.  The train side follows the
+working endpoint-pollute batch-one gradient path while replaying each event's
+sample, noise, timestep, checkpoint, and learning-rate weight.  Each gradient
+is normalized in full parameter space and contracted with the query feature.
+Train gradients are never persisted.
 """
 
 from __future__ import annotations
@@ -116,33 +116,38 @@ def make_config(args: argparse.Namespace) -> TrajAttributionConfig:
     return TrajAttributionConfig(**values)
 
 
-def make_exact_event_fns(
-    *, schedule: Any, projector: Any, state: Any, cfg: Any, chunk_size: int
+def make_event_train_fn(
+    *,
+    adapter: Any,
+    model: Any,
+    schedule: Any,
+    projector: Any,
+    state: Any,
+    params: Any,
+    cfg: Any,
 ):
-    """Extract normalized exact-event features with a shared batch forward.
+    """Use the working endpoint-pollute batch-one gradient structure.
 
-    The loss vector is evaluated once for the original training batch.  VJP
-    pullbacks with one-hot cotangents then recover the exact gradient of each
-    selected example.  This is mathematically identical to differentiating
-    ``losses[position]`` separately, while avoiding one duplicated full UNet
-    forward graph per selected position during XLA compilation.
+    The original event sample, diffusion noise, timestep, checkpoint, and
+    learning-rate weight are retained.  We intentionally avoid the expensive
+    full-batch train-mode/dropout VJP graph that stalls XLA compilation.
     """
 
-    def per_example_losses(params, x, y, noise, timesteps, dropout_rng):
-        xt = q_sample(schedule, x, timesteps, noise)
-        target = x if cfg.predict_x0 else noise
-        pred = state.apply_fn(
-            {"params": params},
-            xt,
-            timesteps,
-            y if cfg.class_cond else None,
-            train=True,
-            rngs={"dropout": dropout_rng},
-        )
-        axes = tuple(range(1, pred.ndim))
-        return jnp.mean(jnp.square(pred - target), axis=axes)
+    opt_state = state.opt_state
 
-    def transform_one(params, opt_state, grad):
+    def one(x0, cond, noise, timestep):
+        x0 = x0[None, ...]
+        cond = cond[None, ...] if cond.ndim else cond[None]
+        noise = noise[None, ...]
+        t = timestep[None].astype(jnp.int32)
+
+        def loss_fn(candidate):
+            xt = q_sample(schedule, x0, t, noise)
+            target = x0 if cfg.predict_x0 else noise
+            pred = adapter.eps_apply(model, candidate, xt, t, cond)
+            return jnp.mean(jnp.square(pred - target))
+
+        grad = jax.grad(loss_fn)(params)
         update, _ = state.tx.update(grad, opt_state, params)
 
         def normalized_project(tree):
@@ -154,36 +159,7 @@ def make_exact_event_fns(
 
         return normalized_project(grad), normalized_project(update)
 
-    def gradient_chunk(params, x, y, noise, timesteps, dropout_rng, positions):
-        def loss_vector(candidate):
-            return per_example_losses(
-                candidate, x, y, noise, timesteps, dropout_rng
-            )
-
-        loss_values, pullback = jax.vjp(loss_vector, params)
-        cotangents = jax.nn.one_hot(
-            positions,
-            loss_values.shape[0],
-            dtype=loss_values.dtype,
-        )
-        grads = jax.vmap(lambda cotangent: pullback(cotangent)[0])(
-            cotangents
-        )
-        return grads
-
-    def transform_chunk(params, opt_state, grads):
-        if chunk_size == 1:
-            grad = jax.tree_util.tree_map(lambda leaf: leaf[0], grads)
-            raw, adamw = transform_one(params, opt_state, grad)
-            return raw[None, :], adamw[None, :]
-        return jax.vmap(lambda grad: transform_one(params, opt_state, grad))(
-            grads
-        )
-
-    # Keeping these as separate JIT boundaries prevents XLA from compiling the
-    # full batch backward, optimizer transform, full-tree norms, and sketch as
-    # one monolithic fused graph.
-    return jax.jit(gradient_chunk), jax.jit(transform_chunk)
+    return jax.jit(jax.vmap(one, in_axes=(0, 0, 0, 0)))
 
 
 def load_query_features(
@@ -280,12 +256,14 @@ def score_shard(
             seed_parts=(args.train_seed, "traj_tracin_projection", checkpoint_index),
             device=device,
         )
-        gradient_fn, transform_fn = make_exact_event_fns(
+        event_train_fn = make_event_train_fn(
+            adapter=adapter,
+            model=model,
             schedule=schedule,
             projector=projector,
             state=state,
+            params=params,
             cfg=cfg,
-            chunk_size=args.event_chunk_size,
         )
         query_device = array_to_device(
             jnp.asarray(query_features[checkpoint_index]), device
@@ -301,7 +279,9 @@ def score_shard(
                 range(0, steps_per_epoch * int(cfg.batch_size), int(cfg.batch_size))
             ):
                 selected = indices[start : start + int(cfg.batch_size)]
-                next_rng, noise_rng, t_rng, dropout_rng = jax.random.split(rng, 4)
+                # Preserve the original four-way RNG advance even though the
+                # pollute-style batch-one path does not replay training dropout.
+                next_rng, noise_rng, t_rng, _dropout_rng = jax.random.split(rng, 4)
                 rng = next_rng
                 rows = score_row[selected]
                 positions = np.flatnonzero(rows >= 0)
@@ -333,44 +313,23 @@ def score_shard(
                     compile_started = time.monotonic()
                     if first_kernel:
                         print(
-                            "[compile 1/3 start] exact-event batch VJP gradients",
+                            "[compile start] pollute-style batch-one grad + "
+                            "AdamW + full-L2 + projection",
                             flush=True,
                         )
-                    grads = gradient_fn(
-                        params,
-                        x,
-                        y,
-                        noise,
-                        timesteps,
-                        dropout_rng,
-                        jnp.asarray(padded_positions, dtype=jnp.int32),
-                    )
-                    jax.tree_util.tree_leaves(grads)[0].block_until_ready()
-                    if first_kernel:
-                        print(
-                            "[compile 1/3 done] exact-event gradients ready "
-                            f"elapsed={format_duration(time.monotonic() - compile_started)}",
-                            flush=True,
-                        )
-                        transform_started = time.monotonic()
-                        print(
-                            "[compile 2/3 start] AdamW + full-L2 + projection",
-                            flush=True,
-                        )
-                    raw, adamw = transform_fn(
-                        params,
-                        state.opt_state,
-                        grads,
+                    raw, adamw = event_train_fn(
+                        x[padded_positions],
+                        y[padded_positions],
+                        noise[padded_positions],
+                        timesteps[padded_positions],
                     )
                     raw.block_until_ready()
                     if first_kernel:
                         print(
-                            "[compile 2/3 done] transformed features ready "
-                            f"elapsed={format_duration(time.monotonic() - transform_started)}",
+                            "[compile done] train features ready "
+                            f"elapsed={format_duration(time.monotonic() - compile_started)}",
                             flush=True,
                         )
-                        dot_started = time.monotonic()
-                        print("[compile 3/3 start] query dot product", flush=True)
                     train = jnp.concatenate(
                         (raw[:real_count], adamw[:real_count]), axis=0
                     )
@@ -381,11 +340,7 @@ def score_shard(
                     )
                     dots.block_until_ready()
                     if first_kernel:
-                        print(
-                            "[compile 3/3 done] query dot product ready "
-                            f"elapsed={format_duration(time.monotonic() - dot_started)}",
-                            flush=True,
-                        )
+                        print("[dot ready] query contraction complete", flush=True)
                         first_kernel = False
                         if args.compile_only:
                             active_path.unlink(missing_ok=True)
@@ -450,7 +405,7 @@ def merge(
     for query_slot, query in enumerate(queries):
         for transform_slot, transform in enumerate(TRANSFORMS):
             namespace = (
-                f"celeba_paper_retrac_{transform}_train_exact4_"
+                f"celeba_paper_retrac_{transform}_train_replay4_batch1_"
                 "query_mean50_of_full_l2_linear_shape3d_semantics"
             )
             root = (
@@ -481,6 +436,10 @@ def merge(
                         "full_parameter_l2_normalize(each_train_loss_gradient)"
                     ),
                     "train_event_count": 4,
+                    "train_replay_semantics": (
+                        "pollute_style_independent_batch1_with_replayed_noise_and_timestep"
+                    ),
+                    "training_dropout_replayed": False,
                     "query_timestamp_count": 50,
                     "query_mc_per_timestamp": 1,
                     "checkpoint_count": 49,
