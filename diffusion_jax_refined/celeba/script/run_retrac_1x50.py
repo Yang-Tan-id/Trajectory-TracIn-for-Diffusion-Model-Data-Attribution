@@ -350,8 +350,12 @@ def score_shard(
                         len(queries), len(TRANSFORMS), real_count
                     )
                     destination = rows[real_positions]
-                    scores[0, :, destination] += event_lr * host[:, 0]
-                    scores[1, :, destination] += event_lr * host[:, 1]
+                    # Index the transform first so NumPy keeps the axes as
+                    # (query, selected event).  Combining a scalar, slice, and
+                    # integer array in one expression moves the advanced-index
+                    # axis to the front and produces (event, query).
+                    scores[0][:, destination] += event_lr * host[:, 0]
+                    scores[1][:, destination] += event_lr * host[:, 1]
                     completed_events += real_count
                 if (
                     batch_no == 0
