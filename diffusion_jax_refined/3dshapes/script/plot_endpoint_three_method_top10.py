@@ -70,6 +70,16 @@ METHODS = (
     ),
 )
 
+ENDPOINT_POLLUTE_VARIANTS = {
+    "raw": ("score", "RAW"),
+    "query_l2": ("score_query_normalized", "QUERY-L2"),
+    "train_l2": ("score_train_l2_normalized", "TRAIN-L2"),
+    "query_train_l2": (
+        "score_query_train_l2_normalized",
+        "QUERY/TRAIN-L2",
+    ),
+}
+
 
 def parse_ids(text: str) -> list[int]:
     values = [int(token) for token in text.replace(",", " ").split()]
@@ -124,6 +134,11 @@ def main() -> None:
     parser.add_argument("--train-seed", type=int, default=42)
     parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--top-k", type=int, default=10)
+    parser.add_argument(
+        "--endpoint-pollute-variant",
+        choices=tuple(ENDPOINT_POLLUTE_VARIANTS),
+        default="raw",
+    )
     parser.add_argument("--dataset", type=Path, default=default_data_root / "dataset.npz")
     parser.add_argument("--sample-root", type=Path)
     parser.add_argument("--output-dir", type=Path)
@@ -136,8 +151,29 @@ def main() -> None:
     images, labels = load_dataset(args.dataset)
     result_root = SHAPES_ROOT / "result" / args.experiment
     sample_root = args.sample_root or result_root / "sample_ddim_eta0_1000"
+    pollute_directory, pollute_label = ENDPOINT_POLLUTE_VARIANTS[
+        args.endpoint_pollute_variant
+    ]
+    methods = (
+        Method(
+            key=f"endpoint_pollute_{args.endpoint_pollute_variant}",
+            label=f"Endpoint-Pollute\nAdamW · {pollute_label} · P1",
+            namespace=METHODS[0].namespace,
+            score_directory=pollute_directory,
+            ranking_sign=1,
+        ),
+        METHODS[1],
+        METHODS[2],
+    )
     output_dir = args.output_dir or (
-        result_root / "eval" / "endpoint_top10_three_method_q0_19"
+        result_root
+        / "eval"
+        / (
+            "endpoint_top10_three_method_q0_19"
+            if args.endpoint_pollute_variant == "raw"
+            else "endpoint_top10_three_method_q0_19_"
+            f"endpoint_pollute_{args.endpoint_pollute_variant}"
+        )
     )
     output_dir.mkdir(parents=True, exist_ok=True)
     checkpoint_stem = f"seed_{args.train_seed}_epoch_{args.epochs:04d}"
@@ -153,7 +189,7 @@ def main() -> None:
         )
         selected: dict[str, tuple[np.ndarray, np.ndarray]] = {}
         root = score_root(result_root, args.train_seed, query)
-        for method in METHODS:
+        for method in methods:
             directory = (
                 root
                 / f"traj_tracin_{method.namespace}"
@@ -167,13 +203,13 @@ def main() -> None:
             )
 
         figure, axes = plt.subplots(
-            len(METHODS),
+            len(methods),
             args.top_k + 1,
             figsize=(2.15 * (args.top_k + 1), 6.9),
             gridspec_kw={"width_ratios": [1.12] + [1.0] * args.top_k},
             squeeze=False,
         )
-        for row, method in enumerate(METHODS):
+        for row, method in enumerate(methods):
             axes[row, 0].imshow(endpoint)
             axes[row, 0].set_ylabel(
                 method.label,
@@ -238,9 +274,9 @@ def main() -> None:
         )
         plt.close(figure)
 
-        for left_position, left in enumerate(METHODS):
+        for left_position, left in enumerate(methods):
             left_set = set(int(x) for x in selected[left.key][0])
-            for right in METHODS[left_position + 1 :]:
+            for right in methods[left_position + 1 :]:
                 right_set = set(int(x) for x in selected[right.key][0])
                 intersection = len(left_set & right_set)
                 overlap_rows.append(
@@ -262,9 +298,11 @@ def main() -> None:
     manifest = {
         "query_ids": args.query_ids,
         "top_k": args.top_k,
-        "methods": [method.__dict__ for method in METHODS],
+        "methods": [method.__dict__ for method in methods],
         "ranking_semantics": {
-            "endpoint_pollute_raw": "stored score descending (P1)",
+            f"endpoint_pollute_{args.endpoint_pollute_variant}": (
+                "stored score descending (P1)"
+            ),
             "retrac_query_train_l2": "stored score ascending (-stored, M1)",
             "endpoint_tracin_raw": "stored score ascending (-stored, M1)",
         },
