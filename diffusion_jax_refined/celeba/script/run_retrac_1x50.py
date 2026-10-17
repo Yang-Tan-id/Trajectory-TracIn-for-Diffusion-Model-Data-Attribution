@@ -79,6 +79,44 @@ SCORE_DIRECTORY = "score_query_train_l2_normalized"
 SCORE_VARIANT = "query_train_l2_normalized"
 
 
+def replay_semantics(replay_dropout: bool) -> str:
+    return (
+        "exact_shared_forward_batch_vjp_train_mode_dropout"
+        if replay_dropout
+        else "pollute_style_independent_batch1_with_replayed_noise_and_timestep"
+    )
+
+
+def validate_component_provenance(
+    payload: Any,
+    *,
+    path: Path,
+    replay_dropout: bool,
+) -> None:
+    required = {
+        "replay_dropout",
+        "train_replay_semantics",
+        "training_dropout_rate",
+        "original_training_batch_size",
+    }
+    missing = required.difference(payload.files)
+    if missing:
+        raise RuntimeError(
+            f"{path}: component provenance is missing {sorted(missing)}; "
+            "refusing to resume or relabel a legacy shard"
+        )
+    stored_replay = bool(np.asarray(payload["replay_dropout"]).item())
+    stored_semantics = str(np.asarray(payload["train_replay_semantics"]).item())
+    expected_semantics = replay_semantics(replay_dropout)
+    if stored_replay != replay_dropout or stored_semantics != expected_semantics:
+        raise RuntimeError(
+            f"{path}: component mode mismatch: "
+            f"stored replay_dropout={stored_replay}, semantics={stored_semantics!r}; "
+            f"requested replay_dropout={replay_dropout}, "
+            f"semantics={expected_semantics!r}"
+        )
+
+
 def parse_ints(text: str) -> list[int]:
     return [int(value) for value in text.replace(",", " ").split() if value]
 
@@ -170,11 +208,14 @@ def make_exact_event_train_fn(
     params: Any,
     cfg: Any,
 ):
-    """Replay the original train-mode batch and select per-example losses.
+    """Replay one train-mode batch and extract exact per-example features.
 
-    Dropout is generated for the original full batch with the original RNG key.
-    ``lax.map`` evaluates selected positions sequentially inside one compiled
-    call so a chunk-sized full-parameter gradient bank is never materialized.
+    The original implementation differentiated ``losses[position]`` inside
+    ``lax.map``.  That is exact, but it repeats the full 128-example UNet
+    forward once per selected position.  Here the batch loss vector and its
+    VJP closure are constructed once.  Sequential one-hot pullbacks then
+    recover the same per-example gradients without materializing a
+    chunk-sized full-parameter gradient bank or repeating the batch forward.
     """
 
     opt_state = state.opt_state
@@ -194,13 +235,20 @@ def make_exact_event_train_fn(
         return jnp.mean(jnp.square(pred - target), axis=axes)
 
     def exact_batch(x0, cond, noise, timesteps, dropout_rng, positions):
-        def one_position(position):
-            def selected_loss(candidate):
-                return per_example_losses(
-                    candidate, x0, cond, noise, timesteps, dropout_rng
-                )[position]
+        def loss_vector(candidate):
+            return per_example_losses(
+                candidate, x0, cond, noise, timesteps, dropout_rng
+            )
 
-            grad = jax.grad(selected_loss)(params)
+        loss_values, pullback = jax.vjp(loss_vector, params)
+
+        def one_position(position):
+            cotangent = jax.nn.one_hot(
+                position,
+                loss_values.shape[0],
+                dtype=loss_values.dtype,
+            )
+            grad = pullback(cotangent)[0]
             update, _ = state.tx.update(grad, opt_state, params)
 
             def normalized_project(tree):
@@ -292,6 +340,11 @@ def score_shard(
         )
     if component_path.is_file():
         with np.load(component_path, allow_pickle=False) as payload:
+            validate_component_provenance(
+                payload,
+                path=component_path,
+                replay_dropout=bool(args.replay_dropout),
+            )
             scores[...] = payload["scores"]
             completed = list(
                 np.asarray(payload["completed_checkpoints"], dtype=np.int32)
@@ -377,7 +430,7 @@ def score_shard(
                     compile_started = time.monotonic()
                     if first_kernel:
                         replay_label = (
-                            "exact full-batch train-mode/dropout replay"
+                            "exact shared-forward batch-VJP train-mode/dropout replay"
                             if args.replay_dropout
                             else "pollute-style batch-one grad"
                         )
@@ -465,6 +518,14 @@ def score_shard(
             completed_checkpoints=np.asarray(completed, dtype=np.int32),
             score_indices=attribution_indices,
             query_ids=np.asarray([query["id"] for query in queries], dtype=np.int32),
+            replay_dropout=np.asarray(bool(args.replay_dropout)),
+            train_replay_semantics=np.asarray(
+                replay_semantics(bool(args.replay_dropout))
+            ),
+            training_dropout_rate=np.asarray(float(cfg.dropout), dtype=np.float64),
+            original_training_batch_size=np.asarray(
+                int(cfg.batch_size), dtype=np.int32
+            ),
         )
         active_path.unlink(missing_ok=True)
         print(f"[checkpoint] {checkpoint_index + 1}/49 complete", flush=True)
@@ -482,6 +543,11 @@ def merge(
         if not path.is_file():
             raise FileNotFoundError(path)
         with np.load(path, allow_pickle=False) as payload:
+            validate_component_provenance(
+                payload,
+                path=path,
+                replay_dropout=bool(args.replay_dropout),
+            )
             shards.append(np.asarray(payload["scores"], dtype=np.float64))
     scores = sum(shards, np.zeros_like(shards[0]))
     result_root = CELEBA_ROOT / "result" / args.experiment
@@ -525,9 +591,7 @@ def merge(
                     ),
                     "train_event_count": 4,
                     "train_replay_semantics": (
-                        "exact_original_batch_train_mode_selected_per_example_loss"
-                        if args.replay_dropout
-                        else "pollute_style_independent_batch1_with_replayed_noise_and_timestep"
+                        replay_semantics(bool(args.replay_dropout))
                     ),
                     "training_dropout_replayed": bool(args.replay_dropout),
                     "query_timestamp_count": 50,
