@@ -116,7 +116,7 @@ def make_config(args: argparse.Namespace) -> TrajAttributionConfig:
     return TrajAttributionConfig(**values)
 
 
-def make_event_train_fn(
+def make_batch_one_event_train_fn(
     *,
     adapter: Any,
     model: Any,
@@ -160,6 +160,63 @@ def make_event_train_fn(
         return normalized_project(grad), normalized_project(update)
 
     return jax.jit(jax.vmap(one, in_axes=(0, 0, 0, 0)))
+
+
+def make_exact_event_train_fn(
+    *,
+    schedule: Any,
+    projector: Any,
+    state: Any,
+    params: Any,
+    cfg: Any,
+):
+    """Replay the original train-mode batch and select per-example losses.
+
+    Dropout is generated for the original full batch with the original RNG key.
+    ``lax.map`` evaluates selected positions sequentially inside one compiled
+    call so a chunk-sized full-parameter gradient bank is never materialized.
+    """
+
+    opt_state = state.opt_state
+
+    def per_example_losses(candidate, x0, cond, noise, timesteps, dropout_rng):
+        xt = q_sample(schedule, x0, timesteps, noise)
+        target = x0 if cfg.predict_x0 else noise
+        pred = state.apply_fn(
+            {"params": candidate},
+            xt,
+            timesteps,
+            cond if cfg.class_cond else None,
+            train=True,
+            rngs={"dropout": dropout_rng},
+        )
+        axes = tuple(range(1, pred.ndim))
+        return jnp.mean(jnp.square(pred - target), axis=axes)
+
+    def exact_batch(x0, cond, noise, timesteps, dropout_rng, positions):
+        def one_position(position):
+            def selected_loss(candidate):
+                return per_example_losses(
+                    candidate, x0, cond, noise, timesteps, dropout_rng
+                )[position]
+
+            grad = jax.grad(selected_loss)(params)
+            update, _ = state.tx.update(grad, opt_state, params)
+
+            def normalized_project(tree):
+                norm = tree_l2_norm(tree)
+                normalized = jax.tree_util.tree_map(
+                    lambda leaf: leaf
+                    / jnp.maximum(norm, EPS).astype(leaf.dtype),
+                    tree,
+                )
+                return projector(normalized).astype(jnp.float32)
+
+            return normalized_project(grad), normalized_project(update)
+
+        return jax.lax.map(one_position, positions)
+
+    return jax.jit(exact_batch)
 
 
 def load_query_features(
@@ -256,15 +313,24 @@ def score_shard(
             seed_parts=(args.train_seed, "traj_tracin_projection", checkpoint_index),
             device=device,
         )
-        event_train_fn = make_event_train_fn(
-            adapter=adapter,
-            model=model,
-            schedule=schedule,
-            projector=projector,
-            state=state,
-            params=params,
-            cfg=cfg,
-        )
+        if args.replay_dropout:
+            event_train_fn = make_exact_event_train_fn(
+                schedule=schedule,
+                projector=projector,
+                state=state,
+                params=params,
+                cfg=cfg,
+            )
+        else:
+            event_train_fn = make_batch_one_event_train_fn(
+                adapter=adapter,
+                model=model,
+                schedule=schedule,
+                projector=projector,
+                state=state,
+                params=params,
+                cfg=cfg,
+            )
         query_device = array_to_device(
             jnp.asarray(query_features[checkpoint_index]), device
         )
@@ -279,9 +345,7 @@ def score_shard(
                 range(0, steps_per_epoch * int(cfg.batch_size), int(cfg.batch_size))
             ):
                 selected = indices[start : start + int(cfg.batch_size)]
-                # Preserve the original four-way RNG advance even though the
-                # pollute-style batch-one path does not replay training dropout.
-                next_rng, noise_rng, t_rng, _dropout_rng = jax.random.split(rng, 4)
+                next_rng, noise_rng, t_rng, dropout_rng = jax.random.split(rng, 4)
                 rng = next_rng
                 rows = score_row[selected]
                 positions = np.flatnonzero(rows >= 0)
@@ -312,17 +376,32 @@ def score_shard(
                     )
                     compile_started = time.monotonic()
                     if first_kernel:
+                        replay_label = (
+                            "exact full-batch train-mode/dropout replay"
+                            if args.replay_dropout
+                            else "pollute-style batch-one grad"
+                        )
                         print(
-                            "[compile start] pollute-style batch-one grad + "
-                            "AdamW + full-L2 + projection",
+                            f"[compile start] {replay_label} + AdamW + "
+                            "full-L2 + projection",
                             flush=True,
                         )
-                    raw, adamw = event_train_fn(
-                        x[padded_positions],
-                        y[padded_positions],
-                        noise[padded_positions],
-                        timesteps[padded_positions],
-                    )
+                    if args.replay_dropout:
+                        raw, adamw = event_train_fn(
+                            x,
+                            y,
+                            noise,
+                            timesteps,
+                            dropout_rng,
+                            jnp.asarray(padded_positions, dtype=jnp.int32),
+                        )
+                    else:
+                        raw, adamw = event_train_fn(
+                            x[padded_positions],
+                            y[padded_positions],
+                            noise[padded_positions],
+                            timesteps[padded_positions],
+                        )
                     raw.block_until_ready()
                     if first_kernel:
                         print(
@@ -408,8 +487,13 @@ def merge(
     result_root = CELEBA_ROOT / "result" / args.experiment
     for query_slot, query in enumerate(queries):
         for transform_slot, transform in enumerate(TRANSFORMS):
+            replay_tag = (
+                "train_replay4_exact_batch_dropout"
+                if args.replay_dropout
+                else "train_replay4_batch1"
+            )
             namespace = (
-                f"celeba_paper_retrac_{transform}_train_replay4_batch1_"
+                f"celeba_paper_retrac_{transform}_{replay_tag}_"
                 "query_mean50_of_full_l2_linear_shape3d_semantics"
             )
             root = (
@@ -441,9 +525,11 @@ def merge(
                     ),
                     "train_event_count": 4,
                     "train_replay_semantics": (
-                        "pollute_style_independent_batch1_with_replayed_noise_and_timestep"
+                        "exact_original_batch_train_mode_selected_per_example_loss"
+                        if args.replay_dropout
+                        else "pollute_style_independent_batch1_with_replayed_noise_and_timestep"
                     ),
-                    "training_dropout_replayed": False,
+                    "training_dropout_replayed": bool(args.replay_dropout),
                     "query_timestamp_count": 50,
                     "query_mc_per_timestamp": 1,
                     "checkpoint_count": 49,
@@ -470,6 +556,14 @@ def main() -> None:
     parser.add_argument("--component-prefix", type=Path, required=True)
     parser.add_argument("--merge-only", action="store_true")
     parser.add_argument("--compile-only", action="store_true")
+    parser.add_argument(
+        "--replay-dropout",
+        action="store_true",
+        help=(
+            "reconstruct each original training batch and its train-mode dropout "
+            "mask before differentiating the selected per-example loss"
+        ),
+    )
     args = parser.parse_args()
     if not 0 <= args.shard_index < args.shard_count:
         raise ValueError("invalid shard index")

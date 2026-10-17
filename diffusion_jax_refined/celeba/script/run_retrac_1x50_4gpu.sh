@@ -12,7 +12,14 @@ IFS=, read -r -a gpu_ids <<< "$gpu_ids_text"
 shard_count="${#gpu_ids[@]}"
 (( shard_count > 0 )) || { echo "GPU_IDS is empty" >&2; exit 1; }
 
-run_tag="${RUN_TAG:-celeba_retrac_1x50_$(date +%Y%m%d_%H%M%S)}"
+replay_dropout="${REPLAY_DROPOUT:-1}"
+case "$replay_dropout" in
+  0) replay_args=(); replay_label="batch-one approximation" ;;
+  1) replay_args=(--replay-dropout); replay_label="exact full-batch dropout replay" ;;
+  *) echo "REPLAY_DROPOUT must be 0 or 1" >&2; exit 1 ;;
+esac
+
+run_tag="${RUN_TAG:-celeba_retrac_1x50_exact_dropout_$(date +%Y%m%d_%H%M%S)}"
 result_root="$celeba_root/result/$experiment"
 log_root="$result_root/logs/retrac_1x50_full_l2/$run_tag"
 component_prefix="$log_root/components"
@@ -28,9 +35,9 @@ export JAX_COMPILATION_CACHE_DIR="$compile_cache"
 export JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS=0
 export JAX_PERSISTENT_CACHE_MIN_ENTRY_SIZE_BYTES=0
 
-echo "[definition] CelebA ReTrac replay4 batch-one x query-50; 49 checkpoint intervals"
+echo "[definition] CelebA ReTrac replay4 x query-50; 49 checkpoint intervals"
 echo "[definition] query: normalize each of 50 full-space loss gradients, project, then mean"
-echo "[definition] train: pollute-style batch-one grad with replayed sample/noise/timestep; full-space L2"
+echo "[definition] train: $replay_label; replayed sample/noise/timestep; full-space L2"
 echo "[definition] transforms=raw_gradient,adamw_full; reduction=linear; no persistent train gradients"
 echo "[queries] $query_ids"
 echo "[gpus] $gpu_ids_text"
@@ -49,9 +56,10 @@ common=(
   --progress-every-batches "${PROGRESS_EVERY_BATCHES:-25}"
   --shard-count "$shard_count"
   --component-prefix "$component_prefix"
+  "${replay_args[@]}"
 )
 
-echo "[warm-up] compiling pollute-style batch-one kernel once on GPU ${gpu_ids[0]}"
+echo "[warm-up] compiling $replay_label kernel once on GPU ${gpu_ids[0]}"
 CUDA_VISIBLE_DEVICES="${gpu_ids[0]}" JAX_PLATFORMS=cuda JAX_NUM_DEVICES=1 \
   "$python_bin" "$script_dir/run_retrac_1x50.py" \
     "${common[@]}" --shard-index 0 --compile-only \
