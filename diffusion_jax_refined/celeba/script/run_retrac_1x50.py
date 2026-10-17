@@ -116,7 +116,7 @@ def make_config(args: argparse.Namespace) -> TrajAttributionConfig:
     return TrajAttributionConfig(**values)
 
 
-def make_exact_event_fn(
+def make_exact_event_fns(
     *, schedule: Any, projector: Any, state: Any, cfg: Any, chunk_size: int
 ):
     """Extract normalized exact-event features with a shared batch forward.
@@ -154,7 +154,7 @@ def make_exact_event_fn(
 
         return normalized_project(grad), normalized_project(update)
 
-    def chunk(params, opt_state, x, y, noise, timesteps, dropout_rng, positions):
+    def gradient_chunk(params, x, y, noise, timesteps, dropout_rng, positions):
         def loss_vector(candidate):
             return per_example_losses(
                 candidate, x, y, noise, timesteps, dropout_rng
@@ -169,11 +169,21 @@ def make_exact_event_fn(
         grads = jax.vmap(lambda cotangent: pullback(cotangent)[0])(
             cotangents
         )
-        return jax.vmap(
-            lambda grad: transform_one(params, opt_state, grad)
-        )(grads)
+        return grads
 
-    return jax.jit(chunk)
+    def transform_chunk(params, opt_state, grads):
+        if chunk_size == 1:
+            grad = jax.tree_util.tree_map(lambda leaf: leaf[0], grads)
+            raw, adamw = transform_one(params, opt_state, grad)
+            return raw[None, :], adamw[None, :]
+        return jax.vmap(lambda grad: transform_one(params, opt_state, grad))(
+            grads
+        )
+
+    # Keeping these as separate JIT boundaries prevents XLA from compiling the
+    # full batch backward, optimizer transform, full-tree norms, and sketch as
+    # one monolithic fused graph.
+    return jax.jit(gradient_chunk), jax.jit(transform_chunk)
 
 
 def load_query_features(
@@ -270,7 +280,7 @@ def score_shard(
             seed_parts=(args.train_seed, "traj_tracin_projection", checkpoint_index),
             device=device,
         )
-        event_fn = make_exact_event_fn(
+        gradient_fn, transform_fn = make_exact_event_fns(
             schedule=schedule,
             projector=projector,
             state=state,
@@ -323,13 +333,11 @@ def score_shard(
                     compile_started = time.monotonic()
                     if first_kernel:
                         print(
-                            "[compile start] exact-event grad + AdamW + "
-                            "full-L2 + projection",
+                            "[compile 1/3 start] exact-event batch VJP gradients",
                             flush=True,
                         )
-                    raw, adamw = event_fn(
+                    grads = gradient_fn(
                         params,
-                        state.opt_state,
                         x,
                         y,
                         noise,
@@ -337,7 +345,32 @@ def score_shard(
                         dropout_rng,
                         jnp.asarray(padded_positions, dtype=jnp.int32),
                     )
+                    jax.tree_util.tree_leaves(grads)[0].block_until_ready()
+                    if first_kernel:
+                        print(
+                            "[compile 1/3 done] exact-event gradients ready "
+                            f"elapsed={format_duration(time.monotonic() - compile_started)}",
+                            flush=True,
+                        )
+                        transform_started = time.monotonic()
+                        print(
+                            "[compile 2/3 start] AdamW + full-L2 + projection",
+                            flush=True,
+                        )
+                    raw, adamw = transform_fn(
+                        params,
+                        state.opt_state,
+                        grads,
+                    )
                     raw.block_until_ready()
+                    if first_kernel:
+                        print(
+                            "[compile 2/3 done] transformed features ready "
+                            f"elapsed={format_duration(time.monotonic() - transform_started)}",
+                            flush=True,
+                        )
+                        dot_started = time.monotonic()
+                        print("[compile 3/3 start] query dot product", flush=True)
                     train = jnp.concatenate(
                         (raw[:real_count], adamw[:real_count]), axis=0
                     )
@@ -349,8 +382,8 @@ def score_shard(
                     dots.block_until_ready()
                     if first_kernel:
                         print(
-                            "[compile done] first exact-event kernel ready "
-                            f"elapsed={format_duration(time.monotonic() - compile_started)}",
+                            "[compile 3/3 done] query dot product ready "
+                            f"elapsed={format_duration(time.monotonic() - dot_started)}",
                             flush=True,
                         )
                         first_kernel = False
