@@ -208,14 +208,11 @@ def make_exact_event_train_fn(
     params: Any,
     cfg: Any,
 ):
-    """Replay one train-mode batch and extract exact per-example features.
+    """Replay the original train-mode batch and select per-example losses.
 
-    The original implementation differentiated ``losses[position]`` inside
-    ``lax.map``.  That is exact, but it repeats the full 128-example UNet
-    forward once per selected position.  Here the batch loss vector and its
-    VJP closure are constructed once.  Sequential one-hot pullbacks then
-    recover the same per-example gradients without materializing a
-    chunk-sized full-parameter gradient bank or repeating the batch forward.
+    Dropout is generated for the original full batch with the original RNG key.
+    ``lax.map`` evaluates selected positions sequentially inside one compiled
+    call so a chunk-sized full-parameter gradient bank is never materialized.
     """
 
     opt_state = state.opt_state
@@ -235,20 +232,13 @@ def make_exact_event_train_fn(
         return jnp.mean(jnp.square(pred - target), axis=axes)
 
     def exact_batch(x0, cond, noise, timesteps, dropout_rng, positions):
-        def loss_vector(candidate):
-            return per_example_losses(
-                candidate, x0, cond, noise, timesteps, dropout_rng
-            )
-
-        loss_values, pullback = jax.vjp(loss_vector, params)
-
         def one_position(position):
-            cotangent = jax.nn.one_hot(
-                position,
-                loss_values.shape[0],
-                dtype=loss_values.dtype,
-            )
-            grad = pullback(cotangent)[0]
+            def selected_loss(candidate):
+                return per_example_losses(
+                    candidate, x0, cond, noise, timesteps, dropout_rng
+                )[position]
+
+            grad = jax.grad(selected_loss)(params)
             update, _ = state.tx.update(grad, opt_state, params)
 
             def normalized_project(tree):
@@ -430,7 +420,7 @@ def score_shard(
                     compile_started = time.monotonic()
                     if first_kernel:
                         replay_label = (
-                            "exact shared-forward batch-VJP train-mode/dropout replay"
+                            "exact full-batch train-mode/dropout replay"
                             if args.replay_dropout
                             else "pollute-style batch-one grad"
                         )
