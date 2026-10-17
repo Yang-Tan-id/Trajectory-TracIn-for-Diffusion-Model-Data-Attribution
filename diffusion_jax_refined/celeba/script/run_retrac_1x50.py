@@ -232,6 +232,7 @@ def score_shard(
         (len(TRANSFORMS), len(queries), len(attribution_indices)), dtype=np.float64
     )
     completed: list[int] = []
+    first_kernel = True
     active_path = component_path.with_suffix(".active_checkpoint")
     if active_path.is_file():
         active_path.unlink(missing_ok=True)
@@ -313,6 +314,13 @@ def score_shard(
                         (0, args.event_chunk_size - real_count),
                         mode="edge",
                     )
+                    compile_started = time.monotonic()
+                    if first_kernel:
+                        print(
+                            "[compile start] exact-event grad + AdamW + "
+                            "full-L2 + projection",
+                            flush=True,
+                        )
                     raw, adamw = event_fn(
                         params,
                         state.opt_state,
@@ -333,6 +341,17 @@ def score_shard(
                         precision=jax.lax.Precision.HIGHEST,
                     )
                     dots.block_until_ready()
+                    if first_kernel:
+                        print(
+                            "[compile done] first exact-event kernel ready "
+                            f"elapsed={format_duration(time.monotonic() - compile_started)}",
+                            flush=True,
+                        )
+                        first_kernel = False
+                        if args.compile_only:
+                            active_path.unlink(missing_ok=True)
+                            print("[compile only] warm-up complete", flush=True)
+                            return
                     host = np.asarray(jax.device_get(dots), dtype=np.float32).reshape(
                         len(queries), len(TRANSFORMS), real_count
                     )
@@ -448,9 +467,12 @@ def main() -> None:
     parser.add_argument("--shard-count", type=int, default=1)
     parser.add_argument("--component-prefix", type=Path, required=True)
     parser.add_argument("--merge-only", action="store_true")
+    parser.add_argument("--compile-only", action="store_true")
     args = parser.parse_args()
     if not 0 <= args.shard_index < args.shard_count:
         raise ValueError("invalid shard index")
+    if args.merge_only and args.compile_only:
+        raise ValueError("--merge-only and --compile-only are mutually exclusive")
     os.environ.update(
         EXPERIMENT_TAG=args.experiment,
         TRAIN_SEED=str(args.train_seed),
