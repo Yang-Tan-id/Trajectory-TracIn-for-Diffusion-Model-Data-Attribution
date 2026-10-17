@@ -137,6 +137,7 @@ def main() -> None:
     for method in methods:
         method_root = root / method / f"topk_{args.topk:04d}"
         records: dict[int, dict[str, object]] = {}
+        candidate_universe: np.ndarray | None = None
         for query_id in args.query_ids:
             manifest_path = one_match(method_root, query_id, "removal_manifest.json")
             if manifest_path is None:
@@ -149,12 +150,38 @@ def main() -> None:
                 raise ValueError(
                     f"{manifest_path}: expected {args.topk} unique removed indices"
                 )
-            if np.any((removed < 0) | (removed >= args.candidate_size)):
-                raise ValueError(f"{manifest_path}: removed index outside candidate universe")
+            score_indices_path = Path(manifest["score_directory"]) / "score_indices.npy"
+            if not score_indices_path.is_file():
+                raise FileNotFoundError(score_indices_path)
+            score_indices = np.asarray(
+                np.load(score_indices_path), dtype=np.int64
+            ).reshape(-1)
+            if (
+                len(score_indices) != args.candidate_size
+                or len(np.unique(score_indices)) != args.candidate_size
+            ):
+                raise ValueError(
+                    f"{score_indices_path}: expected {args.candidate_size} unique candidates"
+                )
+            sorted_candidates = np.sort(score_indices)
+            if candidate_universe is None:
+                candidate_universe = sorted_candidates
+            elif not np.array_equal(candidate_universe, sorted_candidates):
+                raise ValueError(
+                    f"{score_indices_path}: candidate universe differs across queries"
+                )
+            positions = np.searchsorted(sorted_candidates, removed)
+            if np.any(positions >= len(sorted_candidates)) or not np.array_equal(
+                sorted_candidates[positions], removed
+            ):
+                raise ValueError(
+                    f"{manifest_path}: removed index absent from score candidate universe"
+                )
             metrics_path = one_match(method_root, query_id, "counterfactual_metrics.json")
             metrics = json.loads(metrics_path.read_text()) if metrics_path else None
             records[query_id] = {
                 "removed": removed,
+                "removed_positions": positions,
                 "manifest": manifest,
                 "metrics": metrics,
             }
@@ -162,32 +189,38 @@ def main() -> None:
         if len(records) < 2:
             report.append(f"{METHOD_LABELS[method]}: only {len(records)} manifests; skipped")
             continue
+        assert candidate_universe is not None
 
         query_ids = sorted(records)
         frequency = np.zeros(args.candidate_size, dtype=np.int64)
         for query_id in query_ids:
-            frequency[np.asarray(records[query_id]["removed"])] += 1
+            frequency[np.asarray(records[query_id]["removed_positions"])] += 1
 
         # This is a query-independent consensus ranking.  It is diagnostic
         # only: no counterfactual model has been trained for this set.
         global_order = np.lexsort((np.arange(args.candidate_size), -frequency))
-        global_topk = global_order[: args.topk]
+        global_topk = candidate_universe[global_order[: args.topk]]
         np.save(output_dir / f"{method}_global_frequency_top{args.topk}.npy", global_topk)
 
         method_rows: list[dict[str, object]] = []
         for query_id in query_ids:
             removed = np.asarray(records[query_id]["removed"], dtype=np.int64)
+            removed_positions = np.asarray(
+                records[query_id]["removed_positions"], dtype=np.int64
+            )
             other_frequency = frequency.copy()
-            other_frequency[removed] -= 1
+            other_frequency[removed_positions] -= 1
             other_count = len(query_ids) - 1
-            commonness = float(other_frequency[removed].mean() / other_count)
+            commonness = float(
+                other_frequency[removed_positions].mean() / other_count
+            )
 
             # Leave this query out when constructing its global-frequency set,
             # avoiding the mechanical self-overlap bias.
             loo_order = np.lexsort(
                 (np.arange(args.candidate_size), -other_frequency)
             )
-            loo_global = loo_order[: args.topk]
+            loo_global = candidate_universe[loo_order[: args.topk]]
             loo_overlap = float(np.intersect1d(removed, loo_global).size / args.topk)
 
             metrics = records[query_id]["metrics"]
