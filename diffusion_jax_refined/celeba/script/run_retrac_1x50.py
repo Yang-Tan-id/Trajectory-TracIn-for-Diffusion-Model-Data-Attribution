@@ -119,7 +119,14 @@ def make_config(args: argparse.Namespace) -> TrajAttributionConfig:
 def make_exact_event_fn(
     *, schedule: Any, projector: Any, state: Any, cfg: Any, chunk_size: int
 ):
-    """Extract raw and AdamW-full normalized features for exact batch events."""
+    """Extract normalized exact-event features with a shared batch forward.
+
+    The loss vector is evaluated once for the original training batch.  VJP
+    pullbacks with one-hot cotangents then recover the exact gradient of each
+    selected example.  This is mathematically identical to differentiating
+    ``losses[position]`` separately, while avoiding one duplicated full UNet
+    forward graph per selected position during XLA compilation.
+    """
 
     def per_example_losses(params, x, y, noise, timesteps, dropout_rng):
         xt = q_sample(schedule, x, timesteps, noise)
@@ -135,13 +142,7 @@ def make_exact_event_fn(
         axes = tuple(range(1, pred.ndim))
         return jnp.mean(jnp.square(pred - target), axis=axes)
 
-    def one(params, opt_state, x, y, noise, timesteps, dropout_rng, position):
-        def selected_loss(candidate):
-            return per_example_losses(
-                candidate, x, y, noise, timesteps, dropout_rng
-            )[position]
-
-        grad = jax.grad(selected_loss)(params)
+    def transform_one(params, opt_state, grad):
         update, _ = state.tx.update(grad, opt_state, params)
 
         def normalized_project(tree):
@@ -154,18 +155,23 @@ def make_exact_event_fn(
         return normalized_project(grad), normalized_project(update)
 
     def chunk(params, opt_state, x, y, noise, timesteps, dropout_rng, positions):
-        return jax.vmap(
-            lambda position: one(
-                params,
-                opt_state,
-                x,
-                y,
-                noise,
-                timesteps,
-                dropout_rng,
-                position,
+        def loss_vector(candidate):
+            return per_example_losses(
+                candidate, x, y, noise, timesteps, dropout_rng
             )
-        )(positions)
+
+        loss_values, pullback = jax.vjp(loss_vector, params)
+        cotangents = jax.nn.one_hot(
+            positions,
+            loss_values.shape[0],
+            dtype=loss_values.dtype,
+        )
+        grads = jax.vmap(lambda cotangent: pullback(cotangent)[0])(
+            cotangents
+        )
+        return jax.vmap(
+            lambda grad: transform_one(params, opt_state, grad)
+        )(grads)
 
     return jax.jit(chunk)
 
