@@ -172,8 +172,6 @@ def load_training_config(
     *,
     train_seed: int,
     epochs: int,
-    intervention: str,
-    label_swap_seed: int,
 ):
     from DM__training_CELEBA_pixel import TrainConfig
 
@@ -186,16 +184,7 @@ def load_training_config(
     cfg.class_names = tuple(CLASS_NAMES)
     cfg.resume_from = None
     cfg.exclude_ranges = None
-    cfg.exclude_indices = None
-    cfg.label_swap_indices = None
-    cfg.label_swap_seed = int(label_swap_seed)
-    selected = {0: tuple(int(x) for x in removed.tolist())}
-    if intervention == "removal":
-        cfg.exclude_indices = selected
-    elif intervention == "label_swap":
-        cfg.label_swap_indices = selected
-    else:
-        raise ValueError(intervention)
+    cfg.exclude_indices = {0: tuple(int(x) for x in removed.tolist())}
     cfg.checkpoint_dir = str(output_dir)
     cfg.seed = train_seed
     cfg.epochs = epochs
@@ -242,10 +231,6 @@ def main() -> None:
     parser.add_argument("--train-seed", type=int, default=42)
     parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument(
-        "--intervention", choices=("removal", "label_swap"), default="removal"
-    )
-    parser.add_argument("--label-swap-seed", type=int, default=20261017)
-    parser.add_argument(
         "--stage", choices=("validate", "train", "eval", "all"), default="all"
     )
     args = parser.parse_args()
@@ -281,14 +266,9 @@ def main() -> None:
     if missing:
         raise FileNotFoundError("missing input(s): " + ", ".join(map(str, missing)))
 
-    intervention_root = (
-        "endpoint_top500_removal_q0_9"
-        if args.intervention == "removal"
-        else "endpoint_top500_label_swap_q0_9"
-    )
     run_dir = (
         result_root
-        / intervention_root
+        / "endpoint_top500_removal_q0_9"
         / args.method
         / f"query_{args.query_id:03d}_seed_{initial_seed:03d}"
     )
@@ -308,16 +288,6 @@ def main() -> None:
         "cached_lds_prediction_sign": -1,
         "cached_lds_direction": cached_lds_sign,
         "topk": TOPK,
-        "intervention": args.intervention,
-        "label_swap_definition": (
-            "deterministic cyclic permutation of complete 40-dimensional label "
-            "vectors within the selected top-500 rows"
-            if args.intervention == "label_swap"
-            else None
-        ),
-        "label_swap_seed": (
-            args.label_swap_seed if args.intervention == "label_swap" else None
-        ),
         "full_training_size": FULL_TRAIN_SIZE,
         "attributed_candidate_size": ATTRIBUTED_SIZE,
         "removal_fraction_of_full_training_set": TOPK / FULL_TRAIN_SIZE,
@@ -330,16 +300,10 @@ def main() -> None:
     if args.stage == "validate":
         from DM__training_CELEBA_pixel import TrainConfig
 
-        required_field = (
-            "exclude_indices"
-            if args.intervention == "removal"
-            else "label_swap_indices"
-        )
-        if required_field not in TrainConfig.__dataclass_fields__:
-            raise RuntimeError(f"CelebA TrainConfig lacks {required_field} support")
+        if "exclude_indices" not in TrainConfig.__dataclass_fields__:
+            raise RuntimeError("CelebA TrainConfig lacks exclude_indices support")
         print(
-            f"[valid] intervention={args.intervention} method={args.method} "
-            f"query={args.query_id} topk={TOPK} "
+            f"[valid] method={args.method} query={args.query_id} topk={TOPK} "
             f"ranking_sign={ranking_sign:+d} order={metadata['ranking_order']} "
             f"score={score_dir}",
             flush=True,
@@ -360,14 +324,11 @@ def main() -> None:
                 removed,
                 train_seed=args.train_seed,
                 epochs=args.epochs,
-                intervention=args.intervention,
-                label_swap_seed=args.label_swap_seed,
             )
             metadata["train_config"] = asdict(cfg)
             write_json(manifest_path, metadata)
             print(
-                f"[train] intervention={args.intervention} method={args.method} "
-                f"Q{args.query_id} selected={TOPK} "
+                f"[train] method={args.method} Q{args.query_id} remove={TOPK} "
                 f"order={metadata['ranking_order']} batch_size={cfg.batch_size}",
                 flush=True,
             )
