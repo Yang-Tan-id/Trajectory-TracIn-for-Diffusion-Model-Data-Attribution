@@ -40,6 +40,12 @@ METHODS = (
         +1,
     ),
     ("tracin_raw", TRACIN_NAMESPACE, "score", -1),
+    (
+        "tracin_query_train_l2",
+        TRACIN_NAMESPACE,
+        "score_query_train_l2_normalized",
+        -1,
+    ),
 )
 
 
