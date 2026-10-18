@@ -21,15 +21,25 @@ if str(CELEBA_ROOT) not in sys.path:
 from dataset_config_attr40 import _prompt_path_tag
 
 
-NAMESPACE = (
+POLLUTE_NAMESPACE = (
     "celeba_endpoint_pollute_adamw_full_train1x50_query1x50_"
     "timestamp_sum_squared_shape3d_semantics"
 )
-VARIANTS = (
-    ("raw", "score"),
-    ("query_l2", "score_query_normalized"),
-    ("train_l2", "score_train_l2_normalized"),
-    ("query_train_l2", "score_query_train_l2_normalized"),
+TRACIN_NAMESPACE = (
+    "celeba_endpoint_tracin_adamw_full_"
+    "train_mean50_query_mean50_linear_shape3d_semantics"
+)
+METHODS = (
+    ("pollute_raw", POLLUTE_NAMESPACE, "score", +1),
+    ("pollute_query_l2", POLLUTE_NAMESPACE, "score_query_normalized", +1),
+    ("pollute_train_l2", POLLUTE_NAMESPACE, "score_train_l2_normalized", +1),
+    (
+        "pollute_query_train_l2",
+        POLLUTE_NAMESPACE,
+        "score_query_train_l2_normalized",
+        +1,
+    ),
+    ("tracin_raw", TRACIN_NAMESPACE, "score", -1),
 )
 
 
@@ -58,11 +68,10 @@ def score_root(result_root: Path, train_seed: int, record: dict) -> Path:
         / f"train_seed_{train_seed}"
         / f"query_{_prompt_path_tag(str(record['prompt']))}"
         / f"initial_seed_{query_seed(record)}"
-        / f"traj_tracin_{NAMESPACE}"
     )
 
 
-def topk(score_dir: Path, k: int) -> tuple[np.ndarray, np.ndarray]:
+def topk(score_dir: Path, k: int, ranking_sign: int) -> tuple[np.ndarray, np.ndarray]:
     scores = np.asarray(np.load(score_dir / "scores.npy"), dtype=np.float64).reshape(-1)
     indices = np.asarray(
         np.load(score_dir / "score_indices.npy"), dtype=np.int64
@@ -71,7 +80,7 @@ def topk(score_dir: Path, k: int) -> tuple[np.ndarray, np.ndarray]:
         raise ValueError(f"score/index shape mismatch under {score_dir}")
     if len(np.unique(indices)) != len(indices):
         raise ValueError(f"duplicate candidate indices under {score_dir}")
-    ranking = np.where(np.isfinite(scores), scores, -np.inf)
+    ranking = np.where(np.isfinite(scores), ranking_sign * scores, -np.inf)
     order = np.argsort(-ranking, kind="stable")[:k]
     if len(order) != k or np.any(~np.isfinite(ranking[order])):
         raise ValueError(f"fewer than {k} finite scores under {score_dir}")
@@ -96,7 +105,7 @@ def main() -> None:
     )
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    variant_names = [name for name, _ in VARIANTS]
+    method_names = [name for name, *_ in METHODS]
     rows: list[dict[str, object]] = []
     universe_size: int | None = None
     for query_id in query_ids:
@@ -104,16 +113,20 @@ def main() -> None:
         root = score_root(result_root, args.train_seed, record)
         universes: dict[str, np.ndarray] = {}
         selections: dict[str, set[int]] = {}
-        for name, directory in VARIANTS:
-            universe, selected = topk(root / directory, args.topk)
+        for name, namespace, directory, ranking_sign in METHODS:
+            universe, selected = topk(
+                root / f"traj_tracin_{namespace}" / directory,
+                args.topk,
+                ranking_sign,
+            )
             universes[name] = universe
             selections[name] = set(map(int, selected))
             universe_size = len(universe)
-        reference = set(map(int, universes[variant_names[0]]))
-        for name in variant_names[1:]:
+        reference = set(map(int, universes[method_names[0]]))
+        for name in method_names[1:]:
             if set(map(int, universes[name])) != reference:
                 raise ValueError(f"Q{query_id}: candidate universe differs for {name}")
-        for left, right in combinations(variant_names, 2):
+        for left, right in combinations(method_names, 2):
             count = len(selections[left] & selections[right])
             rows.append(
                 {
@@ -127,15 +140,15 @@ def main() -> None:
             )
 
     lines = [
-        "CELEBA ENDPOINT-POLLUTE ADAMW 50x1 TIMESTAMP-SUM-SQUARED",
-        f"SAME-QUERY CROSS-VARIANT TOP-{args.topk} OVERLAP",
-        "ranking: stored score descending",
+        "CELEBA ENDPOINT-POLLUTE VARIANTS + ENDPOINT-TRACIN RAW",
+        f"SAME-QUERY TOP-{args.topk} OVERLAP",
+        "ranking: Pollute stored score descending; TracIn stored score ascending",
         f"queries: {query_ids}",
         "",
         "PAIR                              MEAN    MEDIAN       STD       MIN       MAX",
         "-" * 82,
     ]
-    for left, right in combinations(variant_names, 2):
+    for left, right in combinations(method_names, 2):
         values = [
             float(row["overlap_fraction"])
             for row in rows
