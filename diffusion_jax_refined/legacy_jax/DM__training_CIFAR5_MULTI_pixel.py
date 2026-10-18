@@ -101,6 +101,8 @@ class CIFAR10Dataset:
         channels_last: bool = True,
         exclude_ranges: Optional[Sequence[Tuple[int, int, int]]] = None,
         exclude_indices: Optional[Dict[int, Sequence[int]]] = None,
+        label_swap_indices: Optional[Dict[int, Sequence[int]]] = None,
+        label_swap_seed: int = 0,
         cond_mode: str = "class_id",
     ):
         self.root = root
@@ -111,6 +113,13 @@ class CIFAR10Dataset:
             int(k): [int(vv) for vv in v]
             for k, v in (exclude_indices.items() if exclude_indices is not None else [])
         }
+        self.label_swap_indices = {
+            int(k): [int(vv) for vv in v]
+            for k, v in (
+                label_swap_indices.items() if label_swap_indices is not None else []
+            )
+        }
+        self.label_swap_seed = int(label_swap_seed)
         self.cond_mode = cond_mode
 
         self._payload = self._load_payload(root)
@@ -129,6 +138,7 @@ class CIFAR10Dataset:
 
         x, y = self._load_arrays()
         x, y = self._apply_exclusions("dataset", x, y)
+        y = self._apply_label_swaps("dataset", y)
 
         if class_names is not None:
             keep_ids = np.array([self.name_to_id[name] for name in class_names], dtype=np.int32)
@@ -250,6 +260,42 @@ class CIFAR10Dataset:
 
         return x[keep_mask], y[keep_mask]
 
+    def _apply_label_swaps(self, batch_name: str, y: np.ndarray) -> np.ndarray:
+        """Deterministically permute complete label vectors within selected rows."""
+        del batch_name
+        batch_id = 0
+        if batch_id not in self.label_swap_indices:
+            return y
+        raw_indices = np.asarray(self.label_swap_indices[batch_id], dtype=np.int64)
+        if raw_indices.size < 2:
+            raise ValueError("label swapping requires at least two selected indices")
+        if np.any(raw_indices < 0) or np.any(raw_indices >= len(y)):
+            raise IndexError(
+                f"label-swap index outside [0, {len(y)}): "
+                f"min={raw_indices.min()}, max={raw_indices.max()}"
+            )
+        indices = np.unique(raw_indices)
+        if len(indices) != len(raw_indices):
+            raise ValueError("label-swap indices must be unique")
+        rng = np.random.default_rng(self.label_swap_seed)
+        rng.shuffle(indices)
+        source = np.roll(indices, 1)
+        output = np.array(y, copy=True)
+        original = np.array(y[indices], copy=True)
+        output[indices] = y[source]
+        different = output[indices] != original
+        changed = int(
+            np.count_nonzero(different)
+            if different.ndim == 1
+            else np.count_nonzero(np.any(different, axis=-1))
+        )
+        print(
+            f"[label_swap] batch {batch_id}: cyclically permuted complete label vectors "
+            f"for {len(indices)} rows with seed={self.label_swap_seed}; "
+            f"changed_vectors={changed}"
+        )
+        return output
+
     def _load_batches(self, batch_names: Sequence[str]):
         xs, ys = [], []
         for name in batch_names:
@@ -331,6 +377,8 @@ class TrainConfig:
     use_test: bool = False
     exclude_ranges: Optional[Tuple[Tuple[int, int, int], ...]] = None
     exclude_indices: Optional[Dict[int, Tuple[int, ...]]] = None
+    label_swap_indices: Optional[Dict[int, Tuple[int, ...]]] = None
+    label_swap_seed: int = 0
 
     # model / diffusion
     model_type: str = "unet"
@@ -1233,6 +1281,8 @@ def train(cfg: TrainConfig):
         channels_last=True,
         exclude_ranges=cfg.exclude_ranges,
         exclude_indices=cfg.exclude_indices,
+        label_swap_indices=cfg.label_swap_indices,
+        label_swap_seed=cfg.label_swap_seed,
         cond_mode=cfg.cond_mode,
     )
 
