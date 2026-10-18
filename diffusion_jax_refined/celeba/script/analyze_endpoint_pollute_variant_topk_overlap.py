@@ -98,6 +98,8 @@ def main() -> None:
     args = parser.parse_args()
 
     query_ids = parse_ids(args.query_ids)
+    if len(query_ids) < 2:
+        raise ValueError("--query-ids must contain at least two queries")
     records = load_queries(args.query_file)
     result_root = CELEBA_ROOT / "result" / args.experiment
     output_dir = args.output_dir or (
@@ -107,7 +109,12 @@ def main() -> None:
 
     method_names = [name for name, *_ in METHODS]
     rows: list[dict[str, object]] = []
+    cross_query_rows: list[dict[str, object]] = []
+    selections_by_method: dict[str, dict[int, set[int]]] = {
+        name: {} for name in method_names
+    }
     universe_size: int | None = None
+    global_reference: set[int] | None = None
     for query_id in query_ids:
         record = records[query_id]
         root = score_root(result_root, args.train_seed, record)
@@ -121,11 +128,16 @@ def main() -> None:
             )
             universes[name] = universe
             selections[name] = set(map(int, selected))
+            selections_by_method[name][query_id] = selections[name]
             universe_size = len(universe)
         reference = set(map(int, universes[method_names[0]]))
         for name in method_names[1:]:
             if set(map(int, universes[name])) != reference:
                 raise ValueError(f"Q{query_id}: candidate universe differs for {name}")
+        if global_reference is None:
+            global_reference = reference
+        elif reference != global_reference:
+            raise ValueError(f"Q{query_id}: candidate universe differs across queries")
         for left, right in combinations(method_names, 2):
             count = len(selections[left] & selections[right])
             rows.append(
@@ -133,6 +145,23 @@ def main() -> None:
                     "query_id": query_id,
                     "left": left,
                     "right": right,
+                    "topk": args.topk,
+                    "overlap_count": count,
+                    "overlap_fraction": count / args.topk,
+                }
+            )
+
+    for method in method_names:
+        for left_query, right_query in combinations(query_ids, 2):
+            count = len(
+                selections_by_method[method][left_query]
+                & selections_by_method[method][right_query]
+            )
+            cross_query_rows.append(
+                {
+                    "method": method,
+                    "left_query": left_query,
+                    "right_query": right_query,
                     "topk": args.topk,
                     "overlap_count": count,
                     "overlap_fraction": count / args.topk,
@@ -183,17 +212,62 @@ def main() -> None:
             )
         )
 
+    lines.extend(
+        [
+            "",
+            "CROSS-QUERY QUERY-SPECIFICITY",
+            "lower overlap (closer to random) means more query-specific",
+            f"query pairs per method: {len(query_ids) * (len(query_ids) - 1) // 2}",
+            "",
+            "METHOD                            MEAN    MEDIAN       STD       MIN       MAX",
+            "-" * 82,
+        ]
+    )
+    for method in method_names:
+        values = [
+            float(row["overlap_fraction"])
+            for row in cross_query_rows
+            if row["method"] == method
+        ]
+        lines.append(
+            f"{method:31s} "
+            f"{statistics.fmean(values):8.2%} "
+            f"{statistics.median(values):9.2%} "
+            f"{statistics.pstdev(values):9.2%} "
+            f"{min(values):9.2%} "
+            f"{max(values):9.2%}"
+        )
+
+    lines.extend(["", "PER-QUERY MEAN OVERLAP WITH ALL OTHER QUERIES", "-" * 82])
+    for query_id in query_ids:
+        parts = []
+        for method in method_names:
+            values = [
+                float(row["overlap_fraction"])
+                for row in cross_query_rows
+                if row["method"] == method
+                and query_id in (row["left_query"], row["right_query"])
+            ]
+            parts.append(f"{method}={statistics.fmean(values):.2%}")
+        lines.append(f"Q{query_id}: " + "; ".join(parts))
+
     report = "\n".join(lines) + "\n"
     print(report, end="")
     txt_path = output_dir / f"top{args.topk}_overlap_report.txt"
     csv_path = output_dir / f"top{args.topk}_overlap_per_query.csv"
+    cross_csv_path = output_dir / f"top{args.topk}_cross_query_overlap.csv"
     txt_path.write_text(report)
     with csv_path.open("w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
         writer.writeheader()
         writer.writerows(rows)
+    with cross_csv_path.open("w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(cross_query_rows[0]))
+        writer.writeheader()
+        writer.writerows(cross_query_rows)
     print(f"[saved] {txt_path}")
     print(f"[saved] {csv_path}")
+    print(f"[saved] {cross_csv_path}")
 
 
 if __name__ == "__main__":
