@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Retrain CelebA after removing score-ranked attribution candidates.
 
-This experiment intentionally compares three existing 50-checkpoint score banks:
+This worker consumes existing 50-checkpoint score banks for:
 
-* endpoint-pollute AdamW timestamp-sum-squared, raw;
-* endpoint-pollute AdamW timestamp-sum-squared, query+train L2;
-* endpoint-TracIn AdamW linear, raw.
+* endpoint-pollute AdamW timestamp-sum-squared, raw or query+train L2;
+* endpoint-TracIn AdamW linear, raw or query+train L2;
+* paper-ReTrac AdamW query+train L2.
 
 The ranking orientation is part of each method contract and is recorded in every
 removal manifest.  It is chosen from the sign=-1 LDS convention used by the
@@ -41,9 +41,10 @@ METHODS = (
     "endpoint_pollute_adamw_timestamp_raw_pos",
     "endpoint_pollute_adamw_timestamp_both_l2_pos",
     "endpoint_tracin_adamw_linear_raw_neg",
+    "endpoint_tracin_adamw_linear_both_l2_neg",
     "retrac_adamw_query_train_l2_neg",
 )
-TOPK = 500
+DEFAULT_TOPK = 500
 FULL_TRAIN_SIZE = 10_000
 ATTRIBUTED_SIZE = 5_000
 
@@ -115,6 +116,15 @@ def score_spec(
             "stored endpoint-TracIn linear raw score ascending",
             -1.0,
         )
+    if method == "endpoint_tracin_adamw_linear_both_l2_neg":
+        return (
+            root
+            / f"traj_tracin_{tracin_namespace}"
+            / "score_query_train_l2_normalized",
+            -1,
+            "stored endpoint-TracIn linear query+train-L2 score ascending",
+            -1.0,
+        )
     if method == "retrac_adamw_query_train_l2_neg":
         return (
             root
@@ -131,7 +141,7 @@ def score_spec(
 
 
 def select_topk(
-    score_dir: Path, ranking_sign: int
+    score_dir: Path, ranking_sign: int, topk: int
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     score_path = score_dir / "scores.npy"
     index_path = score_dir / "score_indices.npy"
@@ -149,9 +159,9 @@ def select_topk(
         raise ValueError(f"candidate index outside [0, {FULL_TRAIN_SIZE})")
     ranking = ranking_sign * stored
     ranking = np.where(np.isfinite(ranking), ranking, -np.inf)
-    order = np.argsort(-ranking, kind="stable")[:TOPK]
-    if len(order) != TOPK or np.any(~np.isfinite(ranking[order])):
-        raise ValueError(f"fewer than {TOPK} finite scores under {score_dir}")
+    order = np.argsort(-ranking, kind="stable")[:topk]
+    if len(order) != topk or np.any(~np.isfinite(ranking[order])):
+        raise ValueError(f"fewer than {topk} finite scores under {score_dir}")
     return indices[order], stored[order], ranking[order]
 
 
@@ -230,10 +240,13 @@ def main() -> None:
     parser.add_argument("--experiment", default="attr40_experiment1")
     parser.add_argument("--train-seed", type=int, default=42)
     parser.add_argument("--epochs", type=int, default=200)
+    parser.add_argument("--topk", type=int, default=DEFAULT_TOPK)
     parser.add_argument(
         "--stage", choices=("validate", "train", "eval", "all"), default="all"
     )
     args = parser.parse_args()
+    if args.topk <= 0 or args.topk > ATTRIBUTED_SIZE:
+        parser.error(f"--topk must be in [1, {ATTRIBUTED_SIZE}]")
 
     records = load_queries(args.query_file)
     if args.query_id not in records:
@@ -247,7 +260,9 @@ def main() -> None:
         record=record,
         method=args.method,
     )
-    removed, raw_scores, ranking_scores = select_topk(score_dir, ranking_sign)
+    removed, raw_scores, ranking_scores = select_topk(
+        score_dir, ranking_sign, args.topk
+    )
     base_checkpoint = (
         result_root
         / "model"
@@ -268,7 +283,7 @@ def main() -> None:
 
     run_dir = (
         result_root
-        / "endpoint_top500_removal_q0_9"
+        / f"endpoint_top{args.topk}_removal_q0_9"
         / args.method
         / f"query_{args.query_id:03d}_seed_{initial_seed:03d}"
     )
@@ -287,11 +302,11 @@ def main() -> None:
         else "stored_score_ascending",
         "cached_lds_prediction_sign": -1,
         "cached_lds_direction": cached_lds_sign,
-        "topk": TOPK,
+        "topk": args.topk,
         "full_training_size": FULL_TRAIN_SIZE,
         "attributed_candidate_size": ATTRIBUTED_SIZE,
-        "removal_fraction_of_full_training_set": TOPK / FULL_TRAIN_SIZE,
-        "removal_fraction_of_attributed_candidates": TOPK / ATTRIBUTED_SIZE,
+        "removal_fraction_of_full_training_set": args.topk / FULL_TRAIN_SIZE,
+        "removal_fraction_of_attributed_candidates": args.topk / ATTRIBUTED_SIZE,
         "removed_dataset_indices": [int(value) for value in removed],
         "removed_raw_scores": [float(value) for value in raw_scores],
         "removed_ranking_scores": [float(value) for value in ranking_scores],
@@ -303,7 +318,7 @@ def main() -> None:
         if "exclude_indices" not in TrainConfig.__dataclass_fields__:
             raise RuntimeError("CelebA TrainConfig lacks exclude_indices support")
         print(
-            f"[valid] method={args.method} query={args.query_id} topk={TOPK} "
+            f"[valid] method={args.method} query={args.query_id} topk={args.topk} "
             f"ranking_sign={ranking_sign:+d} order={metadata['ranking_order']} "
             f"score={score_dir}",
             flush=True,
@@ -328,7 +343,7 @@ def main() -> None:
             metadata["train_config"] = asdict(cfg)
             write_json(manifest_path, metadata)
             print(
-                f"[train] method={args.method} Q{args.query_id} remove={TOPK} "
+                f"[train] method={args.method} Q{args.query_id} remove={args.topk} "
                 f"order={metadata['ranking_order']} batch_size={cfg.batch_size}",
                 flush=True,
             )
@@ -381,7 +396,7 @@ def main() -> None:
         }
         write_json(metrics_path, output)
         print(
-            f"[done] method={args.method} Q{args.query_id} topk={TOPK} "
+            f"[done] method={args.method} Q{args.query_id} topk={args.topk} "
             f"endpoint={output['endpoint_difference']:.9g} "
             f"trajectory={output['trajectory_difference']:.9g}",
             flush=True,
