@@ -14,13 +14,20 @@ METHODS = (
     "endpoint_pollute_adamw_timestamp_raw_pos",
     "endpoint_pollute_adamw_timestamp_both_l2_pos",
     "endpoint_tracin_adamw_linear_raw_neg",
+    "retrac_adamw_query_train_l2_neg",
 )
 SHORT = {
     METHODS[0]: "POLLUTE-RAW",
     METHODS[1]: "POLLUTE-BOTH-L2",
     METHODS[2]: "TRACIN-RAW",
+    METHODS[3]: "RETRAC-BOTH-L2",
 }
-EXPECTED_SIGN = {METHODS[0]: 1, METHODS[1]: 1, METHODS[2]: -1}
+EXPECTED_SIGN = {
+    METHODS[0]: 1,
+    METHODS[1]: 1,
+    METHODS[2]: -1,
+    METHODS[3]: -1,
+}
 
 
 def parse_ids(text: str) -> list[int]:
@@ -79,9 +86,10 @@ def main() -> None:
         "",
         (
             "QUERY  POLLUTE-RAW-END  POLLUTE-L2-END  TRACIN-RAW-END  "
-            "POLLUTE-RAW-TRAJ POLLUTE-L2-TRAJ TRACIN-RAW-TRAJ"
+            "RETRAC-L2-END  POLLUTE-RAW-TRAJ POLLUTE-L2-TRAJ "
+            "TRACIN-RAW-TRAJ RETRAC-L2-TRAJ"
         ),
-        "-" * 112,
+        "-" * 146,
     ]
     for query_id in query_ids:
         values = [by_key[(query_id, method)] for method in METHODS]
@@ -89,10 +97,12 @@ def main() -> None:
             f"Q{query_id:<3d} "
             f"{values[0]['endpoint_difference']:+16.8g} "
             f"{values[1]['endpoint_difference']:+15.8g} "
-            f"{values[2]['endpoint_difference']:+15.8g}  "
+            f"{values[2]['endpoint_difference']:+15.8g} "
+            f"{values[3]['endpoint_difference']:+14.8g}  "
             f"{values[0]['trajectory_difference']:+16.8g} "
             f"{values[1]['trajectory_difference']:+15.8g} "
-            f"{values[2]['trajectory_difference']:+15.8g}"
+            f"{values[2]['trajectory_difference']:+15.8g} "
+            f"{values[3]['trajectory_difference']:+14.8g}"
         )
 
     lines.extend(["", "SUMMARY", "-" * 82])
@@ -123,6 +133,18 @@ def main() -> None:
         lines.append(
             "  POLLUTE-BOTH-L2 minus TRACIN-RAW mean="
             f"{means[METHODS[1]] - means[METHODS[2]]:+.9g}"
+        )
+        lines.append(
+            "  POLLUTE-RAW minus RETRAC-BOTH-L2 mean="
+            f"{means[METHODS[0]] - means[METHODS[3]]:+.9g}"
+        )
+        lines.append(
+            "  POLLUTE-BOTH-L2 minus RETRAC-BOTH-L2 mean="
+            f"{means[METHODS[1]] - means[METHODS[3]]:+.9g}"
+        )
+        lines.append(
+            "  TRACIN-RAW minus RETRAC-BOTH-L2 mean="
+            f"{means[METHODS[2]] - means[METHODS[3]]:+.9g}"
         )
         lines.append("")
 
