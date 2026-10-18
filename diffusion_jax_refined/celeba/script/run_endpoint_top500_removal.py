@@ -41,6 +41,7 @@ METHODS = (
     "endpoint_pollute_adamw_timestamp_raw_pos",
     "endpoint_pollute_adamw_timestamp_both_l2_pos",
     "endpoint_tracin_adamw_linear_raw_neg",
+    "retrac_adamw_query_train_l2_neg",
 )
 TOPK = 500
 FULL_TRAIN_SIZE = 10_000
@@ -84,6 +85,10 @@ def score_spec(
         "celeba_endpoint_tracin_adamw_full_"
         "train_mean50_query_mean50_linear_shape3d_semantics"
     )
+    retrac_namespace = (
+        "celeba_paper_retrac_adamw_full_train_replay4_batch1_"
+        "query_mean50_of_full_l2_linear_shape3d_semantics"
+    )
     if method == "endpoint_pollute_adamw_timestamp_raw_pos":
         return (
             root / f"traj_tracin_{pollute_namespace}" / "score",
@@ -108,6 +113,18 @@ def score_spec(
             root / f"traj_tracin_{tracin_namespace}" / "score",
             -1,
             "stored endpoint-TracIn linear raw score ascending",
+            -1.0,
+        )
+    if method == "retrac_adamw_query_train_l2_neg":
+        return (
+            root
+            / f"traj_tracin_{retrac_namespace}"
+            / "score_query_train_l2_normalized",
+            -1,
+            (
+                "stored paper-ReTrac AdamW-full replay4 batch1 query+train-L2 "
+                "linear score ascending"
+            ),
             -1.0,
         )
     raise ValueError(method)
