@@ -714,6 +714,7 @@ def merge_scores(
                             f"celeba_{objective}_{transform}_train1x50_query1x50_"
                             f"{reduction}_shape3d_semantics"
                         )
+                    namespace = f"{namespace}{args.score_output_suffix}"
                     root = (
                         result_root
                         / "attribution_score"
@@ -784,9 +785,22 @@ def main() -> None:
     parser.add_argument("--shard-count", type=int, default=1)
     parser.add_argument("--component-prefix", type=Path, required=True)
     parser.add_argument("--query-part-root", type=Path, required=True)
+    parser.add_argument(
+        "--score-output-suffix",
+        default="",
+        help=(
+            "Append a safe suffix to score namespaces. Use this when scoring a "
+            "disjoint candidate shard so the standard score bank is not overwritten."
+        ),
+    )
     parser.add_argument("--merge-only", action="store_true")
     parser.add_argument("--keep-query-parts", action="store_true")
     args = parser.parse_args()
+    if any(
+        not (character.isalnum() or character == "_")
+        for character in args.score_output_suffix
+    ):
+        parser.error("--score-output-suffix may contain only letters, digits, underscores")
     if args.timestamp_count != 50:
         raise ValueError("this experiment contract requires exactly 50 timestamps")
     if not (0 <= args.shard_index < args.shard_count):

@@ -56,6 +56,7 @@ common=(
   --shard-count "$shard_count"
   --component-prefix "$component_prefix"
   --query-part-root "$query_part_root"
+  --score-output-suffix "${SCORE_OUTPUT_SUFFIX:-}"
 )
 
 pids=()

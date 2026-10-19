@@ -7,6 +7,10 @@ This worker consumes existing 50-checkpoint score banks for:
 * endpoint-TracIn AdamW linear, raw, query L2, or query+train L2;
 * paper-ReTrac AdamW query+train L2.
 
+Query-L2 score banks covering the complete 10,000-example training set are
+separate method choices, so they cannot be confused with the historical
+5,000-candidate experiments.
+
 The ranking orientation is part of each method contract and is recorded in every
 removal manifest.  It is chosen from the sign=-1 LDS convention used by the
 cached CelebA evaluation: positive LDS removes the largest stored scores, while
@@ -40,9 +44,11 @@ from dataset_config_attr40 import CLASS_NAMES, DATA_ROOT, _prompt_path_tag
 METHODS = (
     "endpoint_pollute_adamw_timestamp_raw_pos",
     "endpoint_pollute_adamw_timestamp_query_l2_pos",
+    "endpoint_pollute_adamw_timestamp_query_l2_full10k_pos",
     "endpoint_pollute_adamw_timestamp_both_l2_pos",
     "endpoint_tracin_adamw_linear_raw_neg",
     "endpoint_tracin_adamw_linear_query_l2_neg",
+    "endpoint_tracin_adamw_linear_query_l2_full10k_neg",
     "endpoint_tracin_adamw_linear_both_l2_neg",
     "retrac_adamw_query_train_l2_neg",
 )
@@ -111,6 +117,18 @@ def score_spec(
             ),
             +1.0,
         )
+    if method == "endpoint_pollute_adamw_timestamp_query_l2_full10k_pos":
+        return (
+            root
+            / f"traj_tracin_{pollute_namespace}_full10000"
+            / "score_query_normalized",
+            +1,
+            (
+                "stored full-10000 endpoint-pollute timestamp-sum-squared "
+                "query-L2 score descending"
+            ),
+            +1.0,
+        )
     if method == "endpoint_pollute_adamw_timestamp_both_l2_pos":
         return (
             root
@@ -139,6 +157,15 @@ def score_spec(
             "stored endpoint-TracIn linear query-L2 score ascending",
             -1.0,
         )
+    if method == "endpoint_tracin_adamw_linear_query_l2_full10k_neg":
+        return (
+            root
+            / f"traj_tracin_{tracin_namespace}_full10000"
+            / "score_query_normalized",
+            -1,
+            "stored full-10000 endpoint-TracIn linear query-L2 score ascending",
+            -1.0,
+        )
     if method == "endpoint_tracin_adamw_linear_both_l2_neg":
         return (
             root
@@ -165,7 +192,7 @@ def score_spec(
 
 def select_topk(
     score_dir: Path, ranking_sign: int, topk: int
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, int]:
     score_path = score_dir / "scores.npy"
     index_path = score_dir / "score_indices.npy"
     if not score_path.is_file() or not index_path.is_file():
@@ -174,8 +201,11 @@ def select_topk(
     indices = np.asarray(np.load(index_path), dtype=np.int64).reshape(-1)
     if stored.shape != indices.shape:
         raise ValueError(f"score/index mismatch: {stored.shape} vs {indices.shape}")
-    if len(stored) != ATTRIBUTED_SIZE:
-        raise ValueError(f"expected {ATTRIBUTED_SIZE} scores, found {len(stored)}")
+    if len(stored) not in (ATTRIBUTED_SIZE, FULL_TRAIN_SIZE):
+        raise ValueError(
+            f"expected {ATTRIBUTED_SIZE} or {FULL_TRAIN_SIZE} scores, "
+            f"found {len(stored)}"
+        )
     if len(np.unique(indices)) != len(indices):
         raise ValueError(f"duplicate candidate indices under {score_dir}")
     if np.any(indices < 0) or np.any(indices >= FULL_TRAIN_SIZE):
@@ -185,7 +215,7 @@ def select_topk(
     order = np.argsort(-ranking, kind="stable")[:topk]
     if len(order) != topk or np.any(~np.isfinite(ranking[order])):
         raise ValueError(f"fewer than {topk} finite scores under {score_dir}")
-    return indices[order], stored[order], ranking[order]
+    return indices[order], stored[order], ranking[order], len(stored)
 
 
 def env_bool(name: str, default: bool) -> bool:
@@ -283,7 +313,7 @@ def main() -> None:
         record=record,
         method=args.method,
     )
-    removed, raw_scores, ranking_scores = select_topk(
+    removed, raw_scores, ranking_scores, candidate_size = select_topk(
         score_dir, ranking_sign, args.topk
     )
     base_checkpoint = (
@@ -327,9 +357,9 @@ def main() -> None:
         "cached_lds_direction": cached_lds_sign,
         "topk": args.topk,
         "full_training_size": FULL_TRAIN_SIZE,
-        "attributed_candidate_size": ATTRIBUTED_SIZE,
+        "attributed_candidate_size": candidate_size,
         "removal_fraction_of_full_training_set": args.topk / FULL_TRAIN_SIZE,
-        "removal_fraction_of_attributed_candidates": args.topk / ATTRIBUTED_SIZE,
+        "removal_fraction_of_attributed_candidates": args.topk / candidate_size,
         "removed_dataset_indices": [int(value) for value in removed],
         "removed_raw_scores": [float(value) for value in raw_scores],
         "removed_ranking_scores": [float(value) for value in ranking_scores],
