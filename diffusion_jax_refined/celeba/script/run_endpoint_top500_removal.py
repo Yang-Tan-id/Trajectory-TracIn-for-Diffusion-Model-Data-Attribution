@@ -3,8 +3,8 @@
 
 This worker consumes existing 50-checkpoint score banks for:
 
-* endpoint-pollute AdamW timestamp-sum-squared, raw or query+train L2;
-* endpoint-TracIn AdamW linear, raw or query+train L2;
+* endpoint-pollute AdamW timestamp-sum-squared, raw, query L2, or query+train L2;
+* endpoint-TracIn AdamW linear, raw, query L2, or query+train L2;
 * paper-ReTrac AdamW query+train L2.
 
 The ranking orientation is part of each method contract and is recorded in every
@@ -39,8 +39,10 @@ from dataset_config_attr40 import CLASS_NAMES, DATA_ROOT, _prompt_path_tag
 
 METHODS = (
     "endpoint_pollute_adamw_timestamp_raw_pos",
+    "endpoint_pollute_adamw_timestamp_query_l2_pos",
     "endpoint_pollute_adamw_timestamp_both_l2_pos",
     "endpoint_tracin_adamw_linear_raw_neg",
+    "endpoint_tracin_adamw_linear_query_l2_neg",
     "endpoint_tracin_adamw_linear_both_l2_neg",
     "retrac_adamw_query_train_l2_neg",
 )
@@ -97,6 +99,18 @@ def score_spec(
             "stored endpoint-pollute timestamp-sum-squared raw score descending",
             +1.0,
         )
+    if method == "endpoint_pollute_adamw_timestamp_query_l2_pos":
+        return (
+            root
+            / f"traj_tracin_{pollute_namespace}"
+            / "score_query_normalized",
+            +1,
+            (
+                "stored endpoint-pollute timestamp-sum-squared query-L2 "
+                "score descending"
+            ),
+            +1.0,
+        )
     if method == "endpoint_pollute_adamw_timestamp_both_l2_pos":
         return (
             root
@@ -114,6 +128,15 @@ def score_spec(
             root / f"traj_tracin_{tracin_namespace}" / "score",
             -1,
             "stored endpoint-TracIn linear raw score ascending",
+            -1.0,
+        )
+    if method == "endpoint_tracin_adamw_linear_query_l2_neg":
+        return (
+            root
+            / f"traj_tracin_{tracin_namespace}"
+            / "score_query_normalized",
+            -1,
+            "stored endpoint-TracIn linear query-L2 score ascending",
             -1.0,
         )
     if method == "endpoint_tracin_adamw_linear_both_l2_neg":
