@@ -11,7 +11,7 @@ gpu_ids="${GPU_IDS:-0,5,6,7}"
 data_root="${CELEBA_ATTR40_DATA_ROOT:-$celeba_root/../dataset/celeba/10000_attr40}"
 original_indices="${ATTRIBUTION_INDICES_PATH_ORIGINAL:-$data_root/attribution_5k_indices.npy}"
 remaining_indices="${REMAINING_INDICES_PATH:-$data_root/attribution_remaining_5k_indices.npy}"
-run_tag="${RUN_TAG:-celeba_endpoint_remaining5k_query_l2_$(date +%Y%m%d_%H%M%S)}"
+run_tag="${RUN_TAG:-celeba_endpoint_remaining5k_all_variants_$(date +%Y%m%d_%H%M%S)}"
 result_root="$celeba_root/result/$experiment"
 
 "$python_bin" - "$original_indices" "$remaining_indices" <<'PY'
@@ -54,5 +54,6 @@ JAX_PLATFORMS=cpu "$python_bin" "$script_dir/merge_endpoint_query_l2_full10k.py"
   --supplement-suffix "_remaining5000" \
   --full-suffix "_full10000"
 
-echo "[done] full-10000 Query-L2 score banks are ready"
-echo "[next] bash $script_dir/run_endpoint_full10k_query_l2_top1000_4gpu.sh"
+echo "[done] all full-10000 endpoint score banks are ready"
+echo "[definition] 2 objectives x (raw-gradient + AdamW-full) x 4 variants"
+echo "[definition] Pollute has 3 reductions; Endpoint-TracIn has linear"
