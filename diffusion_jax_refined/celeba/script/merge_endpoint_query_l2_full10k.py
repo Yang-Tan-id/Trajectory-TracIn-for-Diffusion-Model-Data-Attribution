@@ -88,7 +88,7 @@ def load_bank(path: Path) -> tuple[np.ndarray, np.ndarray]:
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--query-file", type=Path, required=True)
-    parser.add_argument("--query-ids", default="0,1,2,3,4,5,6,7,8,9")
+    parser.add_argument("--query-ids", default=",".join(str(value) for value in range(72)))
     parser.add_argument("--experiment", default="attr40_experiment1")
     parser.add_argument("--train-seed", type=int, default=42)
     parser.add_argument("--supplement-suffix", default="_remaining5000")
