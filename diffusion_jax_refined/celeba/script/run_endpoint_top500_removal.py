@@ -7,9 +7,9 @@ This worker consumes existing 50-checkpoint score banks for:
 * endpoint-TracIn AdamW linear, raw, query L2, or query+train L2;
 * paper-ReTrac AdamW query+train L2.
 
-Query-L2 score banks covering the complete 10,000-example training set are
-separate method choices, so they cannot be confused with the historical
-5,000-candidate experiments.
+Query-L2 and query+train-L2 score banks covering the complete 10,000-example
+training set are separate method choices, so they cannot be confused with the
+historical 5,000-candidate experiments.
 
 The ranking orientation is part of each method contract and is recorded in every
 removal manifest.  It is chosen from the sign=-1 LDS convention used by the
@@ -46,10 +46,12 @@ METHODS = (
     "endpoint_pollute_adamw_timestamp_query_l2_pos",
     "endpoint_pollute_adamw_timestamp_query_l2_full10k_pos",
     "endpoint_pollute_adamw_timestamp_both_l2_pos",
+    "endpoint_pollute_adamw_timestamp_both_l2_full10k_pos",
     "endpoint_tracin_adamw_linear_raw_neg",
     "endpoint_tracin_adamw_linear_query_l2_neg",
     "endpoint_tracin_adamw_linear_query_l2_full10k_neg",
     "endpoint_tracin_adamw_linear_both_l2_neg",
+    "endpoint_tracin_adamw_linear_both_l2_full10k_neg",
     "retrac_adamw_query_train_l2_neg",
 )
 DEFAULT_TOPK = 500
@@ -141,6 +143,18 @@ def score_spec(
             ),
             +1.0,
         )
+    if method == "endpoint_pollute_adamw_timestamp_both_l2_full10k_pos":
+        return (
+            root
+            / f"traj_tracin_{pollute_namespace}_full10000"
+            / "score_query_train_l2_normalized",
+            +1,
+            (
+                "stored full-10000 endpoint-pollute timestamp-sum-squared "
+                "query+train-L2 score descending"
+            ),
+            +1.0,
+        )
     if method == "endpoint_tracin_adamw_linear_raw_neg":
         return (
             root / f"traj_tracin_{tracin_namespace}" / "score",
@@ -173,6 +187,15 @@ def score_spec(
             / "score_query_train_l2_normalized",
             -1,
             "stored endpoint-TracIn linear query+train-L2 score ascending",
+            -1.0,
+        )
+    if method == "endpoint_tracin_adamw_linear_both_l2_full10k_neg":
+        return (
+            root
+            / f"traj_tracin_{tracin_namespace}_full10000"
+            / "score_query_train_l2_normalized",
+            -1,
+            "stored full-10000 endpoint-TracIn linear query+train-L2 score ascending",
             -1.0,
         )
     if method == "retrac_adamw_query_train_l2_neg":
@@ -316,6 +339,11 @@ def main() -> None:
     removed, raw_scores, ranking_scores, candidate_size = select_topk(
         score_dir, ranking_sign, args.topk
     )
+    if "full10k" in args.method and candidate_size != FULL_TRAIN_SIZE:
+        raise ValueError(
+            f"{args.method} requires {FULL_TRAIN_SIZE} candidates, "
+            f"but {score_dir} contains {candidate_size}"
+        )
     base_checkpoint = (
         result_root
         / "model"
