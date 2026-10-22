@@ -27,7 +27,7 @@ echo "[definition] existing Shape3D Q0-Q99 endpoint score banks and cached LDS o
 echo "[families] endpoint-pollute 10/100; endpoint-TracIn; ReTrac; raw and AdamW"
 echo "[output] $output_dir"
 
-"$python_bin" "$repo/$marker" \
+PYTHONUNBUFFERED=1 "$python_bin" -u "$repo/$marker" \
   --experiment "${EXPERIMENT_TAG:-experiment1}" \
   --train-seed "${TRAIN_SEED:-42}" \
   --query-ids "${QUERY_IDS:-$(seq -s, 0 99)}" \

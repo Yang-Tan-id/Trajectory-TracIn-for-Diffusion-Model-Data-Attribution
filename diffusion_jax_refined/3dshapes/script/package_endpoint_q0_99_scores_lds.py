@@ -131,6 +131,9 @@ def main() -> None:
     )
     eval_root = result_root / "eval" / "prompted_solo"
     query_ids = parse_ids(args.query_ids)
+    print(f"[startup] result_root={result_root}", flush=True)
+    print(f"[startup] output_dir={args.output_dir}", flush=True)
+    print(f"[startup] queries={len(query_ids)}", flush=True)
     records = json.loads(args.query_file.read_text())["queries"]
     args.output_dir.mkdir(parents=True, exist_ok=True)
     metadata = args.output_dir / "metadata"
@@ -143,7 +146,11 @@ def main() -> None:
     lds_rows: list[dict[str, Any]] = []
     missing_query_roots: list[str] = []
 
-    for query_id in query_ids:
+    for query_position, query_id in enumerate(query_ids, start=1):
+        print(
+            f"[scan] query={query_id} ({query_position}/{len(query_ids)})",
+            flush=True,
+        )
         record = records[query_id]
         prompt = str(record["prompt"])
         initial_seed = int(record.get("initial_seed", record.get("seed")))
@@ -160,7 +167,6 @@ def main() -> None:
                 if description is None:
                     continue
                 selected.add(namespace_dir)
-                files = [path for path in namespace_dir.rglob("*") if path.is_file()]
                 score_rows.append(
                     {
                         "query_id": query_id,
@@ -168,8 +174,10 @@ def main() -> None:
                         "initial_seed": initial_seed,
                         **description,
                         "directory_name": namespace_dir.name,
-                        "file_count": len(files),
-                        "bytes": sum(path.stat().st_size for path in files),
+                        # Avoid a redundant recursive walk over every score bank.
+                        # The archive pass below already traverses selected data once.
+                        "file_count": "not_prescanned",
+                        "bytes": "not_prescanned",
                         "relative_path": str(namespace_dir.relative_to(result_root)),
                     }
                 )
