@@ -53,6 +53,7 @@ METHODS = (
     "endpoint_tracin_adamw_linear_both_l2_neg",
     "endpoint_tracin_adamw_linear_both_l2_full10k_neg",
     "retrac_adamw_query_train_l2_neg",
+    "retrac_adamw_query_train_l2_full10k_neg",
 )
 DEFAULT_TOPK = 500
 FULL_TRAIN_SIZE = 10_000
@@ -207,6 +208,18 @@ def score_spec(
             (
                 "stored paper-ReTrac AdamW-full replay4 batch1 query+train-L2 "
                 "linear score ascending"
+            ),
+            -1.0,
+        )
+    if method == "retrac_adamw_query_train_l2_full10k_neg":
+        return (
+            root
+            / f"traj_tracin_{retrac_namespace}_full10000"
+            / "score_query_train_l2_normalized",
+            -1,
+            (
+                "stored full-10000 paper-ReTrac AdamW-full replay4 batch1 "
+                "query+train-L2 linear score ascending"
             ),
             -1.0,
         )
