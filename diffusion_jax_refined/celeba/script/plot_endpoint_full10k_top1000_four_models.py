@@ -101,13 +101,13 @@ def load_clip(
     try:
         import jax
         import jax.numpy as jnp
-        from transformers import CLIPProcessor, FlaxCLIPModel
+        from transformers import CLIPTokenizerFast, FlaxCLIPModel
     except ImportError as error:
         raise RuntimeError(
             "CLIP evaluation requires Pillow and transformers with Flax support"
         ) from error
     cache_dir = cache_dir_text or None
-    processor = CLIPProcessor.from_pretrained(
+    tokenizer = CLIPTokenizerFast.from_pretrained(
         model_name,
         cache_dir=cache_dir,
         local_files_only=local_files_only,
@@ -117,7 +117,37 @@ def load_clip(
         cache_dir=cache_dir,
         local_files_only=local_files_only,
     )
-    return jax, jnp, processor, model
+    return jax, jnp, tokenizer, model
+
+
+def clip_pixel_values(images: list[np.ndarray]) -> np.ndarray:
+    """Apply the OpenAI CLIP ViT-B/32 image preprocessing without torchvision."""
+    from PIL import Image
+
+    size = 224
+    mean = np.asarray((0.48145466, 0.4578275, 0.40821073), dtype=np.float32)
+    std = np.asarray((0.26862954, 0.26130258, 0.27577711), dtype=np.float32)
+    output = []
+    for image in images:
+        pil = Image.fromarray(
+            np.rint(np.clip(image, 0.0, 1.0) * 255.0).astype(np.uint8),
+            mode="RGB",
+        )
+        width, height = pil.size
+        scale = size / min(width, height)
+        resized_width = max(size, round(width * scale))
+        resized_height = max(size, round(height * scale))
+        pil = pil.resize(
+            (resized_width, resized_height),
+            resample=Image.Resampling.BICUBIC,
+        )
+        left = (resized_width - size) // 2
+        top = (resized_height - size) // 2
+        pil = pil.crop((left, top, left + size, top + size))
+        value = np.asarray(pil, dtype=np.float32) / 255.0
+        value = (value - mean) / std
+        output.append(np.moveaxis(value, -1, 0))
+    return np.stack(output, axis=0).astype(np.float32)
 
 
 def evaluate_clip(
@@ -128,21 +158,21 @@ def evaluate_clip(
     cache_dir: Path | None,
     local_files_only: bool,
 ) -> tuple[np.ndarray, np.ndarray]:
-    from PIL import Image
-
-    jax, jnp, processor, model = load_clip(
+    jax, jnp, tokenizer, model = load_clip(
         model_name,
         str(cache_dir) if cache_dir is not None else "",
         local_files_only,
     )
-    pil_images = [
-        Image.fromarray(np.rint(np.clip(image, 0.0, 1.0) * 255.0).astype(np.uint8))
-        for image in images
-    ]
-    image_inputs = processor(images=pil_images, return_tensors="np")
-    text_inputs = processor(text=[prompt], return_tensors="np", padding=True)
+    pixel_values = clip_pixel_values(images)
+    text_inputs = tokenizer(
+        [prompt],
+        padding="max_length",
+        max_length=77,
+        truncation=True,
+        return_tensors="np",
+    )
     image_features = model.get_image_features(
-        pixel_values=jnp.asarray(image_inputs["pixel_values"]),
+        pixel_values=jnp.asarray(pixel_values),
         train=False,
     )
     text_features = model.get_text_features(
