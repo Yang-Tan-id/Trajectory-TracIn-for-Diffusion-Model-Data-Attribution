@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import gc
 import json
+import os
 import sys
 from functools import lru_cache
 from pathlib import Path
@@ -90,16 +91,20 @@ def display_image(value: np.ndarray) -> np.ndarray:
 @lru_cache(maxsize=2)
 def load_clip(
     model_name: str,
-    device: str,
     cache_dir_text: str,
     local_files_only: bool,
 ):
+    # The experiment environment is JAX-native and may contain an unusable
+    # optional PyTorch build.  Force Transformers to stay on its Flax backend.
+    os.environ["USE_TORCH"] = "0"
+    os.environ["USE_FLAX"] = "1"
     try:
-        import torch
-        from transformers import CLIPModel, CLIPProcessor
+        import jax
+        import jax.numpy as jnp
+        from transformers import CLIPProcessor, FlaxCLIPModel
     except ImportError as error:
         raise RuntimeError(
-            "CLIP evaluation requires torch, Pillow, and transformers in PYTHON_BIN"
+            "CLIP evaluation requires Pillow and transformers with Flax support"
         ) from error
     cache_dir = cache_dir_text or None
     processor = CLIPProcessor.from_pretrained(
@@ -107,13 +112,12 @@ def load_clip(
         cache_dir=cache_dir,
         local_files_only=local_files_only,
     )
-    model = CLIPModel.from_pretrained(
+    model = FlaxCLIPModel.from_pretrained(
         model_name,
         cache_dir=cache_dir,
         local_files_only=local_files_only,
-    ).to(device)
-    model.eval()
-    return torch, processor, model
+    )
+    return jax, jnp, processor, model
 
 
 def evaluate_clip(
@@ -121,15 +125,13 @@ def evaluate_clip(
     images: list[np.ndarray],
     prompt: str,
     model_name: str,
-    device: str,
     cache_dir: Path | None,
     local_files_only: bool,
 ) -> tuple[np.ndarray, np.ndarray]:
     from PIL import Image
 
-    torch, processor, model = load_clip(
+    jax, jnp, processor, model = load_clip(
         model_name,
-        device,
         str(cache_dir) if cache_dir is not None else "",
         local_files_only,
     )
@@ -137,20 +139,31 @@ def evaluate_clip(
         Image.fromarray(np.rint(np.clip(image, 0.0, 1.0) * 255.0).astype(np.uint8))
         for image in images
     ]
-    image_inputs = processor(images=pil_images, return_tensors="pt")
-    text_inputs = processor(text=[prompt], return_tensors="pt", padding=True)
-    image_inputs = {key: value.to(device) for key, value in image_inputs.items()}
-    text_inputs = {key: value.to(device) for key, value in text_inputs.items()}
-    with torch.no_grad():
-        image_features = model.get_image_features(**image_inputs)
-        text_features = model.get_text_features(**text_inputs)
-        image_features = image_features / image_features.norm(dim=-1, keepdim=True)
-        text_features = text_features / text_features.norm(dim=-1, keepdim=True)
-        original_similarity = image_features @ image_features[0:1].T
-        prompt_similarity = image_features @ text_features.T
+    image_inputs = processor(images=pil_images, return_tensors="np")
+    text_inputs = processor(text=[prompt], return_tensors="np", padding=True)
+    image_features = model.get_image_features(
+        pixel_values=jnp.asarray(image_inputs["pixel_values"]),
+        train=False,
+    )
+    text_features = model.get_text_features(
+        input_ids=jnp.asarray(text_inputs["input_ids"]),
+        attention_mask=jnp.asarray(text_inputs["attention_mask"]),
+        train=False,
+    )
+    image_features = image_features / jnp.linalg.norm(
+        image_features, axis=-1, keepdims=True
+    )
+    text_features = text_features / jnp.linalg.norm(
+        text_features, axis=-1, keepdims=True
+    )
+    original_similarity = image_features @ image_features[0:1].T
+    prompt_similarity = image_features @ text_features.T
+    original_similarity, prompt_similarity = jax.device_get(
+        (original_similarity, prompt_similarity)
+    )
     return (
-        original_similarity[:, 0].detach().cpu().numpy().astype(np.float64),
-        prompt_similarity[:, 0].detach().cpu().numpy().astype(np.float64),
+        np.asarray(original_similarity[:, 0], dtype=np.float64),
+        np.asarray(prompt_similarity[:, 0], dtype=np.float64),
     )
 
 
@@ -165,7 +178,6 @@ def render_query(
     prefer_device: str,
     dpi: int,
     clip_model: str,
-    clip_device: str,
     clip_cache_dir: Path | None,
     clip_local_files_only: bool,
 ) -> Path:
@@ -242,7 +254,6 @@ def render_query(
         images=[image for _, image, _, _ in panels],
         prompt=prompt,
         model_name=clip_model,
-        device=clip_device,
         cache_dir=clip_cache_dir,
         local_files_only=clip_local_files_only,
     )
@@ -333,7 +344,6 @@ def main() -> None:
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--dpi", type=int, default=180)
     parser.add_argument("--clip-model", default="openai/clip-vit-base-patch32")
-    parser.add_argument("--clip-device", default="cuda")
     parser.add_argument("--clip-cache-dir", type=Path)
     parser.add_argument("--clip-local-files-only", action="store_true")
     args = parser.parse_args()
@@ -363,7 +373,6 @@ def main() -> None:
             prefer_device=args.prefer_device,
             dpi=args.dpi,
             clip_model=args.clip_model,
-            clip_device=args.clip_device,
             clip_cache_dir=args.clip_cache_dir,
             clip_local_files_only=args.clip_local_files_only,
         )
