@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Plot full-10k CelebA endpoint top training images for every score variant."""
+"""Plot nine-row full-10k CelebA top training images for three methods."""
 
 from __future__ import annotations
 
@@ -64,6 +64,10 @@ def banks_for_transform(transform: str) -> list[Bank]:
         f"celeba_endpoint_tracin_{transform}_"
         "train_mean50_query_mean50_linear_shape3d_semantics_full10000"
     )
+    retrac_namespace = (
+        f"celeba_paper_retrac_{transform}_train_replay4_batch1_"
+        "query_mean50_of_full_l2_linear_shape3d_semantics_full10000"
+    )
     output: list[Bank] = []
     for variant, directory in VARIANTS:
         output.append(
@@ -87,6 +91,16 @@ def banks_for_transform(transform: str) -> list[Bank]:
                 -1,
             )
         )
+    output.append(
+        Bank(
+            "ReTrac",
+            transform,
+            "both-L2",
+            retrac_namespace,
+            "score_query_train_l2_normalized",
+            -1,
+        )
+    )
     return output
 
 
@@ -270,7 +284,8 @@ def main() -> None:
             for rank in range(1, args.top_k + 1):
                 axes[0, rank].set_title(f"Top {rank}", fontsize=9, fontweight="bold")
             figure.suptitle(
-                f"CelebA full-10k endpoint attribution · Q{query.query_id} · {transform}\n"
+                f"CelebA full-10k attribution · Q{query.query_id} · {transform}\n"
+                "4 Pollute + 4 Endpoint-TracIn + 1 ReTrac rows · "
                 "blue=original 5k, orange=remaining 5k",
                 fontsize=12,
                 fontweight="bold",
