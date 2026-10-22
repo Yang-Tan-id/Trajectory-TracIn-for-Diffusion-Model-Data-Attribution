@@ -71,6 +71,7 @@ from traj_tracin.algorithm import (
 
 
 EPS = 1e-12
+SCORE_OUTPUT_SUFFIX = os.environ.get("SCORE_OUTPUT_SUFFIX", "")
 QUERY_NAMESPACE = (
     "celeba_paper_retrac_endpoint_simple_loss_mean50_of_full_l2_1x50"
 )
@@ -551,6 +552,7 @@ def merge(
             namespace = (
                 f"celeba_paper_retrac_{transform}_{replay_tag}_"
                 "query_mean50_of_full_l2_linear_shape3d_semantics"
+                f"{SCORE_OUTPUT_SUFFIX}"
             )
             root = (
                 result_root
