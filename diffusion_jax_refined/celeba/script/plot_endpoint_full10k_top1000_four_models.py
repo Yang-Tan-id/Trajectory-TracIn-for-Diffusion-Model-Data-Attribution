@@ -7,6 +7,7 @@ import argparse
 import gc
 import json
 import sys
+from functools import lru_cache
 from pathlib import Path
 
 import matplotlib
@@ -86,6 +87,73 @@ def display_image(value: np.ndarray) -> np.ndarray:
     return np.clip(image, 0.0, 1.0)
 
 
+@lru_cache(maxsize=2)
+def load_clip(
+    model_name: str,
+    device: str,
+    cache_dir_text: str,
+    local_files_only: bool,
+):
+    try:
+        import torch
+        from transformers import CLIPModel, CLIPProcessor
+    except ImportError as error:
+        raise RuntimeError(
+            "CLIP evaluation requires torch, Pillow, and transformers in PYTHON_BIN"
+        ) from error
+    cache_dir = cache_dir_text or None
+    processor = CLIPProcessor.from_pretrained(
+        model_name,
+        cache_dir=cache_dir,
+        local_files_only=local_files_only,
+    )
+    model = CLIPModel.from_pretrained(
+        model_name,
+        cache_dir=cache_dir,
+        local_files_only=local_files_only,
+    ).to(device)
+    model.eval()
+    return torch, processor, model
+
+
+def evaluate_clip(
+    *,
+    images: list[np.ndarray],
+    prompt: str,
+    model_name: str,
+    device: str,
+    cache_dir: Path | None,
+    local_files_only: bool,
+) -> tuple[np.ndarray, np.ndarray]:
+    from PIL import Image
+
+    torch, processor, model = load_clip(
+        model_name,
+        device,
+        str(cache_dir) if cache_dir is not None else "",
+        local_files_only,
+    )
+    pil_images = [
+        Image.fromarray(np.rint(np.clip(image, 0.0, 1.0) * 255.0).astype(np.uint8))
+        for image in images
+    ]
+    image_inputs = processor(images=pil_images, return_tensors="pt")
+    text_inputs = processor(text=[prompt], return_tensors="pt", padding=True)
+    image_inputs = {key: value.to(device) for key, value in image_inputs.items()}
+    text_inputs = {key: value.to(device) for key, value in text_inputs.items()}
+    with torch.no_grad():
+        image_features = model.get_image_features(**image_inputs)
+        text_features = model.get_text_features(**text_inputs)
+        image_features = image_features / image_features.norm(dim=-1, keepdim=True)
+        text_features = text_features / text_features.norm(dim=-1, keepdim=True)
+        original_similarity = image_features @ image_features[0:1].T
+        prompt_similarity = image_features @ text_features.T
+    return (
+        original_similarity[:, 0].detach().cpu().numpy().astype(np.float64),
+        prompt_similarity[:, 0].detach().cpu().numpy().astype(np.float64),
+    )
+
+
 def render_query(
     *,
     record: dict,
@@ -96,6 +164,10 @@ def render_query(
     base_checkpoint: Path,
     prefer_device: str,
     dpi: int,
+    clip_model: str,
+    clip_device: str,
+    clip_cache_dir: Path | None,
+    clip_local_files_only: bool,
 ) -> Path:
     seed = query_seed(record)
     prompt = str(record["prompt"])
@@ -166,6 +238,40 @@ def render_query(
     differences = [np.mean(np.abs(image - reference), axis=-1) for _, image, _, _ in panels[1:]]
     positive = np.concatenate([value.reshape(-1) for value in differences])
     vmax = max(float(np.percentile(positive, 99.0)), 1e-8)
+    clip_original, clip_prompt = evaluate_clip(
+        images=[image for _, image, _, _ in panels],
+        prompt=prompt,
+        model_name=clip_model,
+        device=clip_device,
+        cache_dir=clip_cache_dir,
+        local_files_only=clip_local_files_only,
+    )
+    clip_records = []
+    for column, (title, _, endpoint, trajectory) in enumerate(panels):
+        clip_records.append(
+            {
+                "query_id": query_id,
+                "seed": seed,
+                "method": "original" if column == 0 else METHODS[column - 1][0],
+                "title": title,
+                "clip_original_cosine": float(clip_original[column]),
+                "clip_original_distance": float(1.0 - clip_original[column]),
+                "clip_prompt_cosine": float(clip_prompt[column]),
+                "endpoint_difference": endpoint,
+                "trajectory_difference": trajectory,
+            }
+        )
+    (query_output / "clip_metrics.json").write_text(
+        json.dumps(
+            {
+                "clip_model": clip_model,
+                "prompt": prompt,
+                "records": clip_records,
+            },
+            indent=2,
+        )
+        + "\n"
+    )
 
     figure, axes = plt.subplots(2, len(panels), figsize=(3.15 * len(panels), 6.4))
     heatmap = None
@@ -179,12 +285,18 @@ def render_query(
         axes[0, column].axis("off")
         if column == 0:
             axes[1, column].imshow(np.zeros(reference.shape[:2]), cmap="magma", vmin=0, vmax=vmax)
-            axes[1, column].set_title("absolute difference\n(reference = 0)", fontsize=9)
+            axes[1, column].set_title(
+                f"reference\nCLIP(prompt)={clip_prompt[column]:+.3f}", fontsize=9
+            )
         else:
             difference = differences[column - 1]
             heatmap = axes[1, column].imshow(difference, cmap="magma", vmin=0, vmax=vmax)
             axes[1, column].set_title(
-                f"mean |pixel diff|={float(difference.mean()):.4f}", fontsize=9
+                f"CLIP(original)={clip_original[column]:+.3f}  "
+                f"distance={1.0 - clip_original[column]:.3f}\n"
+                f"CLIP(prompt)={clip_prompt[column]:+.3f}  "
+                f"pixel MAE={float(difference.mean()):.4f}",
+                fontsize=8,
             )
             np.save(query_output / f"{METHODS[column - 1][0]}_pixel_absdiff.npy", difference)
         axes[1, column].axis("off")
@@ -220,6 +332,10 @@ def main() -> None:
     parser.add_argument("--prefer-device", default="gpu")
     parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--dpi", type=int, default=180)
+    parser.add_argument("--clip-model", default="openai/clip-vit-base-patch32")
+    parser.add_argument("--clip-device", default="cuda")
+    parser.add_argument("--clip-cache-dir", type=Path)
+    parser.add_argument("--clip-local-files-only", action="store_true")
     args = parser.parse_args()
 
     queries = load_queries(args.query_file)
@@ -246,6 +362,10 @@ def main() -> None:
             base_checkpoint=base_checkpoint,
             prefer_device=args.prefer_device,
             dpi=args.dpi,
+            clip_model=args.clip_model,
+            clip_device=args.clip_device,
+            clip_cache_dir=args.clip_cache_dir,
+            clip_local_files_only=args.clip_local_files_only,
         )
     print(f"[done] figures={output_dir}", flush=True)
 
