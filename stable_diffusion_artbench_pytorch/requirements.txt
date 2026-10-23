@@ -1,5 +1,6 @@
 # Versions used by the official D-TRAK release.
 --extra-index-url https://download.pytorch.org/whl/cu118
+setuptools==68.2.2
 numpy==1.24.4
 accelerate==0.20.3
 datasets==2.12.0
