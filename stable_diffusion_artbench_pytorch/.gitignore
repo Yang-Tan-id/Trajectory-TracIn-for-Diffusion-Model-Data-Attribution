@@ -1,0 +1,14 @@
+dataset/metadata/*.csv
+dataset/images/*
+dataset/indices/*.pkl
+dataset/indices/lds-val/*.pkl
+outputs/*
+!dataset/images/.gitkeep
+!dataset/indices/.gitkeep
+!dataset/indices/lds-val/.gitkeep
+!outputs/.gitkeep
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.DS_Store
+
