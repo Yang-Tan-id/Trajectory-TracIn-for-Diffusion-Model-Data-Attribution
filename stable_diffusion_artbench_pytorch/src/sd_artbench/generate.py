@@ -29,6 +29,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--steps", type=int, default=50)
     parser.add_argument("--guidance-scale", type=float, default=7.5)
     parser.add_argument(
+        "--no-lora",
+        action="store_true",
+        help="Generate from the frozen base model without loading LoRA weights.",
+    )
+    parser.add_argument(
+        "--replay-manifest",
+        type=Path,
+        help=(
+            "Replay the prompt and actual seed of every record in an existing "
+            "query manifest. This is intended for paired base-vs-LoRA samples."
+        ),
+    )
+    parser.add_argument(
         "--replace-flagged",
         action="store_true",
         help=(
@@ -52,6 +65,12 @@ def main() -> None:
     args = parse_args()
     if args.max_replacement_attempts < 1:
         raise ValueError("--max-replacement-attempts must be positive")
+    if args.replay_manifest is not None and args.replace_flagged:
+        raise ValueError(
+            "--replay-manifest cannot be combined with --replace-flagged because "
+            "changing a seed would break the paired comparison; use "
+            "--disable-safety-checker if an exact replay is safety-flagged"
+        )
     requested_seeds = [
         int(value) for value in args.seeds.split(",") if value.strip()
     ]
@@ -79,106 +98,141 @@ def main() -> None:
         pipeline.scheduler.config,
         steps_offset=timestep_stride - 1,
     )
-    pipeline.unet.load_attn_procs(args.lora_dir)
+    if not args.no_lora:
+        pipeline.unet.load_attn_procs(args.lora_dir)
     pipeline = pipeline.to("cuda" if torch.cuda.is_available() else "cpu")
     pipeline.set_progress_bar_config(disable=False)
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     records = []
-    prompt_specs: list[tuple[Optional[str], str]]
-    if args.prompts:
-        prompt_specs = [(None, prompt) for prompt in args.prompts]
+    generation_requests = []
+    if args.replay_manifest is not None:
+        replay_payload = json.loads(args.replay_manifest.read_text(encoding="utf-8"))
+        if not isinstance(replay_payload, list) or not replay_payload:
+            raise ValueError("--replay-manifest must contain a non-empty JSON list")
+        for query_index, item in enumerate(replay_payload):
+            generation_requests.append(
+                {
+                    "prompt_index": query_index,
+                    "label": item.get("label"),
+                    "prompt": str(item["prompt"]),
+                    "requested_seed": int(item.get("requested_seed", item["seed"])),
+                    "actual_seed": int(item["seed"]),
+                    "name": f"query-{query_index:03d}",
+                    "source_query_index": query_index,
+                    "source_file": item.get("file"),
+                }
+            )
     else:
-        prompt_specs = [
-            (label, label_to_prompt(label)) for label in ArtBenchConfig().classes
-        ]
+        prompt_specs: list[tuple[Optional[str], str]]
+        if args.prompts:
+            prompt_specs = [(None, prompt) for prompt in args.prompts]
+        else:
+            prompt_specs = [
+                (label, label_to_prompt(label)) for label in ArtBenchConfig().classes
+            ]
+        for seed in requested_seeds:
+            for prompt_index, (label, prompt) in enumerate(prompt_specs):
+                for image_index in range(args.images_per_class):
+                    requested_seed = seed + image_index
+                    name = label if label is not None else f"prompt-{prompt_index:02d}"
+                    generation_requests.append(
+                        {
+                            "prompt_index": prompt_index,
+                            "label": label,
+                            "prompt": prompt,
+                            "requested_seed": requested_seed,
+                            "actual_seed": requested_seed,
+                            "name": name,
+                            "source_query_index": None,
+                            "source_file": None,
+                        }
+                    )
 
-    next_replacement_seed = max(requested_seeds) + args.images_per_class
+    next_replacement_seed = max(
+        request["actual_seed"] for request in generation_requests
+    ) + 1
     used_prompt_seeds: set[tuple[int, int]] = set()
-    for seed in requested_seeds:
-        for prompt_index, (label, prompt) in enumerate(prompt_specs):
-            for image_index in range(args.images_per_class):
-                requested_seed = seed + image_index
-                actual_seed = requested_seed
-                replacement_attempts = 0
-                while True:
-                    generator = torch.Generator(device=pipeline.device).manual_seed(
-                        actual_seed
-                    )
-                    output = pipeline(
-                        prompt,
-                        height=256,
-                        width=256,
-                        num_inference_steps=args.steps,
-                        guidance_scale=args.guidance_scale,
-                        generator=generator,
-                    )
-                    image = output.images[0]
-                    detected = getattr(output, "nsfw_content_detected", None)
-                    safety_flagged = (
-                        detected is not None
-                        and len(detected) > 0
-                        and bool(detected[0])
-                    )
-                    extrema = image.convert("RGB").getextrema()
-                    all_black = all(
-                        channel_min == 0 and channel_max == 0
-                        for channel_min, channel_max in extrema
-                    )
-                    if not safety_flagged and not all_black:
-                        break
-                    if not args.replace_flagged:
-                        reason = "safety-flagged" if safety_flagged else "all-black"
-                        raise RuntimeError(
-                            f"generation produced a {reason} image for "
-                            f"prompt={prompt!r}, seed={actual_seed}; rerun with "
-                            "--replace-flagged"
-                        )
-                    replacement_attempts += 1
-                    if replacement_attempts > args.max_replacement_attempts:
-                        raise RuntimeError(
-                            "exhausted replacement attempts for "
-                            f"prompt={prompt!r}, requested_seed={requested_seed}"
-                        )
-                    while (prompt_index, next_replacement_seed) in used_prompt_seeds:
-                        next_replacement_seed += 1
-                    replacement_reason = (
-                        "safety-flagged" if safety_flagged else "all-black"
-                    )
-                    print(
-                        f"[replace] prompt={prompt!r} requested_seed={requested_seed} "
-                        f"rejected_seed={actual_seed} reason={replacement_reason} "
-                        f"next_seed={next_replacement_seed}",
-                        flush=True,
-                    )
-                    actual_seed = next_replacement_seed
-                    next_replacement_seed += 1
-                expected_timesteps = [
-                    training_timesteps - 1 - timestep_stride * index
-                    for index in range(args.steps)
-                ]
-                actual_timesteps = [
-                    int(value) for value in pipeline.scheduler.timesteps.tolist()
-                ]
-                if actual_timesteps != expected_timesteps:
-                    raise RuntimeError(
-                        "DDIM sampling schedule mismatch: "
-                        f"actual={actual_timesteps}, expected={expected_timesteps}"
-                    )
-                name = label if label is not None else f"prompt-{prompt_index:02d}"
-                filename = f"{name}__seed-{actual_seed}.png"
-                image.save(args.output_dir / filename)
-                used_prompt_seeds.add((prompt_index, actual_seed))
-                records.append(
-                    {
-                        "file": filename,
-                        "label": label,
-                        "prompt": prompt,
-                        "seed": actual_seed,
-                        "requested_seed": requested_seed,
-                        "replacement_attempts": replacement_attempts,
-                    }
+    for request in generation_requests:
+        prompt_index = request["prompt_index"]
+        label = request["label"]
+        prompt = request["prompt"]
+        requested_seed = request["requested_seed"]
+        actual_seed = request["actual_seed"]
+        replacement_attempts = 0
+        while True:
+            generator = torch.Generator(device=pipeline.device).manual_seed(actual_seed)
+            output = pipeline(
+                prompt,
+                height=256,
+                width=256,
+                num_inference_steps=args.steps,
+                guidance_scale=args.guidance_scale,
+                generator=generator,
+            )
+            image = output.images[0]
+            detected = getattr(output, "nsfw_content_detected", None)
+            safety_flagged = (
+                detected is not None and len(detected) > 0 and bool(detected[0])
+            )
+            extrema = image.convert("RGB").getextrema()
+            all_black = all(
+                channel_min == 0 and channel_max == 0
+                for channel_min, channel_max in extrema
+            )
+            if not safety_flagged and not all_black:
+                break
+            if not args.replace_flagged:
+                reason = "safety-flagged" if safety_flagged else "all-black"
+                raise RuntimeError(
+                    f"generation produced a {reason} image for "
+                    f"prompt={prompt!r}, seed={actual_seed}; rerun with "
+                    "--replace-flagged"
                 )
+            replacement_attempts += 1
+            if replacement_attempts > args.max_replacement_attempts:
+                raise RuntimeError(
+                    "exhausted replacement attempts for "
+                    f"prompt={prompt!r}, requested_seed={requested_seed}"
+                )
+            while (prompt_index, next_replacement_seed) in used_prompt_seeds:
+                next_replacement_seed += 1
+            replacement_reason = "safety-flagged" if safety_flagged else "all-black"
+            print(
+                f"[replace] prompt={prompt!r} requested_seed={requested_seed} "
+                f"rejected_seed={actual_seed} reason={replacement_reason} "
+                f"next_seed={next_replacement_seed}",
+                flush=True,
+            )
+            actual_seed = next_replacement_seed
+            next_replacement_seed += 1
+        expected_timesteps = [
+            training_timesteps - 1 - timestep_stride * index
+            for index in range(args.steps)
+        ]
+        actual_timesteps = [int(value) for value in pipeline.scheduler.timesteps.tolist()]
+        if actual_timesteps != expected_timesteps:
+            raise RuntimeError(
+                "DDIM sampling schedule mismatch: "
+                f"actual={actual_timesteps}, expected={expected_timesteps}"
+            )
+        name = request["name"]
+        filename = f"{name}__seed-{actual_seed}.png"
+        image.save(args.output_dir / filename)
+        used_prompt_seeds.add((prompt_index, actual_seed))
+        records.append(
+            {
+                "file": filename,
+                "label": label,
+                "prompt": prompt,
+                "seed": actual_seed,
+                "requested_seed": requested_seed,
+                "replacement_attempts": replacement_attempts,
+                "model_variant": "base" if args.no_lora else "lora",
+                "source_query_index": request["source_query_index"],
+                "source_file": request["source_file"],
+            }
+        )
     (args.output_dir / "manifest.json").write_text(
         json.dumps(records, indent=2) + "\n", encoding="utf-8"
     )

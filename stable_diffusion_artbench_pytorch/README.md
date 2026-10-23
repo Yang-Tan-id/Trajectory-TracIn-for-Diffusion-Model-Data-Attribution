@@ -146,6 +146,22 @@ python -m sd_artbench.generate \
   --prompt "a bird flying through the sky, an ukiyo e painting"
 ```
 
+For a paired base-model control, replay the exact prompt and actual seed of
+every generated query while skipping LoRA loading:
+
+```bash
+python -m sd_artbench.generate \
+  --no-lora \
+  --replay-manifest outputs/artbench2-queries-60/manifest.json \
+  --output-dir outputs/artbench2-queries-60-base \
+  --steps 50 \
+  --guidance-scale 7.5
+```
+
+The replay mode deliberately rejects `--replace-flagged`, because replacing a
+seed would invalidate the pair. If a base-model result is safety-flagged, rerun
+the exact replay with `--disable-safety-checker` rather than changing its seed.
+
 ## 5. Raw-checkpoint attribution
 
 The attribution implementation lives in `src/sd_artbench/attribution/` and is
