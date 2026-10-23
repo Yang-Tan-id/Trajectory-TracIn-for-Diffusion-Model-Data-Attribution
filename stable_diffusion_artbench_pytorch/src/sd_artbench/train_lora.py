@@ -100,6 +100,19 @@ def set_attention_dropout(unet: UNet2DConditionModel, probability: float) -> Non
             module.p = probability
 
 
+def checkpoint_epochs(num_epochs: int, num_checkpoints: int) -> set[int]:
+    """Return exactly ``num_checkpoints`` approximately even, 1-based epochs."""
+
+    if num_checkpoints < 1:
+        raise ValueError("num_checkpoints must be at least 1")
+    if num_checkpoints > num_epochs:
+        raise ValueError("num_checkpoints cannot exceed num_epochs")
+    return {
+        math.ceil(checkpoint_number * num_epochs / num_checkpoints)
+        for checkpoint_number in range(1, num_checkpoints + 1)
+    }
+
+
 def parse_args() -> argparse.Namespace:
     defaults = ArtBenchConfig()
     parser = argparse.ArgumentParser(description="Fine-tune miniSD on ArtBench-2 with LoRA.")
@@ -120,12 +133,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-workers", type=int, default=8)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--mixed-precision", choices=["no", "fp16", "bf16"], default="fp16")
-    parser.add_argument(
-        "--checkpointing-steps",
-        type=int,
-        default=-1,
-        help="Save resumable state every N updates; -1 matches D-TRAK (1%% of all updates).",
-    )
+    parser.add_argument("--num-checkpoints", type=int, default=25)
     return parser.parse_args()
 
 
@@ -167,9 +175,7 @@ def main() -> None:
     )
     updates_per_epoch = math.ceil(len(dataloader) / accelerator.num_processes)
     total_steps = updates_per_epoch * args.epochs
-    checkpointing_steps = args.checkpointing_steps
-    if checkpointing_steps == -1:
-        checkpointing_steps = math.ceil(total_steps * 0.01)
+    epochs_to_checkpoint = checkpoint_epochs(args.epochs, args.num_checkpoints)
     lr_scheduler = get_scheduler(
         "cosine",
         optimizer=optimizer,
@@ -203,7 +209,7 @@ def main() -> None:
         print(
             f"trainable_parameters={sum(p.numel() for p in unet.parameters() if p.requires_grad):,} "
             f"warmup_steps={math.ceil(total_steps * 0.1)} "
-            f"checkpointing_steps={checkpointing_steps}"
+            f"checkpoint_epochs={sorted(epochs_to_checkpoint)}"
         )
     global_step = 0
     for epoch in range(args.epochs):
@@ -243,16 +249,17 @@ def main() -> None:
                 optimizer.zero_grad()
             epoch_loss += loss.detach().float().item()
             global_step += 1
-            if global_step % checkpointing_steps == 0:
-                accelerator.wait_for_everyone()
-                if accelerator.is_main_process:
-                    accelerator.save_state(
-                        str(args.output_dir / f"checkpoint-{global_step}")
-                    )
 
         if accelerator.is_main_process:
             mean_loss = epoch_loss / max(len(dataloader), 1)
             print(f"epoch={epoch + 1}/{args.epochs} step={global_step} loss={mean_loss:.6f}")
+        completed_epoch = epoch + 1
+        if completed_epoch in epochs_to_checkpoint:
+            accelerator.wait_for_everyone()
+            if accelerator.is_main_process:
+                accelerator.save_state(
+                    str(args.output_dir / f"checkpoint-epoch-{completed_epoch:04d}")
+                )
 
     accelerator.wait_for_everyone()
     if accelerator.is_main_process:
