@@ -166,6 +166,11 @@ Endpoint methods additionally write the four score normalizations `raw`,
 termwise-squared, timestamp-sum-squared, and total-sum-squared reductions as
 separate files so their square order cannot be confused.
 
+Endpoint-Pollute evaluates query and training examples with batched VJPs. The
+default query batch, training batch, and per-example VJP chunk are all 8;
+reduce `--pollute-query-batch-size`, `--pollute-train-batch-size`, or
+`--per-example-chunk-size` only if the smoke run runs out of GPU memory.
+
 First run a one-image, one-query, one-timestep smoke test. The query manifest is
 the `manifest.json` produced by `sd_artbench.generate`:
 

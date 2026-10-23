@@ -8,11 +8,13 @@ from pathlib import Path
 
 import numpy as np
 import torch
+import torch.nn.functional as F
 from PIL import Image
 from tqdm.auto import tqdm
 
 from ..config import ArtBenchConfig
-from .optimizer import adamw_full_direction
+from .autograd import batched_loss_gradients
+from .optimizer import adamw_full_direction, adamw_full_direction_batch
 from .projection import CountSketchProjector, stable_seed
 from .runtime import (
     AttributionArtBenchDataset,
@@ -20,13 +22,11 @@ from .runtime import (
     deterministic_noise,
     encode_image,
     encode_prompt,
-    gradients,
     list_checkpoints,
     load_queries,
     load_raw_checkpoint,
     mean_simple_gradient,
     select_timesteps,
-    simple_loss,
 )
 from .scoring import TRANSFORMS, VARIANTS, score_variants
 
@@ -50,7 +50,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--checkpoint-indices", type=parse_ints)
     parser.add_argument("--query-indices", type=parse_ints)
     parser.add_argument("--timestep-count", type=int, default=50)
-    parser.add_argument("--timestep-batch-size", type=int, default=8)
+    parser.add_argument("--timestep-batch-size", type=int, default=16)
+    parser.add_argument("--pollute-query-batch-size", type=int, default=8)
+    parser.add_argument("--pollute-train-batch-size", type=int, default=8)
+    parser.add_argument("--per-example-chunk-size", type=int, default=8)
     parser.add_argument("--proj-dim", type=int, default=32768)
     parser.add_argument("--rank", type=int, default=128)
     parser.add_argument("--mixed-precision", choices=("no", "fp16", "bf16"), default="fp16")
@@ -73,6 +76,18 @@ def project_dual(runtime, gradients_raw, projector, max_grad_norm):
     )
     adamw_projected, adamw_norm = projector.project(adamw)
     return raw, adamw_projected, raw_norm, adamw_norm, learning_rate
+
+
+def project_dual_batch(runtime, gradients_raw, projector, max_grad_norm):
+    raw, raw_norms = projector.project_batch(gradients_raw)
+    adamw, learning_rate = adamw_full_direction_batch(
+        runtime.parameters,
+        gradients_raw,
+        runtime.optimizer,
+        max_grad_norm=max_grad_norm,
+    )
+    adamw_projected, adamw_norms = projector.project_batch(adamw)
+    return raw, adamw_projected, raw_norms, adamw_norms, learning_rate
 
 
 def save_result(path: Path, scores: np.ndarray, metadata: dict, indices: np.ndarray) -> None:
@@ -166,6 +181,14 @@ def save_pollute_state(
 
 def main() -> None:
     args = parse_args()
+    for name in (
+        "timestep_batch_size",
+        "pollute_query_batch_size",
+        "pollute_train_batch_size",
+        "per_example_chunk_size",
+    ):
+        if getattr(args, name) < 1:
+            raise ValueError(f"--{name.replace('_', '-')} must be positive")
     methods = {item.strip() for item in args.methods.split(",") if item.strip()}
     unknown = methods.difference({"endpoint_tracin", "endpoint_pollute"})
     if unknown:
@@ -240,6 +263,9 @@ def main() -> None:
         "checkpoint_indices": checkpoint_indices,
         "timesteps": timesteps,
         "timestep_batch_size": args.timestep_batch_size,
+        "pollute_query_batch_size": args.pollute_query_batch_size,
+        "pollute_train_batch_size": args.pollute_train_batch_size,
+        "per_example_chunk_size": args.per_example_chunk_size,
         "proj_dim": args.proj_dim,
         "train_positions": [args.train_start, train_end],
         "query_ids": [query.query_id for query in queries],
@@ -326,68 +352,175 @@ def main() -> None:
                 print(f"[pollute] skip final checkpoint {checkpoint.name}: no next checkpoint")
                 pollute_completed = checkpoint_slot
             else:
-                # Cache next-checkpoint predictions, then restore current parameters.
+                # Cache batched next-checkpoint predictions on CPU, then restore
+                # current parameters.  Query and train examples all use the same
+                # checkpoint/timestep noise, matching the established endpoint
+                # Pollute definition.
                 load_raw_checkpoint(runtime, checkpoints[checkpoint_index + 1])
-                next_predictions: list[list[torch.Tensor]] = []
+                next_predictions: list[torch.Tensor] = []
                 with torch.no_grad():
-                    for query, latent, hidden in zip(queries, query_latents, query_hidden):
-                        current = []
-                        for timestep in timesteps:
-                            noise = deterministic_noise(
-                                latent, "endpoint_pollute", checkpoint_index, int(timestep)
+                    for timestep in timesteps:
+                        prediction_chunks = []
+                        shared_noise = deterministic_noise(
+                            query_latents[0],
+                            "endpoint_pollute",
+                            checkpoint_index,
+                            int(timestep),
+                        )
+                        for start in range(
+                            0, len(queries), args.pollute_query_batch_size
+                        ):
+                            end = min(
+                                start + args.pollute_query_batch_size, len(queries)
                             )
-                            ts = torch.full((1,), int(timestep), device=device, dtype=torch.long)
-                            noisy = runtime.scheduler.add_noise(latent, noise, ts)
-                            current.append(runtime.unet(noisy, ts, hidden).sample.detach())
-                        next_predictions.append(current)
+                            latents = torch.cat(query_latents[start:end], dim=0)
+                            hidden = torch.cat(query_hidden[start:end], dim=0)
+                            noise = shared_noise.expand_as(latents)
+                            ts = torch.full(
+                                (end - start,),
+                                int(timestep),
+                                device=device,
+                                dtype=torch.long,
+                            )
+                            noisy = runtime.scheduler.add_noise(latents, noise, ts)
+                            prediction_chunks.append(
+                                runtime.unet(noisy, ts, hidden).sample.detach().cpu()
+                            )
+                        next_predictions.append(torch.cat(prediction_chunks, dim=0))
                 load_raw_checkpoint(runtime, checkpoint)
                 for timestamp_slot, timestep in enumerate(timesteps):
-                    query_features = []
-                    for query_slot, (query, latent, hidden) in enumerate(
-                        zip(queries, query_latents, query_hidden)
+                    shared_query_noise = deterministic_noise(
+                        query_latents[0],
+                        "endpoint_pollute",
+                        checkpoint_index,
+                        int(timestep),
+                    )
+                    query_feature_chunks = []
+                    for start in range(
+                        0, len(queries), args.pollute_query_batch_size
                     ):
-                        noise = deterministic_noise(
-                            latent, "endpoint_pollute", checkpoint_index, int(timestep)
+                        end = min(start + args.pollute_query_batch_size, len(queries))
+                        latents = torch.cat(query_latents[start:end], dim=0)
+                        hidden = torch.cat(query_hidden[start:end], dim=0)
+                        noise = shared_query_noise.expand_as(latents)
+                        ts = torch.full(
+                            (end - start,),
+                            int(timestep),
+                            device=device,
+                            dtype=torch.long,
                         )
-                        ts = torch.full((1,), int(timestep), device=device, dtype=torch.long)
-                        noisy = runtime.scheduler.add_noise(latent, noise, ts)
+                        noisy = runtime.scheduler.add_noise(latents, noise, ts)
                         prediction = runtime.unet(noisy, ts, hidden).sample
-                        delta = (next_predictions[query_slot][timestamp_slot] - prediction).detach()
-                        delta_norm = delta.float().norm().clamp_min(1e-12)
-                        pollute_loss = (prediction.float() * delta.float()).mean()
-                        gradient = gradients(pollute_loss, runtime.parameters)
-                        feature = projector.project(gradient)[0] / delta_norm
-                        query_features.append(feature)
-                    query_matrix = torch.stack(query_features)
-                    for destination, position in enumerate(
-                        tqdm(
-                            train_positions,
-                            desc=f"Pollute {checkpoint.name} t={int(timestep)}",
-                            leave=False,
+                        target = next_predictions[timestamp_slot][start:end].to(
+                            device=device, dtype=prediction.dtype
                         )
-                    ):
-                        latent, hidden = train_encoding(position)
-                        noise = deterministic_noise(
-                            latent, "endpoint_pollute", checkpoint_index, int(timestep)
+                        delta = (target - prediction).detach()
+                        delta_norms = delta.float().flatten(1).norm(dim=1).clamp_min(1e-12)
+                        losses = (prediction.float() * delta.float()).flatten(1).mean(dim=1)
+                        features = torch.empty(
+                            (end - start, args.proj_dim),
+                            device=device,
+                            dtype=torch.float32,
                         )
-                        gradient = gradients(
-                            simple_loss(runtime, latent, hidden, int(timestep), noise),
+                        for sample_slots, gradient_batch in batched_loss_gradients(
+                            losses,
                             runtime.parameters,
+                            list(range(end - start)),
+                            chunk_size=args.per_example_chunk_size,
+                        ):
+                            projected, _ = projector.project_batch(gradient_batch)
+                            rows = torch.as_tensor(
+                                sample_slots, device=device, dtype=torch.long
+                            )
+                            features[rows] = projected / delta_norms[rows, None]
+                        query_feature_chunks.append(features)
+                    query_matrix = torch.cat(query_feature_chunks, dim=0)
+
+                    train_progress = tqdm(
+                        total=len(train_positions),
+                        desc=f"Pollute {checkpoint.name} t={int(timestep)}",
+                        leave=False,
+                    )
+                    for start in range(
+                        0, len(train_positions), args.pollute_train_batch_size
+                    ):
+                        end = min(
+                            start + args.pollute_train_batch_size,
+                            len(train_positions),
                         )
-                        raw, adamw, _, _, _ = project_dual(
-                            runtime, gradient, projector, args.max_grad_norm
+                        encoded = [
+                            train_encoding(position)
+                            for position in train_positions[start:end]
+                        ]
+                        latents = torch.cat([item[0] for item in encoded], dim=0)
+                        hidden = torch.cat([item[1] for item in encoded], dim=0)
+                        shared_train_noise = deterministic_noise(
+                            latents[:1],
+                            "endpoint_pollute",
+                            checkpoint_index,
+                            int(timestep),
                         )
-                        for transform_slot, feature in enumerate((raw, adamw)):
-                            dots = score_variants(query_matrix, feature.unsqueeze(0))[..., 0]
-                            values = dots.detach().cpu().numpy()
-                            weighted = checkpoint_lr * values / len(timesteps)
-                            pollute_linear[transform_slot, :, :, destination] += weighted
-                            pollute_termwise_squared[
-                                transform_slot, :, :, destination
-                            ] += checkpoint_lr * np.square(values) / len(timesteps)
-                            pollute_timestamp_components[
-                                timestamp_slot, transform_slot, :, :, destination
-                            ] += weighted
+                        noise = shared_train_noise.expand_as(latents)
+                        ts = torch.full(
+                            (end - start,),
+                            int(timestep),
+                            device=device,
+                            dtype=torch.long,
+                        )
+                        noisy = runtime.scheduler.add_noise(latents, noise, ts)
+                        prediction = runtime.unet(noisy, ts, hidden).sample
+                        if runtime.scheduler.config.prediction_type == "epsilon":
+                            target = noise
+                        elif runtime.scheduler.config.prediction_type == "v_prediction":
+                            target = runtime.scheduler.get_velocity(latents, noise, ts)
+                        else:
+                            raise ValueError(
+                                "unsupported prediction type "
+                                f"{runtime.scheduler.config.prediction_type}"
+                            )
+                        losses = F.mse_loss(
+                            prediction.float(), target.float(), reduction="none"
+                        ).mean(dim=(1, 2, 3))
+                        for sample_slots, gradient_batch in batched_loss_gradients(
+                            losses,
+                            runtime.parameters,
+                            list(range(end - start)),
+                            chunk_size=args.per_example_chunk_size,
+                        ):
+                            raw, adamw, _, _, reconstructed_lr = project_dual_batch(
+                                runtime,
+                                gradient_batch,
+                                projector,
+                                args.max_grad_norm,
+                            )
+                            if not np.isclose(checkpoint_lr, reconstructed_lr):
+                                raise RuntimeError("optimizer LR changed while scoring")
+                            destinations = [start + slot for slot in sample_slots]
+                            for transform_slot, feature in enumerate((raw, adamw)):
+                                dots = score_variants(query_matrix, feature)
+                                values_batch = dots.detach().cpu().numpy()
+                                for local_slot, destination in enumerate(destinations):
+                                    values = values_batch[..., local_slot]
+                                    weighted = checkpoint_lr * values / len(timesteps)
+                                    pollute_linear[
+                                        transform_slot, :, :, destination
+                                    ] += weighted
+                                    pollute_termwise_squared[
+                                        transform_slot, :, :, destination
+                                    ] += (
+                                        checkpoint_lr
+                                        * np.square(values)
+                                        / len(timesteps)
+                                    )
+                                    pollute_timestamp_components[
+                                        timestamp_slot,
+                                        transform_slot,
+                                        :,
+                                        :,
+                                        destination,
+                                    ] += weighted
+                        train_progress.update(end - start)
+                    train_progress.close()
                 pollute_completed = checkpoint_slot
 
         metadata = {
