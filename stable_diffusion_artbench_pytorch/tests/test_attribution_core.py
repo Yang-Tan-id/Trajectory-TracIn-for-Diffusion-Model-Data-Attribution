@@ -5,6 +5,7 @@ import numpy as np
 import torch
 
 from sd_artbench.attribution.autograd import batched_loss_gradients
+from sd_artbench.attribution.launch_shards import save_checkpoint_sum
 from sd_artbench.attribution.merge_shards import merge_shards
 from sd_artbench.attribution.optimizer import (
     adamw_full_direction,
@@ -160,3 +161,22 @@ def test_merge_shards_sorts_by_training_interval(tmp_path: Path):
     assert indices.tolist() == [100, 101, 102, 103]
     assert manifest["train_positions"] == [0, 4]
     assert variants is None
+
+
+def test_checkpoint_shards_are_summed(tmp_path: Path):
+    first = tmp_path / "checkpoint-first.npz"
+    second = tmp_path / "checkpoint-second.npz"
+    output = tmp_path / "merged.npz"
+    _write_shard(first, 0, [1.0, 2.0])
+    _write_shard(second, 0, [3.0, 4.0])
+    with np.load(second, allow_pickle=False) as payload:
+        fields = {key: np.asarray(payload[key]) for key in payload.files}
+    manifest = json.loads(str(fields["manifest_json"].item()))
+    manifest["checkpoint_indices"] = [1]
+    fields["manifest_json"] = np.asarray(json.dumps(manifest))
+    np.savez_compressed(second, **fields)
+    save_checkpoint_sum([first, second], output)
+    with np.load(output, allow_pickle=False) as payload:
+        assert payload["scores"].tolist() == [[[4.0, 6.0]]]
+        merged = json.loads(str(payload["manifest_json"].item()))
+    assert merged["checkpoint_indices"] == [0, 1]

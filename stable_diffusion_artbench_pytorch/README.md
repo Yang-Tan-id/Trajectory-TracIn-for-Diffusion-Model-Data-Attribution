@@ -248,9 +248,10 @@ controls how many per-example VJPs run together (default 2; try 4 after the
 smoke test if memory permits). Query/train timestep gradients are also evaluated
 in bounded batches instead of 100 independent forward/backward calls.
 
-Use the launcher to restrict work to exactly the GPU IDs assigned to you. It
-splits the 5,000 training positions into contiguous shards, writes one log per
-GPU, resumes each shard independently, and merges completed score files:
+Use the launcher to restrict work to exactly the GPU IDs assigned to you. For
+ReTrac it divides the 24 checkpoint intervals across the four GPUs (six per
+GPU), avoiding duplicated replay, then sums the four full-training-set score
+files. It writes one log per GPU and resumes each shard independently:
 
 ```bash
 python -m sd_artbench.attribution.launch_shards \
