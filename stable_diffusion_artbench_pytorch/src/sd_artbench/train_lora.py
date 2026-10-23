@@ -66,6 +66,10 @@ class IndexedArtBenchDataset(Dataset):
         return {
             "pixel_values": pixel_values,
             "input_ids": tokenized.input_ids[0],
+            # Extra fields are ignored by training and make later ReTrac event
+            # replay map each shuffled batch back to the target split exactly.
+            "position": item,
+            "metadata_index": int(row.name),
         }
 
 
@@ -125,7 +129,10 @@ def resolve_resume_checkpoint(output_dir: Path, value: str) -> Path:
             return path
         return output_dir / path
 
-    checkpoints = sorted(output_dir.glob("checkpoint-epoch-*"))
+    checkpoints = sorted(
+        output_dir.glob("checkpoint-epoch-*"),
+        key=lambda path: int(path.name.rsplit("-", 1)[-1]),
+    )
     if not checkpoints:
         raise FileNotFoundError(f"No checkpoint-epoch-* directories found in {output_dir}")
     return checkpoints[-1]
@@ -363,6 +370,19 @@ def main() -> None:
                         {
                             "completed_epoch": completed_epoch,
                             "global_step": global_step,
+                            "model": args.model,
+                            "resolution": args.resolution,
+                            "rank": args.rank,
+                            "attention_dropout": args.attention_dropout,
+                            "conditioning_dropout": args.conditioning_dropout,
+                            "epochs": args.epochs,
+                            "batch_size": args.batch_size,
+                            "gradient_accumulation_steps": args.gradient_accumulation_steps,
+                            "learning_rate": args.learning_rate,
+                            "weight_decay": args.weight_decay,
+                            "num_workers": args.num_workers,
+                            "seed": args.seed,
+                            "mixed_precision": args.mixed_precision,
                         },
                         indent=2,
                         sort_keys=True,

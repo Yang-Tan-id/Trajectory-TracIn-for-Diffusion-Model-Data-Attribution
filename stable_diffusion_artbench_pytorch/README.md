@@ -141,9 +141,104 @@ python -m sd_artbench.generate \
   --prompt "a bird flying through the sky, an ukiyo e painting"
 ```
 
-The D-TRAK per-sample gradient, random projection, and score-combination code
-will live in `src/sd_artbench/attribution/` so the PyTorch model path stays
-independent of the JAX implementation.
+## 5. Raw-checkpoint attribution
+
+The attribution implementation lives in `src/sd_artbench/attribution/` and is
+independent of the JAX model. It reads the 25 raw LoRA/Accelerate checkpoints;
+it does not use or reconstruct EMA weights.
+
+Each run writes both training transforms:
+
+- `raw_gradient`: the ordinary per-example LoRA loss gradient;
+- `adamw_full`: the hypothetical next AdamW parameter direction reconstructed
+  from that checkpoint's first moment, second moment, step, epsilon, betas, and
+  decoupled weight decay, after the training run's global-norm clipping at 1.0.
+  The learning rate is factored out of the direction and applied exactly once
+  during scoring.
+
+Endpoint methods additionally write the four score normalizations `raw`,
+`query_l2`, `train_l2`, and `query_train_l2`. Endpoint-Pollute writes linear,
+termwise-squared, timestamp-sum-squared, and total-sum-squared reductions as
+separate files so their square order cannot be confused.
+
+First run a one-image, one-query, one-timestep smoke test. The query manifest is
+the `manifest.json` produced by `sd_artbench.generate`:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python -m sd_artbench.attribution.run_endpoint \
+  --query-manifest outputs/sample-preview/manifest.json \
+  --checkpoint-indices 0 \
+  --query-indices 0 \
+  --timestep-count 1 \
+  --proj-dim 512 \
+  --train-start 0 \
+  --train-end 1 \
+  --output-dir outputs/attribution-smoke/endpoint
+```
+
+Then smoke-test exact-event ReTrac. Its batch size and accumulation must equal
+the values used for training. New checkpoints record and validate every replay
+argument; older checkpoints are at least checked for consistency against each
+saved `global_step`:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python -m sd_artbench.attribution.run_retrac \
+  --query-manifest outputs/sample-preview/manifest.json \
+  --checkpoint-indices 0 \
+  --query-indices 0 \
+  --timestep-count 1 \
+  --proj-dim 512 \
+  --batch-size 8 \
+  --gradient-accumulation-steps 8 \
+  --num-workers 0 \
+  --train-start 0 \
+  --train-end 1 \
+  --max-replay-batches 1 \
+  --output-dir outputs/attribution-smoke/retrac
+```
+
+The smoke run is deliberately saved as `retrac_debug.npz`, never as the formal
+`retrac.npz`. For the full jobs, remove all smoke limits:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python -m sd_artbench.attribution.run_endpoint \
+  --query-manifest outputs/sample-preview/manifest.json \
+  --timestep-count 100 \
+  --proj-dim 32768 \
+  --output-dir outputs/attribution/endpoint
+
+CUDA_VISIBLE_DEVICES=0 python -m sd_artbench.attribution.run_retrac \
+  --query-manifest outputs/sample-preview/manifest.json \
+  --timestep-count 100 \
+  --proj-dim 32768 \
+  --batch-size 8 \
+  --gradient-accumulation-steps 8 \
+  --output-dir outputs/attribution/retrac
+```
+
+`run_retrac` defaults to `exact_batch`, which recovers the shuffled training
+batch, random flip, VAE sample, noise, timestep, conditioning dropout, and
+attention-dropout graph from the saved RNG state. If exact per-example
+full-batch differentiation runs out of memory, `--replay-mode batch1` is the
+lower-memory approximation; this choice is recorded in the result manifest.
+
+Both runners checkpoint their accumulated scores after each model checkpoint
+and resume automatically. For multiple GPUs, launch separate processes with
+non-overlapping `--train-start/--train-end` ranges and distinct output
+directories. Merge matching `.npz` score files afterward:
+
+```bash
+python -m sd_artbench.attribution.merge_shards \
+  --inputs outputs/shard0/endpoint_tracin.npz \
+           outputs/shard1/endpoint_tracin.npz \
+           outputs/shard2/endpoint_tracin.npz \
+           outputs/shard3/endpoint_tracin.npz \
+  --output outputs/attribution/endpoint_tracin.npz
+```
+
+The full attribution run is much more expensive than image generation. Always
+finish both smoke tests before starting all 5,000 training images, 25
+checkpoints, and 100 timesteps.
 
 `trainable_parameters.json` records the exact LoRA parameter names and shapes
 used for updates and later attribution. Official D-TRAK checkpoints infer this
