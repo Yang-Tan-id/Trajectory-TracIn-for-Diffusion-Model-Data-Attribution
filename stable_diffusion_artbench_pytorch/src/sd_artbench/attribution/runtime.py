@@ -394,6 +394,13 @@ def mean_simple_gradient(
 def select_timesteps(count: int, total: int = 1000) -> list[int]:
     if count < 1 or count > total:
         raise ValueError(f"timestep count must be in [1, {total}]")
-    # Match the JAX framework's DDIM-position schedule exactly, including
-    # NumPy's integer truncation at the two non-integral positions.
-    return np.linspace(total - 1, 0, count, dtype=np.int32).tolist()
+    if total % count:
+        raise ValueError(
+            "sampling-aligned timestep count must divide the training "
+            f"schedule exactly: total={total}, count={count}"
+        )
+    # Use the exact DDIM inference positions used by sd_artbench.generate.
+    # For a 1000-step training schedule and DDIM-50 this is
+    # 999, 979, ..., 19 (50 U-Net evaluations with stride 20).
+    stride = total // count
+    return [total - 1 - stride * index for index in range(count)]

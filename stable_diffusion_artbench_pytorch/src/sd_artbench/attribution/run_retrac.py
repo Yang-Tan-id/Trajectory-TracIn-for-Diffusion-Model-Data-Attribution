@@ -57,7 +57,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, default=root / "outputs/attribution-retrac")
     parser.add_argument("--checkpoint-indices", type=parse_ints)
     parser.add_argument("--query-indices", type=parse_ints)
-    parser.add_argument("--timestep-count", type=int, default=100)
+    parser.add_argument("--timestep-count", type=int, default=50)
     parser.add_argument("--timestep-batch-size", type=int, default=8)
     parser.add_argument("--proj-dim", type=int, default=32768)
     parser.add_argument("--rank", type=int, default=128)

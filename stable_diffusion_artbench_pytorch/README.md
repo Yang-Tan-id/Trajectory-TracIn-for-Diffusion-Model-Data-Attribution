@@ -207,13 +207,13 @@ The smoke run is deliberately saved as `retrac_debug.npz`, never as the formal
 ```bash
 CUDA_VISIBLE_DEVICES=0 python -m sd_artbench.attribution.run_endpoint \
   --query-manifest outputs/sample-preview/manifest.json \
-  --timestep-count 100 \
+  --timestep-count 50 \
   --proj-dim 32768 \
   --output-dir outputs/attribution/endpoint
 
 CUDA_VISIBLE_DEVICES=0 python -m sd_artbench.attribution.run_retrac \
   --query-manifest outputs/sample-preview/manifest.json \
-  --timestep-count 100 \
+  --timestep-count 50 \
   --proj-dim 32768 \
   --batch-size 8 \
   --gradient-accumulation-steps 8 \
@@ -242,7 +242,8 @@ python -m sd_artbench.attribution.merge_shards \
 
 The full attribution run is much more expensive than image generation. Always
 finish both smoke tests before starting all 5,000 training images, 25
-checkpoints, and 100 timesteps.
+checkpoints, and the same 50 timestep positions used by DDIM-50 sampling
+(`999, 979, ..., 19`).
 
 ### Four-GPU optimized launch
 
@@ -250,7 +251,7 @@ The exact ReTrac path uses PyTorch's vmap-backed batched VJP, so raw and
 AdamW-full reuse the same per-example gradient. `--per-example-chunk-size`
 controls how many per-example VJPs run together (default 2; try 4 after the
 smoke test if memory permits). Query/train timestep gradients are also evaluated
-in bounded batches instead of 100 independent forward/backward calls.
+in bounded batches instead of 50 independent forward/backward calls.
 
 Use the launcher to restrict work to exactly the GPU IDs assigned to you. For
 ReTrac it divides the 24 checkpoint intervals across the four GPUs (six per
@@ -264,7 +265,7 @@ python -m sd_artbench.attribution.launch_shards \
   --output-dir outputs/attribution/retrac-4gpu \
   -- \
   --query-manifest outputs/sample-preview/manifest.json \
-  --timestep-count 100 \
+  --timestep-count 50 \
   --timestep-batch-size 2 \
   --proj-dim 32768 \
   --batch-size 8 \

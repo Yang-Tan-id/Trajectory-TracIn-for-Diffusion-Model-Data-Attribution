@@ -12,10 +12,19 @@ from sd_artbench.attribution.optimizer import (
     adamw_full_direction_batch,
 )
 from sd_artbench.attribution.projection import CountSketchProjector
+from sd_artbench.attribution.runtime import select_timesteps
 from sd_artbench.attribution.scoring import (
     endpoint_pollute_reductions,
     score_variants,
 )
+
+
+def test_attribution_timesteps_match_ddim50_sampling_exactly():
+    timesteps = select_timesteps(50)
+    assert len(timesteps) == 50
+    assert timesteps == list(range(999, 18, -20))
+    assert timesteps[:3] == [999, 979, 959]
+    assert timesteps[-3:] == [59, 39, 19]
 
 
 def test_countsketch_is_deterministic_and_normalizes_in_full_space():
