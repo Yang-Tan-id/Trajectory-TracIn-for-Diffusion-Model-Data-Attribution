@@ -28,13 +28,27 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--steps", type=int, default=50)
     parser.add_argument("--guidance-scale", type=float, default=7.5)
+    parser.add_argument(
+        "--disable-safety-checker",
+        action="store_true",
+        help=(
+            "Disable the pretrained pipeline safety checker. Use this for the "
+            "fixed research query set so false positives cannot become black images."
+        ),
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     dtype = torch.float16 if torch.cuda.is_available() else torch.float32
-    pipeline = StableDiffusionPipeline.from_pretrained(args.model, torch_dtype=dtype)
+    pipeline_kwargs = {"torch_dtype": dtype}
+    if args.disable_safety_checker:
+        pipeline_kwargs.update(
+            safety_checker=None,
+            requires_safety_checker=False,
+        )
+    pipeline = StableDiffusionPipeline.from_pretrained(args.model, **pipeline_kwargs)
     training_timesteps = int(pipeline.scheduler.config.num_train_timesteps)
     if training_timesteps % args.steps:
         raise ValueError(
@@ -76,6 +90,16 @@ def main() -> None:
                     guidance_scale=args.guidance_scale,
                     generator=generator,
                 ).images[0]
+                extrema = image.convert("RGB").getextrema()
+                if all(
+                    channel_min == 0 and channel_max == 0
+                    for channel_min, channel_max in extrema
+                ):
+                    raise RuntimeError(
+                        "generation produced an all-black image for "
+                        f"prompt={prompt!r}, seed={actual_seed}; rerun with "
+                        "--disable-safety-checker"
+                    )
                 expected_timesteps = [
                     training_timesteps - 1 - timestep_stride * index
                     for index in range(args.steps)

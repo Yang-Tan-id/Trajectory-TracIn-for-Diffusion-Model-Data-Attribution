@@ -129,7 +129,8 @@ predicted-noise tensor and advances the latent to the next state on the exact
 python -m sd_artbench.generate \
   --lora-dir outputs/artbench2-lora/final \
   --seeds 0,1,2 \
-  --images-per-class 1
+  --images-per-class 1 \
+  --disable-safety-checker
 ```
 
 Pass `--prompt` more than once to compare custom prompts with the same initial
