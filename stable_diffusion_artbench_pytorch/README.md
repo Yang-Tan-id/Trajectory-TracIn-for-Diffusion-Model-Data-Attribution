@@ -43,19 +43,24 @@ Large datasets, model weights, and generated outputs are ignored by Git.
 
 ## Setup
 
-The pinned packages follow the official D-TRAK release and require an NVIDIA
-CUDA environment for attribution. Python 3.8 is the safest choice.
+Use the checked-in Conda environment; do not install project dependencies into
+`base`:
 
 ```bash
-conda create -n sd-artbench-dtrak python=3.8 -y
-conda activate sd-artbench-dtrak
-pip install -r requirements.txt
-pip install -e .
+conda env create -f environment.yml
+conda activate sd_artbench
+export PYTHONPATH="$PWD/src"
 accelerate config
 ```
 
-Install `requirements-attribution.txt` only when the per-sample gradient and
-random-projection stages are added/run; `fast-jl` requires CUDA.
+The environment pins the paper-compatible PyTorch 2.0.1, Diffusers 0.16.1,
+and CUDA 11.8 stack. Confirm that the server's NVIDIA driver supports this
+runtime with `nvidia-smi`. `requirements.txt` remains only as a reference for
+the official D-TRAK Python versions.
+
+`fast-jl` and `traker` are intentionally not part of the base environment;
+they are needed only by the later attribution stage and require CUDA-specific
+installation/testing.
 
 ## 1. Place ArtBench
 

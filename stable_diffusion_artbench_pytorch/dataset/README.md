@@ -30,6 +30,8 @@ If the original Berkeley download links return HTTP 404, use the verified
 256 px Hugging Face mirror. From the project root:
 
 ```bash
+conda activate sd_artbench
+export PYTHONPATH="$PWD/src"
 python -m sd_artbench.download_hf_artbench
 python -m sd_artbench.prepare_data
 ```
