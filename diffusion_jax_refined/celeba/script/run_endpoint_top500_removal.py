@@ -24,6 +24,7 @@ import gc
 import json
 import os
 import pickle
+import re
 import sys
 from dataclasses import asdict
 from pathlib import Path
@@ -48,6 +49,7 @@ METHODS = (
     "endpoint_pollute_adamw_timestamp_both_l2_pos",
     "endpoint_pollute_adamw_timestamp_both_l2_full10k_pos",
     "endpoint_tracin_adamw_linear_raw_neg",
+    "endpoint_tracin_adamw_linear_raw_full10k_neg",
     "endpoint_tracin_adamw_linear_query_l2_neg",
     "endpoint_tracin_adamw_linear_query_l2_full10k_neg",
     "endpoint_tracin_adamw_linear_both_l2_neg",
@@ -161,6 +163,13 @@ def score_spec(
             root / f"traj_tracin_{tracin_namespace}" / "score",
             -1,
             "stored endpoint-TracIn linear raw score ascending",
+            -1.0,
+        )
+    if method == "endpoint_tracin_adamw_linear_raw_full10k_neg":
+        return (
+            root / f"traj_tracin_{tracin_namespace}_full10000" / "score",
+            -1,
+            "stored full-10000 endpoint-TracIn linear raw score ascending",
             -1.0,
         )
     if method == "endpoint_tracin_adamw_linear_query_l2_neg":
@@ -331,11 +340,21 @@ def main() -> None:
     parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--topk", type=int, default=DEFAULT_TOPK)
     parser.add_argument(
+        "--output-group",
+        help=(
+            "Result directory name below the experiment root. The default keeps "
+            "the historical q0_9 layout."
+        ),
+    )
+    parser.add_argument(
         "--stage", choices=("validate", "train", "eval", "all"), default="all"
     )
     args = parser.parse_args()
     if args.topk <= 0 or args.topk > ATTRIBUTED_SIZE:
         parser.error(f"--topk must be in [1, {ATTRIBUTED_SIZE}]")
+    output_group = args.output_group or f"endpoint_top{args.topk}_removal_q0_9"
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+", output_group):
+        parser.error("--output-group may contain only letters, digits, '.', '_', '-'")
 
     records = load_queries(args.query_file)
     if args.query_id not in records:
@@ -377,7 +396,7 @@ def main() -> None:
 
     run_dir = (
         result_root
-        / f"endpoint_top{args.topk}_removal_q0_9"
+        / output_group
         / args.method
         / f"query_{args.query_id:03d}_seed_{initial_seed:03d}"
     )
@@ -385,6 +404,7 @@ def main() -> None:
     manifest_path = run_dir / "removal_manifest.json"
     metadata = {
         "method": args.method,
+        "output_group": output_group,
         "query_id": args.query_id,
         "prompt": str(record["prompt"]),
         "initial_seed": initial_seed,
