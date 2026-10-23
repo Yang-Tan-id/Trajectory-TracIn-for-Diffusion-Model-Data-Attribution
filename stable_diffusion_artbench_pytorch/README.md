@@ -172,6 +172,18 @@ python -m sd_artbench.compare_generations \
   --output-dir outputs/artbench2-base-vs-lora
 ```
 
+To inspect how one fixed query changes across the 25 raw LoRA checkpoints,
+render Base plus epochs 4, 8, ..., 100 and build both a timeline and GIF:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python -m sd_artbench.generate_checkpoint_trajectory \
+  --query-manifest outputs/artbench2-queries-60/manifest.json \
+  --query-indices 22 \
+  --checkpoint-root outputs/artbench2-lora \
+  --output-dir outputs/checkpoint-trajectories-q22 \
+  --disable-safety-checker
+```
+
 ## 5. Raw-checkpoint attribution
 
 The attribution implementation lives in `src/sd_artbench/attribution/` and is
