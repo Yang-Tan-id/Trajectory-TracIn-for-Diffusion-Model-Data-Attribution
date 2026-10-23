@@ -29,11 +29,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--steps", type=int, default=50)
     parser.add_argument("--guidance-scale", type=float, default=7.5)
     parser.add_argument(
+        "--replace-flagged",
+        action="store_true",
+        help=(
+            "Replace a safety-flagged or all-black result with the next unused "
+            "seed, preserving the requested number of valid query images."
+        ),
+    )
+    parser.add_argument("--max-replacement-attempts", type=int, default=100)
+    parser.add_argument(
         "--disable-safety-checker",
         action="store_true",
         help=(
-            "Disable the pretrained pipeline safety checker. Use this for the "
-            "fixed research query set so false positives cannot become black images."
+            "Disable the pretrained pipeline safety checker explicitly. Formal "
+            "query generation should normally use --replace-flagged instead."
         ),
     )
     return parser.parse_args()
@@ -41,6 +50,13 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
+    if args.max_replacement_attempts < 1:
+        raise ValueError("--max-replacement-attempts must be positive")
+    requested_seeds = [
+        int(value) for value in args.seeds.split(",") if value.strip()
+    ]
+    if not requested_seeds:
+        raise ValueError("--seeds must contain at least one integer")
     dtype = torch.float16 if torch.cuda.is_available() else torch.float32
     pipeline_kwargs = {"torch_dtype": dtype}
     if args.disable_safety_checker:
@@ -77,29 +93,66 @@ def main() -> None:
             (label, label_to_prompt(label)) for label in ArtBenchConfig().classes
         ]
 
-    for seed in [int(value) for value in args.seeds.split(",") if value.strip()]:
+    next_replacement_seed = max(requested_seeds) + args.images_per_class
+    used_prompt_seeds: set[tuple[int, int]] = set()
+    for seed in requested_seeds:
         for prompt_index, (label, prompt) in enumerate(prompt_specs):
             for image_index in range(args.images_per_class):
-                actual_seed = seed + image_index
-                generator = torch.Generator(device=pipeline.device).manual_seed(actual_seed)
-                image = pipeline(
-                    prompt,
-                    height=256,
-                    width=256,
-                    num_inference_steps=args.steps,
-                    guidance_scale=args.guidance_scale,
-                    generator=generator,
-                ).images[0]
-                extrema = image.convert("RGB").getextrema()
-                if all(
-                    channel_min == 0 and channel_max == 0
-                    for channel_min, channel_max in extrema
-                ):
-                    raise RuntimeError(
-                        "generation produced an all-black image for "
-                        f"prompt={prompt!r}, seed={actual_seed}; rerun with "
-                        "--disable-safety-checker"
+                requested_seed = seed + image_index
+                actual_seed = requested_seed
+                replacement_attempts = 0
+                while True:
+                    generator = torch.Generator(device=pipeline.device).manual_seed(
+                        actual_seed
                     )
+                    output = pipeline(
+                        prompt,
+                        height=256,
+                        width=256,
+                        num_inference_steps=args.steps,
+                        guidance_scale=args.guidance_scale,
+                        generator=generator,
+                    )
+                    image = output.images[0]
+                    detected = getattr(output, "nsfw_content_detected", None)
+                    safety_flagged = (
+                        detected is not None
+                        and len(detected) > 0
+                        and bool(detected[0])
+                    )
+                    extrema = image.convert("RGB").getextrema()
+                    all_black = all(
+                        channel_min == 0 and channel_max == 0
+                        for channel_min, channel_max in extrema
+                    )
+                    if not safety_flagged and not all_black:
+                        break
+                    if not args.replace_flagged:
+                        reason = "safety-flagged" if safety_flagged else "all-black"
+                        raise RuntimeError(
+                            f"generation produced a {reason} image for "
+                            f"prompt={prompt!r}, seed={actual_seed}; rerun with "
+                            "--replace-flagged"
+                        )
+                    replacement_attempts += 1
+                    if replacement_attempts > args.max_replacement_attempts:
+                        raise RuntimeError(
+                            "exhausted replacement attempts for "
+                            f"prompt={prompt!r}, requested_seed={requested_seed}"
+                        )
+                    while (prompt_index, next_replacement_seed) in used_prompt_seeds:
+                        next_replacement_seed += 1
+                    replacement_reason = (
+                        "safety-flagged" if safety_flagged else "all-black"
+                    )
+                    print(
+                        f"[replace] prompt={prompt!r} requested_seed={requested_seed} "
+                        f"rejected_seed={actual_seed} reason={replacement_reason} "
+                        f"next_seed={next_replacement_seed}",
+                        flush=True,
+                    )
+                    actual_seed = next_replacement_seed
+                    next_replacement_seed += 1
                 expected_timesteps = [
                     training_timesteps - 1 - timestep_stride * index
                     for index in range(args.steps)
@@ -115,12 +168,15 @@ def main() -> None:
                 name = label if label is not None else f"prompt-{prompt_index:02d}"
                 filename = f"{name}__seed-{actual_seed}.png"
                 image.save(args.output_dir / filename)
+                used_prompt_seeds.add((prompt_index, actual_seed))
                 records.append(
                     {
                         "file": filename,
                         "label": label,
                         "prompt": prompt,
                         "seed": actual_seed,
+                        "requested_seed": requested_seed,
+                        "replacement_attempts": replacement_attempts,
                     }
                 )
     (args.output_dir / "manifest.json").write_text(
