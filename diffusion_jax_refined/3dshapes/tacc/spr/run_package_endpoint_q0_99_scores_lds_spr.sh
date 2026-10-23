@@ -16,8 +16,11 @@ while [[ "$repo" != / && ! -f "$repo/$marker" ]]; do repo="$(dirname "$repo")"; 
 
 python_bin="${PYTHON_BIN:-/scratch/11447/yangtan7447/conda-envs/trajectory-tracin/bin/python}"
 [[ -x "$python_bin" ]] || python_bin="$(command -v python3)"
+query_file="${QUERY_FILE:-$repo/diffusion_jax_refined/3dshapes/queries_in_distribution_plus_zero_seed_100_219.json}"
+[[ -r "$query_file" ]] || { echo "missing query file: $query_file" >&2; exit 1; }
 stamp="${RUN_TAG:-$(date +%Y%m%d_%H%M%S)}"
 output_dir="${OUTPUT_DIR:-${SCRATCH}/shape3d_q0_99_endpoint_export_${stamp}}"
+mkdir -p "$output_dir"
 
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-48}"
 export OPENBLAS_NUM_THREADS="$OMP_NUM_THREADS"
@@ -30,6 +33,7 @@ echo "[output] $output_dir"
 PYTHONUNBUFFERED=1 "$python_bin" -u "$repo/$marker" \
   --experiment "${EXPERIMENT_TAG:-experiment1}" \
   --train-seed "${TRAIN_SEED:-42}" \
+  --query-file "$query_file" \
   --query-ids "${QUERY_IDS:-$(seq -s, 0 99)}" \
   --output-dir "$output_dir"
 
