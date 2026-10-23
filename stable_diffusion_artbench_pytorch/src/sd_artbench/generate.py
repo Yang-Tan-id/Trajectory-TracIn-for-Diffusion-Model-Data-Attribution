@@ -1,6 +1,7 @@
 import argparse
 import json
 from pathlib import Path
+from typing import Optional
 
 import torch
 from diffusers import DDIMScheduler, StableDiffusionPipeline
@@ -16,6 +17,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, default=root / "outputs" / "generated")
     parser.add_argument("--seeds", default="0")
     parser.add_argument("--images-per-class", type=int, default=1)
+    parser.add_argument(
+        "--prompt",
+        action="append",
+        dest="prompts",
+        help=(
+            "Custom prompt to generate. Repeat --prompt for multiple prompts. "
+            "When omitted, generate the two ArtBench-2 class prompts."
+        ),
+    )
     parser.add_argument("--steps", type=int, default=50)
     parser.add_argument("--guidance-scale", type=float, default=7.5)
     return parser.parse_args()
@@ -32,10 +42,16 @@ def main() -> None:
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     records = []
-    classes = ArtBenchConfig().classes
+    prompt_specs: list[tuple[Optional[str], str]]
+    if args.prompts:
+        prompt_specs = [(None, prompt) for prompt in args.prompts]
+    else:
+        prompt_specs = [
+            (label, label_to_prompt(label)) for label in ArtBenchConfig().classes
+        ]
+
     for seed in [int(value) for value in args.seeds.split(",") if value.strip()]:
-        for label in classes:
-            prompt = label_to_prompt(label)
+        for prompt_index, (label, prompt) in enumerate(prompt_specs):
             for image_index in range(args.images_per_class):
                 actual_seed = seed + image_index
                 generator = torch.Generator(device=pipeline.device).manual_seed(actual_seed)
@@ -47,10 +63,16 @@ def main() -> None:
                     guidance_scale=args.guidance_scale,
                     generator=generator,
                 ).images[0]
-                filename = f"{label}__seed-{actual_seed}.png"
+                name = label if label is not None else f"prompt-{prompt_index:02d}"
+                filename = f"{name}__seed-{actual_seed}.png"
                 image.save(args.output_dir / filename)
                 records.append(
-                    {"file": filename, "label": label, "prompt": prompt, "seed": actual_seed}
+                    {
+                        "file": filename,
+                        "label": label,
+                        "prompt": prompt,
+                        "seed": actual_seed,
+                    }
                 )
     (args.output_dir / "manifest.json").write_text(
         json.dumps(records, indent=2) + "\n", encoding="utf-8"

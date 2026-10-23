@@ -128,6 +128,19 @@ python -m sd_artbench.generate \
   --images-per-class 1
 ```
 
+Pass `--prompt` more than once to compare custom prompts with the same initial
+noise seeds:
+
+```bash
+python -m sd_artbench.generate \
+  --lora-dir outputs/artbench2-lora/final \
+  --output-dir outputs/generated-custom \
+  --seeds 0,1,2 \
+  --prompt "a post impressionism painting" \
+  --prompt "a ukiyo e painting" \
+  --prompt "a bird flying through the sky, an ukiyo e painting"
+```
+
 The D-TRAK per-sample gradient, random projection, and score-combination code
 will live in `src/sd_artbench/attribution/` so the PyTorch model path stays
 independent of the JAX implementation.
