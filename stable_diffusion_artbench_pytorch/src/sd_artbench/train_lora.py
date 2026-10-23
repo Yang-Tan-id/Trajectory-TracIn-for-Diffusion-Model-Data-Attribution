@@ -146,6 +146,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--conditioning-dropout", type=float, default=0.1)
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--batch-size", type=int, default=64)
+    parser.add_argument("--gradient-accumulation-steps", type=int, default=1)
     parser.add_argument("--learning-rate", type=float, default=3e-4)
     parser.add_argument("--weight-decay", type=float, default=1e-6)
     parser.add_argument("--num-workers", type=int, default=8)
@@ -162,7 +163,10 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    accelerator = Accelerator(mixed_precision=args.mixed_precision)
+    accelerator = Accelerator(
+        mixed_precision=args.mixed_precision,
+        gradient_accumulation_steps=args.gradient_accumulation_steps,
+    )
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
@@ -221,7 +225,10 @@ def main() -> None:
         lr=args.learning_rate,
         weight_decay=args.weight_decay,
     )
-    updates_per_epoch = math.ceil(len(dataloader) / accelerator.num_processes)
+    updates_per_epoch = math.ceil(
+        len(dataloader)
+        / (accelerator.num_processes * args.gradient_accumulation_steps)
+    )
     total_steps = updates_per_epoch * args.epochs
     epochs_to_checkpoint = checkpoint_epochs(args.epochs, args.num_checkpoints)
     lr_scheduler = get_scheduler(
@@ -268,6 +275,7 @@ def main() -> None:
         )
         print(
             f"trainable_parameters={sum(p.numel() for p in unet.parameters() if p.requires_grad):,} "
+            f"effective_batch_size={args.batch_size * args.gradient_accumulation_steps * accelerator.num_processes} "
             f"warmup_steps={math.ceil(total_steps * 0.1)} "
             f"checkpoint_epochs={sorted(epochs_to_checkpoint)}"
         )
@@ -315,7 +323,8 @@ def main() -> None:
                 lr_scheduler.step()
                 optimizer.zero_grad()
             epoch_loss += loss.detach().float().item()
-            global_step += 1
+            if accelerator.sync_gradients:
+                global_step += 1
 
         if accelerator.is_main_process:
             mean_loss = epoch_loss / max(len(dataloader), 1)

@@ -30,6 +30,10 @@ mixed-precision scaler, and RNG state. Resume the newest saved state with
 Final inference weights are written to
 `outputs/artbench2-lora/final/`.
 
+On a 24 GiB GPU, use `--batch-size 8 --gradient-accumulation-steps 8` to
+preserve the effective batch size of 64 without placing all 64 images in GPU
+memory simultaneously.
+
 ## Layout
 
 ```text
