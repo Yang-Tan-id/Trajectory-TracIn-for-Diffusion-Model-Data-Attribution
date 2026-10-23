@@ -7,6 +7,7 @@ import torch
 
 from sd_artbench.attribution.autograd import (
     batched_loss_gradients,
+    compare_gradient_batches,
     functional_per_example_gradients,
 )
 from sd_artbench.attribution.launch_shards import save_checkpoint_sum
@@ -127,6 +128,19 @@ def test_torch_func_per_example_gradients_match_individual_autograd():
     )
     expected = torch.cat([chunk[1][0] for chunk in legacy_chunks], dim=0)
     assert torch.allclose(actual, expected)
+
+
+def test_gradient_batch_comparison_reports_exact_match():
+    gradients = [
+        torch.tensor([[1.0, 2.0], [3.0, 4.0]]),
+        torch.tensor([[-2.0], [5.0]]),
+    ]
+    diagnostics = compare_gradient_batches(gradients, gradients)
+    assert len(diagnostics) == 2
+    for item in diagnostics:
+        assert item["relative_l2"] == 0.0
+        assert np.isclose(item["cosine"], 1.0)
+        assert np.isclose(item["norm_ratio"], 1.0)
 
 
 def test_adamw_full_direction_matches_one_real_optimizer_step():

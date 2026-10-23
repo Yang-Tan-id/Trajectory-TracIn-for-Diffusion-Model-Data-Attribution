@@ -8,6 +8,47 @@ import torch
 import torch.nn.functional as F
 
 
+@torch.no_grad()
+def compare_gradient_batches(
+    reference: Sequence[torch.Tensor],
+    candidate: Sequence[torch.Tensor],
+) -> list[dict[str, float]]:
+    """Return whole-gradient diagnostics for each example in two gradient trees."""
+
+    if len(reference) != len(candidate) or not reference:
+        raise ValueError("gradient trees must have the same non-zero leaf count")
+    batch_size = reference[0].shape[0]
+    if any(
+        left.shape != right.shape or left.shape[0] != batch_size
+        for left, right in zip(reference, candidate)
+    ):
+        raise ValueError("gradient trees must have identical batched leaf shapes")
+    left_square = torch.zeros(batch_size, device=reference[0].device)
+    right_square = torch.zeros_like(left_square)
+    difference_square = torch.zeros_like(left_square)
+    dot = torch.zeros_like(left_square)
+    for left, right in zip(reference, candidate):
+        left_flat = left.detach().float().reshape(batch_size, -1)
+        right_flat = right.detach().float().reshape(batch_size, -1)
+        left_square.add_(left_flat.square().sum(dim=1))
+        right_square.add_(right_flat.square().sum(dim=1))
+        difference_square.add_((right_flat - left_flat).square().sum(dim=1))
+        dot.add_((left_flat * right_flat).sum(dim=1))
+    left_norm = left_square.sqrt().clamp_min(1e-30)
+    right_norm = right_square.sqrt().clamp_min(1e-30)
+    relative_l2 = difference_square.sqrt() / left_norm
+    cosine = dot / (left_norm * right_norm).clamp_min(1e-30)
+    norm_ratio = right_norm / left_norm
+    return [
+        {
+            "relative_l2": float(relative_l2[index].cpu()),
+            "cosine": float(cosine[index].cpu()),
+            "norm_ratio": float(norm_ratio[index].cpu()),
+        }
+        for index in range(batch_size)
+    ]
+
+
 def batched_loss_gradients(
     losses: torch.Tensor,
     parameters: Sequence[torch.nn.Parameter],

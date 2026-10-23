@@ -15,7 +15,11 @@ from PIL import Image
 from tqdm.auto import tqdm
 
 from ..config import ArtBenchConfig
-from .autograd import batched_loss_gradients, functional_per_example_gradients
+from .autograd import (
+    batched_loss_gradients,
+    compare_gradient_batches,
+    functional_per_example_gradients,
+)
 from .optimizer import adamw_full_direction, adamw_full_direction_batch
 from .projection import CountSketchProjector, stable_seed
 from .runtime import (
@@ -70,6 +74,14 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=0,
         help="CUDA-synchronize and time the first N calls of each Pollute stage.",
+    )
+    parser.add_argument(
+        "--debug-compare-gradient-backends",
+        action="store_true",
+        help=(
+            "compare legacy and torch.func gradients before projection for the "
+            "first Pollute query chunk and first Pollute train chunk"
+        ),
     )
     parser.add_argument("--proj-dim", type=int, default=32768)
     parser.add_argument("--rank", type=int, default=128)
@@ -196,6 +208,10 @@ def main() -> None:
             raise ValueError(f"--{name.replace('_', '-')} must be positive")
     if args.profile_pollute_batches < 0:
         raise ValueError("--profile-pollute-batches cannot be negative")
+    if args.debug_compare_gradient_backends and args.per_example_backend != "torch_func":
+        raise ValueError(
+            "--debug-compare-gradient-backends requires --per-example-backend torch_func"
+        )
     methods = {item.strip() for item in args.methods.split(",") if item.strip()}
     unknown = methods.difference({"endpoint_tracin", "endpoint_pollute"})
     if unknown:
@@ -206,6 +222,21 @@ def main() -> None:
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
     profile_totals: dict[str, float] = defaultdict(float)
     profile_counts: dict[str, int] = defaultdict(int)
+    compared_query_gradients = False
+    compared_train_gradients = False
+
+    def print_gradient_comparison(kind: str, diagnostics: list[dict[str, float]]) -> None:
+        relative = np.asarray([item["relative_l2"] for item in diagnostics])
+        cosine = np.asarray([item["cosine"] for item in diagnostics])
+        ratio = np.asarray([item["norm_ratio"] for item in diagnostics])
+        print(
+            f"[gradient-backend-compare] kind={kind} examples={len(diagnostics)} "
+            f"rel_l2_mean={relative.mean():.8e} rel_l2_max={relative.max():.8e} "
+            f"cosine_mean={cosine.mean():.10f} cosine_min={cosine.min():.10f} "
+            f"norm_ratio_mean={ratio.mean():.8f} "
+            f"norm_ratio_range=[{ratio.min():.8f},{ratio.max():.8f}]",
+            flush=True,
+        )
 
     def profile_start(stage: str) -> float | None:
         if profile_counts[stage] >= args.profile_pollute_batches:
@@ -507,6 +538,23 @@ def main() -> None:
                                     chunk_size=args.per_example_chunk_size,
                                 )
                             )
+                        legacy_debug_iterator = None
+                        if (
+                            args.debug_compare_gradient_backends
+                            and not compared_query_gradients
+                        ):
+                            debug_prediction = runtime.unet(noisy, ts, hidden).sample
+                            debug_losses = (
+                                debug_prediction.float() * delta.float()
+                            ).flatten(1).mean(dim=1)
+                            legacy_debug_iterator = iter(
+                                batched_loss_gradients(
+                                    debug_losses,
+                                    runtime.parameters,
+                                    list(range(end - start)),
+                                    chunk_size=args.per_example_chunk_size,
+                                )
+                            )
                         while True:
                             profile_started = profile_start("query_vjp")
                             try:
@@ -514,6 +562,22 @@ def main() -> None:
                             except StopIteration:
                                 break
                             profile_stop("query_vjp", profile_started)
+                            if legacy_debug_iterator is not None:
+                                debug_slots, debug_gradients = next(
+                                    legacy_debug_iterator
+                                )
+                                if debug_slots != sample_slots:
+                                    raise RuntimeError(
+                                        "gradient backend comparison chunk mismatch"
+                                    )
+                                print_gradient_comparison(
+                                    "query",
+                                    compare_gradient_batches(
+                                        debug_gradients, gradient_batch
+                                    ),
+                                )
+                                compared_query_gradients = True
+                                legacy_debug_iterator = None
                             profile_started = profile_start("query_projection")
                             projected, _ = projector.project_batch(gradient_batch)
                             rows = torch.as_tensor(
@@ -595,6 +659,25 @@ def main() -> None:
                                     chunk_size=args.per_example_chunk_size,
                                 )
                             )
+                        legacy_debug_iterator = None
+                        if (
+                            args.debug_compare_gradient_backends
+                            and not compared_train_gradients
+                        ):
+                            debug_prediction = runtime.unet(noisy, ts, hidden).sample
+                            debug_losses = F.mse_loss(
+                                debug_prediction.float(),
+                                target.float(),
+                                reduction="none",
+                            ).mean(dim=(1, 2, 3))
+                            legacy_debug_iterator = iter(
+                                batched_loss_gradients(
+                                    debug_losses,
+                                    runtime.parameters,
+                                    list(range(end - start)),
+                                    chunk_size=args.per_example_chunk_size,
+                                )
+                            )
                         while True:
                             profile_started = profile_start("train_vjp")
                             try:
@@ -602,6 +685,23 @@ def main() -> None:
                             except StopIteration:
                                 break
                             profile_stop("train_vjp", profile_started)
+
+                            if legacy_debug_iterator is not None:
+                                debug_slots, debug_gradients = next(
+                                    legacy_debug_iterator
+                                )
+                                if debug_slots != sample_slots:
+                                    raise RuntimeError(
+                                        "gradient backend comparison chunk mismatch"
+                                    )
+                                print_gradient_comparison(
+                                    "train",
+                                    compare_gradient_batches(
+                                        debug_gradients, gradient_batch
+                                    ),
+                                )
+                                compared_train_gradients = True
+                                legacy_debug_iterator = None
 
                             profile_started = profile_start("train_raw_projection")
                             raw, _ = projector.project_batch(gradient_batch)
