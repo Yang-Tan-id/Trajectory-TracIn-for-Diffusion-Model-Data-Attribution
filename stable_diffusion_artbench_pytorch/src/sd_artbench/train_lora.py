@@ -2,8 +2,10 @@ import argparse
 import json
 import math
 import pickle
+import random
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import torch
 import torch.nn.functional as F
@@ -161,7 +163,13 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     accelerator = Accelerator(mixed_precision=args.mixed_precision)
+    random.seed(args.seed)
+    np.random.seed(args.seed)
     torch.manual_seed(args.seed)
+    torch.cuda.manual_seed(args.seed)
+    torch.cuda.manual_seed_all(args.seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
 
     tokenizer = CLIPTokenizer.from_pretrained(args.model, subfolder="tokenizer")
     scheduler = DDPMScheduler.from_pretrained(args.model, subfolder="scheduler")
