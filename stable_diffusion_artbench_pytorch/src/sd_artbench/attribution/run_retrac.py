@@ -304,8 +304,13 @@ def main() -> None:
         set_attention_dropout(runtime.unet, args.attention_dropout)
         microbatch = 0
         total_microbatches = (end_epoch - start_epoch) * len(dataloader)
+        displayed_microbatches = (
+            total_microbatches
+            if args.max_replay_batches is None
+            else min(total_microbatches, args.max_replay_batches)
+        )
         progress = tqdm(
-            total=total_microbatches,
+            total=displayed_microbatches,
             desc=f"ReTrac {checkpoint.name}->{checkpoints[checkpoint_index + 1].name}",
         )
         for replay_epoch in range(start_epoch, end_epoch):
