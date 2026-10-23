@@ -394,9 +394,6 @@ def mean_simple_gradient(
 def select_timesteps(count: int, total: int = 1000) -> list[int]:
     if count < 1 or count > total:
         raise ValueError(f"timestep count must be in [1, {total}]")
-    if count == 50 and total == 1000:
-        # Exact model-evaluation schedule used by the CelebA DDIM-50 runner.
-        # These are 50 independent endpoint re-noising evaluations; they are
-        # not states chained from a saved reverse-generation trajectory.
-        return list(range(999, -1, -20))
+    # Match the JAX framework's DDIM-position schedule exactly, including
+    # NumPy's integer truncation at the two non-integral positions.
     return np.linspace(total - 1, 0, count, dtype=np.int32).tolist()

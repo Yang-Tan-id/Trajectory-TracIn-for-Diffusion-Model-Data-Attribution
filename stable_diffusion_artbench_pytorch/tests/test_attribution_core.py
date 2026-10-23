@@ -18,17 +18,6 @@ from sd_artbench.attribution.scoring import (
 )
 
 
-def test_endpoint_runners_use_celeba_ddim50_schedule():
-    source = (
-        Path(__file__).parents[1]
-        / "src"
-        / "sd_artbench"
-        / "attribution"
-        / "runtime.py"
-    ).read_text(encoding="utf-8")
-    assert "return list(range(999, -1, -20))" in source
-
-
 def test_countsketch_is_deterministic_and_normalizes_in_full_space():
     tensors = [torch.tensor([3.0, 4.0]), torch.tensor([0.0])]
     projector = CountSketchProjector(proj_dim=17, seed=42, chunk_size=2)

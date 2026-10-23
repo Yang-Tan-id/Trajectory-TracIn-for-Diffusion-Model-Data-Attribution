@@ -207,13 +207,13 @@ The smoke run is deliberately saved as `retrac_debug.npz`, never as the formal
 ```bash
 CUDA_VISIBLE_DEVICES=0 python -m sd_artbench.attribution.run_endpoint \
   --query-manifest outputs/sample-preview/manifest.json \
-  --timestep-count 50 \
+  --timestep-count 100 \
   --proj-dim 32768 \
   --output-dir outputs/attribution/endpoint
 
 CUDA_VISIBLE_DEVICES=0 python -m sd_artbench.attribution.run_retrac \
   --query-manifest outputs/sample-preview/manifest.json \
-  --timestep-count 50 \
+  --timestep-count 100 \
   --proj-dim 32768 \
   --batch-size 8 \
   --gradient-accumulation-steps 8 \
