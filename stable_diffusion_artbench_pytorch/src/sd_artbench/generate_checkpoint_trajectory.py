@@ -37,7 +37,11 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=root / "outputs" / "checkpoint-trajectories",
     )
-    parser.add_argument("--rank", type=int, default=4)
+    parser.add_argument(
+        "--rank",
+        type=int,
+        help="LoRA rank override. By default it is inferred from the checkpoint.",
+    )
     parser.add_argument("--steps", type=int, default=50)
     parser.add_argument("--guidance-scale", type=float, default=7.5)
     parser.add_argument("--gif-frame-ms", type=int, default=500)
@@ -67,14 +71,37 @@ def find_model_file(checkpoint: Path) -> Path:
     raise FileNotFoundError(f"no saved model state found in {checkpoint}")
 
 
-def load_lora_state(lora_layers: torch.nn.Module, checkpoint: Path) -> None:
+def read_lora_state(checkpoint: Path) -> dict[str, torch.Tensor]:
     model_path = find_model_file(checkpoint)
     if model_path.suffix == ".safetensors":
         from safetensors.torch import load_file
 
-        state = load_file(str(model_path), device="cpu")
-    else:
-        state = torch.load(model_path, map_location="cpu")
+        return load_file(str(model_path), device="cpu")
+    return torch.load(model_path, map_location="cpu")
+
+
+def infer_lora_rank(checkpoint: Path) -> int:
+    state = read_lora_state(checkpoint)
+    down_ranks = {
+        int(value.shape[0])
+        for name, value in state.items()
+        if name.endswith("_lora.down.weight") and value.ndim == 2
+    }
+    up_ranks = {
+        int(value.shape[1])
+        for name, value in state.items()
+        if name.endswith("_lora.up.weight") and value.ndim == 2
+    }
+    if len(down_ranks) != 1 or down_ranks != up_ranks:
+        raise ValueError(
+            f"could not infer one consistent LoRA rank from {checkpoint}: "
+            f"down={sorted(down_ranks)}, up={sorted(up_ranks)}"
+        )
+    return down_ranks.pop()
+
+
+def load_lora_state(lora_layers: torch.nn.Module, checkpoint: Path) -> None:
+    state = read_lora_state(checkpoint)
     lora_layers.load_state_dict(state, strict=True)
 
 
@@ -183,8 +210,10 @@ def write_visualizations(
 
 def main() -> None:
     args = parse_args()
-    if args.rank < 1 or args.steps < 1 or args.gif_frame_ms < 1:
-        raise ValueError("rank, steps, and gif-frame-ms must be positive")
+    if args.rank is not None and args.rank < 1:
+        raise ValueError("--rank must be positive")
+    if args.steps < 1 or args.gif_frame_ms < 1:
+        raise ValueError("steps and gif-frame-ms must be positive")
     queries = load_queries(args.query_manifest, args.query_indices)
     checkpoints = list_checkpoints(args.checkpoint_root)
     if args.checkpoint_indices is not None:
@@ -237,7 +266,15 @@ def main() -> None:
         image.save(frame_path)
         frames_by_query[query_index].append(("Base / epoch 0", frame_path))
 
-    lora_layers = create_lora_layers(pipeline.unet, args.rank).to(
+    checkpoint_rank = infer_lora_rank(checkpoints[0])
+    rank = checkpoint_rank if args.rank is None else args.rank
+    if rank != checkpoint_rank:
+        raise ValueError(
+            f"requested LoRA rank {rank}, but {checkpoints[0]} contains rank "
+            f"{checkpoint_rank}"
+        )
+    print(f"[LoRA] inferred rank={rank} from {checkpoints[0].name}", flush=True)
+    lora_layers = create_lora_layers(pipeline.unet, rank).to(
         device=device, dtype=dtype
     )
     for checkpoint_slot, checkpoint in enumerate(checkpoints, start=1):
@@ -286,6 +323,7 @@ def main() -> None:
         "model": args.model,
         "query_manifest": str(args.query_manifest.resolve()),
         "checkpoint_root": str(args.checkpoint_root.resolve()),
+        "rank": rank,
         "checkpoints": [checkpoint.name for checkpoint in checkpoints],
         "timesteps": expected_timesteps,
         "guidance_scale": args.guidance_scale,

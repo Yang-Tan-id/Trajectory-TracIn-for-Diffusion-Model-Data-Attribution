@@ -184,6 +184,9 @@ CUDA_VISIBLE_DEVICES=0 python -m sd_artbench.generate_checkpoint_trajectory \
   --disable-safety-checker
 ```
 
+The trajectory tool infers the LoRA rank from the first selected raw checkpoint
+(rank 128 for the default experiment) and rejects an incompatible override.
+
 ## 5. Raw-checkpoint attribution
 
 The attribution implementation lives in `src/sd_artbench/attribution/` and is
