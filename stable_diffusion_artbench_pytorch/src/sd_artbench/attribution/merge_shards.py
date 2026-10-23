@@ -84,8 +84,6 @@ def merge_shards(paths: list[Path]) -> tuple[np.ndarray, np.ndarray, dict, np.nd
             "proj_dim",
             "query_ids",
             "query_manifest",
-            "query_definition",
-            "guidance_scales",
             "max_grad_norm",
             "reduction",
             "replay_mode",

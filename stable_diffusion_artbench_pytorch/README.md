@@ -119,7 +119,11 @@ accelerate launch --mixed_precision fp16 -m sd_artbench.train_lora \
 The pretrained model is downloaded from Hugging Face on first use. Subsequent
 runs can use the local cache.
 
-## 4. Generate and save the fixed 50-step DDIM query trajectory
+## 4. Generate with 50-step DDIM
+
+Sampling performs 50 sequential DDIM updates.  Each update evaluates one
+predicted-noise tensor and advances the latent to the next state on the exact
+`999,979,...,19` schedule (a training-timestep stride of 20).
 
 ```bash
 python -m sd_artbench.generate \
@@ -127,11 +131,6 @@ python -m sd_artbench.generate \
   --seeds 0,1,2 \
   --images-per-class 1
 ```
-
-Each image now has a sibling `*.trajectory.npz` containing the 50 U-Net input
-latents, the 50 classifier-free-guidance predicted-noise tensors, and the exact
-`999,979,...,19` timestep schedule.  Attribution requires this trajectory; it
-does not reconstruct independent noisy states from the final PNG.
 
 Pass `--prompt` more than once to compare custom prompts with the same initial
 noise seeds:

@@ -16,33 +16,17 @@ from sd_artbench.attribution.scoring import (
     endpoint_pollute_reductions,
     score_variants,
 )
-from sd_artbench.trajectory import (
-    ddim_stride_timesteps,
-    load_query_trajectory,
-    save_query_trajectory,
-)
 
 
-def test_ddim50_uses_exact_twenty_index_stride():
-    timesteps = ddim_stride_timesteps(50)
-    assert timesteps.tolist() == list(range(999, -1, -20))
-
-
-def test_query_trajectory_round_trip(tmp_path: Path):
-    path = tmp_path / "query.trajectory.npz"
-    latents = np.arange(3 * 4 * 2 * 2, dtype=np.float32).reshape(3, 4, 2, 2)
-    predictions = -latents
-    save_query_trajectory(
-        path,
-        latents=latents,
-        predicted_noise=predictions,
-        timesteps=np.asarray([999, 979, 959]),
-    )
-    loaded = load_query_trajectory(path, expected_steps=3)
-    assert loaded.latents.dtype == np.float16
-    assert np.array_equal(loaded.latents, latents.astype(np.float16))
-    assert np.array_equal(loaded.predicted_noise, predictions.astype(np.float16))
-    assert loaded.timesteps.tolist() == [999, 979, 959]
+def test_endpoint_runners_use_celeba_ddim50_schedule():
+    source = (
+        Path(__file__).parents[1]
+        / "src"
+        / "sd_artbench"
+        / "attribution"
+        / "runtime.py"
+    ).read_text(encoding="utf-8")
+    assert "return list(range(999, -1, -20))" in source
 
 
 def test_countsketch_is_deterministic_and_normalizes_in_full_space():
