@@ -94,6 +94,49 @@ def batched_loss_gradients(
         yield current, gradients_batch
 
 
+def scalar_loop_loss_gradients(
+    losses: torch.Tensor,
+    parameters: Sequence[torch.nn.Parameter],
+    sample_indices: Sequence[int],
+    *,
+    chunk_size: int,
+) -> Iterator[tuple[list[int], list[torch.Tensor]]]:
+    """Yield exact per-example gradients using ordinary scalar VJPs.
+
+    All examples share the original batched forward graph.  Backward is run
+    once per scalar loss without ``is_grads_batched`` or ``torch.func``.  This
+    is the correctness backend for operator stacks whose vmap batching rules
+    do not reproduce scalar autograd.
+    """
+
+    if losses.ndim != 1:
+        raise ValueError("losses must be a rank-1 per-example vector")
+    if chunk_size < 1:
+        raise ValueError("chunk_size must be positive")
+    indices = [int(index) for index in sample_indices]
+    for start in range(0, len(indices), chunk_size):
+        current = indices[start : start + chunk_size]
+        per_example: list[list[torch.Tensor]] = []
+        for index in current:
+            values = torch.autograd.grad(
+                losses[index],
+                parameters,
+                allow_unused=True,
+                retain_graph=index != indices[-1],
+            )
+            per_example.append(
+                [
+                    torch.zeros_like(parameter) if value is None else value.detach()
+                    for parameter, value in zip(parameters, values)
+                ]
+            )
+        gradients_batch = [
+            torch.stack([values[parameter_slot] for values in per_example], dim=0)
+            for parameter_slot in range(len(parameters))
+        ]
+        yield current, gradients_batch
+
+
 def _functional_parameter_dict(
     module: torch.nn.Module,
     parameters: Sequence[torch.nn.Parameter],

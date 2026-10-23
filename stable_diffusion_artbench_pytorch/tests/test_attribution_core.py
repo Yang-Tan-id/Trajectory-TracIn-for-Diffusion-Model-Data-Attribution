@@ -9,6 +9,7 @@ from sd_artbench.attribution.autograd import (
     batched_loss_gradients,
     compare_gradient_batches,
     functional_per_example_gradients,
+    scalar_loop_loss_gradients,
 )
 from sd_artbench.attribution.launch_shards import save_checkpoint_sum
 from sd_artbench.attribution.merge_shards import merge_shards
@@ -62,6 +63,20 @@ def test_batched_vjp_matches_individual_gradients():
     losses = (inputs * parameter).square().sum(dim=1)
     chunks = list(
         batched_loss_gradients(losses, [parameter], [0, 1, 2], chunk_size=2)
+    )
+    actual = torch.cat([chunk[1][0] for chunk in chunks], dim=0)
+    expected = 2.0 * inputs.square() * parameter.detach()
+    assert torch.allclose(actual, expected)
+
+
+def test_scalar_loop_vjp_matches_individual_gradients():
+    parameter = torch.nn.Parameter(torch.tensor([1.5, -0.5]))
+    inputs = torch.tensor([[1.0, 2.0], [-3.0, 4.0], [2.0, -1.0]])
+    losses = (inputs * parameter).square().sum(dim=1)
+    chunks = list(
+        scalar_loop_loss_gradients(
+            losses, [parameter], [0, 1, 2], chunk_size=2
+        )
     )
     actual = torch.cat([chunk[1][0] for chunk in chunks], dim=0)
     expected = 2.0 * inputs.square() * parameter.detach()

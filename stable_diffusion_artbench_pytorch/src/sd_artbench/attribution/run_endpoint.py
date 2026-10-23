@@ -19,6 +19,7 @@ from .autograd import (
     batched_loss_gradients,
     compare_gradient_batches,
     functional_per_example_gradients,
+    scalar_loop_loss_gradients,
 )
 from .optimizer import adamw_full_direction, adamw_full_direction_batch
 from .projection import CountSketchProjector, stable_seed
@@ -62,11 +63,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--per-example-chunk-size", type=int, default=8)
     parser.add_argument(
         "--per-example-backend",
-        choices=("legacy", "torch_func"),
+        choices=("legacy", "torch_func", "scalar_loop"),
         default="legacy",
         help=(
             "legacy uses is_grads_batched; torch_func uses functional_call + "
-            "vmap(grad) and avoids PyTorch 2.0 legacy vmap fallbacks"
+            "vmap(grad); scalar_loop shares a batched forward but uses one "
+            "ordinary scalar autograd VJP per example"
         ),
     )
     parser.add_argument(
@@ -510,7 +512,7 @@ def main() -> None:
                             dtype=torch.long,
                         )
                         noisy = runtime.scheduler.add_noise(latents, noise, ts)
-                        if args.per_example_backend == "legacy":
+                        if args.per_example_backend in {"legacy", "scalar_loop"}:
                             prediction = runtime.unet(noisy, ts, hidden).sample
                         else:
                             with torch.no_grad():
@@ -521,7 +523,7 @@ def main() -> None:
                         delta = (target - prediction).detach()
                         delta_norms = delta.float().flatten(1).norm(dim=1).clamp_min(1e-12)
                         losses = None
-                        if args.per_example_backend == "legacy":
+                        if args.per_example_backend in {"legacy", "scalar_loop"}:
                             losses = (prediction.float() * delta.float()).flatten(1).mean(
                                 dim=1
                             )
@@ -535,6 +537,16 @@ def main() -> None:
                             assert losses is not None
                             gradient_iterator = iter(
                                 batched_loss_gradients(
+                                    losses,
+                                    runtime.parameters,
+                                    list(range(end - start)),
+                                    chunk_size=args.per_example_chunk_size,
+                                )
+                            )
+                        elif args.per_example_backend == "scalar_loop":
+                            assert losses is not None
+                            gradient_iterator = iter(
+                                scalar_loop_loss_gradients(
                                     losses,
                                     runtime.parameters,
                                     list(range(end - start)),
@@ -668,21 +680,31 @@ def main() -> None:
                                 "unsupported prediction type "
                                 f"{runtime.scheduler.config.prediction_type}"
                             )
-                        if args.per_example_backend == "legacy":
+                        if args.per_example_backend in {"legacy", "scalar_loop"}:
                             profile_started = profile_start("train_forward")
                             prediction = runtime.unet(noisy, ts, hidden).sample
                             losses = F.mse_loss(
                                 prediction.float(), target.float(), reduction="none"
                             ).mean(dim=(1, 2, 3))
                             profile_stop("train_forward", profile_started)
-                            gradient_iterator = iter(
-                                batched_loss_gradients(
-                                    losses,
-                                    runtime.parameters,
-                                    list(range(end - start)),
-                                    chunk_size=args.per_example_chunk_size,
+                            if args.per_example_backend == "legacy":
+                                gradient_iterator = iter(
+                                    batched_loss_gradients(
+                                        losses,
+                                        runtime.parameters,
+                                        list(range(end - start)),
+                                        chunk_size=args.per_example_chunk_size,
+                                    )
                                 )
-                            )
+                            else:
+                                gradient_iterator = iter(
+                                    scalar_loop_loss_gradients(
+                                        losses,
+                                        runtime.parameters,
+                                        list(range(end - start)),
+                                        chunk_size=args.per_example_chunk_size,
+                                    )
+                                )
                         else:
                             gradient_iterator = iter(
                                 functional_per_example_gradients(
