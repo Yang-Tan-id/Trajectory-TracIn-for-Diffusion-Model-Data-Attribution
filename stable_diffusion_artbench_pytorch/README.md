@@ -298,3 +298,22 @@ used for updates and later attribution. Official D-TRAK checkpoints infer this
 set from the LoRA architecture rather than storing a separate Boolean mask;
 the manifest is additional metadata and does not change training.
 
+## 6. CLIP nearest-neighbor baseline
+
+Rank the exact 5,000 training images against every generated endpoint using
+normalized CLIP image embeddings and cosine similarity:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python -m sd_artbench.clip_similarity \
+  --query-manifest outputs/artbench2-queries-60/manifest.json \
+  --output-dir outputs/clip-similarity-q60 \
+  --batch-size 64 \
+  --top-k 20 \
+  --contact-sheet-top-k 10
+```
+
+The command writes the complete `60 x 5000` matrix to `similarities.npy`, a
+long-form `topk.csv`, reusable CLIP embeddings, and one visual contact sheet per
+query under `contact_sheets/`. On a rerun, add `--reuse-embeddings` to skip CLIP
+encoding when the model and image paths still match the cache.
+
