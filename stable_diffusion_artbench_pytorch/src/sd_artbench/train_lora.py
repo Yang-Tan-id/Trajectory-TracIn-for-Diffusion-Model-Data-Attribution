@@ -113,6 +113,21 @@ def checkpoint_epochs(num_epochs: int, num_checkpoints: int) -> set[int]:
     }
 
 
+def resolve_resume_checkpoint(output_dir: Path, value: str) -> Path:
+    """Resolve an explicit checkpoint path or the latest epoch checkpoint."""
+
+    if value != "latest":
+        path = Path(value)
+        if path.is_absolute() or path.exists():
+            return path
+        return output_dir / path
+
+    checkpoints = sorted(output_dir.glob("checkpoint-epoch-*"))
+    if not checkpoints:
+        raise FileNotFoundError(f"No checkpoint-epoch-* directories found in {output_dir}")
+    return checkpoints[-1]
+
+
 def parse_args() -> argparse.Namespace:
     defaults = ArtBenchConfig()
     parser = argparse.ArgumentParser(description="Fine-tune miniSD on ArtBench-2 with LoRA.")
@@ -134,6 +149,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--mixed-precision", choices=["no", "fp16", "bf16"], default="fp16")
     parser.add_argument("--num-checkpoints", type=int, default=25)
+    parser.add_argument(
+        "--resume-from-checkpoint",
+        default=None,
+        help="Full Accelerator state directory, or 'latest'.",
+    )
     return parser.parse_args()
 
 
@@ -151,6 +171,18 @@ def main() -> None:
     vae.requires_grad_(False)
     text_encoder.requires_grad_(False)
     unet.requires_grad_(False)
+
+    # Match the official ordering: frozen base modules use inference precision,
+    # while the subsequently created trainable LoRA parameters stay float32.
+    weight_dtype = torch.float32
+    if accelerator.mixed_precision == "fp16":
+        weight_dtype = torch.float16
+    elif accelerator.mixed_precision == "bf16":
+        weight_dtype = torch.bfloat16
+    vae.to(accelerator.device, dtype=weight_dtype)
+    text_encoder.to(accelerator.device, dtype=weight_dtype)
+    unet.to(accelerator.device, dtype=weight_dtype)
+
     lora_layers = create_lora_layers(unet, args.rank)
     set_attention_dropout(unet, args.attention_dropout)
 
@@ -186,16 +218,28 @@ def main() -> None:
     lora_layers, optimizer, dataloader, lr_scheduler = accelerator.prepare(
         lora_layers, optimizer, dataloader, lr_scheduler
     )
-    weight_dtype = torch.float32
-    if accelerator.mixed_precision == "fp16":
-        weight_dtype = torch.float16
-    elif accelerator.mixed_precision == "bf16":
-        weight_dtype = torch.bfloat16
-    vae.to(accelerator.device, dtype=weight_dtype)
-    text_encoder.to(accelerator.device, dtype=weight_dtype)
-    unet.to(accelerator.device, dtype=weight_dtype)
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
+    first_epoch = 0
+    global_step = 0
+    if args.resume_from_checkpoint:
+        resume_path = resolve_resume_checkpoint(
+            args.output_dir, args.resume_from_checkpoint
+        )
+        state_path = resume_path / "training_state.json"
+        if not state_path.is_file():
+            raise FileNotFoundError(
+                f"Missing {state_path}; cannot determine the exact resume position"
+            )
+        accelerator.load_state(str(resume_path))
+        training_state = json.loads(state_path.read_text(encoding="utf-8"))
+        first_epoch = int(training_state["completed_epoch"])
+        global_step = int(training_state["global_step"])
+        accelerator.print(
+            f"Resumed full training state from {resume_path} "
+            f"at completed_epoch={first_epoch} global_step={global_step}"
+        )
+
     if accelerator.is_main_process:
         trainable_parameters = {
             name: list(parameter.shape)
@@ -211,8 +255,7 @@ def main() -> None:
             f"warmup_steps={math.ceil(total_steps * 0.1)} "
             f"checkpoint_epochs={sorted(epochs_to_checkpoint)}"
         )
-    global_step = 0
-    for epoch in range(args.epochs):
+    for epoch in range(first_epoch, args.epochs):
         unet.train()
         epoch_loss = 0.0
         for batch in dataloader:
@@ -257,8 +300,21 @@ def main() -> None:
         if completed_epoch in epochs_to_checkpoint:
             accelerator.wait_for_everyone()
             if accelerator.is_main_process:
-                accelerator.save_state(
-                    str(args.output_dir / f"checkpoint-epoch-{completed_epoch:04d}")
+                checkpoint_path = (
+                    args.output_dir / f"checkpoint-epoch-{completed_epoch:04d}"
+                )
+                accelerator.save_state(str(checkpoint_path))
+                (checkpoint_path / "training_state.json").write_text(
+                    json.dumps(
+                        {
+                            "completed_epoch": completed_epoch,
+                            "global_step": global_step,
+                        },
+                        indent=2,
+                        sort_keys=True,
+                    )
+                    + "\n",
+                    encoding="utf-8",
                 )
 
     accelerator.wait_for_everyone()
