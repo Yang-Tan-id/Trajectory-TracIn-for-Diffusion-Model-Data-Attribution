@@ -50,6 +50,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--checkpoint-indices", type=parse_ints)
     parser.add_argument("--query-indices", type=parse_ints)
     parser.add_argument("--timestep-count", type=int, default=100)
+    parser.add_argument("--timestep-batch-size", type=int, default=8)
     parser.add_argument("--proj-dim", type=int, default=32768)
     parser.add_argument("--rank", type=int, default=128)
     parser.add_argument("--mixed-precision", choices=("no", "fp16", "bf16"), default="fp16")
@@ -238,6 +239,7 @@ def main() -> None:
         "weight_decay": args.weight_decay,
         "checkpoint_indices": checkpoint_indices,
         "timesteps": timesteps,
+        "timestep_batch_size": args.timestep_batch_size,
         "proj_dim": args.proj_dim,
         "train_positions": [args.train_start, train_end],
         "query_ids": [query.query_id for query in queries],
@@ -288,6 +290,7 @@ def main() -> None:
                     hidden,
                     timesteps,
                     seed_parts=("endpoint_tracin", checkpoint_index, query.query_id),
+                    timestep_batch_size=args.timestep_batch_size,
                 )
                 query_features.append(projector.project(gradient)[0])
             query_matrix = torch.stack(query_features)
@@ -301,6 +304,7 @@ def main() -> None:
                     hidden,
                     timesteps,
                     seed_parts=("endpoint_tracin_train", checkpoint_index, position),
+                    timestep_batch_size=args.timestep_batch_size,
                 )
                 raw, adamw, _, _, reconstructed_lr = project_dual(
                     runtime, gradient, projector, args.max_grad_norm

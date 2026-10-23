@@ -240,6 +240,41 @@ The full attribution run is much more expensive than image generation. Always
 finish both smoke tests before starting all 5,000 training images, 25
 checkpoints, and 100 timesteps.
 
+### Four-GPU optimized launch
+
+The exact ReTrac path uses PyTorch's vmap-backed batched VJP, so raw and
+AdamW-full reuse the same per-example gradient. `--per-example-chunk-size`
+controls how many per-example VJPs run together (default 2; try 4 after the
+smoke test if memory permits). Query/train timestep gradients are also evaluated
+in bounded batches instead of 100 independent forward/backward calls.
+
+Use the launcher to restrict work to exactly the GPU IDs assigned to you. It
+splits the 5,000 training positions into contiguous shards, writes one log per
+GPU, resumes each shard independently, and merges completed score files:
+
+```bash
+python -m sd_artbench.attribution.launch_shards \
+  --method retrac \
+  --gpu-ids 0,1,2,3 \
+  --output-dir outputs/attribution/retrac-4gpu \
+  -- \
+  --query-manifest outputs/sample-preview/manifest.json \
+  --timestep-count 100 \
+  --timestep-batch-size 2 \
+  --proj-dim 32768 \
+  --batch-size 8 \
+  --gradient-accumulation-steps 8 \
+  --num-workers 8 \
+  --per-example-chunk-size 2
+```
+
+`--gpu-ids` is never inferred from all GPUs on the host. Only the comma-separated
+IDs supplied there are placed in child-process `CUDA_VISIBLE_DEVICES` values.
+Use `tail -f outputs/attribution/retrac-4gpu/shard-00-gpu-0.log` to follow one
+worker. If vmap-backed VJP is unsupported by an operation on the installed
+PyTorch/Diffusers build, the worker fails explicitly instead of silently
+switching to a different attribution definition.
+
 `trainable_parameters.json` records the exact LoRA parameter names and shapes
 used for updates and later attribution. Official D-TRAK checkpoints infer this
 set from the LoRA architecture rather than storing a separate Boolean mask;

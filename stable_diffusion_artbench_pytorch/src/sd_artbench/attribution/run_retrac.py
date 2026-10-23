@@ -23,7 +23,8 @@ from tqdm.auto import tqdm
 
 from ..config import ArtBenchConfig
 from ..train_lora import IndexedArtBenchDataset, set_attention_dropout
-from .optimizer import adamw_full_direction
+from .autograd import batched_loss_gradients
+from .optimizer import adamw_full_direction, adamw_full_direction_batch
 from .projection import CountSketchProjector, stable_seed
 from .runtime import (
     build_runtime,
@@ -57,6 +58,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--checkpoint-indices", type=parse_ints)
     parser.add_argument("--query-indices", type=parse_ints)
     parser.add_argument("--timestep-count", type=int, default=100)
+    parser.add_argument("--timestep-batch-size", type=int, default=8)
     parser.add_argument("--proj-dim", type=int, default=32768)
     parser.add_argument("--rank", type=int, default=128)
     parser.add_argument("--mixed-precision", choices=("no", "fp16", "bf16"), default="fp16")
@@ -71,6 +73,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--attention-dropout", type=float, default=0.1)
     parser.add_argument(
         "--replay-mode", choices=("batch1", "exact_batch"), default="exact_batch"
+    )
+    parser.add_argument(
+        "--per-example-chunk-size",
+        type=int,
+        default=2,
+        help="Number of exact per-example VJPs evaluated together; lower if OOM.",
     )
     parser.add_argument("--train-start", type=int, default=0)
     parser.add_argument("--train-end", type=int)
@@ -145,6 +153,8 @@ def load_result(
 
 def main() -> None:
     args = parse_args()
+    if args.per_example_chunk_size < 1:
+        raise ValueError("--per-example-chunk-size must be positive")
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
     runtime = build_runtime(
         model_name=args.model,
@@ -194,8 +204,10 @@ def main() -> None:
         "gradient_accumulation_steps": args.gradient_accumulation_steps,
         "conditioning_dropout": args.conditioning_dropout,
         "attention_dropout": args.attention_dropout,
+        "per_example_chunk_size": args.per_example_chunk_size,
         "checkpoint_indices": checkpoint_indices,
         "timesteps": timesteps,
+        "timestep_batch_size": args.timestep_batch_size,
         "proj_dim": args.proj_dim,
         "train_positions": [args.train_start, train_end],
         "query_ids": [query.query_id for query in queries],
@@ -266,6 +278,7 @@ def main() -> None:
                 timesteps,
                 seed_parts=("retrac_query", checkpoint_index, query.query_id),
                 full_l2_each=True,
+                timestep_batch_size=args.timestep_batch_size,
             )
             query_features.append(projector.project(gradient)[0])
         query_matrix = torch.stack(query_features)
@@ -381,14 +394,42 @@ def main() -> None:
                     total_steps,
                     warmup_steps,
                 )
-                for selected_offset, sample_slot in enumerate(selected):
-                    if args.replay_mode == "exact_batch":
-                        gradient = gradients(
-                            losses[sample_slot],
-                            runtime.parameters,
-                            retain_graph=selected_offset + 1 < len(selected),
+                if args.replay_mode == "exact_batch" and selected:
+                    for sample_slots, gradient_batch in batched_loss_gradients(
+                        losses,
+                        runtime.parameters,
+                        selected,
+                        chunk_size=args.per_example_chunk_size,
+                    ):
+                        raw_features, _ = projector.project_batch(
+                            gradient_batch, full_l2_normalize=True
                         )
-                    else:
+                        adamw_directions, _ = adamw_full_direction_batch(
+                            runtime.parameters,
+                            gradient_batch,
+                            runtime.optimizer,
+                            max_grad_norm=args.max_grad_norm,
+                        )
+                        adamw_features, _ = projector.project_batch(
+                            adamw_directions, full_l2_normalize=True
+                        )
+                        destinations = [
+                            destination_by_position[positions[sample_slot]]
+                            for sample_slot in sample_slots
+                        ]
+                        raw_values = (
+                            event_lr
+                            * (query_matrix @ raw_features.T).detach().cpu().numpy()
+                        )
+                        adamw_values = (
+                            event_lr
+                            * (query_matrix @ adamw_features.T).detach().cpu().numpy()
+                        )
+                        for local_slot, destination in enumerate(destinations):
+                            scores[0, :, destination] += raw_values[:, local_slot]
+                            scores[1, :, destination] += adamw_values[:, local_slot]
+                elif args.replay_mode == "batch1":
+                    for sample_slot in selected:
                         prediction = runtime.unet(
                             noisy[sample_slot : sample_slot + 1],
                             batch_timesteps[sample_slot : sample_slot + 1],
@@ -400,22 +441,24 @@ def main() -> None:
                             reduction="mean",
                         )
                         gradient = gradients(loss, runtime.parameters)
-                    raw_feature, _ = projector.project(
-                        gradient, full_l2_normalize=True
-                    )
-                    adamw_direction, _ = adamw_full_direction(
-                        runtime.parameters,
-                        gradient,
-                        runtime.optimizer,
-                        max_grad_norm=args.max_grad_norm,
-                    )
-                    adamw_feature, _ = projector.project(
-                        adamw_direction, full_l2_normalize=True
-                    )
-                    destination = destination_by_position[positions[sample_slot]]
-                    train_matrix = torch.stack((raw_feature, adamw_feature))
-                    dots = query_matrix @ train_matrix.T
-                    scores[:, :, destination] += event_lr * dots.T.detach().cpu().numpy()
+                        raw_feature, _ = projector.project(
+                            gradient, full_l2_normalize=True
+                        )
+                        adamw_direction, _ = adamw_full_direction(
+                            runtime.parameters,
+                            gradient,
+                            runtime.optimizer,
+                            max_grad_norm=args.max_grad_norm,
+                        )
+                        adamw_feature, _ = projector.project(
+                            adamw_direction, full_l2_normalize=True
+                        )
+                        destination = destination_by_position[positions[sample_slot]]
+                        train_matrix = torch.stack((raw_feature, adamw_feature))
+                        dots = query_matrix @ train_matrix.T
+                        scores[:, :, destination] += (
+                            event_lr * dots.T.detach().cpu().numpy()
+                        )
                 microbatch += 1
                 progress.update(1)
             # DataLoader recreates workers/iterator per epoch, matching training.

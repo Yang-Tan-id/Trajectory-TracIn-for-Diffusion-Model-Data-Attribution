@@ -21,6 +21,7 @@ from transformers import CLIPTextModel, CLIPTokenizer
 
 from ..config import label_to_prompt
 from ..train_lora import create_lora_layers, set_attention_dropout
+from .autograd import batched_loss_gradients
 from .projection import stable_seed
 
 
@@ -291,6 +292,34 @@ def simple_loss(
     return F.mse_loss(prediction.float(), target.float(), reduction="mean")
 
 
+def simple_losses(
+    runtime: AttributionRuntime,
+    latent: torch.Tensor,
+    hidden_states: torch.Tensor,
+    timesteps: Sequence[int],
+    noises: torch.Tensor,
+) -> torch.Tensor:
+    """Return one diffusion loss per supplied timestep/noise pair."""
+
+    count = len(timesteps)
+    latent_batch = latent.expand(count, *latent.shape[1:])
+    hidden_batch = hidden_states.expand(count, *hidden_states.shape[1:])
+    timestep_tensor = torch.as_tensor(timesteps, device=runtime.device, dtype=torch.long)
+    noisy = runtime.scheduler.add_noise(latent_batch, noises, timestep_tensor)
+    prediction = runtime.unet(noisy, timestep_tensor, hidden_batch).sample
+    if runtime.scheduler.config.prediction_type == "epsilon":
+        target = noises
+    elif runtime.scheduler.config.prediction_type == "v_prediction":
+        target = runtime.scheduler.get_velocity(latent_batch, noises, timestep_tensor)
+    else:
+        raise ValueError(
+            f"unsupported prediction type {runtime.scheduler.config.prediction_type}"
+        )
+    return F.mse_loss(
+        prediction.float(), target.float(), reduction="none"
+    ).mean(dim=(1, 2, 3))
+
+
 def gradients(
     loss: torch.Tensor,
     parameters: Sequence[torch.nn.Parameter],
@@ -314,21 +343,51 @@ def mean_simple_gradient(
     *,
     seed_parts: Sequence[object],
     full_l2_each: bool = False,
+    timestep_batch_size: int = 8,
 ) -> list[torch.Tensor]:
+    if timestep_batch_size < 1:
+        raise ValueError("timestep_batch_size must be positive")
     parameters = runtime.parameters
     total = [torch.zeros_like(parameter, dtype=torch.float32) for parameter in parameters]
-    for timestep in timesteps:
-        noise = deterministic_noise(latent, *seed_parts, int(timestep))
-        current = gradients(
-            simple_loss(runtime, latent, hidden_states, int(timestep), noise), parameters
+    for start in range(0, len(timesteps), timestep_batch_size):
+        current_timesteps = [
+            int(value) for value in timesteps[start : start + timestep_batch_size]
+        ]
+        noises = torch.cat(
+            [
+                deterministic_noise(latent, *seed_parts, timestep)
+                for timestep in current_timesteps
+            ],
+            dim=0,
         )
+        losses = simple_losses(runtime, latent, hidden_states, current_timesteps, noises)
         if full_l2_each:
-            norm = torch.sqrt(
-                sum(gradient.float().square().sum() for gradient in current)
+            _, current = next(
+                batched_loss_gradients(
+                    losses,
+                    parameters,
+                    list(range(len(current_timesteps))),
+                    chunk_size=len(current_timesteps),
+                )
+            )
+            norms = torch.sqrt(
+                sum(
+                    gradient.float()
+                    .reshape(len(current_timesteps), -1)
+                    .square()
+                    .sum(dim=1)
+                    for gradient in current
+                )
             ).clamp_min(1e-12)
-            current = [gradient / norm for gradient in current]
-        for destination, value in zip(total, current):
-            destination.add_(value.float(), alpha=1.0 / len(timesteps))
+            for destination, value in zip(total, current):
+                view_shape = (len(current_timesteps),) + (1,) * (value.ndim - 1)
+                normalized = value.float() / norms.view(view_shape)
+                destination.add_(normalized.sum(dim=0), alpha=1.0 / len(timesteps))
+        else:
+            current = gradients(losses.mean(), parameters)
+            weight = len(current_timesteps) / len(timesteps)
+            for destination, value in zip(total, current):
+                destination.add_(value.float(), alpha=weight)
     return total
 
 
