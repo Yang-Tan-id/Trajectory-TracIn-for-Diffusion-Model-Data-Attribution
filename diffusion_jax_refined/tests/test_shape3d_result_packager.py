@@ -19,6 +19,11 @@ LAUNCHER = (
     / "diffusion_jax_refined/3dshapes/tacc/spr/"
     "run_package_endpoint_q0_99_scores_lds_spr.sh"
 )
+SUBMITTER = (
+    REPO_ROOT
+    / "diffusion_jax_refined/3dshapes/tacc/skx_dev/"
+    "submit_package_endpoint_q0_99_scores_lds_skx_dev.sh"
+)
 
 
 class Shape3DResultPackagerTest(unittest.TestCase):
@@ -129,6 +134,14 @@ class Shape3DResultPackagerTest(unittest.TestCase):
         self.assertIn('mkdir -p "$output_dir"', text)
         self.assertIn('PYTHONUNBUFFERED=1 "$python_bin" -u', text)
         self.assertIn('--query-file "$query_file"', text)
+
+    def test_stampede3_submitter_never_uses_explicit_export(self) -> None:
+        text = SUBMITTER.read_text()
+        self.assertIn("-p skx-dev", text)
+        self.assertIn('export REPO_ROOT="$repo"', text)
+        self.assertIn('export OUTPUT_DIR="$output_dir"', text)
+        self.assertIn('--chdir="$SCRATCH"', text)
+        self.assertNotIn("--export", text)
 
 
 if __name__ == "__main__":
