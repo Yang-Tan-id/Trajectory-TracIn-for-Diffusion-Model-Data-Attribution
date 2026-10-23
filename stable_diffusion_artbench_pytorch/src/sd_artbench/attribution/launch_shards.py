@@ -86,6 +86,7 @@ def save_checkpoint_sum(inputs: list[Path], output: Path) -> None:
             "conditioning_dropout",
             "attention_dropout",
             "per_example_chunk_size",
+            "per_example_backend",
             "timesteps",
             "timestep_batch_size",
             "proj_dim",

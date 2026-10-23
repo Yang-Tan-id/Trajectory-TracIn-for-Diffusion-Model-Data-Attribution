@@ -170,6 +170,12 @@ Endpoint-Pollute evaluates query and training examples with batched VJPs. The
 default query batch, training batch, and per-example VJP chunk are all 8;
 reduce `--pollute-query-batch-size`, `--pollute-train-batch-size`, or
 `--per-example-chunk-size` only if the smoke run runs out of GPU memory.
+PyTorch 2.0's legacy `is_grads_batched` implementation falls back to slow
+operator-by-operator loops for several Stable Diffusion backward operators.
+Pass `--per-example-backend torch_func` to use the public
+`torch.func.vmap(torch.func.grad(...))` implementation. The default remains
+`legacy` until the two backends have been numerically compared on the target
+server/GPU stack.
 
 First run a one-image, one-query, one-timestep smoke test. The query manifest is
 the `manifest.json` produced by `sd_artbench.generate`:

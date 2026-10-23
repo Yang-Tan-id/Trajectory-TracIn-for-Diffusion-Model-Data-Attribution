@@ -1,10 +1,14 @@
 import json
+from collections import namedtuple
 from pathlib import Path
 
 import numpy as np
 import torch
 
-from sd_artbench.attribution.autograd import batched_loss_gradients
+from sd_artbench.attribution.autograd import (
+    batched_loss_gradients,
+    functional_per_example_gradients,
+)
 from sd_artbench.attribution.launch_shards import save_checkpoint_sum
 from sd_artbench.attribution.merge_shards import merge_shards
 from sd_artbench.attribution.optimizer import (
@@ -60,6 +64,68 @@ def test_batched_vjp_matches_individual_gradients():
     )
     actual = torch.cat([chunk[1][0] for chunk in chunks], dim=0)
     expected = 2.0 * inputs.square() * parameter.detach()
+    assert torch.allclose(actual, expected)
+
+
+def test_torch_func_per_example_gradients_match_individual_autograd():
+    output_type = namedtuple("ToyOutput", ["sample"])
+
+    class ToyUNet(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.lora_scale = torch.nn.Parameter(torch.tensor([1.5, -0.5]))
+            self.register_buffer("bias", torch.tensor([0.25, -0.75]))
+
+        def forward(self, noisy, timesteps, hidden):
+            del timesteps, hidden
+            prediction = (
+                noisy * self.lora_scale[None, :, None, None]
+                + self.bias[None, :, None, None]
+            )
+            return output_type(prediction)
+
+    module = ToyUNet()
+    noisy = torch.tensor(
+        [
+            [[[1.0]], [[2.0]]],
+            [[[-3.0]], [[4.0]]],
+            [[[2.0]], [[-1.0]]],
+        ]
+    )
+    timesteps = torch.tensor([9, 7, 5])
+    hidden = torch.zeros(3, 1, 1)
+    targets = torch.tensor(
+        [
+            [[[0.5]], [[-0.5]]],
+            [[[1.0]], [[2.0]]],
+            [[[-1.0]], [[0.25]]],
+        ]
+    )
+    functional_chunks = list(
+        functional_per_example_gradients(
+            module,
+            [module.lora_scale],
+            noisy,
+            timesteps,
+            hidden,
+            targets,
+            loss="mse",
+            chunk_size=2,
+        )
+    )
+    actual = torch.cat([chunk[1][0] for chunk in functional_chunks], dim=0)
+
+    losses = torch.nn.functional.mse_loss(
+        module(noisy, timesteps, hidden).sample,
+        targets,
+        reduction="none",
+    ).mean(dim=(1, 2, 3))
+    legacy_chunks = list(
+        batched_loss_gradients(
+            losses, [module.lora_scale], list(range(3)), chunk_size=2
+        )
+    )
+    expected = torch.cat([chunk[1][0] for chunk in legacy_chunks], dim=0)
     assert torch.allclose(actual, expected)
 
 

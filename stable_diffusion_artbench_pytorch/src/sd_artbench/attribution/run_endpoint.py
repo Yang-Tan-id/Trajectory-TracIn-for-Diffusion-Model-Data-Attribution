@@ -15,7 +15,7 @@ from PIL import Image
 from tqdm.auto import tqdm
 
 from ..config import ArtBenchConfig
-from .autograd import batched_loss_gradients
+from .autograd import batched_loss_gradients, functional_per_example_gradients
 from .optimizer import adamw_full_direction, adamw_full_direction_batch
 from .projection import CountSketchProjector, stable_seed
 from .runtime import (
@@ -56,6 +56,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--pollute-query-batch-size", type=int, default=8)
     parser.add_argument("--pollute-train-batch-size", type=int, default=8)
     parser.add_argument("--per-example-chunk-size", type=int, default=8)
+    parser.add_argument(
+        "--per-example-backend",
+        choices=("legacy", "torch_func"),
+        default="legacy",
+        help=(
+            "legacy uses is_grads_batched; torch_func uses functional_call + "
+            "vmap(grad) and avoids PyTorch 2.0 legacy vmap fallbacks"
+        ),
+    )
     parser.add_argument(
         "--profile-pollute-batches",
         type=int,
@@ -193,6 +202,7 @@ def main() -> None:
         raise ValueError(f"unknown endpoint methods: {sorted(unknown)}")
     if not methods:
         raise ValueError("at least one endpoint method is required")
+    print(f"[per-example gradients] backend={args.per_example_backend}", flush=True)
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
     profile_totals: dict[str, float] = defaultdict(float)
     profile_counts: dict[str, int] = defaultdict(int)
@@ -305,6 +315,7 @@ def main() -> None:
         "pollute_query_batch_size": args.pollute_query_batch_size,
         "pollute_train_batch_size": args.pollute_train_batch_size,
         "per_example_chunk_size": args.per_example_chunk_size,
+        "per_example_backend": args.per_example_backend,
         "proj_dim": args.proj_dim,
         "train_positions": [args.train_start, train_end],
         "query_ids": [query.query_id for query in queries],
@@ -452,25 +463,50 @@ def main() -> None:
                             dtype=torch.long,
                         )
                         noisy = runtime.scheduler.add_noise(latents, noise, ts)
-                        prediction = runtime.unet(noisy, ts, hidden).sample
+                        if args.per_example_backend == "legacy":
+                            prediction = runtime.unet(noisy, ts, hidden).sample
+                        else:
+                            with torch.no_grad():
+                                prediction = runtime.unet(noisy, ts, hidden).sample
                         target = next_predictions[timestamp_slot][start:end].to(
                             device=device, dtype=prediction.dtype
                         )
                         delta = (target - prediction).detach()
                         delta_norms = delta.float().flatten(1).norm(dim=1).clamp_min(1e-12)
-                        losses = (prediction.float() * delta.float()).flatten(1).mean(dim=1)
+                        losses = None
+                        if args.per_example_backend == "legacy":
+                            losses = (prediction.float() * delta.float()).flatten(1).mean(
+                                dim=1
+                            )
                         profile_stop("query_current_forward", profile_started)
                         features = torch.empty(
                             (end - start, args.proj_dim),
                             device=device,
                             dtype=torch.float32,
                         )
-                        gradient_iterator = iter(batched_loss_gradients(
-                            losses,
-                            runtime.parameters,
-                            list(range(end - start)),
-                            chunk_size=args.per_example_chunk_size,
-                        ))
+                        if args.per_example_backend == "legacy":
+                            assert losses is not None
+                            gradient_iterator = iter(
+                                batched_loss_gradients(
+                                    losses,
+                                    runtime.parameters,
+                                    list(range(end - start)),
+                                    chunk_size=args.per_example_chunk_size,
+                                )
+                            )
+                        else:
+                            gradient_iterator = iter(
+                                functional_per_example_gradients(
+                                    runtime.unet,
+                                    runtime.parameters,
+                                    noisy,
+                                    ts,
+                                    hidden,
+                                    delta,
+                                    loss="pollute",
+                                    chunk_size=args.per_example_chunk_size,
+                                )
+                            )
                         while True:
                             profile_started = profile_start("query_vjp")
                             try:
@@ -508,7 +544,6 @@ def main() -> None:
                         latents = torch.cat([item[0] for item in encoded], dim=0)
                         hidden = torch.cat([item[1] for item in encoded], dim=0)
                         profile_stop("train_encode_transfer", profile_started)
-                        profile_started = profile_start("train_forward")
                         shared_train_noise = deterministic_noise(
                             latents[:1],
                             "endpoint_pollute",
@@ -523,7 +558,6 @@ def main() -> None:
                             dtype=torch.long,
                         )
                         noisy = runtime.scheduler.add_noise(latents, noise, ts)
-                        prediction = runtime.unet(noisy, ts, hidden).sample
                         if runtime.scheduler.config.prediction_type == "epsilon":
                             target = noise
                         elif runtime.scheduler.config.prediction_type == "v_prediction":
@@ -533,16 +567,34 @@ def main() -> None:
                                 "unsupported prediction type "
                                 f"{runtime.scheduler.config.prediction_type}"
                             )
-                        losses = F.mse_loss(
-                            prediction.float(), target.float(), reduction="none"
-                        ).mean(dim=(1, 2, 3))
-                        profile_stop("train_forward", profile_started)
-                        gradient_iterator = iter(batched_loss_gradients(
-                            losses,
-                            runtime.parameters,
-                            list(range(end - start)),
-                            chunk_size=args.per_example_chunk_size,
-                        ))
+                        if args.per_example_backend == "legacy":
+                            profile_started = profile_start("train_forward")
+                            prediction = runtime.unet(noisy, ts, hidden).sample
+                            losses = F.mse_loss(
+                                prediction.float(), target.float(), reduction="none"
+                            ).mean(dim=(1, 2, 3))
+                            profile_stop("train_forward", profile_started)
+                            gradient_iterator = iter(
+                                batched_loss_gradients(
+                                    losses,
+                                    runtime.parameters,
+                                    list(range(end - start)),
+                                    chunk_size=args.per_example_chunk_size,
+                                )
+                            )
+                        else:
+                            gradient_iterator = iter(
+                                functional_per_example_gradients(
+                                    runtime.unet,
+                                    runtime.parameters,
+                                    noisy,
+                                    ts,
+                                    hidden,
+                                    target,
+                                    loss="mse",
+                                    chunk_size=args.per_example_chunk_size,
+                                )
+                            )
                         while True:
                             profile_started = profile_start("train_vjp")
                             try:

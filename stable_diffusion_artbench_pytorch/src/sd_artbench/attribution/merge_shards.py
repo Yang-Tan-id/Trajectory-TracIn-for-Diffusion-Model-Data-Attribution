@@ -78,6 +78,7 @@ def merge_shards(paths: list[Path]) -> tuple[np.ndarray, np.ndarray, dict, np.nd
             "conditioning_dropout",
             "attention_dropout",
             "per_example_chunk_size",
+            "per_example_backend",
             "checkpoint_indices",
             "timesteps",
             "timestep_batch_size",
