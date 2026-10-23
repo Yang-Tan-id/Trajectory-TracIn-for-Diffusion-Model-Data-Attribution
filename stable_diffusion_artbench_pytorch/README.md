@@ -162,6 +162,16 @@ The replay mode deliberately rejects `--replace-flagged`, because replacing a
 seed would invalidate the pair. If a base-model result is safety-flagged, rerun
 the exact replay with `--disable-safety-checker` rather than changing its seed.
 
+After both sets exist, validate their pairing and create per-query plus overview
+comparison images:
+
+```bash
+python -m sd_artbench.compare_generations \
+  --base-manifest outputs/artbench2-queries-60-base/manifest.json \
+  --lora-manifest outputs/artbench2-queries-60/manifest.json \
+  --output-dir outputs/artbench2-base-vs-lora
+```
+
 ## 5. Raw-checkpoint attribution
 
 The attribution implementation lives in `src/sd_artbench/attribution/` and is
