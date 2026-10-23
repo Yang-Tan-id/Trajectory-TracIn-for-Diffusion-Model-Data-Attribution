@@ -141,6 +141,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--resolution", type=int, default=256)
     parser.add_argument("--rank", type=int, default=128)
     parser.add_argument("--attention-dropout", type=float, default=0.1)
+    parser.add_argument("--conditioning-dropout", type=float, default=0.1)
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--learning-rate", type=float, default=3e-4)
@@ -167,6 +168,13 @@ def main() -> None:
     text_encoder = CLIPTextModel.from_pretrained(args.model, subfolder="text_encoder")
     vae = AutoencoderKL.from_pretrained(args.model, subfolder="vae")
     unet = UNet2DConditionModel.from_pretrained(args.model, subfolder="unet")
+    empty_input_ids = tokenizer(
+        "",
+        max_length=tokenizer.model_max_length,
+        padding="max_length",
+        truncation=True,
+        return_tensors="pt",
+    ).input_ids[0]
 
     vae.requires_grad_(False)
     text_encoder.requires_grad_(False)
@@ -263,6 +271,14 @@ def main() -> None:
                 pixel_values = batch["pixel_values"].to(
                     accelerator.device, dtype=weight_dtype
                 )
+                input_ids = batch["input_ids"]
+                if args.conditioning_dropout > 0:
+                    drop_condition = (
+                        torch.rand(input_ids.shape[0], device=input_ids.device)
+                        < args.conditioning_dropout
+                    )
+                    input_ids = input_ids.clone()
+                    input_ids[drop_condition] = empty_input_ids.to(input_ids.device)
                 latents = vae.encode(pixel_values).latent_dist.sample()
                 latents = latents * vae.config.scaling_factor
                 noise = torch.randn_like(latents)
@@ -273,7 +289,7 @@ def main() -> None:
                     device=latents.device,
                 ).long()
                 noisy_latents = scheduler.add_noise(latents, noise, timesteps)
-                hidden_states = text_encoder(batch["input_ids"])[0]
+                hidden_states = text_encoder(input_ids)[0]
                 prediction = unet(noisy_latents, timesteps, hidden_states).sample
                 if scheduler.config.prediction_type == "epsilon":
                     target = noise

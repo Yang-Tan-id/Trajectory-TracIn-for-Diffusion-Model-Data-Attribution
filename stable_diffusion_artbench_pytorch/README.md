@@ -20,7 +20,8 @@ The paper-faithful target dataset is sampled as follows:
 The model defaults reproduce the D-TRAK setup: `lambdalabs/miniSD-diffusers`,
 256 px, U-Net attention LoRA rank 128, batch size 64, 100 epochs, AdamW,
 learning rate `3e-4`, weight decay `1e-6`, cosine schedule with 10% warmup,
-attention dropout 0.1, center crop, random horizontal flip, and seed 42.
+attention dropout 0.1, conditioning dropout 0.1, center crop, random horizontal
+flip, and seed 42.
 Resumable training state is saved at 25 evenly spaced epochs (with the default
 100 epochs: 4, 8, ..., 100), matching the 25-checkpoint attribution setup.
 Every checkpoint contains the LoRA parameters, AdamW moments, scheduler,
