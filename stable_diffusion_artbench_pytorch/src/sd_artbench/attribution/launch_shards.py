@@ -91,6 +91,8 @@ def save_checkpoint_sum(inputs: list[Path], output: Path) -> None:
             "proj_dim",
             "query_ids",
             "query_manifest",
+            "query_definition",
+            "guidance_scales",
             "max_grad_norm",
             "replay_mode",
             "debug_max_replay_batches",

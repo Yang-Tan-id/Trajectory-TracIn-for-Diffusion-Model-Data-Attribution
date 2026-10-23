@@ -17,7 +17,6 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.nn.functional as F
-from PIL import Image
 from torch.utils.data import DataLoader
 from tqdm.auto import tqdm
 
@@ -28,14 +27,13 @@ from .optimizer import adamw_full_direction, adamw_full_direction_batch
 from .projection import CountSketchProjector, stable_seed
 from .runtime import (
     build_runtime,
-    encode_image,
     encode_prompt,
     gradients,
     list_checkpoints,
     load_queries,
+    load_query_trajectories,
     load_raw_checkpoint,
-    mean_simple_gradient,
-    select_timesteps,
+    mean_trajectory_gradient,
 )
 from .scoring import TRANSFORMS
 
@@ -57,7 +55,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, default=root / "outputs/attribution-retrac")
     parser.add_argument("--checkpoint-indices", type=parse_ints)
     parser.add_argument("--query-indices", type=parse_ints)
-    parser.add_argument("--timestep-count", type=int, default=100)
+    parser.add_argument("--timestep-count", type=int, default=50)
     parser.add_argument("--timestep-batch-size", type=int, default=8)
     parser.add_argument("--proj-dim", type=int, default=32768)
     parser.add_argument("--rank", type=int, default=128)
@@ -178,7 +176,10 @@ def main() -> None:
         queries = [queries[index] for index in args.query_indices]
     if not queries:
         raise ValueError("at least one query is required")
-    timesteps = select_timesteps(args.timestep_count)
+    query_trajectories = load_query_trajectories(
+        queries, expected_steps=args.timestep_count
+    )
+    timesteps = query_trajectories[0].timesteps.tolist()
     dataset = IndexedArtBenchDataset(
         args.metadata_csv, args.image_root, args.index_path, runtime.tokenizer, 256
     )
@@ -212,6 +213,8 @@ def main() -> None:
         "train_positions": [args.train_start, train_end],
         "query_ids": [query.query_id for query in queries],
         "query_manifest": str(args.query_manifest.resolve()),
+        "query_definition": "fixed_ddim_trajectory_reference_predicted_noise",
+        "guidance_scales": [query.guidance_scale for query in queries],
         "replay_mode": args.replay_mode,
         "max_grad_norm": args.max_grad_norm,
         "debug_max_replay_batches": args.max_replay_batches,
@@ -219,12 +222,10 @@ def main() -> None:
     result_name = "retrac_debug.npz" if args.max_replay_batches is not None else "retrac.npz"
     result_path = args.output_dir / result_name
     scores, completed_slot = load_result(result_path, score_shape, run_signature)
-    query_latents = []
     query_hidden = []
     for query in queries:
-        with Image.open(query.image_path) as image:
-            query_latents.append(encode_image(runtime, image))
         query_hidden.append(encode_prompt(runtime, query.prompt))
+    unconditional_hidden = encode_prompt(runtime, "")
 
     for checkpoint_slot, checkpoint_index in enumerate(checkpoint_indices):
         if checkpoint_slot <= completed_slot:
@@ -270,13 +271,15 @@ def main() -> None:
         runtime.unet.eval()
         set_attention_dropout(runtime.unet, 0.0)
         query_features = []
-        for query, latent, hidden in zip(queries, query_latents, query_hidden):
-            gradient = mean_simple_gradient(
+        for query, trajectory, hidden in zip(
+            queries, query_trajectories, query_hidden
+        ):
+            gradient = mean_trajectory_gradient(
                 runtime,
-                latent,
+                trajectory,
                 hidden,
-                timesteps,
-                seed_parts=("retrac_query", checkpoint_index, query.query_id),
+                unconditional_hidden,
+                query.guidance_scale,
                 full_l2_each=True,
                 timestep_batch_size=args.timestep_batch_size,
             )

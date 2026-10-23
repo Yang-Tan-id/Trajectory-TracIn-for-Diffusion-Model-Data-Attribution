@@ -119,7 +119,7 @@ accelerate launch --mixed_precision fp16 -m sd_artbench.train_lora \
 The pretrained model is downloaded from Hugging Face on first use. Subsequent
 runs can use the local cache.
 
-## 4. Generate with 50-step DDIM
+## 4. Generate and save the fixed 50-step DDIM query trajectory
 
 ```bash
 python -m sd_artbench.generate \
@@ -127,6 +127,11 @@ python -m sd_artbench.generate \
   --seeds 0,1,2 \
   --images-per-class 1
 ```
+
+Each image now has a sibling `*.trajectory.npz` containing the 50 U-Net input
+latents, the 50 classifier-free-guidance predicted-noise tensors, and the exact
+`999,979,...,19` timestep schedule.  Attribution requires this trajectory; it
+does not reconstruct independent noisy states from the final PNG.
 
 Pass `--prompt` more than once to compare custom prompts with the same initial
 noise seeds:
@@ -203,13 +208,13 @@ The smoke run is deliberately saved as `retrac_debug.npz`, never as the formal
 ```bash
 CUDA_VISIBLE_DEVICES=0 python -m sd_artbench.attribution.run_endpoint \
   --query-manifest outputs/sample-preview/manifest.json \
-  --timestep-count 100 \
+  --timestep-count 50 \
   --proj-dim 32768 \
   --output-dir outputs/attribution/endpoint
 
 CUDA_VISIBLE_DEVICES=0 python -m sd_artbench.attribution.run_retrac \
   --query-manifest outputs/sample-preview/manifest.json \
-  --timestep-count 100 \
+  --timestep-count 50 \
   --proj-dim 32768 \
   --batch-size 8 \
   --gradient-accumulation-steps 8 \

@@ -8,7 +8,6 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from PIL import Image
 from tqdm.auto import tqdm
 
 from ..config import ArtBenchConfig
@@ -17,15 +16,17 @@ from .projection import CountSketchProjector, stable_seed
 from .runtime import (
     AttributionArtBenchDataset,
     build_runtime,
+    cfg_predictions,
     deterministic_noise,
     encode_image,
     encode_prompt,
     gradients,
     list_checkpoints,
     load_queries,
+    load_query_trajectories,
     load_raw_checkpoint,
     mean_simple_gradient,
-    select_timesteps,
+    mean_trajectory_gradient,
     simple_loss,
 )
 from .scoring import TRANSFORMS, VARIANTS, score_variants
@@ -49,7 +50,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--methods", default="endpoint_tracin,endpoint_pollute")
     parser.add_argument("--checkpoint-indices", type=parse_ints)
     parser.add_argument("--query-indices", type=parse_ints)
-    parser.add_argument("--timestep-count", type=int, default=100)
+    parser.add_argument("--timestep-count", type=int, default=50)
     parser.add_argument("--timestep-batch-size", type=int, default=8)
     parser.add_argument("--proj-dim", type=int, default=32768)
     parser.add_argument("--rank", type=int, default=128)
@@ -194,7 +195,10 @@ def main() -> None:
         queries = [queries[index] for index in args.query_indices]
     if not queries:
         raise ValueError("at least one query is required")
-    timesteps = select_timesteps(args.timestep_count)
+    query_trajectories = load_query_trajectories(
+        queries, expected_steps=args.timestep_count
+    )
+    timesteps = query_trajectories[0].timesteps.tolist()
     dataset = AttributionArtBenchDataset(
         args.metadata_csv, args.image_root, args.index_path, runtime.tokenizer
     )
@@ -206,12 +210,10 @@ def main() -> None:
         [dataset.metadata_indices[position] for position in train_positions], dtype=np.int64
     )
 
-    query_latents = []
     query_hidden = []
     for query in queries:
-        with Image.open(query.image_path) as image:
-            query_latents.append(encode_image(runtime, image))
         query_hidden.append(encode_prompt(runtime, query.prompt))
+    unconditional_hidden = encode_prompt(runtime, "")
 
     # VAE posterior modes and text embeddings do not depend on checkpoints.
     # Keep them on CPU after first use; this avoids millions of redundant VAE
@@ -244,6 +246,8 @@ def main() -> None:
         "train_positions": [args.train_start, train_end],
         "query_ids": [query.query_id for query in queries],
         "query_manifest": str(args.query_manifest.resolve()),
+        "query_definition": "fixed_ddim_trajectory_reference_predicted_noise",
+        "guidance_scales": [query.guidance_scale for query in queries],
         "max_grad_norm": args.max_grad_norm,
     }
     tracin_scores, tracin_completed = load_result(
@@ -283,13 +287,15 @@ def main() -> None:
         did_pollute = "endpoint_pollute" in methods and checkpoint_slot > pollute_completed
         if did_tracin:
             query_features = []
-            for query, latent, hidden in zip(queries, query_latents, query_hidden):
-                gradient = mean_simple_gradient(
+            for query, trajectory, hidden in zip(
+                queries, query_trajectories, query_hidden
+            ):
+                gradient = mean_trajectory_gradient(
                     runtime,
-                    latent,
+                    trajectory,
                     hidden,
-                    timesteps,
-                    seed_parts=("endpoint_tracin", checkpoint_index, query.query_id),
+                    unconditional_hidden,
+                    query.guidance_scale,
                     timestep_batch_size=args.timestep_batch_size,
                 )
                 query_features.append(projector.project(gradient)[0])
@@ -330,28 +336,46 @@ def main() -> None:
                 load_raw_checkpoint(runtime, checkpoints[checkpoint_index + 1])
                 next_predictions: list[list[torch.Tensor]] = []
                 with torch.no_grad():
-                    for query, latent, hidden in zip(queries, query_latents, query_hidden):
+                    for query, trajectory, hidden in zip(
+                        queries, query_trajectories, query_hidden
+                    ):
                         current = []
-                        for timestep in timesteps:
-                            noise = deterministic_noise(
-                                latent, "endpoint_pollute", checkpoint_index, int(timestep)
+                        for timestamp_slot, timestep in enumerate(timesteps):
+                            trajectory_latent = torch.as_tensor(
+                                trajectory.latents[timestamp_slot : timestamp_slot + 1],
+                                device=device,
+                                dtype=runtime.weight_dtype,
                             )
-                            ts = torch.full((1,), int(timestep), device=device, dtype=torch.long)
-                            noisy = runtime.scheduler.add_noise(latent, noise, ts)
-                            current.append(runtime.unet(noisy, ts, hidden).sample.detach())
+                            current.append(
+                                cfg_predictions(
+                                    runtime,
+                                    trajectory_latent,
+                                    hidden,
+                                    unconditional_hidden,
+                                    [int(timestep)],
+                                    query.guidance_scale,
+                                ).detach()
+                            )
                         next_predictions.append(current)
                 load_raw_checkpoint(runtime, checkpoint)
                 for timestamp_slot, timestep in enumerate(timesteps):
                     query_features = []
-                    for query_slot, (query, latent, hidden) in enumerate(
-                        zip(queries, query_latents, query_hidden)
+                    for query_slot, (query, trajectory, hidden) in enumerate(
+                        zip(queries, query_trajectories, query_hidden)
                     ):
-                        noise = deterministic_noise(
-                            latent, "endpoint_pollute", checkpoint_index, int(timestep)
+                        trajectory_latent = torch.as_tensor(
+                            trajectory.latents[timestamp_slot : timestamp_slot + 1],
+                            device=device,
+                            dtype=runtime.weight_dtype,
                         )
-                        ts = torch.full((1,), int(timestep), device=device, dtype=torch.long)
-                        noisy = runtime.scheduler.add_noise(latent, noise, ts)
-                        prediction = runtime.unet(noisy, ts, hidden).sample
+                        prediction = cfg_predictions(
+                            runtime,
+                            trajectory_latent,
+                            hidden,
+                            unconditional_hidden,
+                            [int(timestep)],
+                            query.guidance_scale,
+                        )
                         delta = (next_predictions[query_slot][timestamp_slot] - prediction).detach()
                         delta_norm = delta.float().norm().clamp_min(1e-12)
                         pollute_loss = (prediction.float() * delta.float()).mean()

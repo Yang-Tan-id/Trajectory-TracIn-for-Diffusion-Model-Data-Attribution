@@ -20,6 +20,7 @@ from torchvision import transforms
 from transformers import CLIPTextModel, CLIPTokenizer
 
 from ..config import label_to_prompt
+from ..trajectory import QueryTrajectory, load_query_trajectory
 from ..train_lora import create_lora_layers, set_attention_dropout
 from .autograd import batched_loss_gradients
 from .projection import stable_seed
@@ -31,6 +32,8 @@ class QueryRecord:
     image_path: Path
     prompt: str
     seed: int
+    trajectory_path: Path | None
+    guidance_scale: float
 
 
 class AttributionArtBenchDataset(Dataset):
@@ -211,15 +214,44 @@ def load_queries(manifest_path: Path) -> list[QueryRecord]:
         image_path = Path(item["file"])
         if not image_path.is_absolute():
             image_path = manifest_path.parent / image_path
+        trajectory_value = item.get("trajectory_file")
+        trajectory_path = None if trajectory_value is None else Path(trajectory_value)
+        if trajectory_path is not None and not trajectory_path.is_absolute():
+            trajectory_path = manifest_path.parent / trajectory_path
         records.append(
             QueryRecord(
                 query_id=query_id,
                 image_path=image_path,
                 prompt=str(item["prompt"]),
                 seed=int(item["seed"]),
+                trajectory_path=trajectory_path,
+                guidance_scale=float(item.get("guidance_scale", 7.5)),
             )
         )
     return records
+
+
+def load_query_trajectories(
+    queries: Sequence[QueryRecord], *, expected_steps: int
+) -> list[QueryTrajectory]:
+    trajectories = []
+    for query in queries:
+        if query.trajectory_path is None:
+            raise ValueError(
+                "query manifest does not contain trajectory_file. Regenerate all "
+                "queries with the updated sd_artbench.generate command; a final PNG "
+                "alone cannot recover the fixed DDIM trajectory."
+            )
+        trajectories.append(
+            load_query_trajectory(query.trajectory_path, expected_steps=expected_steps)
+        )
+    reference = trajectories[0].timesteps
+    for query, trajectory in zip(queries[1:], trajectories[1:]):
+        if not np.array_equal(trajectory.timesteps, reference):
+            raise ValueError(
+                f"query {query.query_id} uses a different DDIM timestep schedule"
+            )
+    return trajectories
 
 
 @torch.no_grad()
@@ -318,6 +350,132 @@ def simple_losses(
     return F.mse_loss(
         prediction.float(), target.float(), reduction="none"
     ).mean(dim=(1, 2, 3))
+
+
+def cfg_predictions(
+    runtime: AttributionRuntime,
+    latents: torch.Tensor,
+    hidden_states: torch.Tensor,
+    unconditional_hidden_states: torch.Tensor,
+    timesteps: Sequence[int] | torch.Tensor,
+    guidance_scale: float,
+) -> torch.Tensor:
+    """Predict the exact classifier-free-guidance output used by DDIM sampling."""
+
+    count = latents.shape[0]
+    if torch.is_tensor(timesteps):
+        timestep_tensor = timesteps.to(runtime.device, dtype=torch.long)
+    else:
+        timestep_tensor = torch.as_tensor(
+            timesteps, device=runtime.device, dtype=torch.long
+        )
+    if timestep_tensor.shape != (count,):
+        raise ValueError(f"expected {count} timesteps, got {tuple(timestep_tensor.shape)}")
+    latent_input = torch.cat([latents, latents], dim=0)
+    timestep_input = torch.cat([timestep_tensor, timestep_tensor], dim=0)
+    hidden_input = torch.cat(
+        [
+            unconditional_hidden_states.expand(count, *unconditional_hidden_states.shape[1:]),
+            hidden_states.expand(count, *hidden_states.shape[1:]),
+        ],
+        dim=0,
+    )
+    prediction = runtime.unet(latent_input, timestep_input, hidden_input).sample
+    unconditional, conditional = prediction.chunk(2)
+    return unconditional + guidance_scale * (conditional - unconditional)
+
+
+def trajectory_losses(
+    runtime: AttributionRuntime,
+    latents: torch.Tensor,
+    reference_predictions: torch.Tensor,
+    hidden_states: torch.Tensor,
+    unconditional_hidden_states: torch.Tensor,
+    timesteps: Sequence[int],
+    guidance_scale: float,
+) -> torch.Tensor:
+    prediction = cfg_predictions(
+        runtime,
+        latents,
+        hidden_states,
+        unconditional_hidden_states,
+        timesteps,
+        guidance_scale,
+    )
+    return F.mse_loss(
+        prediction.float(), reference_predictions.float(), reduction="none"
+    ).mean(dim=(1, 2, 3))
+
+
+def mean_trajectory_gradient(
+    runtime: AttributionRuntime,
+    trajectory: QueryTrajectory,
+    hidden_states: torch.Tensor,
+    unconditional_hidden_states: torch.Tensor,
+    guidance_scale: float,
+    *,
+    full_l2_each: bool = False,
+    timestep_batch_size: int = 8,
+) -> list[torch.Tensor]:
+    """Gradient against the fixed reference model's 50 predicted-noise outputs."""
+
+    if timestep_batch_size < 1:
+        raise ValueError("timestep_batch_size must be positive")
+    parameters = runtime.parameters
+    total = [torch.zeros_like(parameter, dtype=torch.float32) for parameter in parameters]
+    step_count = len(trajectory.timesteps)
+    for start in range(0, step_count, timestep_batch_size):
+        end = min(step_count, start + timestep_batch_size)
+        latents = torch.as_tensor(
+            trajectory.latents[start:end],
+            device=runtime.device,
+            dtype=runtime.weight_dtype,
+        )
+        targets = torch.as_tensor(
+            trajectory.predicted_noise[start:end],
+            device=runtime.device,
+            dtype=runtime.weight_dtype,
+        )
+        current_timesteps = trajectory.timesteps[start:end].tolist()
+        losses = trajectory_losses(
+            runtime,
+            latents,
+            targets,
+            hidden_states,
+            unconditional_hidden_states,
+            current_timesteps,
+            guidance_scale,
+        )
+        if full_l2_each:
+            _, current = next(
+                batched_loss_gradients(
+                    losses,
+                    parameters,
+                    list(range(end - start)),
+                    chunk_size=end - start,
+                )
+            )
+            norms = torch.sqrt(
+                sum(
+                    gradient.float()
+                    .reshape(end - start, -1)
+                    .square()
+                    .sum(dim=1)
+                    for gradient in current
+                )
+            ).clamp_min(1e-12)
+            for destination, value in zip(total, current):
+                view_shape = (end - start,) + (1,) * (value.ndim - 1)
+                destination.add_(
+                    (value.float() / norms.view(view_shape)).sum(dim=0),
+                    alpha=1.0 / step_count,
+                )
+        else:
+            current = gradients(losses.mean(), parameters)
+            weight = (end - start) / step_count
+            for destination, value in zip(total, current):
+                destination.add_(value.float(), alpha=weight)
+    return total
 
 
 def gradients(
