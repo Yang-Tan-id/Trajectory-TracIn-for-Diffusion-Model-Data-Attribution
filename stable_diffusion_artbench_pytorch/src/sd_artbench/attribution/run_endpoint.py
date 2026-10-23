@@ -574,16 +574,20 @@ def main() -> None:
                                 )
                             )
                         while True:
+                            debug_slots = None
+                            debug_gradients = None
+                            if legacy_debug_iterator is not None:
+                                debug_slots, debug_gradients = next(
+                                    legacy_debug_iterator
+                                )
                             profile_started = profile_start("query_vjp")
                             try:
                                 sample_slots, gradient_batch = next(gradient_iterator)
                             except StopIteration:
                                 break
                             profile_stop("query_vjp", profile_started)
-                            if legacy_debug_iterator is not None:
-                                debug_slots, debug_gradients = next(
-                                    legacy_debug_iterator
-                                )
+                            if debug_gradients is not None:
+                                assert debug_slots is not None
                                 if debug_slots != sample_slots:
                                     raise RuntimeError(
                                         "gradient backend comparison chunk mismatch"
@@ -714,6 +718,12 @@ def main() -> None:
                                 )
                             )
                         while True:
+                            debug_slots = None
+                            debug_gradients = None
+                            if legacy_debug_iterator is not None:
+                                debug_slots, debug_gradients = next(
+                                    legacy_debug_iterator
+                                )
                             profile_started = profile_start("train_vjp")
                             try:
                                 sample_slots, gradient_batch = next(gradient_iterator)
@@ -721,10 +731,8 @@ def main() -> None:
                                 break
                             profile_stop("train_vjp", profile_started)
 
-                            if legacy_debug_iterator is not None:
-                                debug_slots, debug_gradients = next(
-                                    legacy_debug_iterator
-                                )
+                            if debug_gradients is not None:
+                                assert debug_slots is not None
                                 if debug_slots != sample_slots:
                                     raise RuntimeError(
                                         "gradient backend comparison chunk mismatch"
