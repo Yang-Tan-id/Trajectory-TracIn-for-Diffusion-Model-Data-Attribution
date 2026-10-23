@@ -63,6 +63,17 @@ See `dataset/README.md`. Do not copy data from `diffusion_jax_refined` unless it
 has the original images and matching `ArtBench-10.csv`; its latent cache alone
 is not sufficient for Stable Diffusion fine-tuning.
 
+The original Berkeley file endpoints currently return HTTP 404. The supported
+fallback downloads the complete 256 px, 60,000-row Hugging Face mirror and
+exports only the 12,000 ArtBench-2 train/test images without re-encoding them:
+
+```bash
+python -m sd_artbench.download_hf_artbench
+```
+
+This creates both `dataset/metadata/ArtBench-10.csv` and the two required class
+folders under `dataset/images/artbench-10-imagefolder/`.
+
 ## 2. Prepare exact ArtBench-2 indices
 
 ```bash

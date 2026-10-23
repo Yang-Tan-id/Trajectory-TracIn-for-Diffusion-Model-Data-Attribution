@@ -26,6 +26,17 @@ The CSV must contain at least these columns:
 `python -m sd_artbench.prepare_data` creates all files under `indices/`.
 Dataset files and generated pickle files are ignored by Git.
 
+If the original Berkeley download links return HTTP 404, use the verified
+256 px Hugging Face mirror. From the project root:
+
+```bash
+python -m sd_artbench.download_hf_artbench
+python -m sd_artbench.prepare_data
+```
+
+The downloader exports only `post_impressionism` and `ukiyo_e` while retaining
+the official 5,000-train/1,000-test count for each class.
+
 If the images already exist elsewhere, symlink the directory instead of
 duplicating it:
 
