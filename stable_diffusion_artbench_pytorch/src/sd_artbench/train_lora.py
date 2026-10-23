@@ -17,6 +17,7 @@ from diffusers.optimization import get_scheduler
 from PIL import Image
 from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
+from tqdm.auto import tqdm
 from transformers import CLIPTextModel, CLIPTokenizer
 
 from .config import ArtBenchConfig, label_to_prompt
@@ -279,9 +280,18 @@ def main() -> None:
             f"warmup_steps={math.ceil(total_steps * 0.1)} "
             f"checkpoint_epochs={sorted(epochs_to_checkpoint)}"
         )
+    progress_bar = tqdm(
+        total=total_steps,
+        initial=global_step,
+        desc="Training",
+        dynamic_ncols=True,
+        disable=not accelerator.is_local_main_process,
+    )
     for epoch in range(first_epoch, args.epochs):
         unet.train()
         epoch_loss = 0.0
+        update_loss = 0.0
+        micro_batches_in_update = 0
         for batch in dataloader:
             with accelerator.accumulate(unet):
                 pixel_values = batch["pixel_values"].to(
@@ -323,8 +333,19 @@ def main() -> None:
                 lr_scheduler.step()
                 optimizer.zero_grad()
             epoch_loss += loss.detach().float().item()
+            update_loss += loss.detach().float().item()
+            micro_batches_in_update += 1
             if accelerator.sync_gradients:
                 global_step += 1
+                mean_update_loss = update_loss / micro_batches_in_update
+                progress_bar.update(1)
+                progress_bar.set_postfix(
+                    epoch=f"{epoch + 1}/{args.epochs}",
+                    loss=f"{mean_update_loss:.4f}",
+                    lr=f"{lr_scheduler.get_last_lr()[0]:.2e}",
+                )
+                update_loss = 0.0
+                micro_batches_in_update = 0
 
         if accelerator.is_main_process:
             mean_loss = epoch_loss / max(len(dataloader), 1)
@@ -350,6 +371,7 @@ def main() -> None:
                     encoding="utf-8",
                 )
 
+    progress_bar.close()
     accelerator.wait_for_everyone()
     if accelerator.is_main_process:
         accelerator.unwrap_model(unet).save_attn_procs(args.output_dir / "final")

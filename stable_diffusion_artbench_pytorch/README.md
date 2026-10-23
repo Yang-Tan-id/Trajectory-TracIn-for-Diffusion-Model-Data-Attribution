@@ -33,6 +33,8 @@ Final inference weights are written to
 On a 24 GiB GPU, use `--batch-size 8 --gradient-accumulation-steps 8` to
 preserve the effective batch size of 64 without placing all 64 images in GPU
 memory simultaneously.
+The terminal progress bar advances once per optimizer update and reports the
+current epoch, micro-batch-averaged loss, and learning rate.
 
 ## Layout
 
