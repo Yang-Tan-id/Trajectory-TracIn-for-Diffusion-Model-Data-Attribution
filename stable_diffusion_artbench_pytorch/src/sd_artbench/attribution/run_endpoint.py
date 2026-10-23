@@ -238,6 +238,22 @@ def main() -> None:
             flush=True,
         )
 
+    def one_loss_gradient(loss: torch.Tensor) -> list[torch.Tensor]:
+        values = torch.autograd.grad(
+            loss,
+            runtime.parameters,
+            allow_unused=True,
+            retain_graph=True,
+        )
+        return [
+            (
+                torch.zeros_like(parameter)
+                if value is None
+                else value.detach()
+            ).unsqueeze(0)
+            for parameter, value in zip(runtime.parameters, values)
+        ]
+
     def profile_start(stage: str) -> float | None:
         if profile_counts[stage] >= args.profile_pollute_batches:
             return None
@@ -539,6 +555,7 @@ def main() -> None:
                                 )
                             )
                         legacy_debug_iterator = None
+                        loop_debug_gradients = None
                         if (
                             args.debug_compare_gradient_backends
                             and not compared_query_gradients
@@ -547,6 +564,7 @@ def main() -> None:
                             debug_losses = (
                                 debug_prediction.float() * delta.float()
                             ).flatten(1).mean(dim=1)
+                            loop_debug_gradients = one_loss_gradient(debug_losses[0])
                             legacy_debug_iterator = iter(
                                 batched_loss_gradients(
                                     debug_losses,
@@ -571,9 +589,24 @@ def main() -> None:
                                         "gradient backend comparison chunk mismatch"
                                     )
                                 print_gradient_comparison(
-                                    "query",
+                                    "query_func_vs_legacy",
                                     compare_gradient_batches(
                                         debug_gradients, gradient_batch
+                                    ),
+                                )
+                                assert loop_debug_gradients is not None
+                                print_gradient_comparison(
+                                    "query_legacy_vs_loop",
+                                    compare_gradient_batches(
+                                        loop_debug_gradients,
+                                        [value[:1] for value in debug_gradients],
+                                    ),
+                                )
+                                print_gradient_comparison(
+                                    "query_func_vs_loop",
+                                    compare_gradient_batches(
+                                        loop_debug_gradients,
+                                        [value[:1] for value in gradient_batch],
                                     ),
                                 )
                                 compared_query_gradients = True
@@ -660,6 +693,7 @@ def main() -> None:
                                 )
                             )
                         legacy_debug_iterator = None
+                        loop_debug_gradients = None
                         if (
                             args.debug_compare_gradient_backends
                             and not compared_train_gradients
@@ -670,6 +704,7 @@ def main() -> None:
                                 target.float(),
                                 reduction="none",
                             ).mean(dim=(1, 2, 3))
+                            loop_debug_gradients = one_loss_gradient(debug_losses[0])
                             legacy_debug_iterator = iter(
                                 batched_loss_gradients(
                                     debug_losses,
@@ -695,9 +730,24 @@ def main() -> None:
                                         "gradient backend comparison chunk mismatch"
                                     )
                                 print_gradient_comparison(
-                                    "train",
+                                    "train_func_vs_legacy",
                                     compare_gradient_batches(
                                         debug_gradients, gradient_batch
+                                    ),
+                                )
+                                assert loop_debug_gradients is not None
+                                print_gradient_comparison(
+                                    "train_legacy_vs_loop",
+                                    compare_gradient_batches(
+                                        loop_debug_gradients,
+                                        [value[:1] for value in debug_gradients],
+                                    ),
+                                )
+                                print_gradient_comparison(
+                                    "train_func_vs_loop",
+                                    compare_gradient_batches(
+                                        loop_debug_gradients,
+                                        [value[:1] for value in gradient_batch],
                                     ),
                                 )
                                 compared_train_gradients = True
