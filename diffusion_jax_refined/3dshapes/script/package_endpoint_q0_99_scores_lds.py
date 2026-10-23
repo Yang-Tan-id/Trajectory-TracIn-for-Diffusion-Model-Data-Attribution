@@ -277,8 +277,16 @@ def main() -> None:
                 continue
             selected_namespace_dirs.add(namespace_dir)
             selected_lds_namespace_dirs.add(namespace_dir)
+            selected_files.update(
+                path
+                for path in namespace_dir.rglob("lds_results.csv")
+                if path.is_file()
+            )
             for summary in summaries:
                 selected_files.add(summary)
+                sibling_results = summary.with_name("lds_results.csv")
+                if sibling_results.is_file():
+                    selected_files.add(sibling_results)
                 relative = summary.relative_to(namespace_dir)
                 if len(relative.parts) < 4:
                     invalid_lds_summaries.append(
@@ -307,6 +315,18 @@ def main() -> None:
                         flush=True,
                     )
                     continue
+                target_cache_value = payload.get("target_cache")
+                if target_cache_value:
+                    target_cache = Path(str(target_cache_value))
+                    if not target_cache.is_absolute():
+                        target_cache = result_root / target_cache
+                    try:
+                        target_cache.relative_to(result_root)
+                    except ValueError:
+                        pass
+                    else:
+                        if target_cache.is_file():
+                            selected_files.add(target_cache)
                 lds_rows.append(
                     {
                         "query_id": query_id,
@@ -411,7 +431,9 @@ def main() -> None:
         "\n".join(selected_file_rel) + ("\n" if selected_file_rel else "")
     )
     readme = (
-        "This slim bundle contains final score arrays/metadata and LDS summaries only.\n"
+        "This slim bundle contains final score arrays/metadata, LDS summaries,\n"
+        "lds_results.csv files (including true_f and predictions), and referenced\n"
+        "true_f_results.csv target caches when they are inside the result root.\n"
         "It does not contain model checkpoints, train/query gradient artifacts, samples,\n"
         "LDS intermediate predictions/caches, datasets, or top-K retrained models.\n"
         "Paths under data/ are relative to the\n"

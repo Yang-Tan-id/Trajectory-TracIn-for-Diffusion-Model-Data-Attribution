@@ -76,8 +76,26 @@ class Shape3DResultPackagerTest(unittest.TestCase):
                 / "simple_loss/pred_kept_sign_-1/subset_00"
             )
             summary_dir.mkdir(parents=True)
+            target_cache = (
+                result_root
+                / "eval/prompted_solo/lds_target_cache/simple_loss/true_f_results.csv"
+            )
+            target_cache.parent.mkdir(parents=True)
+            target_cache.write_text("true_f\n0.5\n")
             (summary_dir / "lds_summary.json").write_text(
-                json.dumps({"lds_spearman": 0.25, "lds_percent": 25.0})
+                json.dumps(
+                    {
+                        "lds_spearman": 0.25,
+                        "lds_percent": 25.0,
+                        "target_cache": str(target_cache),
+                    }
+                )
+            )
+            (summary_dir / "lds_results.csv").write_text(
+                "true_f,pred_sum_tau\n0.5,0.25\n"
+            )
+            (summary_dir / "predictions.npy").write_bytes(
+                b"intermediate-predictions-must-not-be-exported"
             )
             invalid_summary = (
                 result_root
@@ -159,7 +177,10 @@ class Shape3DResultPackagerTest(unittest.TestCase):
             self.assertIn("scores.npy", selected_files)
             self.assertIn("score_indices.npy", selected_files)
             self.assertIn("lds_summary.json", selected_files)
+            self.assertIn("lds_results.csv", selected_files)
+            self.assertIn("true_f_results.csv", selected_files)
             self.assertNotIn("projected_gradients.npz", selected_files)
+            self.assertNotIn("predictions.npy", selected_files)
 
     def test_launcher_has_fail_fast_inputs_and_unbuffered_progress(self) -> None:
         text = LAUNCHER.read_text()
