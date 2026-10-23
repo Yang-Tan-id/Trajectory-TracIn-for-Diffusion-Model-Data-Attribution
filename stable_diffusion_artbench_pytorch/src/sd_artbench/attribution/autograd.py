@@ -8,6 +8,163 @@ import torch
 import torch.nn.functional as F
 
 
+class LinearGradSampleCapture:
+    """Exact per-sample gradients for a parameter set owned by Linear layers.
+
+    A regular backward of ``losses.sum()`` supplies each Linear output's
+    gradient.  Because Stable Diffusion has no cross-example attention, the
+    weight gradient for example ``b`` is the outer-product sum
+    ``grad_output[b].T @ input[b]``.  This avoids vectorizing backward itself.
+    """
+
+    def __init__(
+        self,
+        root: torch.nn.Module,
+        parameters: Sequence[torch.nn.Parameter],
+    ) -> None:
+        self.parameters = list(parameters)
+        self.parameter_slots = {
+            id(parameter): slot for slot, parameter in enumerate(self.parameters)
+        }
+        owners: dict[int, tuple[torch.nn.Linear, str]] = {}
+        relevant_modules: list[torch.nn.Linear] = []
+        for module in root.modules():
+            if not isinstance(module, torch.nn.Linear):
+                continue
+            owns_target = False
+            for name, parameter in module.named_parameters(recurse=False):
+                if id(parameter) in self.parameter_slots:
+                    owners[id(parameter)] = (module, name)
+                    owns_target = True
+            if owns_target:
+                relevant_modules.append(module)
+        missing = [
+            slot
+            for slot, parameter in enumerate(self.parameters)
+            if id(parameter) not in owners
+        ]
+        if missing:
+            raise ValueError(
+                "linear-hooks backend only supports parameters directly owned by "
+                f"torch.nn.Linear; unmatched slots={missing[:8]}"
+            )
+        self.owners = owners
+        self.enabled = False
+        self.batch_size = 0
+        self.samples: dict[int, torch.Tensor] = {}
+        self.handles = [
+            module.register_forward_hook(self._forward_hook)
+            for module in relevant_modules
+        ]
+
+    def start(self, batch_size: int) -> None:
+        if self.enabled:
+            raise RuntimeError("linear gradient-sample capture is already active")
+        if batch_size < 1:
+            raise ValueError("linear gradient-sample batch size must be positive")
+        self.batch_size = batch_size
+        self.samples = {}
+        self.enabled = True
+
+    def _forward_hook(
+        self,
+        module: torch.nn.Module,
+        inputs: tuple[torch.Tensor, ...],
+        output: torch.Tensor,
+    ) -> None:
+        if not self.enabled:
+            return
+        if not inputs or not torch.is_tensor(inputs[0]) or not torch.is_tensor(output):
+            raise TypeError("captured Linear must receive and return tensors")
+        activation = inputs[0].detach()
+        if activation.shape[0] != self.batch_size or output.shape[0] != self.batch_size:
+            raise ValueError(
+                "captured Linear does not preserve the leading example axis: "
+                f"input={tuple(activation.shape)} output={tuple(output.shape)} "
+                f"expected_batch={self.batch_size}"
+            )
+
+        def capture_output_gradient(gradient_output: torch.Tensor) -> None:
+            input_flat = activation.float().reshape(self.batch_size, -1, activation.shape[-1])
+            output_flat = gradient_output.detach().float().reshape(
+                self.batch_size, -1, gradient_output.shape[-1]
+            )
+            if input_flat.shape[1] != output_flat.shape[1]:
+                raise ValueError("captured Linear input/output token counts differ")
+            for name, parameter in module.named_parameters(recurse=False):
+                if id(parameter) not in self.parameter_slots:
+                    continue
+                if name == "weight":
+                    value = torch.bmm(output_flat.transpose(1, 2), input_flat)
+                elif name == "bias":
+                    value = output_flat.sum(dim=1)
+                else:
+                    raise ValueError(f"unsupported Linear parameter {name!r}")
+                previous = self.samples.get(id(parameter))
+                self.samples[id(parameter)] = value if previous is None else previous + value
+
+        output.register_hook(capture_output_gradient)
+
+    def loss_gradients(
+        self,
+        losses: torch.Tensor,
+        *,
+        chunk_size: int,
+    ) -> Iterator[tuple[list[int], list[torch.Tensor]]]:
+        if not self.enabled:
+            raise RuntimeError("call start() before the captured forward")
+        if losses.ndim != 1 or losses.shape[0] != self.batch_size:
+            raise ValueError("captured losses must have exactly one value per example")
+        try:
+            aggregate = torch.autograd.grad(
+                losses.sum(), self.parameters, allow_unused=True
+            )
+        finally:
+            self.enabled = False
+        gradients = [
+            self.samples.get(
+                id(parameter),
+                torch.zeros(
+                    (self.batch_size,) + tuple(parameter.shape),
+                    device=parameter.device,
+                    dtype=torch.float32,
+                ),
+            )
+            for parameter in self.parameters
+        ]
+
+        # The analytic per-sample gradients must add back to PyTorch's ordinary
+        # aggregate gradient.  Fail closed if module ownership/shape assumptions
+        # ever stop matching the installed Diffusers implementation.
+        difference_square = torch.zeros((), device=losses.device)
+        reference_square = torch.zeros((), device=losses.device)
+        for parameter, per_sample, total in zip(
+            self.parameters, gradients, aggregate
+        ):
+            expected = (
+                torch.zeros_like(parameter) if total is None else total.detach()
+            ).float()
+            actual = per_sample.sum(dim=0).float()
+            difference_square.add_((actual - expected).square().sum())
+            reference_square.add_(expected.square().sum())
+        relative_l2 = float(
+            (difference_square.sqrt() / reference_square.sqrt().clamp_min(1e-30))
+            .detach()
+            .cpu()
+        )
+        if relative_l2 > 5e-3:
+            raise RuntimeError(
+                "linear-hooks per-sample gradients do not sum to the ordinary "
+                f"gradient: relative_l2={relative_l2:.8e}"
+            )
+
+        for start in range(0, self.batch_size, chunk_size):
+            end = min(start + chunk_size, self.batch_size)
+            yield list(range(start, end)), [
+                value[start:end].detach() for value in gradients
+            ]
+
+
 @torch.no_grad()
 def compare_gradient_batches(
     reference: Sequence[torch.Tensor],

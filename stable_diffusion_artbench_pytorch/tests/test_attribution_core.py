@@ -9,6 +9,7 @@ from sd_artbench.attribution.autograd import (
     batched_loss_gradients,
     compare_gradient_batches,
     functional_per_example_gradients,
+    LinearGradSampleCapture,
     scalar_loop_loss_gradients,
 )
 from sd_artbench.attribution.launch_shards import save_checkpoint_sum
@@ -81,6 +82,37 @@ def test_scalar_loop_vjp_matches_individual_gradients():
     actual = torch.cat([chunk[1][0] for chunk in chunks], dim=0)
     expected = 2.0 * inputs.square() * parameter.detach()
     assert torch.allclose(actual, expected)
+
+
+def test_linear_hook_gradients_match_scalar_loop():
+    module = torch.nn.Sequential(
+        torch.nn.Linear(3, 4, bias=False),
+        torch.nn.SiLU(),
+        torch.nn.Linear(4, 2, bias=False),
+    )
+    parameters = list(module.parameters())
+    inputs = torch.tensor(
+        [[1.0, 2.0, -1.0], [-3.0, 4.0, 0.5], [2.0, -1.0, 3.0]]
+    )
+    targets = torch.tensor([[0.5, -0.5], [1.0, 2.0], [-1.0, 0.25]])
+
+    capture = LinearGradSampleCapture(module, parameters)
+    capture.start(len(inputs))
+    losses = torch.nn.functional.mse_loss(
+        module(inputs), targets, reduction="none"
+    ).mean(dim=1)
+    hook_gradients = list(capture.loss_gradients(losses, chunk_size=3))[0][1]
+
+    losses = torch.nn.functional.mse_loss(
+        module(inputs), targets, reduction="none"
+    ).mean(dim=1)
+    scalar_gradients = list(
+        scalar_loop_loss_gradients(
+            losses, parameters, list(range(len(inputs))), chunk_size=3
+        )
+    )[0][1]
+    for hook, scalar in zip(hook_gradients, scalar_gradients):
+        assert torch.allclose(hook, scalar, atol=1e-6, rtol=1e-5)
 
 
 def test_torch_func_per_example_gradients_match_individual_autograd():

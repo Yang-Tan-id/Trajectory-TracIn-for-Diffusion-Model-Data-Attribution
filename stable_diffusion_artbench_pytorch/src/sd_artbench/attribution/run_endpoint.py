@@ -19,6 +19,7 @@ from .autograd import (
     batched_loss_gradients,
     compare_gradient_batches,
     functional_per_example_gradients,
+    LinearGradSampleCapture,
     scalar_loop_loss_gradients,
 )
 from .optimizer import adamw_full_direction, adamw_full_direction_batch
@@ -63,12 +64,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--per-example-chunk-size", type=int, default=8)
     parser.add_argument(
         "--per-example-backend",
-        choices=("legacy", "torch_func", "scalar_loop"),
+        choices=("legacy", "torch_func", "scalar_loop", "linear_hooks"),
         default="legacy",
         help=(
             "legacy uses is_grads_batched; torch_func uses functional_call + "
             "vmap(grad); scalar_loop shares a batched forward but uses one "
-            "ordinary scalar autograd VJP per example"
+            "ordinary scalar autograd VJP per example; linear_hooks extracts "
+            "exact per-example LoRA Linear gradients from one ordinary backward"
         ),
     )
     parser.add_argument(
@@ -302,6 +304,11 @@ def main() -> None:
         learning_rate=args.learning_rate,
         weight_decay=args.weight_decay,
     )
+    linear_capture = (
+        LinearGradSampleCapture(runtime.unet, runtime.parameters)
+        if args.per_example_backend == "linear_hooks"
+        else None
+    )
     checkpoints = list_checkpoints(args.checkpoint_root)
     checkpoint_indices = (
         args.checkpoint_indices
@@ -512,7 +519,13 @@ def main() -> None:
                             dtype=torch.long,
                         )
                         noisy = runtime.scheduler.add_noise(latents, noise, ts)
-                        if args.per_example_backend in {"legacy", "scalar_loop"}:
+                        if linear_capture is not None:
+                            linear_capture.start(end - start)
+                        if args.per_example_backend in {
+                            "legacy",
+                            "scalar_loop",
+                            "linear_hooks",
+                        }:
                             prediction = runtime.unet(noisy, ts, hidden).sample
                         else:
                             with torch.no_grad():
@@ -523,7 +536,11 @@ def main() -> None:
                         delta = (target - prediction).detach()
                         delta_norms = delta.float().flatten(1).norm(dim=1).clamp_min(1e-12)
                         losses = None
-                        if args.per_example_backend in {"legacy", "scalar_loop"}:
+                        if args.per_example_backend in {
+                            "legacy",
+                            "scalar_loop",
+                            "linear_hooks",
+                        }:
                             losses = (prediction.float() * delta.float()).flatten(1).mean(
                                 dim=1
                             )
@@ -550,6 +567,15 @@ def main() -> None:
                                     losses,
                                     runtime.parameters,
                                     list(range(end - start)),
+                                    chunk_size=args.per_example_chunk_size,
+                                )
+                            )
+                        elif args.per_example_backend == "linear_hooks":
+                            assert losses is not None
+                            assert linear_capture is not None
+                            gradient_iterator = iter(
+                                linear_capture.loss_gradients(
+                                    losses,
                                     chunk_size=args.per_example_chunk_size,
                                 )
                             )
@@ -680,7 +706,13 @@ def main() -> None:
                                 "unsupported prediction type "
                                 f"{runtime.scheduler.config.prediction_type}"
                             )
-                        if args.per_example_backend in {"legacy", "scalar_loop"}:
+                        if linear_capture is not None:
+                            linear_capture.start(end - start)
+                        if args.per_example_backend in {
+                            "legacy",
+                            "scalar_loop",
+                            "linear_hooks",
+                        }:
                             profile_started = profile_start("train_forward")
                             prediction = runtime.unet(noisy, ts, hidden).sample
                             losses = F.mse_loss(
@@ -696,12 +728,20 @@ def main() -> None:
                                         chunk_size=args.per_example_chunk_size,
                                     )
                                 )
-                            else:
+                            elif args.per_example_backend == "scalar_loop":
                                 gradient_iterator = iter(
                                     scalar_loop_loss_gradients(
                                         losses,
                                         runtime.parameters,
                                         list(range(end - start)),
+                                        chunk_size=args.per_example_chunk_size,
+                                    )
+                                )
+                            else:
+                                assert linear_capture is not None
+                                gradient_iterator = iter(
+                                    linear_capture.loss_gradients(
+                                        losses,
                                         chunk_size=args.per_example_chunk_size,
                                     )
                                 )
