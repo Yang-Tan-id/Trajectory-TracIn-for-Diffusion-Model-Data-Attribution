@@ -75,6 +75,16 @@ class Shape3DResultPackagerTest(unittest.TestCase):
             (summary_dir / "lds_summary.json").write_text(
                 json.dumps({"lds_spearman": 0.25, "lds_percent": 25.0})
             )
+            invalid_summary = (
+                result_root
+                / "eval/prompted_solo"
+                / query_rel
+                / "lds"
+                / lds_namespace
+                / "noise_trajectory/pred_kept_sign_-1/subset_00/lds_summary.json"
+            )
+            invalid_summary.parent.mkdir(parents=True)
+            invalid_summary.write_text("")
 
             unrelated = result_root / "model" / "must_not_be_selected.ckpt"
             unrelated.parent.mkdir(parents=True)
@@ -103,6 +113,7 @@ class Shape3DResultPackagerTest(unittest.TestCase):
             self.assertEqual(completed.returncode, 0, completed.stderr)
             self.assertIn("[startup] queries=1", completed.stdout)
             self.assertIn("[scan] query=0 (1/1)", completed.stdout)
+            self.assertIn("[warning] skipping invalid LDS summary", completed.stdout)
             self.assertIn("[metadata]", completed.stdout)
 
             inventory_path = output_dir / "metadata/score_inventory.csv"
@@ -119,6 +130,12 @@ class Shape3DResultPackagerTest(unittest.TestCase):
             self.assertEqual(len(lds_rows), 1)
             self.assertEqual(lds_rows[0]["variant"], "raw")
             self.assertEqual(lds_rows[0]["lds_percent"], "25.0")
+
+            invalid_report = (
+                output_dir / "metadata/invalid_lds_summaries.txt"
+            ).read_text()
+            self.assertIn("noise_trajectory", invalid_report)
+            self.assertIn("JSONDecodeError", invalid_report)
 
             selected = (
                 output_dir / "metadata/selected_result_directories.txt"

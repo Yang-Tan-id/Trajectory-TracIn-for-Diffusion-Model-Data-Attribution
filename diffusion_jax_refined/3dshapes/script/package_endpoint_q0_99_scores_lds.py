@@ -145,6 +145,7 @@ def main() -> None:
     score_rows: list[dict[str, Any]] = []
     lds_rows: list[dict[str, Any]] = []
     missing_query_roots: list[str] = []
+    invalid_lds_summaries: list[str] = []
 
     for query_position, query_id in enumerate(query_ids, start=1):
         print(
@@ -199,7 +200,23 @@ def main() -> None:
                 target_function = relative.parts[0]
                 prediction_sign = relative.parts[1].removeprefix("pred_kept_sign_")
                 subset_group = relative.parts[2]
-                payload = json.loads(summary.read_text())
+                try:
+                    payload = json.loads(summary.read_text())
+                    if not isinstance(payload, dict):
+                        raise TypeError(
+                            f"expected a JSON object, got {type(payload).__name__}"
+                        )
+                except (OSError, UnicodeError, json.JSONDecodeError, TypeError) as error:
+                    relative_path = str(summary.relative_to(result_root))
+                    invalid_lds_summaries.append(
+                        f"{relative_path}\t{type(error).__name__}: {error}"
+                    )
+                    print(
+                        f"[warning] skipping invalid LDS summary: {relative_path} "
+                        f"({type(error).__name__}: {error})",
+                        flush=True,
+                    )
+                    continue
                 lds_rows.append(
                     {
                         "query_id": query_id,
@@ -265,6 +282,7 @@ def main() -> None:
         f"selected score namespace directories: {len(score_rows)}",
         f"selected LDS namespace directories: {sum(1 for p in selected if '/lds/' in str(p))}",
         f"LDS result rows: {len(lds_rows)}",
+        f"invalid LDS summaries skipped: {len(invalid_lds_summaries)}",
         f"missing query roots: {len(missing_query_roots)}",
         "",
         "FAMILY                  TRANSFORM       T       VARIANT            TARGET                         SIGN    N      MEAN       STD",
@@ -282,6 +300,10 @@ def main() -> None:
     (metadata / "lds_group_summary.txt").write_text("\n".join(report) + "\n")
     (metadata / "missing_query_roots.txt").write_text(
         "\n".join(missing_query_roots) + ("\n" if missing_query_roots else "")
+    )
+    (metadata / "invalid_lds_summaries.txt").write_text(
+        "\n".join(invalid_lds_summaries)
+        + ("\n" if invalid_lds_summaries else "")
     )
 
     selected_rel = sorted(str(path.relative_to(result_root)) for path in selected)
