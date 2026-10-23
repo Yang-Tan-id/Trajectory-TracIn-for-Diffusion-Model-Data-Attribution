@@ -45,6 +45,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--steps", type=int, default=50)
     parser.add_argument("--guidance-scale", type=float, default=7.5)
     parser.add_argument("--gif-frame-ms", type=int, default=500)
+    parser.add_argument("--skip-gif", action="store_true")
     parser.add_argument("--disable-safety-checker", action="store_true")
     return parser.parse_args()
 
@@ -176,19 +177,23 @@ def write_visualizations(
     prompt: str,
     seed: int,
     frame_ms: int,
+    write_gif: bool,
 ) -> None:
     labeled = []
     for label, path in frames:
         with Image.open(path) as image:
             labeled.append(caption_frame(image.convert("RGB"), label, prompt, seed))
-    labeled[0].save(
-        query_dir / "trajectory.gif",
-        save_all=True,
-        append_images=labeled[1:],
-        duration=frame_ms,
-        loop=0,
-        optimize=False,
-    )
+    if write_gif:
+        labeled[0].save(
+            query_dir / "trajectory.gif",
+            save_all=True,
+            append_images=labeled[1:],
+            duration=frame_ms,
+            loop=0,
+            optimize=False,
+        )
+    else:
+        (query_dir / "trajectory.gif").unlink(missing_ok=True)
     columns = 5
     gap = 8
     tile_width, tile_height = labeled[0].size
@@ -308,6 +313,7 @@ def main() -> None:
             str(query["prompt"]),
             int(query["seed"]),
             args.gif_frame_ms,
+            not args.skip_gif,
         )
         output_records.append(
             {
@@ -316,7 +322,11 @@ def main() -> None:
                 "seed": int(query["seed"]),
                 "frame_count": len(frames),
                 "timeline": str((query_dir / "timeline.jpg").relative_to(args.output_dir)),
-                "gif": str((query_dir / "trajectory.gif").relative_to(args.output_dir)),
+                "gif": (
+                    str((query_dir / "trajectory.gif").relative_to(args.output_dir))
+                    if not args.skip_gif
+                    else None
+                ),
             }
         )
     manifest = {

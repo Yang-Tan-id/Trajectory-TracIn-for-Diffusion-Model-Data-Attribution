@@ -181,6 +181,7 @@ CUDA_VISIBLE_DEVICES=0 python -m sd_artbench.generate_checkpoint_trajectory \
   --query-indices 22 \
   --checkpoint-root outputs/artbench2-lora \
   --output-dir outputs/checkpoint-trajectories-q22 \
+  --skip-gif \
   --disable-safety-checker
 ```
 
