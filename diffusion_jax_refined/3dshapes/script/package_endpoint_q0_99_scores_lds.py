@@ -12,6 +12,7 @@ import shutil
 import statistics
 import subprocess
 import sys
+import tarfile
 from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
@@ -26,6 +27,8 @@ from dataset_config import _prompt_tag
 
 
 VARIANTS = ("query_train_l2", "query_l2", "train_l2", "raw")
+SCORE_ARRAY_NAMES = {"scores.npy", "score_indices.npy", "score_indices.json"}
+SCORE_METADATA_SUFFIXES = {".json", ".csv", ".txt"}
 
 
 def parse_ids(text: str) -> list[int]:
@@ -106,6 +109,77 @@ def population_std(values: list[float]) -> float:
     return statistics.pstdev(finite) if len(finite) > 1 else 0.0 if finite else float("nan")
 
 
+def final_score_files(namespace_dir: Path) -> list[Path]:
+    """Return score outputs, excluding projected gradients and component caches."""
+    files: set[Path] = set()
+    for name in SCORE_ARRAY_NAMES:
+        files.update(path for path in namespace_dir.rglob(name) if path.is_file())
+    files.update(
+        path
+        for path in namespace_dir.rglob("*")
+        if path.is_file() and path.suffix.lower() in SCORE_METADATA_SUFFIXES
+    )
+    return sorted(files)
+
+
+def archive_files(
+    entries: list[tuple[Path, Path]],
+    archive: Path,
+    progress_every_files: int,
+) -> None:
+    total_bytes = sum(source.stat().st_size for source, _ in entries)
+    zstd = shutil.which("zstd")
+    if zstd:
+        command = [zstd, "-T0", "-3", "-q", "-c"]
+    else:
+        gzip = shutil.which("gzip")
+        if gzip is None:
+            raise RuntimeError("Neither zstd nor gzip is available")
+        command = [gzip, "-1", "-c"]
+
+    if archive.exists():
+        archive.unlink()
+    print(
+        f"[archive] creating {archive} files={len(entries)} "
+        f"input_bytes={total_bytes}",
+        flush=True,
+    )
+    processed_bytes = 0
+    with archive.open("wb") as output_handle:
+        process = subprocess.Popen(
+            command,
+            stdin=subprocess.PIPE,
+            stdout=output_handle,
+        )
+        if process.stdin is None:
+            raise RuntimeError("Failed to open compressor stdin")
+        try:
+            with tarfile.open(fileobj=process.stdin, mode="w|") as tar:
+                for index, (source, archive_path) in enumerate(entries, start=1):
+                    tar.add(source, arcname=str(archive_path), recursive=False)
+                    processed_bytes += source.stat().st_size
+                    if (
+                        index == len(entries)
+                        or index % max(1, progress_every_files) == 0
+                    ):
+                        percent = (
+                            100.0 * processed_bytes / total_bytes
+                            if total_bytes
+                            else 100.0
+                        )
+                        print(
+                            f"[archive progress] files={index}/{len(entries)} "
+                            f"bytes={processed_bytes}/{total_bytes} "
+                            f"percent={percent:.2f}",
+                            flush=True,
+                        )
+        finally:
+            process.stdin.close()
+        return_code = process.wait()
+    if return_code != 0:
+        raise subprocess.CalledProcessError(return_code, command)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--experiment", default="experiment1")
@@ -119,6 +193,7 @@ def main() -> None:
     parser.add_argument("--result-root", type=Path)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--archive-name", default="shape3d_q0_99_endpoint_scores_lds")
+    parser.add_argument("--progress-every-files", type=int, default=250)
     parser.add_argument("--no-archive", action="store_true")
     args = parser.parse_args()
 
@@ -141,7 +216,9 @@ def main() -> None:
         shutil.rmtree(metadata)
     metadata.mkdir(parents=True)
 
-    selected: set[Path] = set()
+    selected_files: set[Path] = set()
+    selected_namespace_dirs: set[Path] = set()
+    selected_lds_namespace_dirs: set[Path] = set()
     score_rows: list[dict[str, Any]] = []
     lds_rows: list[dict[str, Any]] = []
     missing_query_roots: list[str] = []
@@ -167,7 +244,11 @@ def main() -> None:
                 description = describe_namespace(namespace_dir.name)
                 if description is None:
                     continue
-                selected.add(namespace_dir)
+                namespace_files = final_score_files(namespace_dir)
+                if not namespace_files:
+                    continue
+                selected_namespace_dirs.add(namespace_dir)
+                selected_files.update(namespace_files)
                 score_rows.append(
                     {
                         "query_id": query_id,
@@ -175,10 +256,8 @@ def main() -> None:
                         "initial_seed": initial_seed,
                         **description,
                         "directory_name": namespace_dir.name,
-                        # Avoid a redundant recursive walk over every score bank.
-                        # The archive pass below already traverses selected data once.
-                        "file_count": "not_prescanned",
-                        "bytes": "not_prescanned",
+                        "file_count": len(namespace_files),
+                        "bytes": sum(path.stat().st_size for path in namespace_files),
                         "relative_path": str(namespace_dir.relative_to(result_root)),
                     }
                 )
@@ -193,12 +272,23 @@ def main() -> None:
             description = describe_namespace(namespace_dir.name)
             if description is None:
                 continue
-            selected.add(namespace_dir)
-            summaries = sorted(namespace_dir.glob("*/pred_kept_sign_*/*/lds_summary.json"))
+            summaries = sorted(namespace_dir.rglob("lds_summary.json"))
+            if not summaries:
+                continue
+            selected_namespace_dirs.add(namespace_dir)
+            selected_lds_namespace_dirs.add(namespace_dir)
             for summary in summaries:
+                selected_files.add(summary)
                 relative = summary.relative_to(namespace_dir)
+                if len(relative.parts) < 4:
+                    invalid_lds_summaries.append(
+                        f"{summary.relative_to(result_root)}\tunexpected LDS path layout"
+                    )
+                    continue
                 target_function = relative.parts[0]
-                prediction_sign = relative.parts[1].removeprefix("pred_kept_sign_")
+                prediction_sign = relative.parts[1]
+                for prefix in ("pred_kept_sign_", "pred_removed_sign_"):
+                    prediction_sign = prediction_sign.removeprefix(prefix)
                 subset_group = relative.parts[2]
                 try:
                     payload = json.loads(summary.read_text())
@@ -280,7 +370,9 @@ def main() -> None:
         f"result_root: {result_root}",
         f"queries requested: {len(query_ids)}",
         f"selected score namespace directories: {len(score_rows)}",
-        f"selected LDS namespace directories: {sum(1 for p in selected if '/lds/' in str(p))}",
+        f"selected LDS namespace directories: {len(selected_lds_namespace_dirs)}",
+        f"selected final result files: {len(selected_files)}",
+        f"selected input bytes: {sum(path.stat().st_size for path in selected_files)}",
         f"LDS result rows: {len(lds_rows)}",
         f"invalid LDS summaries skipped: {len(invalid_lds_summaries)}",
         f"missing query roots: {len(missing_query_roots)}",
@@ -306,14 +398,23 @@ def main() -> None:
         + ("\n" if invalid_lds_summaries else "")
     )
 
-    selected_rel = sorted(str(path.relative_to(result_root)) for path in selected)
+    selected_rel = sorted(
+        str(path.relative_to(result_root)) for path in selected_namespace_dirs
+    )
     (metadata / "selected_result_directories.txt").write_text(
         "\n".join(selected_rel) + ("\n" if selected_rel else "")
     )
+    selected_file_rel = sorted(
+        str(path.relative_to(result_root)) for path in selected_files
+    )
+    (metadata / "selected_result_files.txt").write_text(
+        "\n".join(selected_file_rel) + ("\n" if selected_file_rel else "")
+    )
     readme = (
-        "This bundle contains existing score banks and cached LDS outputs only.\n"
+        "This slim bundle contains final score arrays/metadata and LDS summaries only.\n"
         "It does not contain model checkpoints, train/query gradient artifacts, samples,\n"
-        "datasets, or top-K retrained models. Paths under data/ are relative to the\n"
+        "LDS intermediate predictions/caches, datasets, or top-K retrained models.\n"
+        "Paths under data/ are relative to the\n"
         "Shape3D experiment result root. See metadata/*.csv and *.txt for inventories.\n"
     )
     (metadata / "README.txt").write_text(readme)
@@ -322,38 +423,21 @@ def main() -> None:
     print(f"[metadata] {metadata}", flush=True)
     if args.no_archive:
         return
-    if not selected_rel:
-        raise RuntimeError("No matching score/LDS directories were found")
+    if not selected_file_rel:
+        raise RuntimeError("No matching final score/LDS files were found")
 
-    staging = args.output_dir / "staging"
-    if staging.exists():
-        shutil.rmtree(staging)
-    (staging / "data").mkdir(parents=True)
-    shutil.copytree(metadata, staging / "metadata")
-    for relative in selected_rel:
-        source = result_root / relative
-        destination = staging / "data" / relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.symlink_to(source, target_is_directory=True)
-
-    zstd = shutil.which("zstd")
-    if zstd:
-        archive = args.output_dir / f"{args.archive_name}.tar.zst"
-        command = [
-            "tar", "--dereference", "-C", str(staging),
-            "-I", f"{zstd} -T0 -3", "-cf", str(archive), ".",
-        ]
-    else:
-        archive = args.output_dir / f"{args.archive_name}.tar.gz"
-        command = [
-            "tar", "--dereference", "-C", str(staging),
-            "-I", "gzip -1", "-cf", str(archive), ".",
-        ]
-    if archive.exists():
-        archive.unlink()
-    print(f"[archive] creating {archive}", flush=True)
-    subprocess.run(command, check=True)
-    shutil.rmtree(staging)
+    suffix = ".tar.zst" if shutil.which("zstd") else ".tar.gz"
+    archive = args.output_dir / f"{args.archive_name}{suffix}"
+    entries = [
+        (path, Path("data") / path.relative_to(result_root))
+        for path in sorted(selected_files)
+    ]
+    entries.extend(
+        (path, Path("metadata") / path.name)
+        for path in sorted(metadata.iterdir())
+        if path.is_file()
+    )
+    archive_files(entries, archive, args.progress_every_files)
     print(f"[saved] {archive}", flush=True)
     print(f"[bytes] {archive.stat().st_size}", flush=True)
 

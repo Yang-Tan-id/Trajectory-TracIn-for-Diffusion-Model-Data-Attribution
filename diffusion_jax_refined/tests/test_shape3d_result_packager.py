@@ -61,6 +61,10 @@ class Shape3DResultPackagerTest(unittest.TestCase):
             )
             score_dir.mkdir(parents=True)
             (score_dir / "scores.npy").write_bytes(b"synthetic-score")
+            (score_dir / "score_indices.npy").write_bytes(b"synthetic-indices")
+            (score_dir / "projected_gradients.npz").write_bytes(
+                b"must-not-be-exported"
+            )
 
             lds_namespace = f"{score_namespace}_raw"
             summary_dir = (
@@ -102,7 +106,6 @@ class Shape3DResultPackagerTest(unittest.TestCase):
                     str(result_root),
                     "--output-dir",
                     str(output_dir),
-                    "--no-archive",
                 ],
                 check=False,
                 capture_output=True,
@@ -115,6 +118,12 @@ class Shape3DResultPackagerTest(unittest.TestCase):
             self.assertIn("[scan] query=0 (1/1)", completed.stdout)
             self.assertIn("[warning] skipping invalid LDS summary", completed.stdout)
             self.assertIn("[metadata]", completed.stdout)
+            self.assertIn("[archive progress]", completed.stdout)
+            self.assertIn("[saved]", completed.stdout)
+            self.assertTrue(
+                (output_dir / "shape3d_q0_99_endpoint_scores_lds.tar.gz").is_file()
+                or (output_dir / "shape3d_q0_99_endpoint_scores_lds.tar.zst").is_file()
+            )
 
             inventory_path = output_dir / "metadata/score_inventory.csv"
             with inventory_path.open(newline="") as handle:
@@ -122,7 +131,7 @@ class Shape3DResultPackagerTest(unittest.TestCase):
             self.assertEqual(len(inventory), 1)
             self.assertEqual(inventory[0]["family"], "endpoint_pollute")
             self.assertEqual(inventory[0]["transform"], "raw_gradient")
-            self.assertEqual(inventory[0]["file_count"], "not_prescanned")
+            self.assertEqual(inventory[0]["file_count"], "2")
 
             lds_path = output_dir / "metadata/lds_all_results.csv"
             with lds_path.open(newline="") as handle:
@@ -143,6 +152,14 @@ class Shape3DResultPackagerTest(unittest.TestCase):
             self.assertIn(score_namespace, selected)
             self.assertIn(lds_namespace, selected)
             self.assertNotIn("must_not_be_selected.ckpt", selected)
+
+            selected_files = (
+                output_dir / "metadata/selected_result_files.txt"
+            ).read_text()
+            self.assertIn("scores.npy", selected_files)
+            self.assertIn("score_indices.npy", selected_files)
+            self.assertIn("lds_summary.json", selected_files)
+            self.assertNotIn("projected_gradients.npz", selected_files)
 
     def test_launcher_has_fail_fast_inputs_and_unbuffered_progress(self) -> None:
         text = LAUNCHER.read_text()
