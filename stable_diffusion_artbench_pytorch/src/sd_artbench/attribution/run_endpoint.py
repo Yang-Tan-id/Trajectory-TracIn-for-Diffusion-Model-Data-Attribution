@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
+from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
@@ -54,6 +56,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--pollute-query-batch-size", type=int, default=8)
     parser.add_argument("--pollute-train-batch-size", type=int, default=8)
     parser.add_argument("--per-example-chunk-size", type=int, default=8)
+    parser.add_argument(
+        "--profile-pollute-batches",
+        type=int,
+        default=0,
+        help="CUDA-synchronize and time the first N calls of each Pollute stage.",
+    )
     parser.add_argument("--proj-dim", type=int, default=32768)
     parser.add_argument("--rank", type=int, default=128)
     parser.add_argument("--mixed-precision", choices=("no", "fp16", "bf16"), default="fp16")
@@ -76,18 +84,6 @@ def project_dual(runtime, gradients_raw, projector, max_grad_norm):
     )
     adamw_projected, adamw_norm = projector.project(adamw)
     return raw, adamw_projected, raw_norm, adamw_norm, learning_rate
-
-
-def project_dual_batch(runtime, gradients_raw, projector, max_grad_norm):
-    raw, raw_norms = projector.project_batch(gradients_raw)
-    adamw, learning_rate = adamw_full_direction_batch(
-        runtime.parameters,
-        gradients_raw,
-        runtime.optimizer,
-        max_grad_norm=max_grad_norm,
-    )
-    adamw_projected, adamw_norms = projector.project_batch(adamw)
-    return raw, adamw_projected, raw_norms, adamw_norms, learning_rate
 
 
 def save_result(path: Path, scores: np.ndarray, metadata: dict, indices: np.ndarray) -> None:
@@ -189,6 +185,8 @@ def main() -> None:
     ):
         if getattr(args, name) < 1:
             raise ValueError(f"--{name.replace('_', '-')} must be positive")
+    if args.profile_pollute_batches < 0:
+        raise ValueError("--profile-pollute-batches cannot be negative")
     methods = {item.strip() for item in args.methods.split(",") if item.strip()}
     unknown = methods.difference({"endpoint_tracin", "endpoint_pollute"})
     if unknown:
@@ -196,6 +194,47 @@ def main() -> None:
     if not methods:
         raise ValueError("at least one endpoint method is required")
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
+    profile_totals: dict[str, float] = defaultdict(float)
+    profile_counts: dict[str, int] = defaultdict(int)
+
+    def profile_start(stage: str) -> float | None:
+        if profile_counts[stage] >= args.profile_pollute_batches:
+            return None
+        if device.type == "cuda":
+            torch.cuda.synchronize(device)
+        return time.perf_counter()
+
+    def profile_stop(stage: str, started: float | None) -> None:
+        if started is None:
+            return
+        if device.type == "cuda":
+            torch.cuda.synchronize(device)
+        profile_totals[stage] += time.perf_counter() - started
+        profile_counts[stage] += 1
+
+    def print_pollute_profile() -> None:
+        for stage in (
+            "query_next_forward",
+            "query_current_forward",
+            "query_vjp",
+            "query_projection",
+            "train_encode_transfer",
+            "train_forward",
+            "train_vjp",
+            "train_raw_projection",
+            "train_adamw",
+            "train_adamw_projection",
+            "train_scoring",
+        ):
+            count = profile_counts[stage]
+            if count:
+                total_ms = profile_totals[stage] * 1000.0
+                print(
+                    f"[pollute-profile] stage={stage} calls={count} "
+                    f"total_ms={total_ms:.3f} avg_ms={total_ms / count:.3f}",
+                    flush=True,
+                )
+
     runtime = build_runtime(
         model_name=args.model,
         rank=args.rank,
@@ -370,6 +409,7 @@ def main() -> None:
                         for start in range(
                             0, len(queries), args.pollute_query_batch_size
                         ):
+                            profile_started = profile_start("query_next_forward")
                             end = min(
                                 start + args.pollute_query_batch_size, len(queries)
                             )
@@ -386,6 +426,7 @@ def main() -> None:
                             prediction_chunks.append(
                                 runtime.unet(noisy, ts, hidden).sample.detach().cpu()
                             )
+                            profile_stop("query_next_forward", profile_started)
                         next_predictions.append(torch.cat(prediction_chunks, dim=0))
                 load_raw_checkpoint(runtime, checkpoint)
                 for timestamp_slot, timestep in enumerate(timesteps):
@@ -399,6 +440,7 @@ def main() -> None:
                     for start in range(
                         0, len(queries), args.pollute_query_batch_size
                     ):
+                        profile_started = profile_start("query_current_forward")
                         end = min(start + args.pollute_query_batch_size, len(queries))
                         latents = torch.cat(query_latents[start:end], dim=0)
                         hidden = torch.cat(query_hidden[start:end], dim=0)
@@ -417,22 +459,32 @@ def main() -> None:
                         delta = (target - prediction).detach()
                         delta_norms = delta.float().flatten(1).norm(dim=1).clamp_min(1e-12)
                         losses = (prediction.float() * delta.float()).flatten(1).mean(dim=1)
+                        profile_stop("query_current_forward", profile_started)
                         features = torch.empty(
                             (end - start, args.proj_dim),
                             device=device,
                             dtype=torch.float32,
                         )
-                        for sample_slots, gradient_batch in batched_loss_gradients(
+                        gradient_iterator = iter(batched_loss_gradients(
                             losses,
                             runtime.parameters,
                             list(range(end - start)),
                             chunk_size=args.per_example_chunk_size,
-                        ):
+                        ))
+                        while True:
+                            profile_started = profile_start("query_vjp")
+                            try:
+                                sample_slots, gradient_batch = next(gradient_iterator)
+                            except StopIteration:
+                                break
+                            profile_stop("query_vjp", profile_started)
+                            profile_started = profile_start("query_projection")
                             projected, _ = projector.project_batch(gradient_batch)
                             rows = torch.as_tensor(
                                 sample_slots, device=device, dtype=torch.long
                             )
                             features[rows] = projected / delta_norms[rows, None]
+                            profile_stop("query_projection", profile_started)
                         query_feature_chunks.append(features)
                     query_matrix = torch.cat(query_feature_chunks, dim=0)
 
@@ -444,6 +496,7 @@ def main() -> None:
                     for start in range(
                         0, len(train_positions), args.pollute_train_batch_size
                     ):
+                        profile_started = profile_start("train_encode_transfer")
                         end = min(
                             start + args.pollute_train_batch_size,
                             len(train_positions),
@@ -454,6 +507,8 @@ def main() -> None:
                         ]
                         latents = torch.cat([item[0] for item in encoded], dim=0)
                         hidden = torch.cat([item[1] for item in encoded], dim=0)
+                        profile_stop("train_encode_transfer", profile_started)
+                        profile_started = profile_start("train_forward")
                         shared_train_noise = deterministic_noise(
                             latents[:1],
                             "endpoint_pollute",
@@ -481,20 +536,42 @@ def main() -> None:
                         losses = F.mse_loss(
                             prediction.float(), target.float(), reduction="none"
                         ).mean(dim=(1, 2, 3))
-                        for sample_slots, gradient_batch in batched_loss_gradients(
+                        profile_stop("train_forward", profile_started)
+                        gradient_iterator = iter(batched_loss_gradients(
                             losses,
                             runtime.parameters,
                             list(range(end - start)),
                             chunk_size=args.per_example_chunk_size,
-                        ):
-                            raw, adamw, _, _, reconstructed_lr = project_dual_batch(
-                                runtime,
-                                gradient_batch,
-                                projector,
-                                args.max_grad_norm,
+                        ))
+                        while True:
+                            profile_started = profile_start("train_vjp")
+                            try:
+                                sample_slots, gradient_batch = next(gradient_iterator)
+                            except StopIteration:
+                                break
+                            profile_stop("train_vjp", profile_started)
+
+                            profile_started = profile_start("train_raw_projection")
+                            raw, _ = projector.project_batch(gradient_batch)
+                            profile_stop("train_raw_projection", profile_started)
+
+                            profile_started = profile_start("train_adamw")
+                            adamw_directions, reconstructed_lr = (
+                                adamw_full_direction_batch(
+                                    runtime.parameters,
+                                    gradient_batch,
+                                    runtime.optimizer,
+                                    max_grad_norm=args.max_grad_norm,
+                                )
                             )
+                            profile_stop("train_adamw", profile_started)
+
+                            profile_started = profile_start("train_adamw_projection")
+                            adamw, _ = projector.project_batch(adamw_directions)
+                            profile_stop("train_adamw_projection", profile_started)
                             if not np.isclose(checkpoint_lr, reconstructed_lr):
                                 raise RuntimeError("optimizer LR changed while scoring")
+                            profile_started = profile_start("train_scoring")
                             destinations = [start + slot for slot in sample_slots]
                             for transform_slot, feature in enumerate((raw, adamw)):
                                 dots = score_variants(query_matrix, feature)
@@ -519,9 +596,11 @@ def main() -> None:
                                         :,
                                         destination,
                                     ] += weighted
+                            profile_stop("train_scoring", profile_started)
                         train_progress.update(end - start)
                     train_progress.close()
                 pollute_completed = checkpoint_slot
+                print_pollute_profile()
 
         metadata = {
             **run_signature,
