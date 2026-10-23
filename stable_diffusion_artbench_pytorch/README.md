@@ -20,7 +20,10 @@ The paper-faithful target dataset is sampled as follows:
 The model defaults reproduce the D-TRAK setup: `lambdalabs/miniSD-diffusers`,
 256 px, U-Net attention LoRA rank 128, batch size 64, 100 epochs, AdamW,
 learning rate `3e-4`, weight decay `1e-6`, cosine schedule with 10% warmup,
-center crop, random horizontal flip, and seed 42.
+attention dropout 0.1, center crop, random horizontal flip, and seed 42.
+Resumable training state is saved every 1% of total optimizer updates, matching
+the released D-TRAK training code. Final inference weights are written to
+`outputs/artbench2-lora/final/`.
 
 ## Layout
 
@@ -117,4 +120,9 @@ python -m sd_artbench.generate \
 The D-TRAK per-sample gradient, random projection, and score-combination code
 will live in `src/sd_artbench/attribution/` so the PyTorch model path stays
 independent of the JAX implementation.
+
+`trainable_parameters.json` records the exact LoRA parameter names and shapes
+used for updates and later attribution. Official D-TRAK checkpoints infer this
+set from the LoRA architecture rather than storing a separate Boolean mask;
+the manifest is additional metadata and does not change training.
 

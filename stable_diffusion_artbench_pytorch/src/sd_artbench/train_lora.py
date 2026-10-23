@@ -1,4 +1,5 @@
 import argparse
+import json
 import math
 import pickle
 from pathlib import Path
@@ -91,6 +92,14 @@ def create_lora_layers(unet: UNet2DConditionModel, rank: int) -> AttnProcsLayers
     return AttnProcsLayers(unet.attn_processors)
 
 
+def set_attention_dropout(unet: UNet2DConditionModel, probability: float) -> None:
+    """Match D-TRAK: set every Dropout module inside an attention block to p."""
+
+    for name, module in unet.named_modules():
+        if "attn" in name and isinstance(module, torch.nn.Dropout):
+            module.p = probability
+
+
 def parse_args() -> argparse.Namespace:
     defaults = ArtBenchConfig()
     parser = argparse.ArgumentParser(description="Fine-tune miniSD on ArtBench-2 with LoRA.")
@@ -103,6 +112,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, default=defaults.index_root.parent.parent / "outputs" / "artbench2-lora")
     parser.add_argument("--resolution", type=int, default=256)
     parser.add_argument("--rank", type=int, default=128)
+    parser.add_argument("--attention-dropout", type=float, default=0.1)
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--learning-rate", type=float, default=3e-4)
@@ -110,7 +120,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-workers", type=int, default=8)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--mixed-precision", choices=["no", "fp16", "bf16"], default="fp16")
-    parser.add_argument("--save-every-epochs", type=int, default=10)
+    parser.add_argument(
+        "--checkpointing-steps",
+        type=int,
+        default=-1,
+        help="Save resumable state every N updates; -1 matches D-TRAK (1%% of all updates).",
+    )
     return parser.parse_args()
 
 
@@ -129,6 +144,7 @@ def main() -> None:
     text_encoder.requires_grad_(False)
     unet.requires_grad_(False)
     lora_layers = create_lora_layers(unet, args.rank)
+    set_attention_dropout(unet, args.attention_dropout)
 
     dataset = IndexedArtBenchDataset(
         args.metadata_csv,
@@ -151,6 +167,9 @@ def main() -> None:
     )
     updates_per_epoch = math.ceil(len(dataloader) / accelerator.num_processes)
     total_steps = updates_per_epoch * args.epochs
+    checkpointing_steps = args.checkpointing_steps
+    if checkpointing_steps == -1:
+        checkpointing_steps = math.ceil(total_steps * 0.01)
     lr_scheduler = get_scheduler(
         "cosine",
         optimizer=optimizer,
@@ -171,6 +190,21 @@ def main() -> None:
     unet.to(accelerator.device, dtype=weight_dtype)
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
+    if accelerator.is_main_process:
+        trainable_parameters = {
+            name: list(parameter.shape)
+            for name, parameter in unet.named_parameters()
+            if parameter.requires_grad
+        }
+        (args.output_dir / "trainable_parameters.json").write_text(
+            json.dumps(trainable_parameters, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        print(
+            f"trainable_parameters={sum(p.numel() for p in unet.parameters() if p.requires_grad):,} "
+            f"warmup_steps={math.ceil(total_steps * 0.1)} "
+            f"checkpointing_steps={checkpointing_steps}"
+        )
     global_step = 0
     for epoch in range(args.epochs):
         unet.train()
@@ -209,13 +243,16 @@ def main() -> None:
                 optimizer.zero_grad()
             epoch_loss += loss.detach().float().item()
             global_step += 1
+            if global_step % checkpointing_steps == 0:
+                accelerator.wait_for_everyone()
+                if accelerator.is_main_process:
+                    accelerator.save_state(
+                        str(args.output_dir / f"checkpoint-{global_step}")
+                    )
 
         if accelerator.is_main_process:
             mean_loss = epoch_loss / max(len(dataloader), 1)
             print(f"epoch={epoch + 1}/{args.epochs} step={global_step} loss={mean_loss:.6f}")
-            if (epoch + 1) % args.save_every_epochs == 0:
-                unwrapped = accelerator.unwrap_model(unet)
-                unwrapped.save_attn_procs(args.output_dir / f"epoch-{epoch + 1}")
 
     accelerator.wait_for_everyone()
     if accelerator.is_main_process:
