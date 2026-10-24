@@ -26,7 +26,7 @@ from ..train_lora import IndexedArtBenchDataset, set_attention_dropout
 from .autograd import (
     LinearGradSampleCapture,
     batched_loss_gradients,
-    scalar_loss_gradients,
+    scalar_loop_loss_gradients,
 )
 from .optimizer import adamw_full_direction, adamw_full_direction_batch
 from .projection import CountSketchProjector, stable_seed
@@ -423,7 +423,7 @@ def main() -> None:
                             losses, chunk_size=args.per_example_chunk_size
                         )
                     elif args.per_example_backend == "scalar_loop":
-                        gradient_batches = scalar_loss_gradients(
+                        gradient_batches = scalar_loop_loss_gradients(
                             losses,
                             runtime.parameters,
                             selected,
