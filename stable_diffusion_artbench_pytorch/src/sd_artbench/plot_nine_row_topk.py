@@ -179,8 +179,11 @@ def build_banks(
     endpoint_pollute: dict[str, Any],
     retrac: dict[str, Any],
     transform_slot: int,
+    transform_name: str,
 ) -> list[ScoreBank]:
     banks = []
+    linear_largest = transform_name == "raw_gradient"
+    linear_direction = "largest" if linear_largest else "smallest"
     for variant_slot, variant_label in enumerate(VARIANT_LABELS):
         banks.append(
             ScoreBank(
@@ -194,17 +197,17 @@ def build_banks(
         banks.append(
             ScoreBank(
                 key=f"endpoint_tracin_{variant_label.lower()}",
-                label=f"Endpoint-TracIn | {variant_label} | smallest",
+                label=f"Endpoint-TracIn | {variant_label} | {linear_direction}",
                 scores=endpoint_tracin["scores"][transform_slot, variant_slot],
-                largest=False,
+                largest=linear_largest,
             )
         )
     banks.append(
         ScoreBank(
             key="retrac_both_l2",
-            label="ReTrac | BOTH-L2 | smallest",
+            label=f"ReTrac | BOTH-L2 | {linear_direction}",
             scores=retrac["scores"][transform_slot],
-            largest=False,
+            largest=linear_largest,
         )
     )
     if len(banks) != 9:
@@ -377,7 +380,11 @@ def main() -> None:
         for transform_name in args.transforms:
             transform_slot = endpoint_tracin["transforms"].index(transform_name)
             banks = build_banks(
-                endpoint_tracin, endpoint_pollute, retrac, transform_slot
+                endpoint_tracin,
+                endpoint_pollute,
+                retrac,
+                transform_slot,
+                transform_name,
             )
             figure = make_figure(
                 query=query,
@@ -414,8 +421,14 @@ def main() -> None:
         "retrac": str(args.retrac_path.resolve()),
         "ranking": {
             "endpoint_pollute": "timestamp_sum_squared descending",
-            "endpoint_tracin": "linear ascending",
-            "retrac": "linear ascending",
+            "endpoint_tracin": {
+                "raw_gradient": "linear descending",
+                "adamw_full": "linear ascending",
+            },
+            "retrac": {
+                "raw_gradient": "linear descending",
+                "adamw_full": "linear ascending",
+            },
         },
     }
     (args.output_dir / "manifest.json").write_text(

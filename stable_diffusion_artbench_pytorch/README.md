@@ -363,10 +363,12 @@ python -m sd_artbench.plot_nine_row_topk \
   --output-dir outputs/attribution/nine-row-top10-q0-9
 ```
 
-Endpoint-Pollute uses timestamp-sum-squared scores ranked largest first;
-Endpoint-TracIn and ReTrac use their linear scores ranked smallest first. The
-script writes 20 figures (10 queries times raw-gradient/AdamW-full), a complete
-ranking CSV, and a manifest recording the score files and ranking directions.
+Endpoint-Pollute uses timestamp-sum-squared scores ranked largest first. For
+Endpoint-TracIn and ReTrac, raw-gradient linear scores rank largest first while
+AdamW-full linear scores rank smallest first because the AdamW direction
+contains the optimizer update's minus sign. The script writes 20 figures (10
+queries times raw-gradient/AdamW-full), a complete ranking CSV, and a manifest
+recording the score files and ranking directions.
 
 ## 7. CLIP nearest-neighbor baseline
 
