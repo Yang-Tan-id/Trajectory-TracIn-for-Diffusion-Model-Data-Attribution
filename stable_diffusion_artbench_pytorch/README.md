@@ -346,7 +346,29 @@ used for updates and later attribution. Official D-TRAK checkpoints infer this
 set from the LoRA architecture rather than storing a separate Boolean mask;
 the manifest is additional metadata and does not change training.
 
-## 6. CLIP nearest-neighbor baseline
+## 6. Nine-row Top-K attribution figures
+
+After the merged Endpoint and ReTrac runs finish, reproduce the nine-row
+comparison used by the CelebA/Shape3D analysis for Q0--Q9. Each transform gets
+its own figure: four Endpoint-Pollute normalization rows, four Endpoint-TracIn
+rows, and one ReTrac BOTH-L2 row.
+
+```bash
+python -m sd_artbench.plot_nine_row_topk \
+  --endpoint-root outputs/attribution/endpoint-q60-t50-full-linear-hooks \
+  --retrac-path outputs/attribution/retrac-q60-t50-full-linear-hooks/retrac.npz \
+  --query-manifest outputs/artbench2-queries-60/manifest.json \
+  --query-indices 0,1,2,3,4,5,6,7,8,9 \
+  --top-k 10 \
+  --output-dir outputs/attribution/nine-row-top10-q0-9
+```
+
+Endpoint-Pollute uses timestamp-sum-squared scores ranked largest first;
+Endpoint-TracIn and ReTrac use their linear scores ranked smallest first. The
+script writes 20 figures (10 queries times raw-gradient/AdamW-full), a complete
+ranking CSV, and a manifest recording the score files and ranking directions.
+
+## 7. CLIP nearest-neighbor baseline
 
 Rank the exact 5,000 training images against every generated endpoint using
 normalized CLIP image embeddings and cosine similarity:
