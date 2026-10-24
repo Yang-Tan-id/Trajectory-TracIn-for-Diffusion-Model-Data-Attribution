@@ -15,6 +15,10 @@ def test_checkpoint_count_cannot_exceed_epoch_count():
         checkpoint_epochs(10, 25)
 
 
+def test_zero_checkpoints_means_final_weights_only():
+    assert checkpoint_epochs(100, 0) == set()
+
+
 def test_resolve_latest_checkpoint(tmp_path):
     (tmp_path / "checkpoint-epoch-0004").mkdir()
     expected = tmp_path / "checkpoint-epoch-0008"

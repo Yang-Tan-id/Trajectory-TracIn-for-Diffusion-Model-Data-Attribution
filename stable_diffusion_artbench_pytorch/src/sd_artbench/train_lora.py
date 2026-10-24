@@ -110,8 +110,10 @@ def set_attention_dropout(unet: UNet2DConditionModel, probability: float) -> Non
 def checkpoint_epochs(num_epochs: int, num_checkpoints: int) -> set[int]:
     """Return exactly ``num_checkpoints`` approximately even, 1-based epochs."""
 
-    if num_checkpoints < 1:
-        raise ValueError("num_checkpoints must be at least 1")
+    if num_checkpoints < 0:
+        raise ValueError("num_checkpoints cannot be negative")
+    if num_checkpoints == 0:
+        return set()
     if num_checkpoints > num_epochs:
         raise ValueError("num_checkpoints cannot exceed num_epochs")
     return {
@@ -160,7 +162,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-workers", type=int, default=8)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--mixed-precision", choices=["no", "fp16", "bf16"], default="fp16")
-    parser.add_argument("--num-checkpoints", type=int, default=25)
+    parser.add_argument(
+        "--num-checkpoints",
+        type=int,
+        default=25,
+        help=(
+            "Number of resumable Accelerator checkpoints. Use 0 for "
+            "final-LoRA-only counterfactual retraining."
+        ),
+    )
     parser.add_argument(
         "--resume-from-checkpoint",
         default=None,

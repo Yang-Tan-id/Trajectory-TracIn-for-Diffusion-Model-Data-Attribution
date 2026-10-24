@@ -29,6 +29,8 @@ mixed-precision scaler, and RNG state. Resume the newest saved state with
 `--resume-from-checkpoint latest`.
 Final inference weights are written to
 `outputs/artbench2-lora/final/`.
+Set `--num-checkpoints 0` for counterfactual retraining that should retain only
+the final LoRA weights and no resumable optimizer checkpoints.
 
 On a 24 GiB GPU, use `--batch-size 8 --gradient-accumulation-steps 8` to
 preserve the effective batch size of 64 without placing all 64 images in GPU
@@ -187,6 +189,42 @@ CUDA_VISIBLE_DEVICES=0 python -m sd_artbench.generate_checkpoint_trajectory \
 
 The trajectory tool infers the LoRA rank from the first selected raw checkpoint
 (rank 128 for the default experiment) and rejects an incompatible override.
+
+## AdamW Top-1000 removal retraining
+
+The removal launcher consumes the merged attribution files, removes each
+query's score-ranked 1,000 examples from the original 5,000-example training
+split, and independently retrains a final-only LoRA from seed 42. The four
+configured score banks are endpoint-pollute timestamp-sum-squared BOTH-L2,
+endpoint-TracIn RAW, endpoint-TracIn BOTH-L2, and ReTrac BOTH-L2. Only the
+`adamw_full` transform is used. Pollute ranks stored scores descending;
+endpoint-TracIn and ReTrac rank them ascending.
+
+Validate all 40 Q0-Q9 removal sets without training:
+
+```bash
+python -m sd_artbench.launch_topk_removal \
+  --gpu-ids 0,1,2,3 \
+  --query-indices 0,1,2,3,4,5,6,7,8,9 \
+  --top-k 1000 \
+  --stage prepare
+```
+
+Run the 40 independent retrains across the same four explicit GPUs:
+
+```bash
+python -m sd_artbench.launch_topk_removal \
+  --gpu-ids 0,1,2,3 \
+  --query-indices 0,1,2,3,4,5,6,7,8,9 \
+  --top-k 1000 \
+  --stage all \
+  2>&1 | tee logs/topk-removal-adamw-q0-9.log
+```
+
+Each task writes its exact removed metadata indices, raw scores, signed ranking
+scores, retained split, and training definition under
+`outputs/topk-removal-adamw-q0-9/<method>/query-XXX/topk-1000/`. Completed
+final LoRA directories are skipped on rerun, so the launcher is restartable.
 
 ## 5. Raw-checkpoint attribution
 
