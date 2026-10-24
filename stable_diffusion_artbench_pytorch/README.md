@@ -279,6 +279,12 @@ batch, random flip, VAE sample, noise, timestep, conditioning dropout, and
 attention-dropout graph from the saved RNG state. If exact per-example
 full-batch differentiation runs out of memory, `--replay-mode batch1` is the
 lower-memory approximation; this choice is recorded in the result manifest.
+For `exact_batch`, the default `--per-example-backend linear_hooks` extracts
+exact per-example LoRA Linear gradients from one ordinary backward and checks
+that they sum back to PyTorch's aggregate gradient. `scalar_loop` remains the
+slow correctness reference; `legacy` is retained only for diagnostics because
+this PyTorch/Diffusers stack lacks correct batched-backward rules for several
+U-Net operators.
 
 Both runners checkpoint their accumulated scores after each model checkpoint
 and resume automatically. For multiple GPUs, launch separate processes with

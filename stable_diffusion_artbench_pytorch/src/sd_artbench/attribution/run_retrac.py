@@ -23,7 +23,11 @@ from tqdm.auto import tqdm
 
 from ..config import ArtBenchConfig
 from ..train_lora import IndexedArtBenchDataset, set_attention_dropout
-from .autograd import batched_loss_gradients
+from .autograd import (
+    LinearGradSampleCapture,
+    batched_loss_gradients,
+    scalar_loss_gradients,
+)
 from .optimizer import adamw_full_direction, adamw_full_direction_batch
 from .projection import CountSketchProjector, stable_seed
 from .runtime import (
@@ -79,6 +83,16 @@ def parse_args() -> argparse.Namespace:
         type=int,
         default=2,
         help="Number of exact per-example VJPs evaluated together; lower if OOM.",
+    )
+    parser.add_argument(
+        "--per-example-backend",
+        choices=("linear_hooks", "scalar_loop", "legacy"),
+        default="linear_hooks",
+        help=(
+            "Per-example gradient implementation for exact_batch replay. "
+            "linear_hooks is exact and fast for LoRA Linear parameters; "
+            "scalar_loop is the slow reference; legacy uses is_grads_batched."
+        ),
     )
     parser.add_argument("--train-start", type=int, default=0)
     parser.add_argument("--train-end", type=int)
@@ -164,6 +178,12 @@ def main() -> None:
         learning_rate=args.learning_rate,
         weight_decay=args.weight_decay,
     )
+    gradient_capture = (
+        LinearGradSampleCapture(runtime.unet, runtime.parameters)
+        if args.replay_mode == "exact_batch"
+        and args.per_example_backend == "linear_hooks"
+        else None
+    )
     checkpoints = list_checkpoints(args.checkpoint_root)
     # ReTrac needs a following interval, so the final checkpoint is not a source.
     checkpoint_indices = (
@@ -205,6 +225,7 @@ def main() -> None:
         "conditioning_dropout": args.conditioning_dropout,
         "attention_dropout": args.attention_dropout,
         "per_example_chunk_size": args.per_example_chunk_size,
+        "per_example_backend": args.per_example_backend,
         "checkpoint_indices": checkpoint_indices,
         "timesteps": timesteps,
         "timestep_batch_size": args.timestep_batch_size,
@@ -368,6 +389,8 @@ def main() -> None:
                 losses = None
                 if args.replay_mode == "exact_batch":
                     runtime.unet.train()
+                    if gradient_capture is not None and selected:
+                        gradient_capture.start(len(positions))
                     prediction = runtime.unet(
                         noisy, batch_timesteps, replay_hidden
                     ).sample
@@ -395,12 +418,36 @@ def main() -> None:
                     warmup_steps,
                 )
                 if args.replay_mode == "exact_batch" and selected:
-                    for sample_slots, gradient_batch in batched_loss_gradients(
-                        losses,
-                        runtime.parameters,
-                        selected,
-                        chunk_size=args.per_example_chunk_size,
-                    ):
+                    if args.per_example_backend == "linear_hooks":
+                        gradient_batches = gradient_capture.loss_gradients(
+                            losses, chunk_size=args.per_example_chunk_size
+                        )
+                    elif args.per_example_backend == "scalar_loop":
+                        gradient_batches = scalar_loss_gradients(
+                            losses,
+                            runtime.parameters,
+                            selected,
+                            chunk_size=args.per_example_chunk_size,
+                        )
+                    else:
+                        gradient_batches = batched_loss_gradients(
+                            losses,
+                            runtime.parameters,
+                            selected,
+                            chunk_size=args.per_example_chunk_size,
+                        )
+                    selected_set = set(selected)
+                    for sample_slots, gradient_batch in gradient_batches:
+                        if args.per_example_backend == "linear_hooks":
+                            keep = [
+                                local_slot
+                                for local_slot, sample_slot in enumerate(sample_slots)
+                                if sample_slot in selected_set
+                            ]
+                            if not keep:
+                                continue
+                            sample_slots = [sample_slots[index] for index in keep]
+                            gradient_batch = [value[keep] for value in gradient_batch]
                         raw_features, _ = projector.project_batch(
                             gradient_batch, full_l2_normalize=True
                         )
