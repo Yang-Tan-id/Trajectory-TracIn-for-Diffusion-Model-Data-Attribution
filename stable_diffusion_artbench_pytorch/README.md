@@ -241,6 +241,32 @@ The overview is written to
 sample replays the original query's prompt and actual seed with the same
 DDIM-50 schedule and guidance scale 7.5.
 
+Sanity-check the exact AdamW removal ranking by comparing the first and last
+ten samples of the full 5,000-example ranking. This also verifies any existing
+`removal-manifest.json` against a fresh stable sort of all 5,000 scores and
+annotates every selected image with its attribution score and cached CLIP
+image similarity:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python -m sd_artbench.clip_similarity \
+  --query-manifest outputs/artbench2-queries-60/manifest.json \
+  --output-dir outputs/clip-similarity-q60 \
+  --batch-size 64 \
+  --top-k 20 \
+  --contact-sheet-top-k 0 \
+  --reuse-embeddings
+
+python -m sd_artbench.plot_topk_tail_sanity \
+  --query-indices 0,1,2,3,4,5,6,7,8,9 \
+  --top-k 10 \
+  --end-k 10 \
+  --removal-k 1000
+```
+
+The ten figures, per-image CSV, Top/End CLIP comparison, and exact Top-1000
+validation report are written under
+`outputs/attribution/top10-vs-end10-adamw-q0-9/`.
+
 ## 5. Raw-checkpoint attribution
 
 The attribution implementation lives in `src/sd_artbench/attribution/` and is
