@@ -115,3 +115,28 @@ python script/run_attr40_query100_sample_lds.py \
 Outputs are written below `result/attr40_experiment1/sample_ddim_eta0_50/`,
 the per-query LDS target cache below `result/attr40_experiment1/eval/`, and
 the CSV files below `result/attr40_experiment1/query100_lds_csv_ddim50/`.
+
+## Full-10k Top-1000 ranking sanity check
+
+The Top-10 versus End-10 tool reuses the exact AdamW-full score namespaces,
+ranking signs, and stable sort used by the full-10k Top-1000 removal worker.
+Q10--Q19 are the default because the current 250-task plan contains all four
+methods for those queries. Run it from the repository root in an environment
+with PyTorch and Transformers (the `sd_artbench` environment is sufficient):
+
+```bash
+python diffusion_jax_refined/celeba/script/plot_full10k_top10_end10_clip.py \
+  --query-file diffusion_jax_refined/celeba/queries_attr40_val25_x4.json \
+  --query-ids 10,11,12,13,14,15,16,17,18,19 \
+  --top-k 10 \
+  --end-k 10 \
+  --removal-k 1000 \
+  --device cuda
+```
+
+For each query, the output contains eight visual rows: Top-10 and End-10 for
+Pollute Both-L2, TracIn raw, TracIn Both-L2, and ReTrac Both-L2. Captions
+include the stored attribution score, full-list rank, and CLIP image cosine
+similarity. Existing removal manifests are checked against the freshly sorted
+Top-1000 list and must match exactly. Results are written below
+`result/attr40_experiment1/eval/full10k_top10_vs_end10_clip/`.
