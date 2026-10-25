@@ -226,6 +226,21 @@ scores, retained split, and training definition under
 `outputs/topk-removal-adamw-q0-9/<method>/query-XXX/topk-1000/`. Completed
 final LoRA directories are skipped on rerun, so the launcher is restartable.
 
+Generate matched DDIM-50 previews for every completed non-ReTrac removal model
+and write a four-column overview. Incomplete runs are shown as `MISSING` rather
+than silently substituted:
+
+```bash
+CUDA_VISIBLE_DEVICES=0 python -m sd_artbench.generate_topk_removal_previews \
+  --query-indices 0,1,2,3,4,5,6,7,8,9 \
+  --output-dir outputs/topk-removal-previews-q0-9
+```
+
+The overview is written to
+`outputs/topk-removal-previews-q0-9/overview-q0-9.jpg`. Each counterfactual
+sample replays the original query's prompt and actual seed with the same
+DDIM-50 schedule and guidance scale 7.5.
+
 ## 5. Raw-checkpoint attribution
 
 The attribution implementation lives in `src/sd_artbench/attribution/` and is
