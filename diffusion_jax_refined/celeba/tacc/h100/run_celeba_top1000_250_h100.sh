@@ -22,6 +22,7 @@ done
 
 celeba="$repo/diffusion_jax_refined/celeba"
 plan="$celeba/script/celeba_top1000_250_plan.py"
+metadata_repair="$celeba/script/repair_ddim50_sample_metadata.py"
 worker="$celeba/script/run_endpoint_top500_removal.py"
 slot_worker="$celeba/tacc/h100/run_celeba_top1000_250_slot.sh"
 query_file="$celeba/queries_attr40_val25_x4.json"
@@ -89,6 +90,14 @@ while IFS=$'\t' read -r method query_id; do
     --stage validate >/dev/null
 done < "$task_file"
 echo "[preflight] all 250 tasks valid"
+
+echo "[preflight] certify/restore staged DDIM-50 sampler metadata"
+JAX_PLATFORMS=cpu python "$metadata_repair" \
+  --query-file "$query_file" \
+  --query-ids 0-69 \
+  --experiment "$EXPERIMENT_TAG" \
+  --train-seed "$TRAIN_SEED" \
+  --epochs "$JAX_EPOCHS"
 
 run_slot() {
   local slot="$1"

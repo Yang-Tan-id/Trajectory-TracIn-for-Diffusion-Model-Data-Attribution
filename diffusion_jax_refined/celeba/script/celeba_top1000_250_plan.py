@@ -133,6 +133,8 @@ def transfer_manifest(query_file: Path) -> list[Path]:
         )
         paths.add(seed_root / "trajectory_xt.npy")
         paths.add(seed_root / "trajectory_t.npy")
+        paths.add(seed_root / "seed_info.json")
+        paths.add(seed_root.parent / "manifest.json")
     return sorted(paths, key=str)
 
 
