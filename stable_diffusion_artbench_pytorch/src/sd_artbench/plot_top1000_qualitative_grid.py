@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create a compact three-row ArtBench Top-K removal comparison grid."""
+"""Create a paper-ready ArtBench Top-K removal comparison grid."""
 
 from __future__ import annotations
 
@@ -38,13 +38,13 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=project / "outputs/artbench2-queries-60/manifest.json",
     )
-    parser.add_argument("--query-indices", type=parse_indices, default=[0, 1, 2])
+    parser.add_argument("--query-indices", type=parse_indices, default=list(range(10)))
     parser.add_argument("--tile-size", type=int, default=256)
     parser.add_argument(
         "--output",
         type=Path,
         default=project
-        / "outputs/topk-removal-qualitative-paper/artbench_top1000_q0_q2.png",
+        / "outputs/topk-removal-qualitative-paper/artbench_top1000_q0_q9.png",
     )
     return parser.parse_args()
 
@@ -104,8 +104,6 @@ def load_seeds(path: Path) -> dict[int, int]:
 
 def main() -> None:
     args = parse_args()
-    if len(args.query_indices) != 3:
-        raise ValueError("the paper grid must contain exactly three query rows")
     if args.tile_size < 128:
         raise ValueError("tile-size must be at least 128")
 
