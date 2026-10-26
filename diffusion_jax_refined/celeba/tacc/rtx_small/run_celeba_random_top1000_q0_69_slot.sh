@@ -27,7 +27,7 @@ for ((task_index=slot; task_index<${#tasks[@]}; task_index+=slot_count)); do
     --train-seed "${TRAIN_SEED:-42}" \
     --epochs "${JAX_EPOCHS:-200}" \
     --topk 1000 \
-    --random-seed "${RANDOM_REMOVAL_SEED:-20261025}" \
+    --random-seed "${RANDOM_REMOVAL_SEED:-2026}" \
     --output-group endpoint_random_top1000_removal_q0_69 \
     --stage all
   echo "[task done] index=$task_index/70 slot=$slot method=$method Q$query_id"

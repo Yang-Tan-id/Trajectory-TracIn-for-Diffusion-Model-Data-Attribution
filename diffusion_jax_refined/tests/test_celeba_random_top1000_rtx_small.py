@@ -35,9 +35,9 @@ class CelebaRandomTop1000RtxSmallTest(unittest.TestCase):
 
     def test_random_selection_is_deterministic_unique_and_full10k(self) -> None:
         worker = load_module(WORKER_PATH, "celeba_random_top1000_worker_test")
-        first = worker.select_random_removal(topk=1000, random_seed=20261025, query_id=0)
-        repeat = worker.select_random_removal(topk=1000, random_seed=20261025, query_id=0)
-        other = worker.select_random_removal(topk=1000, random_seed=20261025, query_id=1)
+        first = worker.select_random_removal(topk=1000, random_seed=2026, query_id=0)
+        repeat = worker.select_random_removal(topk=1000, random_seed=2026, query_id=0)
+        other = worker.select_random_removal(topk=1000, random_seed=2026, query_id=1)
         np.testing.assert_array_equal(first, repeat)
         self.assertEqual(first.shape, (1000,))
         self.assertEqual(np.unique(first).size, 1000)
