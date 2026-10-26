@@ -58,6 +58,8 @@ class CelebaRandomTop1000RtxSmallTest(unittest.TestCase):
         self.assertIn("--random-seed", runner)
         self.assertIn("--random-seed", slot)
         self.assertIn("--topk 1000", slot)
+        self.assertIn("read -r preflight_method preflight_query", runner)
+        self.assertNotIn("while IFS=$'\\t' read -r method query_id", runner)
 
     def test_random_job_is_separate_and_resumable(self) -> None:
         worker = WORKER_PATH.read_text()

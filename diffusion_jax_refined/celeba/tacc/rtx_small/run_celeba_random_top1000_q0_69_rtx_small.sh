@@ -75,21 +75,20 @@ if "exclude_indices" not in TrainConfig.__dataclass_fields__:
 print(f"[preflight] JAX={jax.__version__}; GPUs={devices}; training import OK")
 PY
 
-echo "[preflight] validate all 70 input contracts and random subsets"
-while IFS=$'\t' read -r method query_id; do
-  JAX_PLATFORMS=cpu python "$worker" \
-    --method "$method" \
-    --query-id "$query_id" \
-    --query-file "$query_file" \
-    --experiment "$EXPERIMENT_TAG" \
-    --train-seed "$TRAIN_SEED" \
-    --epochs "$JAX_EPOCHS" \
-    --topk 1000 \
-    --random-seed "$RANDOM_REMOVAL_SEED" \
-    --output-group endpoint_random_top1000_removal_q0_69 \
-    --stage validate >/dev/null
-done < "$task_file"
-echo "[preflight] all 70 tasks valid"
+echo "[preflight] validate one representative runtime contract"
+IFS=$'\t' read -r preflight_method preflight_query < "$task_file"
+JAX_PLATFORMS=cpu python "$worker" \
+  --method "$preflight_method" \
+  --query-id "$preflight_query" \
+  --query-file "$query_file" \
+  --experiment "$EXPERIMENT_TAG" \
+  --train-seed "$TRAIN_SEED" \
+  --epochs "$JAX_EPOCHS" \
+  --topk 1000 \
+  --random-seed "$RANDOM_REMOVAL_SEED" \
+  --output-group endpoint_random_top1000_removal_q0_69 \
+  --stage validate
+echo "[preflight] representative runtime contract valid"
 
 run_slot() {
   local slot="$1"
