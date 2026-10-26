@@ -23,7 +23,7 @@ SUBMITTER = PACKAGE_ROOT / "tacc/rtx_small/submit_artbench_random_top1000_60_rtx
 
 
 class ArtBenchRandomTop100060RtxSmallTest(unittest.TestCase):
-    def test_exact_random_task_plan_and_three_disjoint_shards(self) -> None:
+    def test_exact_random_task_plan_and_two_disjoint_shards(self) -> None:
         tasks = PLAN.build_tasks()
         self.assertEqual(len(tasks), 60)
         self.assertEqual(len(set(tasks)), 60)
@@ -32,10 +32,10 @@ class ArtBenchRandomTop100060RtxSmallTest(unittest.TestCase):
             [(topk_removal.RANDOM_METHOD, query_id) for query_id in range(60)],
         )
         shards = [
-            PLAN.build_tasks(shard_index=index, shard_count=3)
-            for index in range(3)
+            PLAN.build_tasks(shard_index=index, shard_count=2)
+            for index in range(2)
         ]
-        self.assertEqual([len(shard) for shard in shards], [20, 20, 20])
+        self.assertEqual([len(shard) for shard in shards], [30, 30])
         flattened = [task for shard in shards for task in shard]
         self.assertEqual(set(flattened), set(tasks))
         self.assertEqual(len(flattened), len(set(flattened)))
@@ -91,7 +91,9 @@ class ArtBenchRandomTop100060RtxSmallTest(unittest.TestCase):
         self.assertIn("--random-seed 2026", slot)
         self.assertIn("--stage all", slot)
         self.assertIn("--mode audit", runner)
-        self.assertIn("for shard_index in 0 1 2", submitter)
+        self.assertIn("for shard_index in 0 1", submitter)
+        self.assertIn('"$shard_index" 2', submitter)
+        self.assertNotIn("for shard_index in 0 1 2", submitter)
         self.assertNotIn("rsync", submitter)
 
 

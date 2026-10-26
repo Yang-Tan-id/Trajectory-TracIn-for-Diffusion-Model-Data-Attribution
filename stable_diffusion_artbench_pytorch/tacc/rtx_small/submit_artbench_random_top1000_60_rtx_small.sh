@@ -32,7 +32,7 @@ export REPO_ROOT="$repo"
 export CONDA_ENV="${CONDA_ENV:-/scratch/11447/yangtan7447/conda-envs/sd_artbench}"
 export OUTPUT_ROOT="${OUTPUT_ROOT:-$artbench/outputs/topk-removal-adamw-q10-59-random-q0-59}"
 
-echo "[submit] three independent 20-query shards; no school-server connection"
-for shard_index in 0 1 2; do
-  sbatch --chdir="$repo" "$runner" "$shard_index" 3
+echo "[submit] two independent 30-query shards; no school-server connection"
+for shard_index in 0 1; do
+  sbatch --chdir="$repo" "$runner" "$shard_index" 2
 done
