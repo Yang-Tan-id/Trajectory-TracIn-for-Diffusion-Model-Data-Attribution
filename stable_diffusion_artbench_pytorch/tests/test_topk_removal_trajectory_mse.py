@@ -19,6 +19,8 @@ class TopKRemovalTrajectoryMseTest(unittest.TestCase):
         self.assertIn("callback_steps=1", source)
         self.assertIn("len(states) != steps", source)
         self.assertIn("steps_offset=stride - 1", source)
+        self.assertIn('"trajectory-4x10.jpg"', source)
+        self.assertIn('"full-data-trajectory-1x10.jpg"', source)
 
     def test_all_four_methods_are_included(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
@@ -48,6 +50,23 @@ class TopKRemovalTrajectoryMseTest(unittest.TestCase):
         np.testing.assert_allclose(per_step, [1.0, 9.0])
         self.assertAlmostEqual(mse, 5.0)
         self.assertAlmostEqual(rmse, np.sqrt(5.0))
+
+    def test_visual_steps_include_both_trajectory_endpoints(self) -> None:
+        namespace: dict[str, object] = {"np": np}
+        module = ast.parse(SCRIPT.read_text(encoding="utf-8"))
+        function = next(
+            node
+            for node in module.body
+            if isinstance(node, ast.FunctionDef) and node.name == "select_visual_steps"
+        )
+        exec(
+            compile(ast.Module(body=[function], type_ignores=[]), str(SCRIPT), "exec"),
+            namespace,
+        )
+        select = namespace["select_visual_steps"]
+        indices = select(50, 10)
+        self.assertEqual(indices.tolist(), [0, 5, 11, 16, 22, 27, 33, 38, 44, 49])
+        self.assertEqual(len(np.unique(indices)), 10)
 
 
 if __name__ == "__main__":

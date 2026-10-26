@@ -11,7 +11,7 @@ from typing import Any, Sequence
 import numpy as np
 import torch
 from diffusers import DDIMScheduler, StableDiffusionPipeline
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from .config import ArtBenchConfig
 from .train_lora import set_attention_dropout
@@ -23,6 +23,12 @@ METHODS = (
     "endpoint_tracin_query_train_l2",
     "retrac_query_train_l2",
 )
+METHOD_LABELS = {
+    "endpoint_pollute_query_train_l2": "POLLUTE-BOTH-L2",
+    "endpoint_tracin_raw": "TRACIN-RAW",
+    "endpoint_tracin_query_train_l2": "TRACIN-BOTH-L2",
+    "retrac_query_train_l2": "RETRAC-BOTH-L2",
+}
 
 
 def parse_csv_ints(value: str) -> list[int]:
@@ -59,6 +65,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--top-k", type=int, default=1000)
     parser.add_argument("--steps", type=int, default=50)
     parser.add_argument("--guidance-scale", type=float, default=7.5)
+    parser.add_argument("--visual-timestamps", type=int, default=10)
+    parser.add_argument("--trajectory-tile-size", type=int, default=160)
     parser.add_argument("--model", default="lambdalabs/miniSD-diffusers")
     return parser.parse_args()
 
@@ -118,6 +126,78 @@ def expected_timesteps(training_timesteps: int, steps: int) -> list[int]:
         )
     stride = training_timesteps // steps
     return [training_timesteps - 1 - stride * index for index in range(steps)]
+
+
+def select_visual_steps(step_count: int, count: int) -> np.ndarray:
+    if count < 2 or count > step_count:
+        raise ValueError("visual timestamp count must be in [2, step_count]")
+    # Rounding a continuous grid guarantees that both endpoints are included.
+    indices = np.rint(np.linspace(0, step_count - 1, count)).astype(np.int64)
+    if len(np.unique(indices)) != count:
+        raise AssertionError("visual timestep selection contains duplicates")
+    return indices
+
+
+@torch.no_grad()
+def decode_trajectory_states(
+    pipeline: StableDiffusionPipeline,
+    states: np.ndarray,
+    indices: Sequence[int],
+) -> list[Image.Image]:
+    selected = np.asarray(states)[np.asarray(indices, dtype=np.int64)]
+    images: list[Image.Image] = []
+    # Small chunks avoid a transient VAE memory spike on RTX GPUs.
+    for start in range(0, len(selected), 5):
+        tensor = torch.from_numpy(selected[start : start + 5]).to(
+            device=pipeline.device, dtype=pipeline.vae.dtype
+        )
+        tensor = tensor / pipeline.vae.config.scaling_factor
+        decoded = pipeline.vae.decode(tensor).sample
+        decoded = (decoded / 2 + 0.5).clamp(0, 1)
+        decoded = decoded.detach().cpu().permute(0, 2, 3, 1).float().numpy()
+        images.extend(
+            Image.fromarray((image * 255.0).round().astype(np.uint8), mode="RGB")
+            for image in decoded
+        )
+    return images
+
+
+def fit_tile(image: Image.Image, size: int) -> Image.Image:
+    output = image.convert("RGB")
+    output.thumbnail((size, size), Image.Resampling.LANCZOS)
+    canvas = Image.new("RGB", (size, size), "white")
+    canvas.paste(output, ((size - output.width) // 2, (size - output.height) // 2))
+    return canvas
+
+
+def write_trajectory_sheet(
+    *,
+    path: Path,
+    trajectories: dict[str, np.ndarray],
+    pipeline: StableDiffusionPipeline,
+    timesteps: Sequence[int],
+    visual_count: int,
+    tile_size: int,
+) -> None:
+    indices = select_visual_steps(len(timesteps), visual_count)
+    label_width = 180
+    header_height = 38
+    gap = 4
+    width = label_width + visual_count * (tile_size + gap) + gap
+    height = header_height + len(trajectories) * (tile_size + gap) + gap
+    canvas = Image.new("RGB", (width, height), (235, 235, 235))
+    draw = ImageDraw.Draw(canvas)
+    for column, index in enumerate(indices):
+        x = label_width + gap + column * (tile_size + gap)
+        draw.text((x + 4, 12), f"t={timesteps[int(index)]}", fill="black")
+    for row, (method, states) in enumerate(trajectories.items()):
+        y = header_height + gap + row * (tile_size + gap)
+        draw.text((8, y + 8), METHOD_LABELS.get(method, method), fill="black")
+        decoded = decode_trajectory_states(pipeline, states, indices)
+        for column, image in enumerate(decoded):
+            x = label_width + gap + column * (tile_size + gap)
+            canvas.paste(fit_tile(image, tile_size), (x, y))
+    canvas.save(path, quality=94)
 
 
 @torch.no_grad()
@@ -210,6 +290,9 @@ def main() -> None:
     args = parse_args()
     if args.top_k < 1 or args.steps < 1:
         raise ValueError("top-k and steps must be positive")
+    if args.trajectory_tile_size < 64:
+        raise ValueError("trajectory-tile-size must be at least 64")
+    select_visual_steps(args.steps, args.visual_timestamps)
     if not torch.cuda.is_available():
         raise RuntimeError("trajectory evaluation requires a CUDA GPU")
     records = load_queries(args.query_manifest, args.query_indices)
@@ -266,6 +349,7 @@ def main() -> None:
                 flush=True,
             )
 
+        candidate_trajectories: dict[str, np.ndarray] = {}
         for method in METHODS:
             print(f"[candidate] Q{query_index} {method}", flush=True)
             lora_dir = removal_lora(
@@ -292,6 +376,7 @@ def main() -> None:
             per_step, trajectory_mse, trajectory_rmse = trajectory_metrics(
                 reference_trajectory, candidate_trajectory
             )
+            candidate_trajectories[method] = candidate_trajectory
             row = {
                 "query_index": query_index,
                 "method": method,
@@ -319,6 +404,24 @@ def main() -> None:
                 flush=True,
             )
 
+        write_trajectory_sheet(
+            path=query_dir / "trajectory-4x10.jpg",
+            trajectories=candidate_trajectories,
+            pipeline=pipeline,
+            timesteps=timesteps,
+            visual_count=args.visual_timestamps,
+            tile_size=args.trajectory_tile_size,
+        )
+        write_trajectory_sheet(
+            path=query_dir / "full-data-trajectory-1x10.jpg",
+            trajectories={"full_data": reference_trajectory},
+            pipeline=pipeline,
+            timesteps=timesteps,
+            visual_count=args.visual_timestamps,
+            tile_size=args.trajectory_tile_size,
+        )
+        print(f"[visual] Q{query_index} trajectory-4x10.jpg", flush=True)
+
     with (args.output_dir / "endpoint_trajectory_metrics.csv").open(
         "w", newline="", encoding="utf-8"
     ) as handle:
@@ -342,6 +445,12 @@ def main() -> None:
         "steps": args.steps,
         "timesteps": timesteps,
         "guidance_scale": args.guidance_scale,
+        "visual_timestamps": args.visual_timestamps,
+        "trajectory_tile_size": args.trajectory_tile_size,
+        "visual_step_indices": [
+            int(value)
+            for value in select_visual_steps(args.steps, args.visual_timestamps)
+        ],
         "trajectory_definition": "mean over DDIM post-step latent-state elementwise MSE",
     }
     (args.output_dir / "manifest.json").write_text(
