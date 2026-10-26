@@ -22,6 +22,9 @@ METHODS = (
     "endpoint_tracin_query_train_l2",
     "retrac_query_train_l2",
 )
+RANDOM_METHOD = "random_full5000_seeded"
+ALL_METHODS = METHODS + (RANDOM_METHOD,)
+DEFAULT_RANDOM_SEED = 2026
 
 
 def load_score_file(path: Path) -> dict[str, Any]:
@@ -107,6 +110,31 @@ def method_scores(
     return scores, payload["indices"], ranking_sign, definition
 
 
+def random_scores(
+    *,
+    query_index: int,
+    base_indices: np.ndarray,
+    random_seed: int,
+) -> tuple[np.ndarray, np.ndarray, int, str]:
+    """Return a deterministic query-specific random ranking."""
+
+    if query_index < 0:
+        raise ValueError("query_index must be non-negative")
+    generator = np.random.default_rng(
+        np.random.SeedSequence([int(random_seed), int(query_index)])
+    )
+    scores = generator.random(len(base_indices), dtype=np.float64)
+    return (
+        scores,
+        np.asarray(base_indices, dtype=np.int64),
+        1,
+        (
+            "uniform random ranking without replacement over the exact "
+            f"5000-image training split; seed=SeedSequence([{random_seed}, query])"
+        ),
+    )
+
+
 def select_topk(
     scores: np.ndarray,
     indices: np.ndarray,
@@ -134,11 +162,11 @@ def parse_args() -> argparse.Namespace:
     defaults = ArtBenchConfig()
     root = defaults.index_root.parent.parent
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--method", choices=METHODS, required=True)
+    parser.add_argument("--method", choices=ALL_METHODS, required=True)
     parser.add_argument("--query-index", type=int, required=True)
     parser.add_argument("--top-k", type=int, default=1000)
     parser.add_argument(
-        "--stage", choices=("prepare", "train", "all"), default="all"
+        "--stage", choices=("validate", "prepare", "train", "all"), default="all"
     )
     parser.add_argument(
         "--endpoint-root",
@@ -169,6 +197,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--gradient-accumulation-steps", type=int, default=8)
     parser.add_argument("--num-workers", type=int, default=8)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--random-seed", type=int, default=DEFAULT_RANDOM_SEED)
     parser.add_argument("--mixed-precision", default="fp16")
     return parser.parse_args()
 
@@ -191,14 +220,24 @@ def main() -> None:
     retained_path = run_dir / "retained-indices.pkl"
     manifest_path = run_dir / "removal-manifest.json"
     completion_path = run_dir / "TRAINING_COMPLETE"
-    run_dir.mkdir(parents=True, exist_ok=True)
 
-    scores, candidate_indices, ranking_sign, definition = method_scores(
-        method=args.method,
-        query_index=args.query_index,
-        endpoint_root=args.endpoint_root,
-        retrac_path=args.retrac_path,
-    )
+    with args.base_index_path.open("rb") as handle:
+        full_indices = [int(value) for value in pickle.load(handle)]
+    if len(full_indices) != len(set(full_indices)):
+        raise ValueError("base training index file contains duplicates")
+    if args.method == RANDOM_METHOD:
+        scores, candidate_indices, ranking_sign, definition = random_scores(
+            query_index=args.query_index,
+            base_indices=np.asarray(full_indices, dtype=np.int64),
+            random_seed=args.random_seed,
+        )
+    else:
+        scores, candidate_indices, ranking_sign, definition = method_scores(
+            method=args.method,
+            query_index=args.query_index,
+            endpoint_root=args.endpoint_root,
+            retrac_path=args.retrac_path,
+        )
     removed, removed_scores, ranking_scores = select_topk(
         scores,
         candidate_indices,
@@ -206,10 +245,6 @@ def main() -> None:
         ranking_sign=ranking_sign,
     )
 
-    with args.base_index_path.open("rb") as handle:
-        full_indices = [int(value) for value in pickle.load(handle)]
-    if len(full_indices) != len(set(full_indices)):
-        raise ValueError("base training index file contains duplicates")
     if set(candidate_indices.tolist()) != set(full_indices):
         raise ValueError(
             "attribution candidates do not exactly match the base training split"
@@ -218,6 +253,17 @@ def main() -> None:
     retained = [value for value in full_indices if value not in removed_set]
     if len(retained) != len(full_indices) - args.top_k:
         raise AssertionError("retained split has an unexpected size")
+
+    if args.stage == "validate":
+        print(
+            f"[valid] method={args.method} query={args.query_index} "
+            f"candidates={len(candidate_indices)} topk={args.top_k} "
+            f"direction={'descending' if ranking_sign == 1 else 'ascending'}",
+            flush=True,
+        )
+        return
+
+    run_dir.mkdir(parents=True, exist_ok=True)
 
     temporary_index = retained_path.with_suffix(".pkl.tmp")
     with temporary_index.open("wb") as handle:
@@ -232,6 +278,7 @@ def main() -> None:
         "ranking_sign": ranking_sign,
         "ranking_direction": "descending" if ranking_sign == 1 else "ascending",
         "score_definition": definition,
+        "random_seed": args.random_seed if args.method == RANDOM_METHOD else None,
         "full_training_size": len(full_indices),
         "retained_training_size": len(retained),
         "removal_fraction": args.top_k / len(full_indices),
