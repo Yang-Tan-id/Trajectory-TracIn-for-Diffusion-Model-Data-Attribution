@@ -43,6 +43,7 @@ from dataset_config_attr40 import CLASS_NAMES, DATA_ROOT, _prompt_path_tag
 
 
 METHODS = (
+    "random_full10k_seeded",
     "endpoint_pollute_adamw_timestamp_raw_pos",
     "endpoint_pollute_adamw_timestamp_query_l2_pos",
     "endpoint_pollute_adamw_timestamp_query_l2_full10k_pos",
@@ -60,6 +61,7 @@ METHODS = (
 DEFAULT_TOPK = 500
 FULL_TRAIN_SIZE = 10_000
 ATTRIBUTED_SIZE = 5_000
+DEFAULT_RANDOM_SEED = 20_261_025
 
 
 def load_queries(path: Path) -> dict[int, dict]:
@@ -263,6 +265,22 @@ def select_topk(
     return indices[order], stored[order], ranking[order], len(stored)
 
 
+def select_random_removal(
+    *, topk: int, random_seed: int, query_id: int
+) -> np.ndarray:
+    """Select a deterministic, query-specific random subset of the full set."""
+    if topk <= 0 or topk > FULL_TRAIN_SIZE:
+        raise ValueError(f"topk must be in [1, {FULL_TRAIN_SIZE}]")
+    if random_seed < 0:
+        raise ValueError("random_seed must be non-negative")
+    if query_id < 0:
+        raise ValueError("query_id must be non-negative")
+    seed_sequence = np.random.SeedSequence([int(random_seed), int(query_id)])
+    generator = np.random.default_rng(seed_sequence)
+    selected = generator.choice(FULL_TRAIN_SIZE, size=topk, replace=False)
+    return np.sort(np.asarray(selected, dtype=np.int64))
+
+
 def env_bool(name: str, default: bool) -> bool:
     value = os.environ.get(name)
     return default if value is None else value.strip().lower() not in {
@@ -340,6 +358,15 @@ def main() -> None:
     parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--topk", type=int, default=DEFAULT_TOPK)
     parser.add_argument(
+        "--random-seed",
+        type=int,
+        default=DEFAULT_RANDOM_SEED,
+        help=(
+            "Base seed for random_full10k_seeded. The actual deterministic "
+            "stream is keyed by this value and --query-id."
+        ),
+    )
+    parser.add_argument(
         "--output-group",
         help=(
             "Result directory name below the experiment root. The default keeps "
@@ -362,15 +389,34 @@ def main() -> None:
     record = records[args.query_id]
     initial_seed = query_seed(record)
     result_root = CELEBA_ROOT / "result" / args.experiment
-    score_dir, ranking_sign, score_definition, cached_lds_sign = score_spec(
-        result_root=result_root,
-        train_seed=args.train_seed,
-        record=record,
-        method=args.method,
-    )
-    removed, raw_scores, ranking_scores, candidate_size = select_topk(
-        score_dir, ranking_sign, args.topk
-    )
+    if args.method == "random_full10k_seeded":
+        if args.random_seed < 0:
+            parser.error("--random-seed must be non-negative")
+        score_dir = None
+        ranking_sign = 0
+        score_definition = (
+            "deterministic query-specific uniform random removal without "
+            "replacement from all 10000 training examples"
+        )
+        cached_lds_sign = None
+        removed = select_random_removal(
+            topk=args.topk,
+            random_seed=args.random_seed,
+            query_id=args.query_id,
+        )
+        raw_scores = np.asarray([], dtype=np.float64)
+        ranking_scores = np.asarray([], dtype=np.float64)
+        candidate_size = FULL_TRAIN_SIZE
+    else:
+        score_dir, ranking_sign, score_definition, cached_lds_sign = score_spec(
+            result_root=result_root,
+            train_seed=args.train_seed,
+            record=record,
+            method=args.method,
+        )
+        removed, raw_scores, ranking_scores, candidate_size = select_topk(
+            score_dir, ranking_sign, args.topk
+        )
     if "full10k" in args.method and candidate_size != FULL_TRAIN_SIZE:
         raise ValueError(
             f"{args.method} requires {FULL_TRAIN_SIZE} candidates, "
@@ -408,14 +454,31 @@ def main() -> None:
         "query_id": args.query_id,
         "prompt": str(record["prompt"]),
         "initial_seed": initial_seed,
-        "score_directory": str(score_dir.resolve()),
+        "score_directory": str(score_dir.resolve()) if score_dir is not None else None,
         "score_definition": score_definition,
         "ranking_sign": ranking_sign,
-        "ranking_order": "stored_score_descending"
-        if ranking_sign == 1
-        else "stored_score_ascending",
-        "cached_lds_prediction_sign": -1,
+        "ranking_order": (
+            "uniform_random_without_replacement"
+            if ranking_sign == 0
+            else (
+                "stored_score_descending"
+                if ranking_sign == 1
+                else "stored_score_ascending"
+            )
+        ),
+        "cached_lds_prediction_sign": None
+        if args.method == "random_full10k_seeded"
+        else -1,
         "cached_lds_direction": cached_lds_sign,
+        "random_seed_base": args.random_seed
+        if args.method == "random_full10k_seeded"
+        else None,
+        "random_seed_key": [args.random_seed, args.query_id]
+        if args.method == "random_full10k_seeded"
+        else None,
+        "random_generator": "numpy.random.PCG64"
+        if args.method == "random_full10k_seeded"
+        else None,
         "topk": args.topk,
         "full_training_size": FULL_TRAIN_SIZE,
         "attributed_candidate_size": candidate_size,
@@ -434,7 +497,7 @@ def main() -> None:
         print(
             f"[valid] method={args.method} query={args.query_id} topk={args.topk} "
             f"ranking_sign={ranking_sign:+d} order={metadata['ranking_order']} "
-            f"score={score_dir}",
+            f"score={score_dir if score_dir is not None else 'NONE'}",
             flush=True,
         )
         return
