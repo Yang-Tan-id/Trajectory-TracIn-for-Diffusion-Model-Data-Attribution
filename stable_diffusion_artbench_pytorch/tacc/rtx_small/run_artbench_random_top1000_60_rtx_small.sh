@@ -33,7 +33,7 @@ slot_worker="$artbench/tacc/rtx_small/run_artbench_random_top1000_60_slot.sh"
 output_root="${OUTPUT_ROOT:-$artbench/outputs/topk-removal-adamw-q10-59-random-q0-59}"
 
 source /scratch/11447/yangtan7447/miniforge3/etc/profile.d/conda.sh
-conda activate "${CONDA_ENV:-/scratch/11447/yangtan7447/conda-envs/sd_artbench}"
+conda activate "${CONDA_ENV:-/scratch/11447/yangtan7447/conda-envs/sd_artbench_rtx}"
 
 export REPO_ROOT="$repo"
 export OUTPUT_ROOT="$output_root"
@@ -79,12 +79,28 @@ from transformers import CLIPTextModel, CLIPTokenizer
 name = "lambdalabs/miniSD-diffusers"
 if not torch.cuda.is_available():
     raise RuntimeError("preflight cannot see the allocated RTX GPU")
+capability = torch.cuda.get_device_capability(0)
+architectures = torch.cuda.get_arch_list()
+if capability == (12, 0) and "sm_120" not in architectures:
+    raise RuntimeError(
+        f"PyTorch {torch.__version__} does not contain sm_120; "
+        f"compiled architectures={architectures}"
+    )
+# Loading weights alone does not execute a CUDA kernel. Force a real kernel
+# before launching any expensive training slots.
+matrix = torch.randn((256, 256), device="cuda", dtype=torch.float16)
+checksum = float((matrix @ matrix).float().mean().cpu())
+torch.cuda.synchronize()
 CLIPTokenizer.from_pretrained(name, subfolder="tokenizer", local_files_only=True)
 DDPMScheduler.from_pretrained(name, subfolder="scheduler", local_files_only=True)
 CLIPTextModel.from_pretrained(name, subfolder="text_encoder", local_files_only=True)
 AutoencoderKL.from_pretrained(name, subfolder="vae", local_files_only=True)
 UNet2DConditionModel.from_pretrained(name, subfolder="unet", local_files_only=True)
-print(f"[preflight] torch={torch.__version__}; GPU={torch.cuda.get_device_name(0)}; miniSD complete")
+print(
+    f"[preflight] torch={torch.__version__}; CUDA={torch.version.cuda}; "
+    f"GPU={torch.cuda.get_device_name(0)}; capability={capability}; "
+    f"kernel_checksum={checksum:.6g}; miniSD complete"
+)
 PY
 
 run_slot() {

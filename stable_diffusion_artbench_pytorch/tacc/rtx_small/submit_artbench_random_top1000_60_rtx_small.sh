@@ -6,7 +6,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo="${REPO_ROOT:-$(cd "$script_dir/../../.." && pwd)}"
 artbench="$repo/stable_diffusion_artbench_pytorch"
 runner="$artbench/tacc/rtx_small/run_artbench_random_top1000_60_rtx_small.sh"
-python_bin="${PYTHON_BIN:-/scratch/11447/yangtan7447/conda-envs/sd_artbench/bin/python}"
+python_bin="${PYTHON_BIN:-/scratch/11447/yangtan7447/conda-envs/sd_artbench_rtx/bin/python}"
 hf_home="${HF_HOME:-/scratch/11447/yangtan7447/huggingface}"
 
 [[ -x "$python_bin" ]] || { echo "ERROR: Python missing: $python_bin" >&2; exit 2; }
@@ -29,7 +29,7 @@ echo "[unit test] ArtBench random Q0-Q59 RTX contract"
   --mode validate --top-k 1000 --random-seed 2026
 
 export REPO_ROOT="$repo"
-export CONDA_ENV="${CONDA_ENV:-/scratch/11447/yangtan7447/conda-envs/sd_artbench}"
+export CONDA_ENV="${CONDA_ENV:-/scratch/11447/yangtan7447/conda-envs/sd_artbench_rtx}"
 export OUTPUT_ROOT="${OUTPUT_ROOT:-$artbench/outputs/topk-removal-adamw-q10-59-random-q0-59}"
 
 echo "[submit] two independent 30-query shards; no school-server connection"

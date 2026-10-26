@@ -20,6 +20,7 @@ from sd_artbench import topk_removal
 RUNNER = PACKAGE_ROOT / "tacc/rtx_small/run_artbench_random_top1000_60_rtx_small.sh"
 SLOT = PACKAGE_ROOT / "tacc/rtx_small/run_artbench_random_top1000_60_slot.sh"
 SUBMITTER = PACKAGE_ROOT / "tacc/rtx_small/submit_artbench_random_top1000_60_rtx_small.sh"
+SETUP = PACKAGE_ROOT / "tacc/rtx_small/setup_artbench_rtx_blackwell_env.sh"
 
 
 class ArtBenchRandomTop100060RtxSmallTest(unittest.TestCase):
@@ -76,7 +77,7 @@ class ArtBenchRandomTop100060RtxSmallTest(unittest.TestCase):
             PLAN.audit(root, top_k=1000, shard_index=0, shard_count=60)
 
     def test_shell_contracts_are_rtx_two_slot_resume_safe(self) -> None:
-        for script in (RUNNER, SLOT, SUBMITTER):
+        for script in (RUNNER, SLOT, SUBMITTER, SETUP):
             result = subprocess.run(
                 ["bash", "-n", str(script)], capture_output=True, text=True
             )
@@ -84,6 +85,7 @@ class ArtBenchRandomTop100060RtxSmallTest(unittest.TestCase):
         runner = RUNNER.read_text()
         slot = SLOT.read_text()
         submitter = SUBMITTER.read_text()
+        setup = SETUP.read_text()
         self.assertIn("#SBATCH -p rtx-small", runner)
         self.assertIn("#SBATCH -n 2", runner)
         self.assertNotIn("#SBATCH --gres", runner)
@@ -95,6 +97,12 @@ class ArtBenchRandomTop100060RtxSmallTest(unittest.TestCase):
         self.assertIn('"$shard_index" 2', submitter)
         self.assertNotIn("for shard_index in 0 1 2", submitter)
         self.assertNotIn("rsync", submitter)
+        self.assertIn("sd_artbench_rtx", runner)
+        self.assertIn("sd_artbench_rtx", submitter)
+        self.assertIn('"sm_120" not in architectures', runner)
+        self.assertIn("matrix @ matrix", runner)
+        self.assertIn("torch==2.7.0 torchvision==0.22.0", setup)
+        self.assertIn("https://download.pytorch.org/whl/cu128", setup)
 
 
 if __name__ == "__main__":
