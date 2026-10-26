@@ -18,6 +18,7 @@ from attribution_one_query import (
     cond_for,
     model_paths,
     preload_dataset,
+    tracin_lr_weight,
 )
 from dataset_loader import ColorGridDataset
 from endpoint_tracin_adamw_mc10_config import *
@@ -129,10 +130,23 @@ def main():
     parser.add_argument("--batch-size", type=int, default=640)
     parser.add_argument("--grad-microbatch-size", type=int, default=32)
     parser.add_argument("--query-batch-size", type=int, default=8)
+    parser.add_argument(
+        "--parameter-transform",
+        choices=("adamw_full", "raw_gradient"),
+        default="adamw_full",
+    )
+    parser.add_argument("--query-mc", type=int, default=ETA_QUERY_MC)
+    parser.add_argument("--train-mc", type=int, default=ETA_TRAIN_MC)
     args = parser.parse_args()
     if not 0 <= args.timestamp_shard_index < args.timestamp_shard_count:
         raise ValueError("invalid timestamp shard")
-    if min(args.batch_size, args.grad_microbatch_size, args.query_batch_size) <= 0:
+    if min(
+        args.batch_size,
+        args.grad_microbatch_size,
+        args.query_batch_size,
+        args.query_mc,
+        args.train_mc,
+    ) <= 0:
         raise ValueError("batch sizes must be positive")
 
     device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
@@ -169,9 +183,18 @@ def main():
     selected = list(
         range(args.timestamp_shard_index, len(timestamps), args.timestamp_shard_count)
     )
-    root = eta_shard_root(
-        args.family, args.timestamp_shard_index, args.timestamp_shard_count
-    )
+    if args.parameter_transform == "adamw_full":
+        root = eta_shard_root(
+            args.family, args.timestamp_shard_index, args.timestamp_shard_count
+        )
+    else:
+        root = eta_raw_gradient_shard_root(
+            args.family,
+            args.timestamp_shard_index,
+            args.timestamp_shard_count,
+            args.query_mc,
+            args.train_mc,
+        )
     done_path = root / "done.json"
     if done_path.is_file():
         print(f"[skip] {done_path}", flush=True)
@@ -197,9 +220,16 @@ def main():
             "batch_size": args.batch_size,
             "grad_microbatch_size": args.grad_microbatch_size,
             "query_batch_size": args.query_batch_size,
+            "query_mc": args.query_mc,
+            "train_mc": args.train_mc,
         }
         for key, value in expected.items():
-            if int(progress[key]) != int(value):
+            backward_default = {
+                "query_mc": ETA_QUERY_MC,
+                "train_mc": ETA_TRAIN_MC,
+            }.get(key)
+            actual = progress.get(key, backward_default)
+            if actual is None or int(actual) != int(value):
                 raise ValueError(f"partial {key} differs")
         if progress["query_ids"] != query_ids:
             raise ValueError("partial query IDs differ")
@@ -232,16 +262,14 @@ def main():
     print(
         f"[endpoint-adamw gpu={args.gpu}] family={args.family} "
         f"queries={query_ids[0]}..{query_ids[-1]} timestamps={len(selected)}/100 "
-        f"query_mc=10 train_mc=10 independent_noise=true full_adamw=true "
+        f"query_mc={args.query_mc} train_mc={args.train_mc} "
+        f"independent_noise=true parameter_transform={args.parameter_transform} "
         f"projection=4096 batch={args.batch_size} microbatch={args.grad_microbatch_size}",
         flush=True,
     )
 
     for local_timestamp, timestamp_index in enumerate(remaining, start=1):
         timestep = int(timestamps[timestamp_index])
-        t_mc = torch.full(
-            (ETA_QUERY_MC,), timestep, device=device, dtype=torch.long
-        )
         timestamp_accumulators = {
             variant: torch.zeros(expected_shape, device=device, dtype=torch.float64)
             for variant in ETA_VARIANTS
@@ -253,43 +281,69 @@ def main():
             named = dict(model.named_parameters())
             names = tuple(named)
             parameters = tuple(named.values())
-            adam_state, adam_hyper = optimizer_state_by_name(
-                checkpoint, names, device
-            )
+            if args.parameter_transform == "adamw_full":
+                adam_state, adam_hyper = optimizer_state_by_name(
+                    checkpoint, names, device
+                )
+            else:
+                adam_state, adam_hyper = None, None
+            if args.parameter_transform == "adamw_full":
+                projection_seed_parts = (
+                    TRAIN_SEED,
+                    "endpoint_tracin_adamw_mc10_projection",
+                    checkpoint_index,
+                )
+            else:
+                projection_seed_parts = (
+                    TRAIN_SEED,
+                    "endpoint_tracin_raw_gradient_projection",
+                    args.query_mc,
+                    args.train_mc,
+                    checkpoint_index,
+                )
             specs = build_countsketch_specs(
                 list(parameters),
                 ETA_PROJECTION_DIM,
                 device=device,
-                seed_parts=(
-                    TRAIN_SEED,
-                    "endpoint_tracin_adamw_mc10_projection",
-                    checkpoint_index,
-                ),
+                seed_parts=projection_seed_parts,
             )
 
             def mean_mc_loss(parameter_dict, x0, condition, noises):
-                x_bank = x0.unsqueeze(0).expand(ETA_QUERY_MC, *x0.shape)
+                mc_count = noises.shape[0]
+                x_bank = x0.unsqueeze(0).expand(mc_count, *x0.shape)
                 condition_bank = condition.unsqueeze(0).expand(
-                    ETA_QUERY_MC, condition.shape[-1]
+                    mc_count, condition.shape[-1]
                 )
-                xt = base.q_sample(x_bank, t_mc, noises, schedule)
+                timestep_bank = torch.full(
+                    (mc_count,), timestep, device=device, dtype=torch.long
+                )
+                xt = base.q_sample(x_bank, timestep_bank, noises, schedule)
                 prediction = functional_call(
-                    model, parameter_dict, (xt, t_mc, condition_bank)
+                    model, parameter_dict, (xt, timestep_bank, condition_bank)
                 )
                 return (prediction - noises).square().mean()
 
             batched_gradient = vmap(
                 grad(mean_mc_loss), in_dims=(None, 0, 0, 0)
             )
-            query_generator = make_torch_generator(
-                device,
-                TRAIN_SEED,
-                "endpoint_tracin_query_mc10",
-                checkpoint_index,
-                timestamp_index,
-            )
+            if args.parameter_transform == "adamw_full":
+                query_seed_parts = (
+                    TRAIN_SEED,
+                    "endpoint_tracin_query_mc10",
+                    checkpoint_index,
+                    timestamp_index,
+                )
+            else:
+                query_seed_parts = (
+                    TRAIN_SEED,
+                    "endpoint_tracin_raw_gradient_query_noise",
+                    args.query_mc,
+                    checkpoint_index,
+                    timestamp_index,
+                )
+            query_generator = make_torch_generator(device, *query_seed_parts)
             query_noises = torch.randn(
-                (len(records), ETA_QUERY_MC, *endpoints.shape[1:]),
+                (len(records), args.query_mc, *endpoints.shape[1:]),
                 generator=query_generator,
                 device=device,
                 dtype=endpoints.dtype,
@@ -324,18 +378,28 @@ def main():
                 end = min(start + args.batch_size, N_TRAIN)
                 for micro_start in range(start, end, args.grad_microbatch_size):
                     micro_end = min(micro_start + args.grad_microbatch_size, end)
-                    generator = make_torch_generator(
-                        device,
-                        TRAIN_SEED,
-                        "endpoint_tracin_train_mc10",
-                        checkpoint_index,
-                        timestamp_index,
-                        micro_start,
-                    )
+                    if args.parameter_transform == "adamw_full":
+                        train_seed_parts = (
+                            TRAIN_SEED,
+                            "endpoint_tracin_train_mc10",
+                            checkpoint_index,
+                            timestamp_index,
+                            micro_start,
+                        )
+                    else:
+                        train_seed_parts = (
+                            TRAIN_SEED,
+                            "endpoint_tracin_raw_gradient_train_noise",
+                            args.train_mc,
+                            checkpoint_index,
+                            timestamp_index,
+                            micro_start,
+                        )
+                    generator = make_torch_generator(device, *train_seed_parts)
                     train_noises = torch.randn(
                         (
                             micro_end - micro_start,
-                            ETA_TRAIN_MC,
+                            args.train_mc,
                             *x_all.shape[1:],
                         ),
                         generator=generator,
@@ -348,11 +412,16 @@ def main():
                         cond_all[micro_start:micro_end],
                         train_noises,
                     )
-                    updates = adamw_full_batched(
-                        gradients, names, named, adam_state, adam_hyper
-                    )
+                    if args.parameter_transform == "adamw_full":
+                        transformed = adamw_full_batched(
+                            gradients, names, named, adam_state, adam_hyper
+                        )
+                        checkpoint_weight = 1.0
+                    else:
+                        transformed = gradients
+                        checkpoint_weight = float(tracin_lr_weight(checkpoint))
                     train_matrix = _project_batched_grads(
-                        updates,
+                        transformed,
                         names,
                         specs,
                         ETA_PROJECTION_DIM,
@@ -361,7 +430,10 @@ def main():
                     ).detach()
                     variants = normalized_dots(query_matrix, train_matrix)
                     for variant in ETA_VARIANTS:
-                        dots = variants[variant].to(torch.float64)
+                        dots = (
+                            variants[variant].to(torch.float64)
+                            * checkpoint_weight
+                        )
                         scores[variant]["linear"][:, micro_start:micro_end] += (
                             dots / float(len(timestamps))
                         )
@@ -371,7 +443,8 @@ def main():
                         timestamp_accumulators[variant][
                             :, micro_start:micro_end
                         ] += dots
-                    del train_noises, gradients, updates, train_matrix, variants, dots
+                    del train_noises, gradients, transformed
+                    del train_matrix, variants, dots
                 if (
                     batch_position == 1
                     or batch_position % progress_every == 0
@@ -392,7 +465,8 @@ def main():
                 f"elapsed={(time.perf_counter()-term_started)/60:.1f}m eta={eta/3600:.2f}h",
                 flush=True,
             )
-            del model, checkpoint, named, names, parameters, adam_state, adam_hyper
+            del model, checkpoint, named, names, parameters
+            del adam_state, adam_hyper
             del specs, batched_gradient, query_noises, query_chunks, query_matrix
             del mean_mc_loss
             if torch.cuda.is_available():
@@ -416,6 +490,9 @@ def main():
                 "batch_size": args.batch_size,
                 "grad_microbatch_size": args.grad_microbatch_size,
                 "query_batch_size": args.query_batch_size,
+                "query_mc": args.query_mc,
+                "train_mc": args.train_mc,
+                "parameter_transform": args.parameter_transform,
                 "completed_timestamps": completed,
             },
         )
@@ -437,11 +514,16 @@ def main():
             "family": args.family,
             "query_ids": query_ids,
             "timestamp_indices": selected,
-            "query_mc": ETA_QUERY_MC,
-            "train_mc": ETA_TRAIN_MC,
+            "query_mc": args.query_mc,
+            "train_mc": args.train_mc,
             "query_train_noise_alignment": False,
             "checkpoint_transitions": 49,
-            "parameter_transform": "full saved-state AdamW",
+            "parameter_transform": args.parameter_transform,
+            "checkpoint_weight": (
+                "included in full AdamW update"
+                if args.parameter_transform == "adamw_full"
+                else "saved checkpoint learning rate"
+            ),
             "projection_dim": ETA_PROJECTION_DIM,
             "normalizations": list(ETA_VARIANTS),
             "contractions": list(ETA_CONTRACTIONS),

@@ -32,3 +32,29 @@ def eta_shard_root(family, shard_index, shard_count):
         / family
         / f"shard_{int(shard_index):02d}_of_{int(shard_count):02d}"
     )
+
+
+def eta_raw_gradient_method(variant, contraction, query_mc=1, train_mc=1):
+    if variant not in ETA_VARIANTS:
+        raise ValueError(variant)
+    if contraction not in ETA_CONTRACTIONS:
+        raise ValueError(contraction)
+    return (
+        f"endpoint_tracin_simple_loss_100t_querymc{int(query_mc)}_"
+        f"trainmc{int(train_mc)}_projected4096_raw_gradient_"
+        f"{variant}_{contraction}"
+    )
+
+
+def eta_raw_gradient_shard_root(
+    family, shard_index, shard_count, query_mc=1, train_mc=1
+):
+    return (
+        ATTR_DIR
+        / (
+            f"_endpoint_tracin_raw_gradient_100t_querymc{int(query_mc)}_"
+            f"trainmc{int(train_mc)}_100q_shards"
+        )
+        / family
+        / f"shard_{int(shard_index):02d}_of_{int(shard_count):02d}"
+    )

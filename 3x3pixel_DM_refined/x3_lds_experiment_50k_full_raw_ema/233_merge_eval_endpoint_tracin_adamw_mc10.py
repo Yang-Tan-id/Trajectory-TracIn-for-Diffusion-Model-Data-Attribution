@@ -21,6 +21,13 @@ def atomic_json(path, value):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--timestamp-shard-count", type=int, default=2)
+    parser.add_argument(
+        "--parameter-transform",
+        choices=("adamw_full", "raw_gradient"),
+        default="adamw_full",
+    )
+    parser.add_argument("--query-mc", type=int, default=ETA_QUERY_MC)
+    parser.add_argument("--train-mc", type=int, default=ETA_TRAIN_MC)
     args = parser.parse_args()
     with open(QUERY_DIR / "manifest.json") as handle:
         manifest = json.load(handle)
@@ -40,7 +47,18 @@ def main():
         )
         covered = []
         for shard_index in range(args.timestamp_shard_count):
-            root = eta_shard_root(family, shard_index, args.timestamp_shard_count)
+            if args.parameter_transform == "adamw_full":
+                root = eta_shard_root(
+                    family, shard_index, args.timestamp_shard_count
+                )
+            else:
+                root = eta_raw_gradient_shard_root(
+                    family,
+                    shard_index,
+                    args.timestamp_shard_count,
+                    args.query_mc,
+                    args.train_mc,
+                )
             with open(root / "done.json") as handle:
                 info = json.load(handle)
             if info["query_ids"] != query_ids:
@@ -59,7 +77,12 @@ def main():
     for variant in ETA_VARIANTS:
         output["variants"][variant] = {}
         for contraction in ETA_CONTRACTIONS:
-            method = eta_method(variant, contraction)
+            if args.parameter_transform == "adamw_full":
+                method = eta_method(variant, contraction)
+            else:
+                method = eta_raw_gradient_method(
+                    variant, contraction, args.query_mc, args.train_mc
+                )
             scores = totals[variant][contraction]
             for query_id in ETA_QUERY_IDS:
                 destination = ATTR_DIR / method / f"q{query_id:02d}"
@@ -72,10 +95,10 @@ def main():
                         "method": method,
                         "query_objective": "endpoint simple-loss gradient",
                         "query_timestamps": 100,
-                        "query_mc": 10,
-                        "train_mc": 10,
+                        "query_mc": args.query_mc,
+                        "train_mc": args.train_mc,
                         "query_train_noise_alignment": False,
-                        "parameter_transform": "full saved-state AdamW",
+                        "parameter_transform": args.parameter_transform,
                         "normalization": variant,
                         "contraction": contraction,
                     },
@@ -109,7 +132,13 @@ def main():
                 )
             output["variants"][variant][contraction] = result
 
-    path = LDS_DIR / "endpoint_tracin_adamw_full_100t_mc10_norm4_q00_q99.json"
+    if args.parameter_transform == "adamw_full":
+        path = LDS_DIR / "endpoint_tracin_adamw_full_100t_mc10_norm4_q00_q99.json"
+    else:
+        path = LDS_DIR / (
+            f"endpoint_tracin_raw_gradient_100t_querymc{args.query_mc}_"
+            f"trainmc{args.train_mc}_norm4_q00_q99.json"
+        )
     atomic_json(path, output)
     print(f"[saved] {path}", flush=True)
 
