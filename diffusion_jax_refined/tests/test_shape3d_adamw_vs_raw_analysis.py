@@ -33,6 +33,8 @@ class Shape3DAdamWVsRawAnalysisTest(unittest.TestCase):
 
     def test_script_syntax_and_statistical_contract(self) -> None:
         ast.parse(SOURCE)
+        self.assertIn('target_root.glob("*/lds_summary.json")', SOURCE)
+        self.assertIn("if len(matches) != 1:", SOURCE)
         self.assertIn("def paired_label_swap(", SOURCE)
         self.assertIn(
             'parser.add_argument("--permutations", type=int, default=1_000_000)',

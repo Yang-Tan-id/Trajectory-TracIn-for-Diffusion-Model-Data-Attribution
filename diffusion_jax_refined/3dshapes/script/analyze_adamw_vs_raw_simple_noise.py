@@ -134,11 +134,23 @@ def summary_path(
     )
 
 
+def resolve_summary(path: Path) -> Path:
+    if path.is_file():
+        return path
+    target_root = path.parents[1]
+    matches = sorted(target_root.glob("*/lds_summary.json"))
+    if len(matches) != 1:
+        raise FileNotFoundError(
+            f"expected one LDS summary under {target_root}; "
+            f"found {len(matches)}: {matches}"
+        )
+    return matches[0]
+
+
 def load_percent(path: Path) -> float:
+    path = resolve_summary(path)
     try:
         payload = json.loads(path.read_text())
-    except FileNotFoundError as error:
-        raise FileNotFoundError(f"missing LDS summary: {path}") from error
     except json.JSONDecodeError as error:
         raise RuntimeError(f"invalid LDS summary JSON: {path}: {error}") from error
     value = float(payload["lds_percent"])
