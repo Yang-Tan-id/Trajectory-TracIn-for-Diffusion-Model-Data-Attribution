@@ -56,6 +56,7 @@ METHODS = (
     "endpoint_tracin_adamw_linear_query_l2_full10k_neg",
     "endpoint_tracin_adamw_linear_both_l2_neg",
     "endpoint_tracin_adamw_linear_both_l2_full10k_neg",
+    "endpoint_tracin_raw_gradient_linear_both_l2_full10k_pos",
     "retrac_adamw_query_train_l2_neg",
     "retrac_adamw_query_train_l2_full10k_neg",
 )
@@ -100,6 +101,10 @@ def score_spec(
     )
     tracin_namespace = (
         "celeba_endpoint_tracin_adamw_full_"
+        "train_mean50_query_mean50_linear_shape3d_semantics"
+    )
+    tracin_raw_gradient_namespace = (
+        "celeba_endpoint_tracin_raw_gradient_"
         "train_mean50_query_mean50_linear_shape3d_semantics"
     )
     retrac_namespace = (
@@ -220,6 +225,18 @@ def score_spec(
             -1,
             "stored full-10000 endpoint-TracIn linear query+train-L2 score ascending",
             -1.0,
+        )
+    if method == "endpoint_tracin_raw_gradient_linear_both_l2_full10k_pos":
+        return (
+            root
+            / f"traj_tracin_{tracin_raw_gradient_namespace}_full10000"
+            / "score_query_train_l2_normalized",
+            +1,
+            (
+                "stored full-10000 endpoint-TracIn raw-gradient linear "
+                "query+train-L2 score descending"
+            ),
+            +1.0,
         )
     if method == "retrac_adamw_query_train_l2_neg":
         return (
