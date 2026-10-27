@@ -43,7 +43,8 @@ class Method:
 # The cached linear TracIn/ReTrac LDS runs use m1 for both raw gradients and
 # AdamW. Raw-gradient values already have the reporting orientation; AdamW
 # values are multiplied by -1 to remove the optimizer update's descent minus
-# sign. Endpoint-Pollute is squared and uses p1 without a sign correction.
+# sign. Endpoint-Pollute is cached under p1, and both raw and AdamW LDS values
+# are multiplied by -1 so every reported value follows "larger is better."
 METHODS = (
     Method(
         label="PINT / RAW",
@@ -58,8 +59,8 @@ METHODS = (
         variant="raw",
         raw_sign="p1",
         adamw_sign="p1",
-        raw_multiplier=1.0,
-        adamw_multiplier=1.0,
+        raw_multiplier=-1.0,
+        adamw_multiplier=-1.0,
     ),
     Method(
         label="PINT / BOTH-L2",
@@ -74,8 +75,8 @@ METHODS = (
         variant="query_train_l2",
         raw_sign="p1",
         adamw_sign="p1",
-        raw_multiplier=1.0,
-        adamw_multiplier=1.0,
+        raw_multiplier=-1.0,
+        adamw_multiplier=-1.0,
     ),
     Method(
         label="TRACIN / RAW",
@@ -317,7 +318,7 @@ def main() -> None:
             "TracIn and ReTrac raw/AdamW=m1/m1."
         ),
         (
-            "Reporting multipliers: Pollute raw/AdamW=+1/+1; "
+            "Reporting multipliers: Pollute raw/AdamW=-1/-1; "
             "TracIn and ReTrac raw/AdamW=+1/-1."
         ),
         f"Paired label-swap Monte Carlo: {args.permutations:,} permutations.",
