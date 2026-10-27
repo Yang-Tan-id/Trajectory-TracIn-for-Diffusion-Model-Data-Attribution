@@ -40,7 +40,7 @@ class Method:
     adamw_multiplier: float
 
 
-# The cached linear TracIn/ReTrac LDS runs use m1 for raw gradients and p1 for
+# The cached linear TracIn/ReTrac LDS runs use m1 for both raw gradients and
 # AdamW. Raw-gradient values already have the reporting orientation; AdamW
 # values are multiplied by -1 to remove the optimizer update's descent minus
 # sign. Endpoint-Pollute is squared and uses p1 without a sign correction.
@@ -86,7 +86,7 @@ METHODS = (
         ),
         variant="raw",
         raw_sign="m1",
-        adamw_sign="p1",
+        adamw_sign="m1",
         raw_multiplier=1.0,
         adamw_multiplier=-1.0,
     ),
@@ -99,7 +99,7 @@ METHODS = (
         ),
         variant="query_train_l2",
         raw_sign="m1",
-        adamw_sign="p1",
+        adamw_sign="m1",
         raw_multiplier=1.0,
         adamw_multiplier=-1.0,
     ),
@@ -112,7 +112,7 @@ METHODS = (
         ),
         variant="query_train_l2",
         raw_sign="m1",
-        adamw_sign="p1",
+        adamw_sign="m1",
         raw_multiplier=1.0,
         adamw_multiplier=-1.0,
     ),
@@ -151,12 +151,21 @@ def resolve_summary(path: Path) -> Path:
         return path
     target_root = path.parents[1]
     matches = sorted(target_root.glob("*/lds_summary.json"))
-    if len(matches) != 1:
-        raise FileNotFoundError(
-            f"expected one LDS summary under {target_root}; "
-            f"found {len(matches)}: {matches}"
+    if len(matches) == 1:
+        return matches[0]
+    if not matches:
+        target_dir = path.parents[2]
+        all_sign_matches = sorted(
+            target_dir.glob("pred_kept_sign_*/*/lds_summary.json")
         )
-    return matches[0]
+        if len(all_sign_matches) == 1:
+            return all_sign_matches[0]
+    else:
+        all_sign_matches = matches
+    raise FileNotFoundError(
+        f"expected one LDS summary for {path}; "
+        f"found {len(all_sign_matches)}: {all_sign_matches}"
+    )
 
 
 def load_percent(path: Path) -> float:
@@ -305,7 +314,7 @@ def main() -> None:
         "Difference = AdamW-full minus Raw-gradient; larger LDS is better.",
         (
             "Cached signs: Pollute raw/AdamW=p1/p1; "
-            "TracIn and ReTrac raw/AdamW=m1/p1."
+            "TracIn and ReTrac raw/AdamW=m1/m1."
         ),
         (
             "Reporting multipliers: Pollute raw/AdamW=+1/+1; "
