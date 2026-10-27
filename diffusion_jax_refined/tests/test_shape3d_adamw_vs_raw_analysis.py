@@ -20,9 +20,12 @@ class Shape3DAdamWVsRawAnalysisTest(unittest.TestCase):
         self.assertIn('label="TRACIN / RAW"', SOURCE)
         self.assertIn('label="TRACIN / BOTH-L2"', SOURCE)
         self.assertIn('label="RETRAC / BOTH-L2"', SOURCE)
-        self.assertEqual(SOURCE.count('raw_sign="p1"'), 5)
-        self.assertEqual(SOURCE.count('adamw_sign="p1"'), 2)
-        self.assertEqual(SOURCE.count('adamw_sign="m1"'), 3)
+        self.assertEqual(SOURCE.count('raw_sign="p1"'), 2)
+        self.assertEqual(SOURCE.count('raw_sign="m1"'), 3)
+        self.assertEqual(SOURCE.count('adamw_sign="p1"'), 5)
+        self.assertEqual(SOURCE.count('raw_multiplier=1.0'), 5)
+        self.assertEqual(SOURCE.count('adamw_multiplier=1.0'), 2)
+        self.assertEqual(SOURCE.count('adamw_multiplier=-1.0'), 3)
 
     def test_namespaces_and_variants(self) -> None:
         self.assertIn("recreate_raw_polluted_endpoint", SOURCE)
@@ -41,6 +44,10 @@ class Shape3DAdamWVsRawAnalysisTest(unittest.TestCase):
             SOURCE,
         )
         self.assertIn("difference = adamw - raw", SOURCE)
+        self.assertIn(
+            "adamw_value = method.adamw_multiplier * adamw_stored_value",
+            SOURCE,
+        )
 
 
 if __name__ == "__main__":

@@ -36,12 +36,14 @@ class Method:
     variant: str
     raw_sign: str
     adamw_sign: str
+    raw_multiplier: float
+    adamw_multiplier: float
 
 
-# Raw-gradient linear TracIn/ReTrac scores rank largest first, whereas their
-# AdamW-full scores rank smallest first because the optimizer update contains
-# the descent-direction minus sign. Endpoint-Pollute is squared and ranks
-# largest first for both feature transforms.
+# The cached linear TracIn/ReTrac LDS runs use m1 for raw gradients and p1 for
+# AdamW. Raw-gradient values already have the reporting orientation; AdamW
+# values are multiplied by -1 to remove the optimizer update's descent minus
+# sign. Endpoint-Pollute is squared and uses p1 without a sign correction.
 METHODS = (
     Method(
         label="PINT / RAW",
@@ -56,6 +58,8 @@ METHODS = (
         variant="raw",
         raw_sign="p1",
         adamw_sign="p1",
+        raw_multiplier=1.0,
+        adamw_multiplier=1.0,
     ),
     Method(
         label="PINT / BOTH-L2",
@@ -70,6 +74,8 @@ METHODS = (
         variant="query_train_l2",
         raw_sign="p1",
         adamw_sign="p1",
+        raw_multiplier=1.0,
+        adamw_multiplier=1.0,
     ),
     Method(
         label="TRACIN / RAW",
@@ -79,8 +85,10 @@ METHODS = (
             "train100x1_query100x1_q0_99"
         ),
         variant="raw",
-        raw_sign="p1",
-        adamw_sign="m1",
+        raw_sign="m1",
+        adamw_sign="p1",
+        raw_multiplier=1.0,
+        adamw_multiplier=-1.0,
     ),
     Method(
         label="TRACIN / BOTH-L2",
@@ -90,8 +98,10 @@ METHODS = (
             "train100x1_query100x1_q0_99"
         ),
         variant="query_train_l2",
-        raw_sign="p1",
-        adamw_sign="m1",
+        raw_sign="m1",
+        adamw_sign="p1",
+        raw_multiplier=1.0,
+        adamw_multiplier=-1.0,
     ),
     Method(
         label="RETRAC / BOTH-L2",
@@ -101,8 +111,10 @@ METHODS = (
             "endpoint100x1_q0_99"
         ),
         variant="query_train_l2",
-        raw_sign="p1",
-        adamw_sign="m1",
+        raw_sign="m1",
+        adamw_sign="p1",
+        raw_multiplier=1.0,
+        adamw_multiplier=-1.0,
     ),
 )
 
@@ -261,8 +273,10 @@ def main() -> None:
                     target=target,
                     sign=method.adamw_sign,
                 )
-                raw_value = load_percent(raw_path)
-                adamw_value = load_percent(adamw_path)
+                raw_stored_value = load_percent(raw_path)
+                adamw_stored_value = load_percent(adamw_path)
+                raw_value = method.raw_multiplier * raw_stored_value
+                adamw_value = method.adamw_multiplier * adamw_stored_value
                 raw_values.append(raw_value)
                 adamw_values.append(adamw_value)
                 per_query_rows.append(
@@ -272,6 +286,10 @@ def main() -> None:
                         "target": target,
                         "raw_sign": method.raw_sign,
                         "adamw_sign": method.adamw_sign,
+                        "raw_multiplier": method.raw_multiplier,
+                        "adamw_multiplier": method.adamw_multiplier,
+                        "raw_stored_lds_percent": raw_stored_value,
+                        "adamw_stored_lds_percent": adamw_stored_value,
                         "raw_lds_percent": raw_value,
                         "adamw_lds_percent": adamw_value,
                         "delta_percent_points": adamw_value - raw_value,
@@ -286,8 +304,12 @@ def main() -> None:
         "SHAPE3D Q0-Q99 — ADAMW-FULL VS RAW-GRADIENT LDS",
         "Difference = AdamW-full minus Raw-gradient; larger LDS is better.",
         (
-            "Directions: Pollute raw/AdamW=p1/p1; "
-            "TracIn and ReTrac raw/AdamW=p1/m1."
+            "Cached signs: Pollute raw/AdamW=p1/p1; "
+            "TracIn and ReTrac raw/AdamW=m1/p1."
+        ),
+        (
+            "Reporting multipliers: Pollute raw/AdamW=+1/+1; "
+            "TracIn and ReTrac raw/AdamW=+1/-1."
         ),
         f"Paired label-swap Monte Carlo: {args.permutations:,} permutations.",
         "",
