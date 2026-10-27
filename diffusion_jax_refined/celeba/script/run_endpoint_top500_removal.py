@@ -45,6 +45,7 @@ from dataset_config_attr40 import CLASS_NAMES, DATA_ROOT, _prompt_path_tag
 METHODS = (
     "random_full10k_seeded",
     "endpoint_pollute_adamw_timestamp_raw_pos",
+    "endpoint_pollute_adamw_timestamp_raw_full10k_pos",
     "endpoint_pollute_adamw_timestamp_query_l2_pos",
     "endpoint_pollute_adamw_timestamp_query_l2_full10k_pos",
     "endpoint_pollute_adamw_timestamp_both_l2_pos",
@@ -110,6 +111,16 @@ def score_spec(
             root / f"traj_tracin_{pollute_namespace}" / "score",
             +1,
             "stored endpoint-pollute timestamp-sum-squared raw score descending",
+            +1.0,
+        )
+    if method == "endpoint_pollute_adamw_timestamp_raw_full10k_pos":
+        return (
+            root / f"traj_tracin_{pollute_namespace}_full10000" / "score",
+            +1,
+            (
+                "stored full-10000 endpoint-pollute timestamp-sum-squared "
+                "raw score descending"
+            ),
             +1.0,
         )
     if method == "endpoint_pollute_adamw_timestamp_query_l2_pos":
