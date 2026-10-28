@@ -40,6 +40,10 @@ class ExportPintLdsTxtTest(unittest.TestCase):
     def test_dataset_specific_pint_orientation(self) -> None:
         self.assertEqual(MODULE.method_configs("shape3d")[0].raw_multiplier, -1.0)
         self.assertEqual(MODULE.method_configs("celeba")[0].raw_multiplier, 1.0)
+        self.assertEqual(MODULE.method_configs("shape3d")[0].raw_sign, "p1")
+        self.assertEqual(MODULE.method_configs("shape3d")[2].raw_sign, "m1")
+        self.assertEqual(MODULE.method_configs("celeba")[0].raw_sign, "m1")
+        self.assertEqual(MODULE.method_configs("celeba")[0].adamw_sign, "p1")
 
     def test_legacy_truncated_query_tag_is_resolved(self) -> None:
         config = MODULE.CONFIGS["celeba"]

@@ -33,6 +33,8 @@ class MethodConfig:
     variant: str
     raw_namespace: str
     adamw_namespace: str
+    raw_sign: str
+    adamw_sign: str
     raw_multiplier: float
     adamw_multiplier: float
 
@@ -75,6 +77,8 @@ def method_configs(dataset: str) -> tuple[MethodConfig, ...]:
         retrac_adamw = (
             "traj_tracin_paper_retrac_adamw_full_exact4_endpoint100x1_q0_99"
         )
+        pint_signs = ("p1", "p1")
+        baseline_signs = ("m1", "m1")
         pint_multipliers = (-1.0, -1.0)
     else:
         pint_raw = (
@@ -101,26 +105,43 @@ def method_configs(dataset: str) -> tuple[MethodConfig, ...]:
             "traj_tracin_celeba_paper_retrac_adamw_full_train_replay4_batch1_"
             "query_mean50_of_full_l2_linear_shape3d_semantics"
         )
+        # The completed CelebA LDS cache used the raw-gradient descent
+        # orientation (m1) and the stored AdamW update orientation (p1).
+        pint_signs = ("m1", "p1")
+        baseline_signs = ("m1", "p1")
         pint_multipliers = (1.0, 1.0)
     return (
         MethodConfig(
-            "PINT / RAW", "raw", pint_raw, pint_adamw, *pint_multipliers
+            "PINT / RAW",
+            "raw",
+            pint_raw,
+            pint_adamw,
+            *pint_signs,
+            *pint_multipliers,
         ),
         MethodConfig(
             "PINT / BOTH-L2",
             "query_train_l2",
             pint_raw,
             pint_adamw,
+            *pint_signs,
             *pint_multipliers,
         ),
         MethodConfig(
-            "TRACIN / RAW", "raw", tracin_raw, tracin_adamw, 1.0, -1.0
+            "TRACIN / RAW",
+            "raw",
+            tracin_raw,
+            tracin_adamw,
+            *baseline_signs,
+            1.0,
+            -1.0,
         ),
         MethodConfig(
             "TRACIN / BOTH-L2",
             "query_train_l2",
             tracin_raw,
             tracin_adamw,
+            *baseline_signs,
             1.0,
             -1.0,
         ),
@@ -129,6 +150,7 @@ def method_configs(dataset: str) -> tuple[MethodConfig, ...]:
             "query_train_l2",
             retrac_raw,
             retrac_adamw,
+            *baseline_signs,
             1.0,
             -1.0,
         ),
@@ -166,8 +188,12 @@ def parse_query_ids(text: str) -> list[int]:
     return values
 
 
-def load_summary(path: Path, expected_subsets: int) -> tuple[dict[str, object], Path]:
-    candidates = sorted(path.glob("pred_kept_sign_*/*/lds_summary.json"))
+def load_summary(
+    path: Path, expected_subsets: int, sign: str
+) -> tuple[dict[str, object], Path]:
+    candidates = sorted(
+        (path / f"pred_kept_sign_{sign}").glob("*/lds_summary.json")
+    )
     decoded: list[tuple[dict[str, object], Path]] = []
     for candidate in candidates:
         payload = json.loads(candidate.read_text())
@@ -175,7 +201,8 @@ def load_summary(path: Path, expected_subsets: int) -> tuple[dict[str, object], 
             decoded.append((payload, candidate))
     if len(decoded) != 1:
         raise RuntimeError(
-            f"expected one {expected_subsets}-subset LDS summary under {path}; "
+            f"expected one {expected_subsets}-subset LDS summary with sign={sign} "
+            f"under {path}; "
             f"found {len(decoded)} of {len(candidates)} candidates: {candidates}"
         )
     return decoded[0]
@@ -241,14 +268,25 @@ def main() -> None:
             config=config,
         )
         for method in methods:
-            for transform, namespace, multiplier in (
-                ("RAW-GRADIENT", method.raw_namespace, method.raw_multiplier),
-                ("ADAMW", method.adamw_namespace, method.adamw_multiplier),
+            for transform, namespace, sign, multiplier in (
+                (
+                    "RAW-GRADIENT",
+                    method.raw_namespace,
+                    method.raw_sign,
+                    method.raw_multiplier,
+                ),
+                (
+                    "ADAMW",
+                    method.adamw_namespace,
+                    method.adamw_sign,
+                    method.adamw_multiplier,
+                ),
             ):
                 for target in TARGETS:
                     payload, summary_path = load_summary(
                         query_root / f"{namespace}_{method.variant}" / target,
                         args.expected_subsets,
+                        sign,
                     )
                     stored = float(payload["lds_percent"])
                     rows.append(
