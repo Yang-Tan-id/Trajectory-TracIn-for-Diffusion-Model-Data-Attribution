@@ -165,7 +165,13 @@ def main() -> None:
                     )
 
                 pollute_ranking = pollute_scores
-                tracin_ranking = -tracin_scores
+                if transform == "raw_gradient":
+                    # Raw-gradient linear TracIn ranks stored scores descending.
+                    tracin_ranking = tracin_scores
+                else:
+                    # AdamW linear TracIn ranks stored scores ascending because
+                    # the optimizer update contains the descent minus sign.
+                    tracin_ranking = -tracin_scores
                 pollute_order = np.argsort(-pollute_ranking, kind="stable")[: args.topk]
                 tracin_order = np.argsort(-tracin_ranking, kind="stable")[: args.topk]
                 pollute_top = set(map(int, pollute_indices[pollute_order]))
@@ -228,7 +234,10 @@ def main() -> None:
         "CELEBA FULL-10K ENDPOINT-POLLUTE vs ENDPOINT-TRACIN",
         f"queries={len(query_ids)} topk={args.topk} candidates=10000",
         f"random independent top-k overlap expectation={args.topk / 10_000:.2%}",
-        "Pollute ranking=stored score descending; TracIn ranking=stored score ascending.",
+        (
+            "Pollute raw/AdamW rank descending; TracIn raw-gradient ranks "
+            "descending and AdamW ranks ascending."
+        ),
         "",
         (
             f"{'TRANSFORM':12s} {'VARIANT':16s} {'OVERLAP MEAN':>13s} "
