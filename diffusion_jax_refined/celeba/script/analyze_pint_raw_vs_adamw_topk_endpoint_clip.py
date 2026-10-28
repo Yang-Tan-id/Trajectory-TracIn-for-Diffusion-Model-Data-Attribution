@@ -8,6 +8,7 @@ import csv
 import json
 import os
 from pathlib import Path
+import time
 from typing import Sequence
 
 import numpy as np
@@ -132,7 +133,9 @@ def batched(values: Sequence[np.ndarray], size: int):
         yield values[start : start + size]
 
 
-def clip_features(images: Sequence[np.ndarray], model_name: str, batch_size: int) -> np.ndarray:
+def clip_features(
+    images: Sequence[np.ndarray], model_name: str, batch_size: int, label: str
+) -> np.ndarray:
     import torch
     from PIL import Image
     from transformers import CLIPModel, CLIPProcessor
@@ -143,17 +146,35 @@ def clip_features(images: Sequence[np.ndarray], model_name: str, batch_size: int
     processor = CLIPProcessor.from_pretrained(model_name)
     model = CLIPModel.from_pretrained(model_name).eval().half().to(device)
     output = []
-    for batch in batched(images, batch_size):
+    total = len(images)
+    started = time.monotonic()
+    for batch_number, batch in enumerate(batched(images, batch_size), start=1):
         pil = [Image.fromarray(display_image(image), mode="RGB") for image in batch]
         pixels = processor(images=pil, return_tensors="pt")["pixel_values"]
         with torch.inference_mode():
             features = model.get_image_features(pixel_values=pixels.to(device, dtype=torch.float16))
             features = torch.nn.functional.normalize(features.float(), dim=-1)
         output.append(features.cpu().numpy())
+        completed = min(batch_number * batch_size, total)
+        elapsed = time.monotonic() - started
+        rate = completed / elapsed if elapsed > 0 else 0.0
+        eta = (total - completed) / rate if rate > 0 else float("inf")
+        print(
+            f"[clip progress] {label} images={completed}/{total} "
+            f"percent={100.0 * completed / total:.2f} elapsed={elapsed:.1f}s "
+            f"eta={eta:.1f}s",
+            flush=True,
+        )
     return np.concatenate(output, axis=0)
 
 
-def label_swap(diff: np.ndarray, permutations: int, seed: int, two_sided: bool) -> float:
+def label_swap(
+    diff: np.ndarray,
+    permutations: int,
+    seed: int,
+    two_sided: bool,
+    label: str,
+) -> float:
     observed = float(diff.mean())
     rng = np.random.default_rng(seed)
     extreme = 0
@@ -167,6 +188,13 @@ def label_swap(diff: np.ndarray, permutations: int, seed: int, two_sided: bool) 
         else:
             extreme += int(np.count_nonzero(values >= observed))
         completed += size
+        if completed % 100_000 == 0 or completed == permutations:
+            print(
+                f"[label-swap progress] {label} "
+                f"permutations={completed}/{permutations} "
+                f"percent={100.0 * completed / permutations:.2f}",
+                flush=True,
+            )
     return (extreme + 1) / (permutations + 1)
 
 
@@ -237,9 +265,13 @@ def main() -> None:
         print(f"[select] Q{query_id} raw+AdamW", flush=True)
 
     print(f"[clip] encoding {len(train_images)} training images", flush=True)
-    train_features = clip_features(train_images, args.clip_model, args.batch_size)
+    train_features = clip_features(
+        train_images, args.clip_model, args.batch_size, "training"
+    )
     print(f"[clip] encoding {len(endpoint_images)} endpoints", flush=True)
-    endpoint_features = clip_features(endpoint_images, args.clip_model, args.batch_size)
+    endpoint_features = clip_features(
+        endpoint_images, args.clip_model, args.batch_size, "endpoints"
+    )
 
     rows: list[dict[str, object]] = []
     for position, query_id in enumerate(args.query_ids):
@@ -284,8 +316,9 @@ def main() -> None:
             f"STD     {raw.std():>12.6f} {adamw.std():>12.6f} {diff.std():>12.6f}",
             f"RAW WINS={int(np.count_nonzero(diff > 0))}/{len(diff)}; ties={int(np.count_nonzero(diff == 0))}",
             (
-                f"PAIRED LABEL-SWAP raw-adamw: p1={label_swap(diff, args.permutations, 2026, False):.8g} "
-                f"p2={label_swap(diff, args.permutations, 2026, True):.8g}"
+                f"PAIRED LABEL-SWAP raw-adamw: "
+                f"p1={label_swap(diff, args.permutations, 2026, False, 'one-sided'):.8g} "
+                f"p2={label_swap(diff, args.permutations, 2026, True, 'two-sided'):.8g}"
             ),
         ]
     )

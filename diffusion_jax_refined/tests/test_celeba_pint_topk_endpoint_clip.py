@@ -34,6 +34,12 @@ class CelebAPintTopkEndpointClipTest(unittest.TestCase):
         self.assertIn('"per_query_endpoint_clip.csv"', SOURCE)
         self.assertIn("PAIRED LABEL-SWAP raw-adamw", SOURCE)
 
+    def test_long_steps_report_progress(self) -> None:
+        self.assertIn("[clip progress]", SOURCE)
+        self.assertIn("images={completed}/{total}", SOURCE)
+        self.assertIn("[label-swap progress]", SOURCE)
+        self.assertIn("permutations={completed}/{permutations}", SOURCE)
+
 
 if __name__ == "__main__":
     unittest.main()
