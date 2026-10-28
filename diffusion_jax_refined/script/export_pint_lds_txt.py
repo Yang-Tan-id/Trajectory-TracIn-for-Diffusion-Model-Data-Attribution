@@ -188,6 +188,30 @@ def prediction_sign(path: Path) -> str:
     raise ValueError(f"prediction sign absent from {path}")
 
 
+def resolve_query_lds_root(
+    *, eval_root: Path, prompt: str, seed: int, config: DatasetConfig
+) -> Path:
+    """Resolve current or legacy-truncated prompt directories without guessing."""
+    full_tag = prompt_tag(prompt, config)
+    exact = eval_root / f"query_{full_tag}" / f"initial_seed_{seed}" / "lds"
+    if exact.is_dir():
+        return exact
+    matches = []
+    for query_dir in eval_root.glob("query_*"):
+        stored_tag = query_dir.name.removeprefix("query_")
+        if not (full_tag.startswith(stored_tag) or stored_tag.startswith(full_tag)):
+            continue
+        candidate = query_dir / f"initial_seed_{seed}" / "lds"
+        if candidate.is_dir():
+            matches.append(candidate)
+    if len(matches) != 1:
+        raise RuntimeError(
+            f"expected one current/legacy LDS query root for tag={full_tag!r} "
+            f"seed={seed}; found {len(matches)}: {matches}"
+        )
+    return matches[0]
+
+
 def main() -> None:
     args = parse_args()
     config = CONFIGS[args.dataset]
@@ -203,19 +227,18 @@ def main() -> None:
     if min(query_ids) < 0 or max(query_ids) >= len(records):
         raise ValueError(f"query IDs exceed manifest range 0..{len(records) - 1}")
     output = args.output or result_root / "analysis" / "pint_lds_q0_99_all.txt"
+    eval_root = result_root / "eval" / "prompted_solo"
 
     rows: list[dict[str, object]] = []
     for query_id in query_ids:
         record = records[query_id]
         prompt = str(record["prompt"])
         seed = int(record.get("initial_seed", record.get("seed")))
-        query_root = (
-            result_root
-            / "eval"
-            / "prompted_solo"
-            / f"query_{prompt_tag(prompt, config)}"
-            / f"initial_seed_{seed}"
-            / "lds"
+        query_root = resolve_query_lds_root(
+            eval_root=eval_root,
+            prompt=prompt,
+            seed=seed,
+            config=config,
         )
         for method in methods:
             for transform, namespace, multiplier in (

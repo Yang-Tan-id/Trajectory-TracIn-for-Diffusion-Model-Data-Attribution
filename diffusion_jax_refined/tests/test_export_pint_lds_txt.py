@@ -3,6 +3,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 
 
@@ -39,6 +40,23 @@ class ExportPintLdsTxtTest(unittest.TestCase):
     def test_dataset_specific_pint_orientation(self) -> None:
         self.assertEqual(MODULE.method_configs("shape3d")[0].raw_multiplier, -1.0)
         self.assertEqual(MODULE.method_configs("celeba")[0].raw_multiplier, 1.0)
+
+    def test_legacy_truncated_query_tag_is_resolved(self) -> None:
+        config = MODULE.CONFIGS["celeba"]
+        prompt = "Attractive,Black_Hair,High_Cheekbones,Male,Mouth_Slightly_Open"
+        full_tag = MODULE.prompt_tag(prompt, config)
+        legacy_tag = full_tag[:40]
+        with tempfile.TemporaryDirectory() as temporary:
+            eval_root = Path(temporary)
+            expected = eval_root / f"query_{legacy_tag}" / "initial_seed_0" / "lds"
+            expected.mkdir(parents=True)
+            actual = MODULE.resolve_query_lds_root(
+                eval_root=eval_root,
+                prompt=prompt,
+                seed=0,
+                config=config,
+            )
+        self.assertEqual(actual, expected)
 
 
 if __name__ == "__main__":
