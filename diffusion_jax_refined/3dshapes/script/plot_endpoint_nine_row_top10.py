@@ -3,9 +3,11 @@
 
 For each query and each requested train transform, the figure contains four
 Endpoint-Pollute normalization variants, four Endpoint-TracIn variants, and
-the standard query+train-L2 ReTrac score.  Endpoint-Pollute ranks stored P1
-timestamp-sum-squared scores descending; Endpoint-TracIn and ReTrac rank their
-stored linear scores ascending (M1).
+the standard query+train-L2 ReTrac score. Endpoint-Pollute ranks stored
+timestamp-sum-squared scores descending for both transforms. The linear
+Endpoint-TracIn and ReTrac banks rank raw-gradient scores descending, whereas
+AdamW-full scores rank ascending because the stored AdamW update already
+contains the optimizer's descent minus sign.
 """
 
 from __future__ import annotations
@@ -125,6 +127,15 @@ def load_queries(path: Path, query_ids: list[int]) -> list[Query]:
     ]
 
 
+def linear_ranking_sign(transform_key: str) -> int:
+    """Orient linear scores so larger ranking values are more influential."""
+    if transform_key == "raw_gradient":
+        return +1
+    if transform_key == "adamw_full":
+        return -1
+    raise ValueError(f"unknown train transform: {transform_key}")
+
+
 def banks_for_transform(transform: Transform) -> list[Bank]:
     banks: list[Bank] = []
     for variant, directory, label in VARIANTS:
@@ -137,23 +148,25 @@ def banks_for_transform(transform: Transform) -> list[Bank]:
                 ranking_sign=+1,
             )
         )
+    linear_sign = linear_ranking_sign(transform.key)
+    linear_order = "largest" if linear_sign == +1 else "smallest"
     for variant, directory, label in VARIANTS:
         banks.append(
             Bank(
                 key=f"tracin_{variant}",
-                label=f"Endpoint-TracIn\n{label} · smallest",
+                label=f"Endpoint-TracIn\n{label} · {linear_order}",
                 namespace=transform.tracin_namespace,
                 score_directory=directory,
-                ranking_sign=-1,
+                ranking_sign=linear_sign,
             )
         )
     banks.append(
         Bank(
             key="retrac_query_train_l2",
-            label="ReTrac\nBOTH-L2 · smallest",
+            label=f"ReTrac\nBOTH-L2 · {linear_order}",
             namespace=transform.retrac_namespace,
             score_directory="score_query_train_l2_normalized",
-            ranking_sign=-1,
+            ranking_sign=linear_sign,
         )
     )
     if len(banks) != 9:
@@ -365,9 +378,18 @@ def main() -> None:
         "top_k": args.top_k,
         "rows_per_figure": 9,
         "ranking": {
-            "endpoint_pollute": "stored timestamp-sum-squared score descending (P1)",
-            "endpoint_tracin": "stored linear score ascending (M1)",
-            "retrac": "stored linear score ascending (M1)",
+            "endpoint_pollute": (
+                "stored timestamp-sum-squared score descending for both "
+                "raw-gradient and AdamW-full"
+            ),
+            "endpoint_tracin": {
+                "raw_gradient": "stored linear score descending",
+                "adamw_full": "stored linear score ascending",
+            },
+            "retrac": {
+                "raw_gradient": "stored linear score descending",
+                "adamw_full": "stored linear score ascending",
+            },
         },
         "transform_namespaces": {
             key: value.__dict__ for key, value in TRANSFORMS.items()
