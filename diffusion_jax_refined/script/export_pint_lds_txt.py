@@ -191,21 +191,39 @@ def parse_query_ids(text: str) -> list[int]:
 def load_summary(
     path: Path, expected_subsets: int, sign: str
 ) -> tuple[dict[str, object], Path]:
-    candidates = sorted(
-        (path / f"pred_kept_sign_{sign}").glob("*/lds_summary.json")
-    )
-    decoded: list[tuple[dict[str, object], Path]] = []
-    for candidate in candidates:
-        payload = json.loads(candidate.read_text())
-        if int(payload.get("num_models", -1)) == expected_subsets:
-            decoded.append((payload, candidate))
-    if len(decoded) != 1:
-        raise RuntimeError(
-            f"expected one {expected_subsets}-subset LDS summary with sign={sign} "
-            f"under {path}; "
-            f"found {len(decoded)} of {len(candidates)} candidates: {candidates}"
+    """Load the preferred prediction sign, or its algebraic inverse if absent."""
+    attempts: list[tuple[str, list[Path], list[tuple[dict[str, object], Path]]]] = []
+    opposite = {"p1": "m1", "m1": "p1"}[sign]
+    for candidate_sign in (sign, opposite):
+        candidates = sorted(
+            (path / f"pred_kept_sign_{candidate_sign}").glob("*/lds_summary.json")
         )
-    return decoded[0]
+        decoded: list[tuple[dict[str, object], Path]] = []
+        for candidate in candidates:
+            payload = json.loads(candidate.read_text())
+            if int(payload.get("num_models", -1)) == expected_subsets:
+                decoded.append((payload, candidate))
+        attempts.append((candidate_sign, candidates, decoded))
+        if len(decoded) == 1:
+            return decoded[0]
+        if len(decoded) > 1:
+            break
+    details = "; ".join(
+        f"sign={candidate_sign}: {len(decoded)} of {len(candidates)} candidates "
+        f"{candidates}"
+        for candidate_sign, candidates, decoded in attempts
+    )
+    raise RuntimeError(
+        f"expected one {expected_subsets}-subset LDS summary for preferred "
+        f"sign={sign} or its inverse under {path}; {details}"
+    )
+
+
+def sign_conversion(preferred: str, stored: str) -> float:
+    """Convert an LDS computed with the stored sign to the preferred sign."""
+    if preferred not in {"p1", "m1"} or stored not in {"p1", "m1"}:
+        raise ValueError(f"unsupported prediction signs: {preferred}, {stored}")
+    return 1.0 if preferred == stored else -1.0
 
 
 def prediction_sign(path: Path) -> str:
@@ -289,6 +307,10 @@ def main() -> None:
                         sign,
                     )
                     stored = float(payload["lds_percent"])
+                    stored_sign = prediction_sign(summary_path)
+                    effective_multiplier = multiplier * sign_conversion(
+                        sign, stored_sign
+                    )
                     rows.append(
                         {
                             "query_id": query_id,
@@ -298,10 +320,11 @@ def main() -> None:
                             "variant": method.variant,
                             "target": target,
                             "stored_lds": stored,
-                            "reported_lds": multiplier * stored,
-                            "report_multiplier": multiplier,
+                            "reported_lds": effective_multiplier * stored,
+                            "report_multiplier": effective_multiplier,
                             "num_subsets": int(payload["num_models"]),
-                            "sign": prediction_sign(summary_path),
+                            "preferred_sign": sign,
+                            "sign": stored_sign,
                             "subset_group": summary_path.parent.name,
                             "summary_path": str(summary_path),
                         }
@@ -368,7 +391,8 @@ def main() -> None:
     lines.extend(["DETAILED PROVENANCE", "=" * 132])
     lines.append(
         "query_id\tseed\ttransform\tmethod\tvariant\ttarget\tstored_lds_percent\t"
-        "report_multiplier\treported_lds_percent\tnum_subsets\tprediction_sign\t"
+        "report_multiplier\treported_lds_percent\tnum_subsets\tpreferred_sign\t"
+        "stored_prediction_sign\t"
         "subset_group\tsummary_path"
     )
     for row in rows:
@@ -385,6 +409,7 @@ def main() -> None:
                     f"{float(row['report_multiplier']):+.0f}",
                     f"{float(row['reported_lds']):+.9f}",
                     str(row["num_subsets"]),
+                    str(row["preferred_sign"]),
                     str(row["sign"]),
                     str(row["subset_group"]),
                     str(row["summary_path"]),

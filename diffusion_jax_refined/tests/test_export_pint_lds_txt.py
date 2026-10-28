@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 from pathlib import Path
 import sys
 import tempfile
@@ -61,6 +62,18 @@ class ExportPintLdsTxtTest(unittest.TestCase):
                 config=config,
             )
         self.assertEqual(actual, expected)
+
+    def test_summary_falls_back_to_inverse_sign(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            summary = root / "pred_kept_sign_m1" / "subset_group" / "lds_summary.json"
+            summary.parent.mkdir(parents=True)
+            summary.write_text(json.dumps({"num_models": 192, "lds_percent": -7.5}))
+            payload, selected = MODULE.load_summary(root, 192, "p1")
+        self.assertEqual(payload["lds_percent"], -7.5)
+        self.assertEqual(MODULE.prediction_sign(selected), "m1")
+        self.assertEqual(MODULE.sign_conversion("p1", "m1"), -1.0)
+        self.assertEqual(MODULE.sign_conversion("m1", "m1"), 1.0)
 
 
 if __name__ == "__main__":
