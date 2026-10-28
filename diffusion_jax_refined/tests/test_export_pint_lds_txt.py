@@ -38,6 +38,10 @@ class ExportPintLdsTxtTest(unittest.TestCase):
         self.assertEqual(methods[3].label, "TRACIN / BOTH-L2")
         self.assertEqual(methods[4].label, "RETRAC / BOTH-L2")
 
+    def test_transform_cli_choices_are_documented(self) -> None:
+        source = SCRIPT.read_text()
+        self.assertIn('choices=("both", "raw-gradient", "adamw")', source)
+
     def test_dataset_specific_pint_orientation(self) -> None:
         self.assertEqual(MODULE.method_configs("shape3d")[0].raw_multiplier, -1.0)
         self.assertEqual(MODULE.method_configs("celeba")[0].raw_multiplier, 1.0)

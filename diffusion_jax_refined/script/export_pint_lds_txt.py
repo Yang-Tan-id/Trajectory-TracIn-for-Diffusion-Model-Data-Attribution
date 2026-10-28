@@ -171,6 +171,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--result-root", type=Path)
     parser.add_argument("--expected-subsets", type=int, default=192)
     parser.add_argument("--query-ids", default="0-99")
+    parser.add_argument(
+        "--transforms",
+        choices=("both", "raw-gradient", "adamw"),
+        default="both",
+        help="Export both transforms or only one transform.",
+    )
     parser.add_argument("--output", type=Path)
     return parser.parse_args()
 
@@ -275,6 +281,11 @@ def main() -> None:
     eval_root = result_root / "eval" / "prompted_solo"
 
     rows: list[dict[str, object]] = []
+    selected_transforms = {
+        "both": ("RAW-GRADIENT", "ADAMW"),
+        "raw-gradient": ("RAW-GRADIENT",),
+        "adamw": ("ADAMW",),
+    }[args.transforms]
     for query_id in query_ids:
         record = records[query_id]
         prompt = str(record["prompt"])
@@ -300,6 +311,8 @@ def main() -> None:
                     method.adamw_multiplier,
                 ),
             ):
+                if transform not in selected_transforms:
+                    continue
                 for target in TARGETS:
                     payload, summary_path = load_summary(
                         query_root / f"{namespace}_{method.variant}" / target,
@@ -330,7 +343,9 @@ def main() -> None:
                         }
                     )
 
-    expected = len(query_ids) * len(methods) * 2 * len(TARGETS)
+    expected = (
+        len(query_ids) * len(methods) * len(selected_transforms) * len(TARGETS)
+    )
     if len(rows) != expected:
         raise RuntimeError(f"internal coverage error: {len(rows)}/{expected}")
 
@@ -355,7 +370,7 @@ def main() -> None:
     ]
     columns = tuple(
         (f"{transform} / {method.label}", transform, method.label)
-        for transform in ("RAW-GRADIENT", "ADAMW")
+        for transform in selected_transforms
         for method in methods
     )
     for target in TARGETS:
