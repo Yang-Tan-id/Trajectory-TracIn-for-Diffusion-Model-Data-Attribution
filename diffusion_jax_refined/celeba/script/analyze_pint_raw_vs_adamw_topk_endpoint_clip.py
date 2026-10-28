@@ -32,6 +32,16 @@ def parse_ids(text: str) -> list[int]:
     return values
 
 
+def parse_variants(text: str) -> list[str]:
+    values = [value.strip() for value in text.replace(" ", ",").split(",") if value.strip()]
+    unknown = sorted(set(values) - set(VARIANT_DIRECTORIES))
+    if not values or len(values) != len(set(values)) or unknown:
+        raise argparse.ArgumentTypeError(
+            f"variants must be unique members of {tuple(VARIANT_DIRECTORIES)}; unknown={unknown}"
+        )
+    return values
+
+
 def prompt_tag(prompt: str) -> str:
     import re
 
@@ -87,14 +97,25 @@ def score_directory(
     train_seed: int,
     prompt: str,
     seed: int,
+    method: str,
     transform: str,
     reduction: str,
     variant: str,
 ) -> Path:
-    namespace = (
-        f"traj_tracin_celeba_endpoint_pollute_{transform}_"
-        f"train1x50_query1x50_{reduction}_shape3d_semantics_full10000"
-    )
+    if method == "pint":
+        namespace = (
+            f"traj_tracin_celeba_endpoint_pollute_{transform}_"
+            f"train1x50_query1x50_{reduction}_shape3d_semantics_full10000"
+        )
+    elif method == "tracin":
+        if reduction != "linear":
+            raise ValueError("TracIn endpoint scores require --reduction linear")
+        namespace = (
+            f"traj_tracin_celeba_endpoint_tracin_{transform}_"
+            "train_mean50_query_mean50_linear_shape3d_semantics_full10000"
+        )
+    else:
+        raise ValueError(f"unknown method: {method}")
     return (
         result_root
         / "attribution_score"
@@ -107,21 +128,33 @@ def score_directory(
     )
 
 
-def ranking_scores(scores: np.ndarray, transform: str, reduction: str) -> np.ndarray:
-    if reduction == "timestamp_sum_squared":
+def ranking_scores(
+    scores: np.ndarray, method: str, transform: str, reduction: str
+) -> np.ndarray:
+    if method == "pint" and reduction == "timestamp_sum_squared":
         return scores
-    if reduction == "linear":
+    if method == "pint" and reduction == "linear":
         return -scores if transform == "raw_gradient" else scores
-    raise ValueError(f"unknown reduction: {reduction}")
+    if method == "tracin" and reduction == "linear":
+        return scores if transform == "raw_gradient" else -scores
+    raise ValueError(
+        f"unsupported method/transform/reduction: {method}/{transform}/{reduction}"
+    )
 
 
-def select_topk(directory: Path, transform: str, reduction: str, topk: int) -> np.ndarray:
+def select_topk(
+    directory: Path,
+    method: str,
+    transform: str,
+    reduction: str,
+    topk: int,
+) -> np.ndarray:
     scores = np.asarray(np.load(directory / "scores.npy"), dtype=np.float64).reshape(-1)
     indices = np.asarray(np.load(directory / "score_indices.npy"), dtype=np.int64).reshape(-1)
     expected = np.arange(10_000, dtype=np.int64)
     if scores.shape != expected.shape or not np.array_equal(indices, expected):
         raise ValueError(f"score bank is not the ordered full-10k universe: {directory}")
-    oriented = ranking_scores(scores, transform, reduction)
+    oriented = ranking_scores(scores, method, transform, reduction)
     if not np.all(np.isfinite(oriented)):
         raise ValueError(f"non-finite ranking scores: {directory}")
     order = np.argsort(-oriented, kind="stable")[:topk]
@@ -217,8 +250,9 @@ def main() -> None:
     parser.add_argument("--train-seed", type=int, default=42)
     parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--topk", type=int, default=1000)
+    parser.add_argument("--method", choices=("pint", "tracin"), default="pint")
     parser.add_argument("--reduction", choices=("timestamp_sum_squared", "linear"), default="timestamp_sum_squared")
-    parser.add_argument("--variant", choices=tuple(VARIANT_DIRECTORIES), default="query_train_l2")
+    parser.add_argument("--variant", type=parse_variants, default=["query_train_l2"])
     parser.add_argument("--clip-model", default="openai/clip-vit-base-patch32")
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--permutations", type=int, default=1_000_000)
@@ -226,6 +260,8 @@ def main() -> None:
     args = parser.parse_args()
     if not 0 < args.topk <= 10_000:
         parser.error("--topk must be within [1, 10000]")
+    if args.method == "tracin" and args.reduction != "linear":
+        parser.error("--method tracin requires --reduction linear")
 
     payload = json.loads(args.query_file.read_text())
     records = payload["queries"] if isinstance(payload, dict) else payload
@@ -235,7 +271,8 @@ def main() -> None:
     sample_root = result_root / "sample_ddim_eta0_50"
     output_dir = args.output_dir or (
         result_root / "analysis" /
-        f"pint_raw_vs_adamw_{args.reduction}_{args.variant}_top{args.topk}_endpoint_clip"
+        f"{args.method}_raw_vs_adamw_{args.reduction}_"
+        f"{'_'.join(args.variant)}_top{args.topk}_endpoint_clip"
     )
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -246,7 +283,7 @@ def main() -> None:
 
     checkpoint_stem = f"seed_{args.train_seed}_epoch_{args.epochs:04d}"
     endpoint_images = []
-    selections: dict[tuple[int, str], np.ndarray] = {}
+    selections: dict[tuple[int, str, str], np.ndarray] = {}
     for query_id in args.query_ids:
         record = records[query_id]
         prompt = str(record["prompt"])
@@ -254,15 +291,19 @@ def main() -> None:
         endpoint_images.append(
             np.load(endpoint_path(sample_root, checkpoint_stem, prompt, seed), allow_pickle=False)
         )
-        for transform in TRANSFORMS:
-            directory = score_directory(
-                result_root, args.train_seed, prompt, seed,
-                transform, args.reduction, args.variant,
-            )
-            selections[(query_id, transform)] = select_topk(
-                directory, transform, args.reduction, args.topk
-            )
-        print(f"[select] Q{query_id} raw+AdamW", flush=True)
+        for variant in args.variant:
+            for transform in TRANSFORMS:
+                directory = score_directory(
+                    result_root, args.train_seed, prompt, seed,
+                    args.method, transform, args.reduction, variant,
+                )
+                selections[(query_id, variant, transform)] = select_topk(
+                    directory, args.method, transform, args.reduction, args.topk
+                )
+        print(
+            f"[select] Q{query_id} raw+AdamW variants={','.join(args.variant)}",
+            flush=True,
+        )
 
     print(f"[clip] encoding {len(train_images)} training images", flush=True)
     train_features = clip_features(
@@ -276,52 +317,76 @@ def main() -> None:
     rows: list[dict[str, object]] = []
     for position, query_id in enumerate(args.query_ids):
         endpoint = endpoint_features[position]
-        for transform in TRANSFORMS:
-            indices = selections[(query_id, transform)]
-            similarities = train_features[indices] @ endpoint
-            rows.append(
-                {
-                    "query_id": query_id,
-                    "transform": transform,
-                    "reduction": args.reduction,
-                    "variant": args.variant,
-                    "topk": args.topk,
-                    "clip_cosine_mean": float(similarities.mean()),
-                    "clip_cosine_median": float(np.median(similarities)),
-                    "clip_cosine_std": float(similarities.std()),
-                    "clip_cosine_min": float(similarities.min()),
-                    "clip_cosine_max": float(similarities.max()),
-                }
-            )
+        for variant in args.variant:
+            for transform in TRANSFORMS:
+                indices = selections[(query_id, variant, transform)]
+                similarities = train_features[indices] @ endpoint
+                rows.append(
+                    {
+                        "query_id": query_id,
+                        "method": args.method,
+                        "transform": transform,
+                        "reduction": args.reduction,
+                        "variant": variant,
+                        "topk": args.topk,
+                        "clip_cosine_mean": float(similarities.mean()),
+                        "clip_cosine_median": float(np.median(similarities)),
+                        "clip_cosine_std": float(similarities.std()),
+                        "clip_cosine_min": float(similarities.min()),
+                        "clip_cosine_max": float(similarities.max()),
+                    }
+                )
 
-    by_key = {(int(row["query_id"]), str(row["transform"])): row for row in rows}
-    raw = np.asarray([by_key[(qid, "raw_gradient")]["clip_cosine_mean"] for qid in args.query_ids], dtype=np.float64)
-    adamw = np.asarray([by_key[(qid, "adamw_full")]["clip_cosine_mean"] for qid in args.query_ids], dtype=np.float64)
-    diff = raw - adamw
+    by_key = {
+        (int(row["query_id"]), str(row["variant"]), str(row["transform"])): row
+        for row in rows
+    }
     lines = [
-        "CELEBA PINT TOP-K TRAINING DATA — CLIP SIMILARITY TO FULL-DATA ENDPOINT",
-        f"queries={len(args.query_ids)} topk={args.topk} reduction={args.reduction} variant={args.variant}",
+        f"CELEBA {args.method.upper()} TOP-K TRAINING DATA — CLIP SIMILARITY TO FULL-DATA ENDPOINT",
+        (
+            f"queries={len(args.query_ids)} topk={args.topk} "
+            f"reduction={args.reduction} variants={','.join(args.variant)}"
+        ),
         "Higher CLIP cosine means the selected training images are more semantically similar to the endpoint.",
-        "",
-        f"{'QUERY':<7} {'RAW-GRAD':>12} {'ADAMW':>12} {'RAW-ADAMW':>12}",
-        "-" * 47,
     ]
-    for query_id, left, right in zip(args.query_ids, raw, adamw, strict=True):
-        lines.append(f"Q{query_id:<6d} {left:>12.6f} {right:>12.6f} {left-right:>+12.6f}")
-    lines.extend(
-        [
-            "-" * 47,
-            f"MEAN    {raw.mean():>12.6f} {adamw.mean():>12.6f} {diff.mean():>+12.6f}",
-            f"MEDIAN  {np.median(raw):>12.6f} {np.median(adamw):>12.6f} {np.median(diff):>+12.6f}",
-            f"STD     {raw.std():>12.6f} {adamw.std():>12.6f} {diff.std():>12.6f}",
-            f"RAW WINS={int(np.count_nonzero(diff > 0))}/{len(diff)}; ties={int(np.count_nonzero(diff == 0))}",
-            (
-                f"PAIRED LABEL-SWAP raw-adamw: "
-                f"p1={label_swap(diff, args.permutations, 2026, False, 'one-sided'):.8g} "
-                f"p2={label_swap(diff, args.permutations, 2026, True, 'two-sided'):.8g}"
-            ),
-        ]
-    )
+    for variant_index, variant in enumerate(args.variant):
+        raw = np.asarray(
+            [by_key[(qid, variant, "raw_gradient")]["clip_cosine_mean"] for qid in args.query_ids],
+            dtype=np.float64,
+        )
+        adamw = np.asarray(
+            [by_key[(qid, variant, "adamw_full")]["clip_cosine_mean"] for qid in args.query_ids],
+            dtype=np.float64,
+        )
+        diff = raw - adamw
+        lines.extend(
+            [
+                "",
+                f"VARIANT: {variant}",
+                f"{'QUERY':<7} {'RAW-GRAD':>12} {'ADAMW':>12} {'RAW-ADAMW':>12}",
+                "-" * 47,
+            ]
+        )
+        for query_id, left, right in zip(args.query_ids, raw, adamw, strict=True):
+            lines.append(f"Q{query_id:<6d} {left:>12.6f} {right:>12.6f} {left-right:>+12.6f}")
+        p1 = label_swap(
+            diff, args.permutations, 2026 + variant_index, False,
+            f"{variant}/one-sided",
+        )
+        p2 = label_swap(
+            diff, args.permutations, 2026 + variant_index, True,
+            f"{variant}/two-sided",
+        )
+        lines.extend(
+            [
+                "-" * 47,
+                f"MEAN    {raw.mean():>12.6f} {adamw.mean():>12.6f} {diff.mean():>+12.6f}",
+                f"MEDIAN  {np.median(raw):>12.6f} {np.median(adamw):>12.6f} {np.median(diff):>+12.6f}",
+                f"STD     {raw.std():>12.6f} {adamw.std():>12.6f} {diff.std():>12.6f}",
+                f"RAW WINS={int(np.count_nonzero(diff > 0))}/{len(diff)}; ties={int(np.count_nonzero(diff == 0))}",
+                f"PAIRED LABEL-SWAP raw-adamw: p1={p1:.8g} p2={p2:.8g}",
+            ]
+        )
     report = "\n".join(lines) + "\n"
     write_csv(output_dir / "per_query_endpoint_clip.csv", rows)
     (output_dir / "endpoint_clip_report.txt").write_text(report)
@@ -329,9 +394,10 @@ def main() -> None:
         json.dumps(
             {
                 "query_ids": args.query_ids,
+                "method": args.method,
                 "transforms": list(TRANSFORMS),
                 "reduction": args.reduction,
-                "variant": args.variant,
+                "variants": args.variant,
                 "topk": args.topk,
                 "clip_model": args.clip_model,
                 "definition": "CLIP cosine between each selected training image and the full-data query endpoint",
