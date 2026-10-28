@@ -23,12 +23,31 @@ class CelebAPintLinearVsSquareOverlapTest(unittest.TestCase):
 
     def test_reductions_variants_and_directions(self) -> None:
         self.assertIn('for reduction in ("linear", "timestamp_sum_squared")', SOURCE)
-        self.assertIn("linear_oriented = -linear_scores", SOURCE)
         self.assertIn("square_oriented = square_scores", SOURCE)
         self.assertIn('("raw", "score")', SOURCE)
         self.assertIn(
             '("query_train_l2", "score_query_train_l2_normalized")', SOURCE
         )
+
+    def test_transform_specific_linear_orientation(self) -> None:
+        tree = ast.parse(SOURCE)
+        function = next(
+            node
+            for node in tree.body
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "orient_linear_scores"
+        )
+        function.returns = None
+        for argument in function.args.args:
+            argument.annotation = None
+        namespace: dict[str, object] = {}
+        ast.fix_missing_locations(function)
+        exec(compile(ast.Module([function], []), str(SCRIPT), "exec"), namespace)
+        orient = namespace["orient_linear_scores"]
+        self.assertEqual(orient(3.0, "raw_gradient"), -3.0)
+        self.assertEqual(orient(3.0, "adamw_full"), 3.0)
+        with self.assertRaises(ValueError):
+            orient(3.0, "unknown")
 
     def test_overlap_and_rank_outputs(self) -> None:
         self.assertIn('"overlap_fraction": overlap / args.topk', SOURCE)

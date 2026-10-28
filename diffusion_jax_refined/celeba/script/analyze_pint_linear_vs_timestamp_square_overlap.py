@@ -71,6 +71,15 @@ def spearman(left: np.ndarray, right: np.ndarray) -> float:
     return float(np.dot(left_rank, right_rank) / denominator)
 
 
+def orient_linear_scores(scores: np.ndarray, transform: str) -> np.ndarray:
+    """Map stored PINT linear scores to a common larger-is-better axis."""
+    if transform == "raw_gradient":
+        return -scores
+    if transform == "adamw_full":
+        return scores
+    raise ValueError(f"unknown transform: {transform}")
+
+
 def summarize(values: list[float]) -> dict[str, float]:
     array = np.asarray(values, dtype=np.float64)
     return {
@@ -156,10 +165,9 @@ def main() -> None:
                         f"Q{query_id} {transform}/{variant}: universes differ"
                     )
 
-                # Endpoint-Pollute linear scores rank ascending for both
-                # transforms. Negation maps them to the common larger-is-better
-                # axis used by the timestamp-sum-squared reduction.
-                linear_oriented = -linear_scores
+                # The stored endpoint-Pollute linear score has a transform-specific
+                # sign: raw-gradient ranks ascending, while AdamW ranks descending.
+                linear_oriented = orient_linear_scores(linear_scores, transform)
                 # Timestamp-sum-squared scores rank descending for both.
                 square_oriented = square_scores
                 linear_order = np.argsort(-linear_oriented, kind="stable")[: args.topk]
@@ -222,7 +230,7 @@ def main() -> None:
         f"queries={len(query_ids)} topk={args.topk} candidates=10000",
         f"random independent top-k expectation={args.topk / 10_000:.2%}",
         (
-            "linear ranks ascending for raw-gradient and AdamW; "
+            "linear ranks raw-gradient ascending and AdamW descending; "
             "timestamp-sum-squared ranks descending for both."
         ),
         "Spearman uses the common larger-is-better orientation.",
