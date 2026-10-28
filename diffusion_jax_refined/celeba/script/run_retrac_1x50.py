@@ -165,11 +165,12 @@ def make_batch_one_event_train_fn(
     params: Any,
     cfg: Any,
 ):
-    """Use the working endpoint-pollute batch-one gradient structure.
+    """Compute the paper ReTrac feature for each selected datapoint.
 
-    The original event sample, diffusion noise, timestep, checkpoint, and
-    learning-rate weight are retained.  We intentionally avoid the expensive
-    full-batch train-mode/dropout VJP graph that stalls XLA compilation.
+    The event record identifies the sample and recovers its diffusion noise and
+    timestep.  Attribution itself uses a singleton batch, computes that
+    datapoint's loss gradient, and normalizes it independently before
+    projection.  The original training batch is not replayed.
     """
 
     opt_state = state.opt_state
@@ -209,11 +210,11 @@ def make_exact_event_train_fn(
     params: Any,
     cfg: Any,
 ):
-    """Replay the original train-mode batch and select per-example losses.
+    """Replay the original train-mode batch for a non-baseline ablation.
 
-    Dropout is generated for the original full batch with the original RNG key.
-    ``lax.map`` evaluates selected positions sequentially inside one compiled
-    call so a chunk-sized full-parameter gradient bank is never materialized.
+    This path is deliberately separate from paper ReTrac.  It restores the
+    complete training batch and dropout context and must only be selected with
+    the explicit ``--replay-dropout`` flag.
     """
 
     opt_state = state.opt_state

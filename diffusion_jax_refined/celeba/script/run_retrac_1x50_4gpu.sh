@@ -12,14 +12,19 @@ IFS=, read -r -a gpu_ids <<< "$gpu_ids_text"
 shard_count="${#gpu_ids[@]}"
 (( shard_count > 0 )) || { echo "GPU_IDS is empty" >&2; exit 1; }
 
-replay_dropout="${REPLAY_DROPOUT:-1}"
+replay_dropout="${REPLAY_DROPOUT:-0}"
 case "$replay_dropout" in
-  0) replay_args=(); replay_label="batch-one approximation" ;;
-  1) replay_args=(--replay-dropout); replay_label="exact full-batch dropout replay" ;;
+  0) replay_args=(); replay_label="paper ReTrac batch-one" ;;
+  1) replay_args=(--replay-dropout); replay_label="non-baseline exact full-batch dropout ablation" ;;
   *) echo "REPLAY_DROPOUT must be 0 or 1" >&2; exit 1 ;;
 esac
 
-run_tag="${RUN_TAG:-celeba_retrac_1x50_exact_dropout_$(date +%Y%m%d_%H%M%S)}"
+if [[ "$replay_dropout" == "0" ]]; then
+  default_run_tag="celeba_retrac_1x50_batch1_$(date +%Y%m%d_%H%M%S)"
+else
+  default_run_tag="celeba_retrac_1x50_exact_dropout_ablation_$(date +%Y%m%d_%H%M%S)"
+fi
+run_tag="${RUN_TAG:-$default_run_tag}"
 result_root="$celeba_root/result/$experiment"
 log_root="$result_root/logs/retrac_1x50_full_l2/$run_tag"
 component_prefix="$log_root/components"
