@@ -23,6 +23,18 @@ METHODS = (
     ("random_full5000_seeded", "Random", "#B0B0B0"),
 )
 
+METHOD_ALIASES = {
+    "endpoint_pollute_adamw_timestamp_both_l2_full10k_pos": (
+        "endpoint_pollute_query_train_l2"
+    ),
+    "endpoint_tracin_adamw_linear_raw_full10k_neg": "endpoint_tracin_raw",
+    "endpoint_tracin_adamw_linear_both_l2_full10k_neg": (
+        "endpoint_tracin_query_train_l2"
+    ),
+    "retrac_adamw_query_train_l2_full10k_neg": "retrac_query_train_l2",
+    "random_full10k_seeded": "random_full5000_seeded",
+}
+
 PERCEPTUAL_LABEL_TO_METHOD = {
     "PINT-BOTH-L2": "endpoint_pollute_query_train_l2",
     "TRACIN-RAW": "endpoint_tracin_raw",
@@ -89,10 +101,17 @@ def values_by_method(
     result: dict[str, np.ndarray] = {}
     for method, _, _ in METHODS:
         selected = sorted(
-            (row for row in rows if row["method"] == method),
-            key=lambda row: int(row["query_index"]),
+            (
+                row
+                for row in rows
+                if METHOD_ALIASES.get(row["method"], row["method"]) == method
+            ),
+            key=lambda row: int(row.get("query_index", row.get("query_id", "-1"))),
         )
-        query_ids = [int(row["query_index"]) for row in selected]
+        query_ids = [
+            int(row.get("query_index", row.get("query_id", "-1")))
+            for row in selected
+        ]
         if len(selected) != expected_queries:
             raise ValueError(
                 f"{method}/{metric}: expected {expected_queries} rows, "
@@ -100,8 +119,11 @@ def values_by_method(
             )
         if len(set(query_ids)) != expected_queries:
             raise ValueError(f"{method}/{metric}: duplicate query ids")
+        source_metric = metric
+        if metric == "pixel_l2" and selected and metric not in selected[0]:
+            source_metric = "endpoint_rmse"
         result[method] = np.asarray(
-            [float(row[metric]) for row in selected], dtype=np.float64
+            [float(row[source_metric]) for row in selected], dtype=np.float64
         )
     return result
 
