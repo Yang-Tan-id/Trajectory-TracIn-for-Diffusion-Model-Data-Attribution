@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare CelebA endpoint-TracIn raw-gradient and AdamW rankings."""
+"""Compare CelebA PINT/TracIn raw-gradient and AdamW rankings."""
 
 from __future__ import annotations
 
@@ -106,6 +106,9 @@ def main() -> None:
     parser.add_argument("--query-ids", default=",".join(map(str, range(72))))
     parser.add_argument("--experiment", default="attr40_experiment1")
     parser.add_argument("--train-seed", type=int, default=42)
+    parser.add_argument(
+        "--method", choices=("tracin", "pint"), default="tracin"
+    )
     parser.add_argument("--topk", type=int, default=1000)
     parser.add_argument("--output-dir", type=Path)
     args = parser.parse_args()
@@ -123,7 +126,7 @@ def main() -> None:
     output_dir = args.output_dir or (
         result_root
         / "analysis"
-        / f"endpoint_tracin_raw_vs_adamw_full10k_top{args.topk}_overlap"
+        / f"endpoint_{args.method}_raw_vs_adamw_full10k_top{args.topk}_overlap"
     )
 
     rows: list[dict[str, object]] = []
@@ -139,13 +142,23 @@ def main() -> None:
             / f"query_{_prompt_path_tag(prompt)}"
             / f"initial_seed_{seed}"
         )
-        namespaces = {
-            transform: (
-                f"traj_tracin_celeba_endpoint_tracin_{transform}_"
-                "train_mean50_query_mean50_linear_shape3d_semantics_full10000"
-            )
-            for transform in ("raw_gradient", "adamw_full")
-        }
+        if args.method == "tracin":
+            namespaces = {
+                transform: (
+                    f"traj_tracin_celeba_endpoint_tracin_{transform}_"
+                    "train_mean50_query_mean50_linear_shape3d_semantics_full10000"
+                )
+                for transform in ("raw_gradient", "adamw_full")
+            }
+        else:
+            namespaces = {
+                transform: (
+                    f"traj_tracin_celeba_endpoint_pollute_{transform}_"
+                    "train1x50_query1x50_timestamp_sum_squared_"
+                    "shape3d_semantics_full10000"
+                )
+                for transform in ("raw_gradient", "adamw_full")
+            }
         for variant, directory in VARIANTS:
             raw_scores, raw_indices = load_bank(
                 query_root / namespaces["raw_gradient"] / directory
@@ -156,11 +169,15 @@ def main() -> None:
             if not np.array_equal(raw_indices, adamw_indices):
                 raise ValueError(f"Q{query_id} {variant}: candidate universes differ")
 
-            # Raw-gradient linear scores rank descending. AdamW-full linear
-            # scores rank ascending because the update includes the descent
-            # minus sign. Negating AdamW gives the common larger-is-better axis.
             raw_oriented = raw_scores
-            adamw_oriented = -adamw_scores
+            if args.method == "tracin":
+                # Linear AdamW TracIn includes the descent-direction minus
+                # sign, so its stored scores rank ascending.
+                adamw_oriented = -adamw_scores
+            else:
+                # PINT stores timestamp-sum-squared scores; both transforms
+                # rank descending because squaring removes the update sign.
+                adamw_oriented = adamw_scores
             raw_order = np.argsort(-raw_oriented, kind="stable")[: args.topk]
             adamw_order = np.argsort(-adamw_oriented, kind="stable")[: args.topk]
             raw_top = set(map(int, raw_indices[raw_order]))
@@ -210,10 +227,20 @@ def main() -> None:
     atomic_csv(output_dir / "summary_overlap.csv", summary_rows)
 
     lines = [
-        "CELEBA FULL-10K ENDPOINT-TRACIN — RAW-GRADIENT VS ADAMW-FULL",
+        (
+            "CELEBA FULL-10K "
+            f"{'PINT' if args.method == 'pint' else 'ENDPOINT-TRACIN'} — "
+            "RAW-GRADIENT VS ADAMW-FULL"
+        ),
         f"queries={len(query_ids)} topk={args.topk} candidates=10000",
         f"random independent top-k expectation={args.topk / 10_000:.2%}",
-        "raw-gradient ranks stored linear score descending; AdamW ranks ascending.",
+        (
+            "raw-gradient and AdamW timestamp-sum-squared scores both rank "
+            "descending."
+            if args.method == "pint"
+            else "raw-gradient ranks stored linear score descending; "
+            "AdamW ranks ascending."
+        ),
         "Spearman uses the common larger-is-better orientation.",
         "",
         (

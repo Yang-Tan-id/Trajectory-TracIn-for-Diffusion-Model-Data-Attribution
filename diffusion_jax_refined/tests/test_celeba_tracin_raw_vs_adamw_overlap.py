@@ -20,10 +20,17 @@ class CelebATracinRawVsAdamWOverlapTest(unittest.TestCase):
         self.assertIn('parser.add_argument("--topk", type=int, default=1000)', SOURCE)
         self.assertIn('expected = np.arange(10_000', SOURCE)
         self.assertIn('for transform in ("raw_gradient", "adamw_full")', SOURCE)
+        self.assertIn(
+            '"--method", choices=("tracin", "pint"), default="tracin"', SOURCE
+        )
 
     def test_ranking_directions_and_variants(self) -> None:
         self.assertIn("raw_oriented = raw_scores", SOURCE)
+        self.assertIn('if args.method == "tracin":', SOURCE)
         self.assertIn("adamw_oriented = -adamw_scores", SOURCE)
+        self.assertIn("adamw_oriented = adamw_scores", SOURCE)
+        self.assertIn("endpoint_pollute_{transform}", SOURCE)
+        self.assertIn("timestamp_sum_squared_", SOURCE)
         self.assertIn('("raw", "score")', SOURCE)
         self.assertIn('("query_l2", "score_query_normalized")', SOURCE)
         self.assertIn('("train_l2", "score_train_l2_normalized")', SOURCE)
