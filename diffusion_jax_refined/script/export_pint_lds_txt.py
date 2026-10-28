@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Export per-query PINT LDS results for CelebA or Shapes3D to one TXT."""
+"""Export five-method per-query LDS results for CelebA or Shapes3D."""
 
 from __future__ import annotations
 
@@ -17,19 +17,24 @@ TARGETS = (
     "simple_loss",
     "noise_trajectory",
 )
-VARIANTS = (("RAW", "raw"), ("BOTH-L2", "query_train_l2"))
-
-
 @dataclass(frozen=True)
 class DatasetConfig:
     title: str
     relative_root: str
     experiment: str
     query_file: str
-    raw_namespace: str
-    adamw_namespace: str
     prompt_tag_limit: int
     empty_tag: str
+
+
+@dataclass(frozen=True)
+class MethodConfig:
+    label: str
+    variant: str
+    raw_namespace: str
+    adamw_namespace: str
+    raw_multiplier: float
+    adamw_multiplier: float
 
 
 CONFIGS = {
@@ -38,14 +43,6 @@ CONFIGS = {
         relative_root="diffusion_jax_refined/celeba",
         experiment="attr40_experiment1",
         query_file="queries_attr40_val25_x4.json",
-        raw_namespace=(
-            "traj_tracin_celeba_endpoint_pollute_raw_gradient_train1x50_"
-            "query1x50_timestamp_sum_squared_shape3d_semantics"
-        ),
-        adamw_namespace=(
-            "traj_tracin_celeba_endpoint_pollute_adamw_full_train1x50_"
-            "query1x50_timestamp_sum_squared_shape3d_semantics"
-        ),
         prompt_tag_limit=150,
         empty_tag="empty_prompt",
     ),
@@ -54,18 +51,88 @@ CONFIGS = {
         relative_root="diffusion_jax_refined/3dshapes",
         experiment="experiment1",
         query_file="queries_in_distribution_plus_zero_seed_100_219.json",
-        raw_namespace=(
-            "traj_tracin_recreate_raw_polluted_endpoint_delta_l2normalized_"
-            "timestamp_sum_squared_q0_99"
-        ),
-        adamw_namespace=(
-            "traj_tracin_recreate_adamw_full_polluted_endpoint_"
-            "delta_l2normalized_timestamp_sum_squared_q0_99"
-        ),
         prompt_tag_limit=160,
         empty_tag="empty",
     ),
 }
+
+
+def method_configs(dataset: str) -> tuple[MethodConfig, ...]:
+    if dataset == "shape3d":
+        pint_raw = (
+            "traj_tracin_recreate_raw_polluted_endpoint_delta_l2normalized_"
+            "timestamp_sum_squared_q0_99"
+        )
+        pint_adamw = (
+            "traj_tracin_recreate_adamw_full_polluted_endpoint_"
+            "delta_l2normalized_timestamp_sum_squared_q0_99"
+        )
+        tracin_raw = "traj_tracin_endpoint_tracin_train100x1_query100x1_q0_99"
+        tracin_adamw = (
+            "traj_tracin_endpoint_tracin_adamw_full_train100x1_query100x1_q0_99"
+        )
+        retrac_raw = "traj_tracin_paper_retrac_exact4_endpoint100x1_q0_99"
+        retrac_adamw = (
+            "traj_tracin_paper_retrac_adamw_full_exact4_endpoint100x1_q0_99"
+        )
+        pint_multipliers = (-1.0, -1.0)
+    else:
+        pint_raw = (
+            "traj_tracin_celeba_endpoint_pollute_raw_gradient_train1x50_"
+            "query1x50_timestamp_sum_squared_shape3d_semantics"
+        )
+        pint_adamw = (
+            "traj_tracin_celeba_endpoint_pollute_adamw_full_train1x50_"
+            "query1x50_timestamp_sum_squared_shape3d_semantics"
+        )
+        tracin_raw = (
+            "traj_tracin_celeba_endpoint_tracin_raw_gradient_train_mean50_"
+            "query_mean50_linear_shape3d_semantics"
+        )
+        tracin_adamw = (
+            "traj_tracin_celeba_endpoint_tracin_adamw_full_train_mean50_"
+            "query_mean50_linear_shape3d_semantics"
+        )
+        retrac_raw = (
+            "traj_tracin_celeba_paper_retrac_raw_gradient_train_replay4_batch1_"
+            "query_mean50_of_full_l2_linear_shape3d_semantics"
+        )
+        retrac_adamw = (
+            "traj_tracin_celeba_paper_retrac_adamw_full_train_replay4_batch1_"
+            "query_mean50_of_full_l2_linear_shape3d_semantics"
+        )
+        pint_multipliers = (1.0, 1.0)
+    return (
+        MethodConfig(
+            "PINT / RAW", "raw", pint_raw, pint_adamw, *pint_multipliers
+        ),
+        MethodConfig(
+            "PINT / BOTH-L2",
+            "query_train_l2",
+            pint_raw,
+            pint_adamw,
+            *pint_multipliers,
+        ),
+        MethodConfig(
+            "TRACIN / RAW", "raw", tracin_raw, tracin_adamw, 1.0, -1.0
+        ),
+        MethodConfig(
+            "TRACIN / BOTH-L2",
+            "query_train_l2",
+            tracin_raw,
+            tracin_adamw,
+            1.0,
+            -1.0,
+        ),
+        MethodConfig(
+            "RETRAC / BOTH-L2",
+            "query_train_l2",
+            retrac_raw,
+            retrac_adamw,
+            1.0,
+            -1.0,
+        ),
+    )
 
 
 def prompt_tag(prompt: str, config: DatasetConfig) -> str:
@@ -80,8 +147,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--repo-root", type=Path, default=Path.cwd())
     parser.add_argument("--query-file", type=Path)
     parser.add_argument("--result-root", type=Path)
-    parser.add_argument("--raw-namespace")
-    parser.add_argument("--adamw-namespace")
     parser.add_argument("--expected-subsets", type=int, default=192)
     parser.add_argument("--query-ids", default="0-99")
     parser.add_argument("--output", type=Path)
@@ -132,8 +197,7 @@ def main() -> None:
     result_root = (
         args.result_root or dataset_root / "result" / config.experiment
     ).expanduser().resolve()
-    raw_namespace = args.raw_namespace or config.raw_namespace
-    adamw_namespace = args.adamw_namespace or config.adamw_namespace
+    methods = method_configs(args.dataset)
     query_ids = parse_query_ids(args.query_ids)
     records = json.loads(query_file.read_text())["queries"]
     if min(query_ids) < 0 or max(query_ids) >= len(records):
@@ -141,7 +205,6 @@ def main() -> None:
     output = args.output or result_root / "analysis" / "pint_lds_q0_99_all.txt"
 
     rows: list[dict[str, object]] = []
-    transforms = (("RAW-GRADIENT", raw_namespace), ("ADAMW", adamw_namespace))
     for query_id in query_ids:
         record = records[query_id]
         prompt = str(record["prompt"])
@@ -154,25 +217,28 @@ def main() -> None:
             / f"initial_seed_{seed}"
             / "lds"
         )
-        for transform, namespace in transforms:
-            for variant_label, variant in VARIANTS:
+        for method in methods:
+            for transform, namespace, multiplier in (
+                ("RAW-GRADIENT", method.raw_namespace, method.raw_multiplier),
+                ("ADAMW", method.adamw_namespace, method.adamw_multiplier),
+            ):
                 for target in TARGETS:
                     payload, summary_path = load_summary(
-                        query_root / f"{namespace}_{variant}" / target,
+                        query_root / f"{namespace}_{method.variant}" / target,
                         args.expected_subsets,
                     )
                     stored = float(payload["lds_percent"])
-                    # PINT scores encode a loss-reduction direction, so negate the
-                    # cached correlation to report a common larger-is-better LDS.
                     rows.append(
                         {
                             "query_id": query_id,
                             "initial_seed": seed,
+                            "method": method.label,
                             "transform": transform,
-                            "variant": variant_label,
+                            "variant": method.variant,
                             "target": target,
                             "stored_lds": stored,
-                            "reported_lds": -stored,
+                            "reported_lds": multiplier * stored,
+                            "report_multiplier": multiplier,
                             "num_subsets": int(payload["num_models"]),
                             "sign": prediction_sign(summary_path),
                             "subset_group": summary_path.parent.name,
@@ -180,29 +246,33 @@ def main() -> None:
                         }
                     )
 
-    expected = len(query_ids) * len(transforms) * len(VARIANTS) * len(TARGETS)
+    expected = len(query_ids) * len(methods) * 2 * len(TARGETS)
     if len(rows) != expected:
         raise RuntimeError(f"internal coverage error: {len(rows)}/{expected}")
 
     lookup = {
-        (int(row["query_id"]), str(row["target"]), str(row["transform"]), str(row["variant"])): row
+        (
+            int(row["query_id"]),
+            str(row["target"]),
+            str(row["transform"]),
+            str(row["method"]),
+        ): row
         for row in rows
     }
     lines = [
-        f"{config.title} PINT LDS — RAW/BOTH-L2 × RAW-GRADIENT/ADAMW",
+        f"{config.title} FIVE-METHOD LDS — RAW-GRADIENT AND ADAMW",
         "=" * 132,
         f"queries={len(query_ids)} range={min(query_ids)}..{max(query_ids)}",
         f"LDS subsets per query/target/configuration={args.expected_subsets}",
         f"expected records={expected} loaded records={len(rows)}",
-        "reported LDS = -1 × stored LDS, giving the common larger-is-better PINT orientation.",
+        "reported LDS applies the method/transform direction multiplier shown in provenance.",
         "Each cell is reported_lds_percent [number_of_subsets].",
         "",
     ]
-    columns = (
-        ("RAW-GRAD / RAW", "RAW-GRADIENT", "RAW"),
-        ("RAW-GRAD / BOTH-L2", "RAW-GRADIENT", "BOTH-L2"),
-        ("ADAMW / RAW", "ADAMW", "RAW"),
-        ("ADAMW / BOTH-L2", "ADAMW", "BOTH-L2"),
+    columns = tuple(
+        (f"{transform} / {method.label}", transform, method.label)
+        for transform in ("RAW-GRADIENT", "ADAMW")
+        for method in methods
     )
     for target in TARGETS:
         lines.extend([target.upper(), "-" * 132])
@@ -212,8 +282,8 @@ def main() -> None:
         lines.append("-" * 132)
         for query_id in query_ids:
             cells = []
-            for _, transform, variant in columns:
-                row = lookup[(query_id, target, transform, variant)]
+            for _, transform, method in columns:
+                row = lookup[(query_id, target, transform, method)]
                 cells.append(
                     f"{float(row['reported_lds']):+10.3f}% [{int(row['num_subsets']):3d}]"
                 )
@@ -225,9 +295,9 @@ def main() -> None:
             ("STD", statistics.pstdev),
         ):
             values = []
-            for _, transform, variant in columns:
+            for _, transform, method in columns:
                 series = [
-                    float(lookup[(qid, target, transform, variant)]["reported_lds"])
+                    float(lookup[(qid, target, transform, method)]["reported_lds"])
                     for qid in query_ids
                 ]
                 values.append(f"{function(series):+10.3f}%")
@@ -236,8 +306,9 @@ def main() -> None:
 
     lines.extend(["DETAILED PROVENANCE", "=" * 132])
     lines.append(
-        "query_id\tseed\ttransform\tvariant\ttarget\tstored_lds_percent\t"
-        "reported_lds_percent\tnum_subsets\tprediction_sign\tsubset_group\tsummary_path"
+        "query_id\tseed\ttransform\tmethod\tvariant\ttarget\tstored_lds_percent\t"
+        "report_multiplier\treported_lds_percent\tnum_subsets\tprediction_sign\t"
+        "subset_group\tsummary_path"
     )
     for row in rows:
         lines.append(
@@ -246,9 +317,11 @@ def main() -> None:
                     str(row["query_id"]),
                     str(row["initial_seed"]),
                     str(row["transform"]),
+                    str(row["method"]),
                     str(row["variant"]),
                     str(row["target"]),
                     f"{float(row['stored_lds']):+.9f}",
+                    f"{float(row['report_multiplier']):+.0f}",
                     f"{float(row['reported_lds']):+.9f}",
                     str(row["num_subsets"]),
                     str(row["sign"]),
