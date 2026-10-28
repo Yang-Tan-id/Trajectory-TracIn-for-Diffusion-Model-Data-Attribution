@@ -209,11 +209,12 @@ def make_exact_event_train_fn(
     params: Any,
     cfg: Any,
 ):
-    """Replay the original train-mode batch and select per-example losses.
+    """Replay one train-mode batch and extract exact per-example features.
 
-    Dropout is generated for the original full batch with the original RNG key.
-    ``lax.map`` evaluates selected positions sequentially inside one compiled
-    call so a chunk-sized full-parameter gradient bank is never materialized.
+    Construct the batch loss vector and its VJP closure once. Sequential
+    one-hot pullbacks recover exact per-example gradients while sharing the
+    full-batch forward and without materializing a position-by-parameter
+    gradient bank.
     """
 
     opt_state = state.opt_state
@@ -233,13 +234,20 @@ def make_exact_event_train_fn(
         return jnp.mean(jnp.square(pred - target), axis=axes)
 
     def exact_batch(x0, cond, noise, timesteps, dropout_rng, positions):
-        def one_position(position):
-            def selected_loss(candidate):
-                return per_example_losses(
-                    candidate, x0, cond, noise, timesteps, dropout_rng
-                )[position]
+        def loss_vector(candidate):
+            return per_example_losses(
+                candidate, x0, cond, noise, timesteps, dropout_rng
+            )
 
-            grad = jax.grad(selected_loss)(params)
+        loss_values, pullback = jax.vjp(loss_vector, params)
+
+        def one_position(position):
+            cotangent = jax.nn.one_hot(
+                position,
+                loss_values.shape[0],
+                dtype=loss_values.dtype,
+            )
+            grad = pullback(cotangent)[0]
             update, _ = state.tx.update(grad, opt_state, params)
 
             def normalized_project(tree):
