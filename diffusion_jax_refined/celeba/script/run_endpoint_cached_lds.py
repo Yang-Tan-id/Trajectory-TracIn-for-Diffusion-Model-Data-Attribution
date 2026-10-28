@@ -17,7 +17,7 @@ CELEBA_ROOT = Path(__file__).resolve().parents[1]
 if str(CELEBA_ROOT) not in sys.path:
     sys.path.insert(0, str(CELEBA_ROOT))
 
-from dataset_config_attr40 import _prompt_path_tag
+from dataset_config_attr40 import _prompt_path_tag, _prompt_path_tag_candidates
 
 
 TARGETS = (
@@ -274,15 +274,36 @@ def main() -> None:
     for query_number, record in enumerate(selected, start=1):
         qid = query_id(record, query_number - 1)
         seed = query_seed(record)
-        prompt_tag = _prompt_path_tag(str(record["prompt"]))
-        query_score_root = (
-            attribution_root / f"query_{prompt_tag}" / f"initial_seed_{seed}"
+        prompt = str(record["prompt"])
+        prompt_tag = _prompt_path_tag(prompt)
+        query_score_roots = tuple(
+            attribution_root / f"query_{tag}" / f"initial_seed_{seed}"
+            for tag in _prompt_path_tag_candidates(prompt)
         )
         completed = 0
         for namespace in selected_namespaces:
-            scheme_root = query_score_root / f"traj_tracin_{namespace}"
             for score_directory, variant in VARIANTS:
-                score_dir = scheme_root / score_directory
+                score_dir = next(
+                    (
+                        root / f"traj_tracin_{namespace}" / score_directory
+                        for root in query_score_roots
+                        if (
+                            root
+                            / f"traj_tracin_{namespace}"
+                            / score_directory
+                            / "scores.npy"
+                        ).is_file()
+                        and (
+                            root
+                            / f"traj_tracin_{namespace}"
+                            / score_directory
+                            / "score_indices.npy"
+                        ).is_file()
+                    ),
+                    query_score_roots[0]
+                    / f"traj_tracin_{namespace}"
+                    / score_directory,
+                )
                 score_path = score_dir / "scores.npy"
                 index_path = score_dir / "score_indices.npy"
                 if not score_path.is_file() or not index_path.is_file():

@@ -14,12 +14,16 @@ import sys
 CELEBA_ROOT = Path(__file__).resolve().parents[1]
 REFINE_ROOT = CELEBA_ROOT.parent
 LEGACY_ROOT = REFINE_ROOT / "legacy_jax"
+PROMPT_PATH_TAG_MAX_LENGTH = 150
 
 
 def prompt_tag(prompt: str) -> str:
     text = str(prompt).strip().replace(",", "__")
     text = re.sub(r"[^A-Za-z0-9._-]+", "_", text)
-    return re.sub(r"_+", "_", text).strip("_")[:80] or "empty_prompt"
+    return (
+        re.sub(r"_+", "_", text).strip("_")[:PROMPT_PATH_TAG_MAX_LENGTH]
+        or "empty_prompt"
+    )
 
 
 def parse_ints(text: str) -> list[int]:

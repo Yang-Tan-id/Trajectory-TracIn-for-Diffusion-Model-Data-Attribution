@@ -5,10 +5,25 @@ import re
 from pathlib import Path
 
 
-def _prompt_path_tag(prompt: str) -> str:
+PROMPT_PATH_TAG_MAX_LENGTH = 150
+LEGACY_PROMPT_PATH_TAG_MAX_LENGTH = 80
+
+
+def _prompt_path_tag_with_limit(prompt: str, max_length: int) -> str:
     text = str(prompt).strip().replace(",", "__")
     text = re.sub(r"[^A-Za-z0-9._-]+", "_", text)
-    return re.sub(r"_+", "_", text).strip("_")[:80] or "empty_prompt"
+    return re.sub(r"_+", "_", text).strip("_")[:max_length] or "empty_prompt"
+
+
+def _prompt_path_tag(prompt: str) -> str:
+    return _prompt_path_tag_with_limit(prompt, PROMPT_PATH_TAG_MAX_LENGTH)
+
+
+def _prompt_path_tag_candidates(prompt: str) -> tuple[str, ...]:
+    """Return the current tag followed by the legacy tag for read fallback."""
+    current = _prompt_path_tag(prompt)
+    legacy = _prompt_path_tag_with_limit(prompt, LEGACY_PROMPT_PATH_TAG_MAX_LENGTH)
+    return (current,) if current == legacy else (current, legacy)
 
 
 ATTRIBUTES = (
