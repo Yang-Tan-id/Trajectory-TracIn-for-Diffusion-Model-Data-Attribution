@@ -156,11 +156,10 @@ def main() -> None:
                         f"Q{query_id} {transform}/{variant}: universes differ"
                     )
 
-                # Raw-gradient linear scores rank descending. AdamW linear
-                # scores rank ascending due to the optimizer descent minus.
-                linear_oriented = (
-                    linear_scores if transform == "raw_gradient" else -linear_scores
-                )
+                # Endpoint-Pollute linear scores rank ascending for both
+                # transforms. Negation maps them to the common larger-is-better
+                # axis used by the timestamp-sum-squared reduction.
+                linear_oriented = -linear_scores
                 # Timestamp-sum-squared scores rank descending for both.
                 square_oriented = square_scores
                 linear_order = np.argsort(-linear_oriented, kind="stable")[: args.topk]
@@ -223,7 +222,7 @@ def main() -> None:
         f"queries={len(query_ids)} topk={args.topk} candidates=10000",
         f"random independent top-k expectation={args.topk / 10_000:.2%}",
         (
-            "linear ranks raw-gradient descending and AdamW ascending; "
+            "linear ranks ascending for raw-gradient and AdamW; "
             "timestamp-sum-squared ranks descending for both."
         ),
         "Spearman uses the common larger-is-better orientation.",

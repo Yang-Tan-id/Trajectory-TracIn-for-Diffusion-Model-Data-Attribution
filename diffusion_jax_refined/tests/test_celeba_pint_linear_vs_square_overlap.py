@@ -23,10 +23,7 @@ class CelebAPintLinearVsSquareOverlapTest(unittest.TestCase):
 
     def test_reductions_variants_and_directions(self) -> None:
         self.assertIn('for reduction in ("linear", "timestamp_sum_squared")', SOURCE)
-        self.assertIn(
-            'linear_scores if transform == "raw_gradient" else -linear_scores',
-            SOURCE,
-        )
+        self.assertIn("linear_oriented = -linear_scores", SOURCE)
         self.assertIn("square_oriented = square_scores", SOURCE)
         self.assertIn('("raw", "score")', SOURCE)
         self.assertIn(
