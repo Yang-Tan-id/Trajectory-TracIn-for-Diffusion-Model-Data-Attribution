@@ -16,7 +16,11 @@ QUERY_IDS = tuple(range(60))
 FRACTION_TAG = "remove_10pct"
 OLD_ROOT = ROOT / "topk_removal_retrac_endtracin_tracindas_100q"
 NEW_ROOT = (
-    ROOT / "topk_removal_pint_endpoint_retrac_random_60q_10pct_correct_direction"
+    ROOT
+    / (
+        "topk_removal_pint_endpoint_retrac_random_60q_10pct_"
+        "final_endpoint_linear_adamw_sign"
+    )
 )
 OLD_TAG = "tracin_das_aligned_timestamp_square"
 NEW_TAG = "pint_raw"
