@@ -16,6 +16,7 @@ TARGETS = (
     "traj_contarfactual",
     "simple_loss",
     "noise_trajectory",
+    "predicted_noise_kl",
 )
 @dataclass(frozen=True)
 class DatasetConfig:
@@ -172,6 +173,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--expected-subsets", type=int, default=192)
     parser.add_argument("--query-ids", default="0-99")
     parser.add_argument(
+        "--targets",
+        default="endpoint_contarfactual,traj_contarfactual,simple_loss,noise_trajectory",
+        help="Comma/space-separated LDS targets to export.",
+    )
+    parser.add_argument(
         "--transforms",
         choices=("both", "raw-gradient", "adamw"),
         default="both",
@@ -274,6 +280,14 @@ def main() -> None:
     ).expanduser().resolve()
     methods = method_configs(args.dataset)
     query_ids = parse_query_ids(args.query_ids)
+    selected_targets = tuple(
+        value for value in args.targets.replace(",", " ").split() if value
+    )
+    if not selected_targets:
+        raise ValueError("--targets must not be empty")
+    invalid_targets = sorted(set(selected_targets) - set(TARGETS))
+    if invalid_targets:
+        raise ValueError(f"unsupported targets: {invalid_targets}")
     records = json.loads(query_file.read_text())["queries"]
     if min(query_ids) < 0 or max(query_ids) >= len(records):
         raise ValueError(f"query IDs exceed manifest range 0..{len(records) - 1}")
@@ -313,7 +327,7 @@ def main() -> None:
             ):
                 if transform not in selected_transforms:
                     continue
-                for target in TARGETS:
+                for target in selected_targets:
                     payload, summary_path = load_summary(
                         query_root / f"{namespace}_{method.variant}" / target,
                         args.expected_subsets,
@@ -344,7 +358,10 @@ def main() -> None:
                     )
 
     expected = (
-        len(query_ids) * len(methods) * len(selected_transforms) * len(TARGETS)
+        len(query_ids)
+        * len(methods)
+        * len(selected_transforms)
+        * len(selected_targets)
     )
     if len(rows) != expected:
         raise RuntimeError(f"internal coverage error: {len(rows)}/{expected}")
@@ -373,7 +390,7 @@ def main() -> None:
         for transform in selected_transforms
         for method in methods
     )
-    for target in TARGETS:
+    for target in selected_targets:
         lines.extend([target.upper(), "-" * 132])
         lines.append(
             f"{'QUERY':<8}" + "".join(f"{label:>28}" for label, _, _ in columns)

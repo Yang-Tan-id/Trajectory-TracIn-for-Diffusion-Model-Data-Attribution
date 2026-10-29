@@ -25,6 +25,7 @@ TARGETS = (
     "traj_contarfactual",
     "simple_loss",
     "noise_trajectory",
+    "predicted_noise_kl",
 )
 VARIANTS = (
     ("score", "raw"),
@@ -214,12 +215,29 @@ def main() -> None:
     )
     parser.add_argument("--prediction-sign", type=float, default=-1.0)
     parser.add_argument(
+        "--target-functions",
+        default="endpoint_contarfactual,traj_contarfactual,simple_loss,noise_trajectory",
+        help="Comma/space-separated cached LDS targets to evaluate.",
+    )
+    parser.add_argument(
         "--write-result-csv",
         action="store_true",
         help="Also write the 192-row lds_results.csv beside every summary (many files).",
     )
     parser.add_argument("--strict", action="store_true")
     args = parser.parse_args()
+    targets = tuple(
+        value
+        for value in args.target_functions.replace(",", " ").split()
+        if value
+    )
+    if not targets:
+        parser.error("--target-functions is empty")
+    invalid_targets = sorted(set(targets) - set(TARGETS))
+    if invalid_targets:
+        parser.error(
+            "unsupported --target-functions: " + ", ".join(invalid_targets)
+        )
 
     requested = set(parse_ints(args.query_ids))
     records = json.loads(args.query_file.read_text())["queries"]
@@ -305,7 +323,7 @@ def main() -> None:
                     else "_final_score_squared"
                 )
                 algorithm = f"traj_tracin_{namespace}{transform_suffix}_{variant}"
-                for target in TARGETS:
+                for target in targets:
                     target_rows = targets_by_key.get((qid, target))
                     if target_rows is None:
                         raise ValueError(f"true-f rows missing for Q{qid} {target}")
@@ -394,7 +412,7 @@ def main() -> None:
     mean_rows: list[dict[str, object]] = []
     for namespace in selected_namespaces:
         for _, variant in VARIANTS:
-            for target in TARGETS:
+            for target in targets:
                 values = [
                     float(row["lds_percent"])
                     for row in all_rows

@@ -14,12 +14,20 @@ import sys
 CELEBA_ROOT = Path(__file__).resolve().parents[1]
 REFINE_ROOT = CELEBA_ROOT.parent
 LEGACY_ROOT = REFINE_ROOT / "legacy_jax"
+PROMPT_PATH_TAG_MAX_LENGTH = 150
+if str(REFINE_ROOT) not in sys.path:
+    sys.path.insert(0, str(REFINE_ROOT))
+
+from common.predicted_noise_kl import query_probe_seed
 
 
 def prompt_tag(prompt: str) -> str:
     text = str(prompt).strip().replace(",", "__")
     text = re.sub(r"[^A-Za-z0-9._-]+", "_", text)
-    return re.sub(r"_+", "_", text).strip("_")[:80] or "empty_prompt"
+    return (
+        re.sub(r"_+", "_", text).strip("_")[:PROMPT_PATH_TAG_MAX_LENGTH]
+        or "empty_prompt"
+    )
 
 
 def parse_ints(text: str) -> list[int]:
@@ -57,11 +65,16 @@ def main() -> None:
     parser.add_argument("--num-inference-steps", type=int, default=50)
     parser.add_argument("--num-trajectory-steps", type=int, default=50)
     parser.add_argument(
+        "--predicted-noise-kl-num-directions", type=int, default=50
+    )
+    parser.add_argument("--predicted-noise-kl-seed", type=int, default=2026)
+    parser.add_argument(
         "--target-functions",
         default="endpoint_counterfactual,traj_counterfactual,simple_loss,noise_trajectory",
     )
     parser.add_argument("--skip-sampling", action="store_true")
     parser.add_argument("--skip-eval", action="store_true")
+    parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument("--python-bin", default=os.environ.get("PYTHON_BIN", sys.executable))
     args = parser.parse_args()
     query_ids = parse_ints(args.query_ids)
@@ -82,6 +95,19 @@ def main() -> None:
     sample_root = result_root / f"sample_ddim_eta0_{args.num_inference_steps}"
     logs = result_root / "logs" / f"query100_lds_ddim{args.num_inference_steps}"
     lds_dirs = model_dirs(args.experiment, args.train_seed, subset_seeds)
+    requested_targets = [
+        value
+        for value in args.target_functions.replace(",", " ").split()
+        if value
+    ]
+    target_arg = ",".join(requested_targets)
+    if "predicted_noise_kl" in requested_targets:
+        cache_namespace = (
+            f"predicted_noise_kl_k{args.predicted_noise_kl_num_directions}_"
+            f"seed{args.predicted_noise_kl_seed}_query_id_v1"
+        )
+    else:
+        cache_namespace = f"steps_{args.num_inference_steps}"
     if args.execute:
         for required in (checkpoint, data_root / "dataset.npz"):
             if not required.is_file():
@@ -101,7 +127,10 @@ def main() -> None:
         SAMPLE_ROOT=str(sample_root),
         DIFFUSION_TRAJECTORY_SAMPLER="ddim_eta0",
         LDS_TRAJECTORY_SAMPLER="ddim_eta0",
-        LDS_TARGET_CACHE_NAMESPACE=f"steps_{args.num_inference_steps}",
+        LDS_TARGET_CACHE_NAMESPACE=cache_namespace,
+        LDS_PREDICTED_NOISE_KL_NUM_DIRECTIONS=str(
+            args.predicted_noise_kl_num_directions
+        ),
         LDS_DEVICE="gpu",
         JAX_NUM_DEVICES="1",
         JAX_PLATFORMS="cuda",
@@ -156,9 +185,6 @@ def main() -> None:
             for future in futures:
                 future.result()
 
-    target_arg = ",".join(
-        value for value in args.target_functions.replace(",", " ").split() if value
-    )
     model_arg = ",".join(str(path) for path in lds_dirs)
 
     def eval_worker(shard_index: int, gpu: str) -> None:
@@ -166,7 +192,16 @@ def main() -> None:
         for query in selected:
             prompt = str(query["prompt"])
             seed = int(query["initial_seed"])
-            query_env = env | {"QUERY": prompt, "INITIAL_SEED": str(seed), "SAMPLE_SEED": str(seed)}
+            qid = int(query["query_id"])
+            query_env = env | {
+                "QUERY": prompt,
+                "INITIAL_SEED": str(seed),
+                "SAMPLE_SEED": str(seed),
+                # Query-specific directions, shared by all 192 subset models.
+                "LDS_PREDICTED_NOISE_KL_MC_SEED": str(
+                    query_probe_seed(args.predicted_noise_kl_seed, qid)
+                ),
+            }
             command = [
                 args.python_bin,
                 "lds/run_eval_attr40.py",
@@ -187,7 +222,9 @@ def main() -> None:
             for future in futures:
                 future.result()
 
-    output_dir = result_root / f"query100_lds_csv_ddim{args.num_inference_steps}"
+    output_dir = args.output_dir or (
+        result_root / f"query100_lds_csv_ddim{args.num_inference_steps}"
+    )
     export_command = [
         args.python_bin,
         "script/export_attr40_query100_lds_csv.py",
@@ -195,6 +232,7 @@ def main() -> None:
         "--result-root", str(result_root),
         "--subset-seeds", ",".join(str(seed) for seed in subset_seeds),
         "--target-functions", target_arg,
+        "--query-ids", ",".join(str(value) for value in query_ids),
         "--output-dir", str(output_dir),
     ]
     if args.execute and not args.skip_eval:

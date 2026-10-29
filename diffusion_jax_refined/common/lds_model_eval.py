@@ -17,6 +17,7 @@ from common.config_loader import load_config, require_attr
 
 TARGET_FUNCTION_CHOICES = (
     "noise_trajectory",
+    "predicted_noise_kl",
     "projected_trajectory",
     "simple_loss",
     "trajectory_state_mse",
@@ -334,6 +335,12 @@ def main() -> None:
         simple_loss_num_mc=int(os.environ.get("LDS_SIMPLE_LOSS_NUM_MC", "10")),
         simple_loss_mc_seed=int(os.environ.get("LDS_SIMPLE_LOSS_MC_SEED", "0")),
         trajectory_sampler=args.trajectory_sampler,
+        predicted_noise_kl_num_directions=int(
+            os.environ.get("LDS_PREDICTED_NOISE_KL_NUM_DIRECTIONS", "50")
+        ),
+        predicted_noise_kl_mc_seed=int(
+            os.environ.get("LDS_PREDICTED_NOISE_KL_MC_SEED", "0")
+        ),
     )
     saved_prompt = (
         evaluator.target_meta.get("seed_info", {}).get("prompt")

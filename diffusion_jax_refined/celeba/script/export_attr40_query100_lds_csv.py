@@ -39,12 +39,25 @@ def main() -> None:
     parser.add_argument("--result-root", type=Path, required=True)
     parser.add_argument("--subset-seeds", default="0,1,2")
     parser.add_argument(
+        "--query-ids", default="", help="Optional comma/space-separated query IDs."
+    )
+    parser.add_argument(
         "--target-functions",
         default="endpoint_counterfactual,traj_counterfactual,simple_loss,noise_trajectory",
     )
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args()
     records = json.loads(args.query_file.read_text())["queries"]
+    requested = set(parse_ints(args.query_ids)) if args.query_ids.strip() else None
+    selected_records = [
+        query
+        for query in records
+        if requested is None or int(query["query_id"]) in requested
+    ]
+    if requested is not None:
+        found = {int(query["query_id"]) for query in selected_records}
+        if found != requested:
+            raise ValueError(f"query IDs absent from manifest: {sorted(requested - found)}")
     subset_seeds = parse_ints(args.subset_seeds)
     targets = [
         ALIASES.get(value, value)
@@ -53,7 +66,7 @@ def main() -> None:
     ]
     rows = []
     missing = []
-    for query in records:
+    for query in selected_records:
         query_root = (
             args.result_root
             / "eval"
@@ -106,7 +119,7 @@ def main() -> None:
             [row for row in rows if row["target_function"] == target],
         )
     manifest_rows = []
-    for query in records:
+    for query in selected_records:
         manifest_rows.append(
             {
                 "query_id": query["query_id"],

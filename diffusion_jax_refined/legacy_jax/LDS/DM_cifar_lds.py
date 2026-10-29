@@ -161,11 +161,16 @@ import numpy as np
 
 THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_DIR = os.path.dirname(THIS_DIR)
+REFINE_ROOT = os.path.dirname(PROJECT_DIR)
 if PROJECT_DIR not in sys.path:
     sys.path.insert(0, PROJECT_DIR)
+if REFINE_ROOT not in sys.path:
+    sys.path.insert(0, REFINE_ROOT)
 
 import jax
 import jax.numpy as jnp
+
+from common.predicted_noise_kl import uniform_timesteps
 
 from DM__training_CIFAR10_pixel import TrainConfig, train
 from DM___sampler import CIFARAdapter, inference_timesteps
@@ -179,6 +184,7 @@ from DM_counterfactual_retrain_from_attribution import (
 
 TARGET_FUNCTION_CHOICES = (
     "noise_trajectory",
+    "predicted_noise_kl",
     "projected_trajectory",
     "simple_loss",
     "trajectory_state_mse",
@@ -665,6 +671,8 @@ class CifarTargetEvaluator:
         simple_loss_num_mc: int,
         simple_loss_mc_seed: int,
         trajectory_sampler: str = "ddpm",
+        predicted_noise_kl_num_directions: int = 50,
+        predicted_noise_kl_mc_seed: int = 0,
     ):
         self.code_file = code_file
         self.base_checkpoint = base_checkpoint
@@ -682,6 +690,10 @@ class CifarTargetEvaluator:
         self.simple_loss_noise_seeds = None if simple_loss_noise_seeds is None else [int(s) for s in simple_loss_noise_seeds]
         self.simple_loss_num_mc = int(simple_loss_num_mc)
         self.simple_loss_mc_seed = int(simple_loss_mc_seed)
+        self.predicted_noise_kl_num_directions = int(
+            predicted_noise_kl_num_directions
+        )
+        self.predicted_noise_kl_mc_seed = int(predicted_noise_kl_mc_seed)
         self.trajectory_sampler = str(trajectory_sampler).strip().lower()
         if self.trajectory_sampler not in ("ddpm", "ddim_eta0"):
             raise ValueError("trajectory_sampler must be 'ddpm' or 'ddim_eta0'.")
@@ -689,6 +701,10 @@ class CifarTargetEvaluator:
             raise ValueError("simple_loss_timesteps must contain at least one timestep.")
         if self.simple_loss_num_mc <= 0:
             raise ValueError("simple_loss_num_mc must be positive.")
+        if not 1 <= self.predicted_noise_kl_num_directions <= 1000:
+            raise ValueError(
+                "predicted_noise_kl_num_directions must be in [1, 1000]."
+            )
 
         self.base_adapter = CIFARAdapter(
             code_file=code_file,
@@ -701,10 +717,12 @@ class CifarTargetEvaluator:
         self.cond = self.base_adapter.make_condition(prompt=prompt, batch_size=1)
 
         self.xt_ref = None
+        self.x0_ref = None
         self.t_seq = None
         self.target_meta: Dict[str, object] = {}
         if self.target_function in (
             "noise_trajectory",
+            "predicted_noise_kl",
             "projected_trajectory",
             "simple_loss",
             "trajectory_state_mse",
@@ -724,6 +742,38 @@ class CifarTargetEvaluator:
                 self.t_seq = self.t_seq[-1:]
             self.xt_ref = jax.device_put(jnp.asarray(self.xt_ref, dtype=jnp.float32), self.device)
             self.t_seq = np.asarray(self.t_seq, dtype=np.int32)
+            if self.target_function == "predicted_noise_kl":
+                final_state_path = os.path.join(
+                    str(self.target_meta["seed_dir"]), "final_state.npy"
+                )
+                if not os.path.isfile(final_state_path):
+                    raise FileNotFoundError(
+                        "predicted_noise_kl requires the generated query endpoint: "
+                        f"{final_state_path}"
+                    )
+                final_state = np.asarray(
+                    np.load(final_state_path), dtype=np.float32
+                )
+                if final_state.ndim != 4:
+                    raise ValueError(
+                        "Expected final_state.npy shape (B,H,W,C), got "
+                        f"{final_state.shape}"
+                    )
+                if not 0 <= self.sample_index < final_state.shape[0]:
+                    raise IndexError(
+                        f"sample_index={self.sample_index} out of range for "
+                        f"final_state batch size {final_state.shape[0]}"
+                    )
+                self.x0_ref = jax.device_put(
+                    jnp.asarray(
+                        final_state[
+                            self.sample_index : self.sample_index + 1
+                        ],
+                        dtype=jnp.float32,
+                    ),
+                    self.device,
+                )
+                self.target_meta["final_state_path"] = final_state_path
             saved_sampler = str(
                 self.target_meta.get("seed_info", {}).get(
                     "trajectory_sampler",
@@ -748,6 +798,19 @@ class CifarTargetEvaluator:
         self._noise_fn = jax.jit(self._noise_objective)
         self._projected_fn = jax.jit(self._projected_trajectory_objective)
         self._simple_loss_fn = jax.jit(self._simple_loss_objective)
+        self._predicted_noise_kl_fn = jax.jit(
+            self._predicted_noise_kl_objective
+        )
+
+        self.predicted_noise_kl_xt = None
+        self.predicted_noise_kl_t = None
+        self.predicted_noise_kl_eps_base = None
+        if self.target_function == "predicted_noise_kl":
+            (
+                self.predicted_noise_kl_xt,
+                self.predicted_noise_kl_t,
+                self.predicted_noise_kl_eps_base,
+            ) = self._build_predicted_noise_kl_probes()
 
         if self.target_function == "projected_trajectory":
             if not trajectory_projection:
@@ -849,6 +912,75 @@ class CifarTargetEvaluator:
 
         losses = jax.vmap(one_loss)(t_values, rng_keys)
         return jnp.mean(losses)
+
+    def _build_predicted_noise_kl_probes(self):
+        """Build query-specific off-trajectory probes and cache full-model outputs."""
+        if self.x0_ref is None:
+            raise ValueError("predicted_noise_kl requires a generated query endpoint.")
+        total_timesteps = int(self.base_adapter.cfg.timesteps)
+        count = int(self.predicted_noise_kl_num_directions)
+        if count > total_timesteps:
+            raise ValueError(
+                "predicted_noise_kl_num_directions cannot exceed the diffusion "
+                f"timestep count ({count} > {total_timesteps})."
+            )
+        timestep_values = uniform_timesteps(total_timesteps, count)
+        t_values = jax.device_put(
+            jnp.asarray(timestep_values, dtype=jnp.int32), self.device
+        )
+        rng_keys = jax.device_put(
+            jax.random.split(
+                jax.random.PRNGKey(self.predicted_noise_kl_mc_seed), count
+            ),
+            self.device,
+        )
+        schedule = self.base_adapter.schedule
+        x0 = self.x0_ref[0]
+
+        @jax.jit
+        def make_probes(t_values_arg, rng_keys_arg):
+            def one_probe(t_scalar, rng):
+                t = jnp.full((x0.shape[0],), t_scalar, dtype=jnp.int32)
+                noise = jax.random.normal(rng, x0.shape, dtype=x0.dtype)
+                return (
+                    self.base_adapter.module.extract(
+                        schedule.sqrt_alphas_cumprod, t, x0.shape
+                    )
+                    * x0
+                    + self.base_adapter.module.extract(
+                        schedule.sqrt_one_minus_alphas_cumprod, t, x0.shape
+                    )
+                    * noise
+                )
+
+            return jax.vmap(one_probe)(t_values_arg, rng_keys_arg)
+
+        xt_probes = make_probes(t_values, rng_keys)
+        base_params = self.base_adapter.state.ema_params
+
+        @jax.jit
+        def predict_base(params, xt_values, t_values_arg):
+            def one_prediction(x, t_scalar):
+                t = jnp.full((x.shape[0],), t_scalar, dtype=jnp.int32)
+                return self._eps_apply(self.base_adapter, params, x, t)
+
+            return jax.vmap(one_prediction)(xt_values, t_values_arg)
+
+        eps_base = predict_base(base_params, xt_probes, t_values)
+        return xt_probes, t_values, eps_base
+
+    def _predicted_noise_kl_objective(
+        self, target_params, xt_probes, t_values, eps_base
+    ):
+        def one_prediction(x, t_scalar):
+            t = jnp.full((x.shape[0],), t_scalar, dtype=jnp.int32)
+            return self._eps_apply(
+                self._target_adapter_for_jit, target_params, x, t
+            )
+
+        eps_target = jax.vmap(one_prediction)(xt_probes, t_values)
+        # Mean per output coordinate of KL[N(eps_target, I) || N(eps_base, I)].
+        return 0.5 * jnp.mean((eps_target - eps_base) ** 2)
 
     def _sample_model_space_trajectory(self, adapter: CIFARAdapter, seed: int, timesteps_to_save: Sequence[int]) -> np.ndarray:
         """Generate model-space x_t snapshots for the target checkpoint without saving them."""
@@ -1117,6 +1249,35 @@ class CifarTargetEvaluator:
                 "target_function": "noise_trajectory",
                 "num_trajectory_steps": int(len(self.t_seq)),
                 "trajectory_reduction": self.trajectory_reduction,
+            }
+        elif self.target_function == "predicted_noise_kl":
+            value = self._predicted_noise_kl_fn(
+                target_params,
+                self.predicted_noise_kl_xt,
+                self.predicted_noise_kl_t,
+                self.predicted_noise_kl_eps_base,
+            )
+            details = {
+                "target_function": "predicted_noise_kl",
+                "definition": (
+                    "Mean per-coordinate KL proxy between subset and full-model "
+                    "predicted-noise fields on independently forward-noised query "
+                    "endpoint probes; both fields are interpreted as unit-covariance "
+                    "Gaussians."
+                ),
+                "off_trajectory": True,
+                "num_directions": int(
+                    self.predicted_noise_kl_num_directions
+                ),
+                "timesteps": [
+                    int(value)
+                    for value in np.asarray(
+                        jax.device_get(self.predicted_noise_kl_t)
+                    ).tolist()
+                ],
+                "mc_seed": int(self.predicted_noise_kl_mc_seed),
+                "reduction": "0.5 * mean_t,H,W,C squared epsilon deviation",
+                "full_model_predictions_cached_per_query": True,
             }
         elif self.target_function == "projected_trajectory":
             value = self._projected_fn(
