@@ -55,6 +55,15 @@ def parse_values(text: str) -> list[str]:
     return [value.strip() for value in text.replace(" ", ",").split(",") if value.strip()]
 
 
+def linear_ranking_sign(transform: str) -> int:
+    """Orient linear scores toward the LDS-supported removal direction."""
+    if transform == "raw_gradient":
+        return +1
+    if transform == "adamw_full":
+        return -1
+    raise ValueError(transform)
+
+
 def banks_for_transform(transform: str) -> list[Bank]:
     pollute_namespace = (
         f"celeba_endpoint_pollute_{transform}_train1x50_query1x50_"
@@ -69,6 +78,7 @@ def banks_for_transform(transform: str) -> list[Bank]:
         "query_mean50_of_full_l2_linear_shape3d_semantics_full10000"
     )
     output: list[Bank] = []
+    linear_sign = linear_ranking_sign(transform)
     for variant, directory in VARIANTS:
         output.append(
             Bank(
@@ -88,7 +98,7 @@ def banks_for_transform(transform: str) -> list[Bank]:
                 variant,
                 tracin_namespace,
                 directory,
-                -1,
+                linear_sign,
             )
         )
     output.append(
@@ -98,7 +108,7 @@ def banks_for_transform(transform: str) -> list[Bank]:
             "both-L2",
             retrac_namespace,
             "score_query_train_l2_normalized",
-            -1,
+            linear_sign,
         )
     )
     return output
