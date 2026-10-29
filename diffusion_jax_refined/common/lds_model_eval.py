@@ -17,6 +17,7 @@ from common.config_loader import load_config, require_attr
 
 TARGET_FUNCTION_CHOICES = (
     "noise_trajectory",
+    "ddim_aux_path_log_ratio",
     "predicted_noise_kl",
     "simple_loss_50x1",
     "vlb_nll",
@@ -227,6 +228,8 @@ def main() -> None:
         parser.error(f"invalid --target-function value(s): {', '.join(invalid_targets)}")
     if "traj_contarfactual" in target_functions:
         evaluator_target_function = "traj_contarfactual"
+    elif "ddim_aux_path_log_ratio" in target_functions:
+        evaluator_target_function = "ddim_aux_path_log_ratio"
     elif "predicted_noise_kl" in target_functions:
         # This target also prepares the shared forward-noise probes and caches
         # the full-model prediction needed by predicted-noise KL.
@@ -346,6 +349,7 @@ def main() -> None:
         predicted_noise_kl_mc_seed=int(
             os.environ.get("LDS_PREDICTED_NOISE_KL_MC_SEED", "0")
         ),
+        ddim_aux_eta=float(os.environ.get("LDS_DDIM_AUX_ETA", "1.0")),
     )
     saved_prompt = (
         evaluator.target_meta.get("seed_info", {}).get("prompt")

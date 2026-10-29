@@ -171,6 +171,7 @@ import jax
 import jax.numpy as jnp
 
 from common.predicted_noise_kl import uniform_timesteps
+from common.ddim_aux_path_log_ratio import ddim_aux_coefficients
 
 from DM__training_CIFAR10_pixel import TrainConfig, train
 from DM___sampler import CIFARAdapter, inference_timesteps
@@ -184,6 +185,7 @@ from DM_counterfactual_retrain_from_attribution import (
 
 TARGET_FUNCTION_CHOICES = (
     "noise_trajectory",
+    "ddim_aux_path_log_ratio",
     "predicted_noise_kl",
     "simple_loss_50x1",
     "vlb_nll",
@@ -675,6 +677,7 @@ class CifarTargetEvaluator:
         trajectory_sampler: str = "ddpm",
         predicted_noise_kl_num_directions: int = 50,
         predicted_noise_kl_mc_seed: int = 0,
+        ddim_aux_eta: float = 1.0,
     ):
         self.code_file = code_file
         self.base_checkpoint = base_checkpoint
@@ -696,6 +699,7 @@ class CifarTargetEvaluator:
             predicted_noise_kl_num_directions
         )
         self.predicted_noise_kl_mc_seed = int(predicted_noise_kl_mc_seed)
+        self.ddim_aux_eta = float(ddim_aux_eta)
         self.trajectory_sampler = str(trajectory_sampler).strip().lower()
         if self.trajectory_sampler not in ("ddpm", "ddim_eta0"):
             raise ValueError("trajectory_sampler must be 'ddpm' or 'ddim_eta0'.")
@@ -707,6 +711,8 @@ class CifarTargetEvaluator:
             raise ValueError(
                 "predicted_noise_kl_num_directions must be in [1, 1000]."
             )
+        if not 0.0 < self.ddim_aux_eta <= 1.0:
+            raise ValueError("ddim_aux_eta must be in (0, 1].")
 
         self.base_adapter = CIFARAdapter(
             code_file=code_file,
@@ -724,6 +730,7 @@ class CifarTargetEvaluator:
         self.target_meta: Dict[str, object] = {}
         if self.target_function in (
             "noise_trajectory",
+            "ddim_aux_path_log_ratio",
             "predicted_noise_kl",
             "simple_loss_50x1",
             "vlb_nll",
@@ -804,6 +811,9 @@ class CifarTargetEvaluator:
         )
 
         self._noise_fn = jax.jit(self._noise_objective)
+        self._ddim_aux_path_log_ratio_fn = jax.jit(
+            self._ddim_aux_path_log_ratio_objective
+        )
         self._projected_fn = jax.jit(self._projected_trajectory_objective)
         self._simple_loss_fn = jax.jit(self._simple_loss_objective)
         self._predicted_noise_kl_fn = jax.jit(
@@ -820,6 +830,23 @@ class CifarTargetEvaluator:
         self.predicted_noise_kl_xt = None
         self.predicted_noise_kl_t = None
         self.predicted_noise_kl_eps_base = None
+        self.ddim_aux_xt = None
+        self.ddim_aux_t = None
+        self.ddim_aux_s = None
+        self.ddim_aux_eps_base = None
+        self.ddim_aux_b0 = None
+        self.ddim_aux_b = None
+        self.ddim_aux_variance = None
+        if self.target_function == "ddim_aux_path_log_ratio":
+            (
+                self.ddim_aux_xt,
+                self.ddim_aux_t,
+                self.ddim_aux_s,
+                self.ddim_aux_eps_base,
+                self.ddim_aux_b0,
+                self.ddim_aux_b,
+                self.ddim_aux_variance,
+            ) = self._build_ddim_aux_path_reference()
         if self.target_function in (
             "predicted_noise_kl",
             "simple_loss_50x1",
@@ -875,6 +902,69 @@ class CifarTargetEvaluator:
         if self.trajectory_reduction == "sum":
             return jnp.sum(vals)
         return jnp.mean(vals)
+
+    def _build_ddim_aux_path_reference(self):
+        if self.trajectory_sampler != "ddim_eta0":
+            raise ValueError(
+                "ddim_aux_path_log_ratio requires a deterministic DDIM reference path"
+            )
+        schedule = self.base_adapter.schedule
+        t_values, s_values, b0, b, variance = ddim_aux_coefficients(
+            np.asarray(jax.device_get(schedule.alphas_cumprod)),
+            np.asarray(self.t_seq),
+            eta=self.ddim_aux_eta,
+        )
+        xt_values = self.xt_ref[:-1]
+        t_device = jax.device_put(jnp.asarray(t_values, dtype=jnp.int32), self.device)
+
+        @jax.jit
+        def predict_base(params, xs, ts):
+            def one_prediction(_carry, inputs):
+                x, t_scalar = inputs
+                t = jnp.full((x.shape[0],), t_scalar, dtype=jnp.int32)
+                prediction = self._eps_apply(self.base_adapter, params, x, t)
+                return None, prediction
+
+            _, predictions = jax.lax.scan(one_prediction, None, (xs, ts))
+            return predictions
+
+        eps_base = predict_base(
+            self.base_adapter.state.ema_params, xt_values, t_device
+        )
+        return (
+            xt_values,
+            t_device,
+            jax.device_put(jnp.asarray(s_values, dtype=jnp.int32), self.device),
+            eps_base,
+            jax.device_put(jnp.asarray(b0, dtype=jnp.float32), self.device),
+            jax.device_put(jnp.asarray(b, dtype=jnp.float32), self.device),
+            jax.device_put(jnp.asarray(variance, dtype=jnp.float32), self.device),
+        )
+
+    def _ddim_aux_path_log_ratio_objective(
+        self, target_params, xt_values, t_values, eps_base, b0, b, variance
+    ):
+        def one_step(inputs):
+            x, t_scalar, eps_ref, b0_value, b_value, variance_value = inputs
+            t = jnp.full((x.shape[0],), t_scalar, dtype=jnp.int32)
+            eps_target = self._eps_apply(
+                self._target_adapter_for_jit, target_params, x, t
+            )
+            delta = eps_target - eps_ref
+            squared_error = jnp.mean(delta**2)
+            cross_inner = jnp.mean(eps_ref * delta)
+            squared = b_value**2 / (2.0 * variance_value) * squared_error
+            cross = (
+                -b_value * (b0_value - b_value) / variance_value * cross_inner
+            )
+            return squared, cross
+
+        squared, cross = jax.vmap(one_step)(
+            (xt_values, t_values, eps_base, b0, b, variance)
+        )
+        squared_total = jnp.sum(squared)
+        cross_total = jnp.sum(cross)
+        return squared_total + cross_total, squared_total, cross_total
 
     def _projected_trajectory_objective(self, target_params, base_params, xt_refs, t_seq):
         """F(target) - F(base), using the exact projections from Traj TracIn."""
@@ -1481,6 +1571,37 @@ class CifarTargetEvaluator:
                 "target_function": "noise_trajectory",
                 "num_trajectory_steps": int(len(self.t_seq)),
                 "trajectory_reduction": self.trajectory_reduction,
+            }
+        elif self.target_function == "ddim_aux_path_log_ratio":
+            value, squared_term, cross_term = self._ddim_aux_path_log_ratio_fn(
+                target_params,
+                self.ddim_aux_xt,
+                self.ddim_aux_t,
+                self.ddim_aux_eps_base,
+                self.ddim_aux_b0,
+                self.ddim_aux_b,
+                self.ddim_aux_variance,
+            )
+            details = {
+                "target_function": "ddim_aux_path_log_ratio",
+                "definition": (
+                    "Per-coordinate pointwise log-density ratio of a positive-"
+                    "variance auxiliary DDIM kernel evaluated on the deterministic "
+                    "full-model DDIM reference path."
+                ),
+                "trajectory_sampler": "ddim_eta0",
+                "auxiliary_eta": self.ddim_aux_eta,
+                "num_positive_variance_transitions": int(len(self.ddim_aux_t)),
+                "timesteps_t": [
+                    int(item) for item in np.asarray(jax.device_get(self.ddim_aux_t))
+                ],
+                "timesteps_s": [
+                    int(item) for item in np.asarray(jax.device_get(self.ddim_aux_s))
+                ],
+                "reduction": "sum_transitions(mean_output_coordinates(log_ratio))",
+                "squared_term": float(squared_term),
+                "cross_term": float(cross_term),
+                "excluded_final_zero_variance_transition": True,
             }
         elif self.target_function == "predicted_noise_kl":
             value = self._predicted_noise_kl_fn(

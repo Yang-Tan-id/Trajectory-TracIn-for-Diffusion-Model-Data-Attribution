@@ -101,7 +101,12 @@ def main() -> None:
         if value
     ]
     target_arg = ",".join(requested_targets)
-    if set(requested_targets) & {"simple_loss_50x1", "vlb_nll"}:
+    if "ddim_aux_path_log_ratio" in requested_targets:
+        cache_namespace = (
+            f"ddim_aux_path_log_ratio_eta1_"
+            f"steps{args.num_inference_steps}_v1"
+        )
+    elif set(requested_targets) & {"simple_loss_50x1", "vlb_nll"}:
         cache_namespace = (
             f"forward_noise_k{args.predicted_noise_kl_num_directions}_"
             f"seed{args.predicted_noise_kl_seed}_query_id_batch1_v2"
@@ -137,6 +142,7 @@ def main() -> None:
         LDS_PREDICTED_NOISE_KL_NUM_DIRECTIONS=str(
             args.predicted_noise_kl_num_directions
         ),
+        LDS_DDIM_AUX_ETA="1.0",
         LDS_DEVICE="gpu",
         JAX_NUM_DEVICES="1",
         JAX_PLATFORMS="cuda",

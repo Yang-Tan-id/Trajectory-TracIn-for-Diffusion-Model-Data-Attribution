@@ -28,6 +28,7 @@ TARGETS = (
     "predicted_noise_kl",
     "simple_loss_50x1",
     "vlb_nll",
+    "ddim_aux_path_log_ratio",
 )
 VARIANTS = (
     ("score", "raw"),
