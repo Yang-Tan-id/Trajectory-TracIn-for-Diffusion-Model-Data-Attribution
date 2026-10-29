@@ -18,7 +18,10 @@ REMOVAL_FRACTION = 0.10
 TOPK = int(round(N_TRAIN * REMOVAL_FRACTION))
 REMOVAL_FRACTION_TAG = "remove_10pct"
 RANDOM_SEED_BASE = 60_000_000
-OUT_ROOT = ROOT / "topk_removal_pint_endpoint_retrac_random_60q_10pct_correct_direction"
+OUT_ROOT = ROOT / (
+    "topk_removal_pint_endpoint_retrac_random_60q_10pct_"
+    "correct_direction_endpoint_linear"
+)
 
 # prediction_sign maps a retained-subset score sum to the LDS target.  Removal
 # changes that prediction with the opposite sign, so the ranking quantity is
@@ -47,21 +50,16 @@ METHODS = (
     {
         "tag": "endpoint_tracin_raw",
         "label": "ENDPOINT TRACIN / RAW",
-        "method": eta_method("raw", "timestamp_sum_squared"),
+        "method": eta_method("raw", "linear"),
         "prediction_sign": -1,
-        "description": (
-            "Full-AdamW endpoint-loss TracIn, raw, timestamp-sum-squared"
-        ),
+        "description": "Full-AdamW endpoint-loss TracIn, raw, linear",
     },
     {
         "tag": "endpoint_tracin_both_l2",
         "label": "ENDPOINT TRACIN / BOTH-L2",
-        "method": eta_method("query_train_l2", "timestamp_sum_squared"),
+        "method": eta_method("query_train_l2", "linear"),
         "prediction_sign": -1,
-        "description": (
-            "Full-AdamW endpoint-loss TracIn, query/train L2, "
-            "timestamp-sum-squared"
-        ),
+        "description": "Full-AdamW endpoint-loss TracIn, query/train L2, linear",
     },
     {
         "tag": "retrac_both_l2",

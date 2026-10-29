@@ -228,6 +228,10 @@ def main() -> None:
             "Ranking uses -LDS-sign times saved score, because removal changes a "
             "retained-subset prediction in the opposite direction.\n\n"
         )
+        handle.write(
+            "Contractions: PINT uses timestamp-sum-squared; Endpoint TracIn uses "
+            "linear; ReTrac uses its checkpoint-level normalized linear score.\n\n"
+        )
         for metric in KEY_METRICS:
             handle.write(f"METRIC: {metric}\n")
             handle.write(

@@ -77,7 +77,7 @@ def main() -> None:
             label = f"{job['method_tag']}/q{int(job['query_id']):02d}"
             log_path = (
                 LOG_DIR
-                / "topk5_random_60q_10pct_correct_direction"
+                / "topk5_random_60q_10pct_correct_direction_endpoint_linear"
                 / job["method_tag"]
                 / f"q{int(job['query_id']):02d}.log"
             )
