@@ -68,3 +68,19 @@ def path_log_ratio_numpy(
     squared = np.sum((b**2 / (2.0 * variance)) * squared_error)
     cross = np.sum(-(b * (b0 - b) / variance) * cross_inner)
     return float(squared + cross), float(squared), float(cross)
+
+
+def unweighted_path_score_numpy(
+    eps_ref: np.ndarray,
+    eps_target: np.ndarray,
+) -> tuple[float, float, float]:
+    """Return total, square, and cross terms after removing both coefficients."""
+    reference = np.asarray(eps_ref, dtype=np.float64)
+    target = np.asarray(eps_target, dtype=np.float64)
+    if reference.shape != target.shape:
+        raise ValueError("reference and target prediction shapes do not match")
+    delta = target - reference
+    axes = tuple(range(1, delta.ndim))
+    squared = np.sum(0.5 * np.mean(delta**2, axis=axes))
+    cross = np.sum(-np.mean(reference * delta, axis=axes))
+    return float(squared + cross), float(squared), float(cross)

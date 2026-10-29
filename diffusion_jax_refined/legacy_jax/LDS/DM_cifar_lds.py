@@ -186,6 +186,7 @@ from DM_counterfactual_retrain_from_attribution import (
 TARGET_FUNCTION_CHOICES = (
     "noise_trajectory",
     "ddim_aux_path_log_ratio",
+    "ddim_unweighted_path_score",
     "predicted_noise_kl",
     "simple_loss_50x1",
     "vlb_nll",
@@ -731,6 +732,7 @@ class CifarTargetEvaluator:
         if self.target_function in (
             "noise_trajectory",
             "ddim_aux_path_log_ratio",
+            "ddim_unweighted_path_score",
             "predicted_noise_kl",
             "simple_loss_50x1",
             "vlb_nll",
@@ -837,7 +839,9 @@ class CifarTargetEvaluator:
         self.ddim_aux_b0 = None
         self.ddim_aux_b = None
         self.ddim_aux_variance = None
-        if self.target_function == "ddim_aux_path_log_ratio":
+        if self.target_function in (
+            "ddim_aux_path_log_ratio", "ddim_unweighted_path_score"
+        ):
             (
                 self.ddim_aux_xt,
                 self.ddim_aux_t,
@@ -957,14 +961,28 @@ class CifarTargetEvaluator:
             cross = (
                 -b_value * (b0_value - b_value) / variance_value * cross_inner
             )
-            return squared, cross
+            return (
+                squared,
+                cross,
+                0.5 * squared_error,
+                -cross_inner,
+            )
 
-        squared, cross = jax.vmap(one_step)(
+        squared, cross, unweighted_squared, unweighted_cross = jax.vmap(one_step)(
             (xt_values, t_values, eps_base, b0, b, variance)
         )
         squared_total = jnp.sum(squared)
         cross_total = jnp.sum(cross)
-        return squared_total + cross_total, squared_total, cross_total
+        unweighted_squared_total = jnp.sum(unweighted_squared)
+        unweighted_cross_total = jnp.sum(unweighted_cross)
+        return (
+            squared_total + cross_total,
+            squared_total,
+            cross_total,
+            unweighted_squared_total + unweighted_cross_total,
+            unweighted_squared_total,
+            unweighted_cross_total,
+        )
 
     def _projected_trajectory_objective(self, target_params, base_params, xt_refs, t_seq):
         """F(target) - F(base), using the exact projections from Traj TracIn."""
@@ -1451,6 +1469,76 @@ class CifarTargetEvaluator:
         target_adapter = self._make_adapter(checkpoint)
         counterfactual_targets = set(targets) & {"endpoint_contarfactual", "traj_contarfactual"}
         values: Dict[str, Tuple[float, Dict[str, object]]] = {}
+        path_targets = set(targets) & {
+            "ddim_aux_path_log_ratio",
+            "ddim_unweighted_path_score",
+        }
+        if path_targets:
+            self._target_adapter_for_jit = target_adapter
+            (
+                weighted_value,
+                weighted_squared,
+                weighted_cross,
+                unweighted_value,
+                unweighted_squared,
+                unweighted_cross,
+            ) = self._ddim_aux_path_log_ratio_fn(
+                target_adapter.state.ema_params,
+                self.ddim_aux_xt,
+                self.ddim_aux_t,
+                self.ddim_aux_eps_base,
+                self.ddim_aux_b0,
+                self.ddim_aux_b,
+                self.ddim_aux_variance,
+            )
+            common_path_details = {
+                "trajectory_sampler": "ddim_eta0",
+                "num_transitions": int(len(self.ddim_aux_t)),
+                "timesteps_t": [
+                    int(item) for item in np.asarray(jax.device_get(self.ddim_aux_t))
+                ],
+                "timesteps_s": [
+                    int(item) for item in np.asarray(jax.device_get(self.ddim_aux_s))
+                ],
+                "shared_model_forward_pass": True,
+                "excluded_final_zero_variance_transition": True,
+            }
+            if "ddim_aux_path_log_ratio" in path_targets:
+                values["ddim_aux_path_log_ratio"] = (
+                    float(weighted_value),
+                    {
+                        **common_path_details,
+                        "target_function": "ddim_aux_path_log_ratio",
+                        "definition": (
+                            "Per-coordinate pointwise log-density ratio of a positive-"
+                            "variance auxiliary DDIM kernel evaluated on the deterministic "
+                            "full-model DDIM reference path."
+                        ),
+                        "auxiliary_eta": self.ddim_aux_eta,
+                        "reduction": "sum_transitions(mean_output_coordinates(log_ratio))",
+                        "squared_term": float(weighted_squared),
+                        "cross_term": float(weighted_cross),
+                    },
+                )
+            if "ddim_unweighted_path_score" in path_targets:
+                values["ddim_unweighted_path_score"] = (
+                    float(unweighted_value),
+                    {
+                        **common_path_details,
+                        "target_function": "ddim_unweighted_path_score",
+                        "definition": (
+                            "Unweighted DDIM-reference path score: both the squared "
+                            "epsilon-deviation and epsilon cross term omit the auxiliary-"
+                            "kernel b/v coefficients. This is not a density ratio."
+                        ),
+                        "reduction": (
+                            "sum_transitions(0.5*mean(delta_epsilon^2) "
+                            "- mean(epsilon_ref*delta_epsilon))"
+                        ),
+                        "squared_term": float(unweighted_squared),
+                        "cross_term": float(unweighted_cross),
+                    },
+                )
         paired_forward_targets = {"simple_loss_50x1", "vlb_nll"}
         if paired_forward_targets.issubset(targets):
             # These targets use identical probes and model predictions. Compute
@@ -1572,8 +1660,18 @@ class CifarTargetEvaluator:
                 "num_trajectory_steps": int(len(self.t_seq)),
                 "trajectory_reduction": self.trajectory_reduction,
             }
-        elif self.target_function == "ddim_aux_path_log_ratio":
-            value, squared_term, cross_term = self._ddim_aux_path_log_ratio_fn(
+        elif self.target_function in (
+            "ddim_aux_path_log_ratio",
+            "ddim_unweighted_path_score",
+        ):
+            (
+                weighted_value,
+                weighted_squared,
+                weighted_cross,
+                unweighted_value,
+                unweighted_squared,
+                unweighted_cross,
+            ) = self._ddim_aux_path_log_ratio_fn(
                 target_params,
                 self.ddim_aux_xt,
                 self.ddim_aux_t,
@@ -1582,12 +1680,36 @@ class CifarTargetEvaluator:
                 self.ddim_aux_b,
                 self.ddim_aux_variance,
             )
-            details = {
-                "target_function": "ddim_aux_path_log_ratio",
-                "definition": (
+            if self.target_function == "ddim_aux_path_log_ratio":
+                value, squared_term, cross_term = (
+                    weighted_value,
+                    weighted_squared,
+                    weighted_cross,
+                )
+                definition = (
                     "Per-coordinate pointwise log-density ratio of a positive-"
                     "variance auxiliary DDIM kernel evaluated on the deterministic "
                     "full-model DDIM reference path."
+                )
+                reduction = "sum_transitions(mean_output_coordinates(log_ratio))"
+            else:
+                value, squared_term, cross_term = (
+                    unweighted_value,
+                    unweighted_squared,
+                    unweighted_cross,
+                )
+                definition = (
+                    "Unweighted DDIM-reference path score with no auxiliary-kernel "
+                    "coefficient on either the squared or cross term; not a density ratio."
+                )
+                reduction = (
+                    "sum_transitions(0.5*mean(delta_epsilon^2) "
+                    "- mean(epsilon_ref*delta_epsilon))"
+                )
+            details = {
+                "target_function": self.target_function,
+                "definition": (
+                    definition
                 ),
                 "trajectory_sampler": "ddim_eta0",
                 "auxiliary_eta": self.ddim_aux_eta,
@@ -1598,7 +1720,7 @@ class CifarTargetEvaluator:
                 "timesteps_s": [
                     int(item) for item in np.asarray(jax.device_get(self.ddim_aux_s))
                 ],
-                "reduction": "sum_transitions(mean_output_coordinates(log_ratio))",
+                "reduction": reduction,
                 "squared_term": float(squared_term),
                 "cross_term": float(cross_term),
                 "excluded_final_zero_variance_transition": True,

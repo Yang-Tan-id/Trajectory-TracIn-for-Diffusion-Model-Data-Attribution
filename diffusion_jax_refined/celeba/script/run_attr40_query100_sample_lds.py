@@ -101,9 +101,11 @@ def main() -> None:
         if value
     ]
     target_arg = ",".join(requested_targets)
-    if "ddim_aux_path_log_ratio" in requested_targets:
+    if set(requested_targets).intersection(
+        {"ddim_aux_path_log_ratio", "ddim_unweighted_path_score"}
+    ):
         cache_namespace = (
-            f"ddim_aux_path_log_ratio_eta1_"
+            f"ddim_path_scores_eta1_"
             f"steps{args.num_inference_steps}_v1"
         )
     elif set(requested_targets) & {"simple_loss_50x1", "vlb_nll"}:

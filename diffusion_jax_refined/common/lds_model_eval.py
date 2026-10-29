@@ -18,6 +18,7 @@ from common.config_loader import load_config, require_attr
 TARGET_FUNCTION_CHOICES = (
     "noise_trajectory",
     "ddim_aux_path_log_ratio",
+    "ddim_unweighted_path_score",
     "predicted_noise_kl",
     "simple_loss_50x1",
     "vlb_nll",
@@ -228,7 +229,9 @@ def main() -> None:
         parser.error(f"invalid --target-function value(s): {', '.join(invalid_targets)}")
     if "traj_contarfactual" in target_functions:
         evaluator_target_function = "traj_contarfactual"
-    elif "ddim_aux_path_log_ratio" in target_functions:
+    elif set(target_functions) & {
+        "ddim_aux_path_log_ratio", "ddim_unweighted_path_score"
+    }:
         evaluator_target_function = "ddim_aux_path_log_ratio"
     elif "predicted_noise_kl" in target_functions:
         # This target also prepares the shared forward-noise probes and caches

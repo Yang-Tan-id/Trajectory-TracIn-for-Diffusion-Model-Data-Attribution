@@ -10,6 +10,7 @@ query_ids="${QUERY_IDS:-$(seq -s, 0 9)}"
 result_root="$celeba/result/attr40_experiment1"
 output_dir="${OUTPUT_DIR:-$result_root/analysis/ddim_aux_path_log_ratio_eta1_q0_9}"
 true_f_csv="$output_dir/celeba_attr40_query100_lds_true_f_long.csv"
+targets="ddim_aux_path_log_ratio,ddim_unweighted_path_score"
 
 raw_pint="celeba_endpoint_pollute_raw_gradient_train1x50_query1x50_timestamp_sum_squared_shape3d_semantics"
 raw_tracin="celeba_endpoint_tracin_raw_gradient_train_mean50_query_mean50_linear_shape3d_semantics"
@@ -27,6 +28,8 @@ echo "[definition] CelebA DDIM auxiliary path log-ratio; Q0-Q9 x 192 LDS models"
 echo "[definition] deterministic full-model DDIM reference path"
 echo "[definition] positive-variance auxiliary kernel eta=1; final zero-variance transition excluded"
 echo "[definition] target=sum over 49 transitions of per-coordinate square plus cross term"
+echo "[definition] unweighted target removes b/v coefficients from both square and cross terms"
+echo "[definition] weighted and unweighted targets share each model forward pass"
 echo "[gpus] $gpu_ids"
 echo "[output] $output_dir"
 
@@ -38,7 +41,7 @@ echo "[output] $output_dir"
   --query-ids "$query_ids" \
   --gpus "$gpu_ids" \
   --subset-seeds 0,1,2 \
-  --target-functions ddim_aux_path_log_ratio \
+  --target-functions "$targets" \
   --output-dir "$output_dir" \
   --python-bin "$py"
 
@@ -53,7 +56,7 @@ echo "[lds] raw-gradient five-method scores"
   --query-ids "$query_ids" \
   --true-f-csv "$true_f_csv" \
   --namespaces "$raw_pint,$raw_tracin,$raw_retrac" \
-  --target-functions ddim_aux_path_log_ratio \
+  --target-functions "$targets" \
   --prediction-sign -1 \
   --output-tag ddim_aux_path_log_ratio_raw_q0_9
 
@@ -63,7 +66,7 @@ echo "[lds] AdamW five-method scores"
   --query-ids "$query_ids" \
   --true-f-csv "$true_f_csv" \
   --namespaces "$adamw_pint,$adamw_tracin,$adamw_retrac" \
-  --target-functions ddim_aux_path_log_ratio \
+  --target-functions "$targets" \
   --prediction-sign 1 \
   --output-tag ddim_aux_path_log_ratio_adamw_q0_9
 
@@ -72,7 +75,7 @@ report="$output_dir/celeba_ddim_aux_path_log_ratio_five_method_q0_9.txt"
   --dataset celeba \
   --repo-root "$repo" \
   --query-ids 0-9 \
-  --targets ddim_aux_path_log_ratio \
+  --targets "$targets" \
   --expected-subsets 192 \
   --output "$report"
 

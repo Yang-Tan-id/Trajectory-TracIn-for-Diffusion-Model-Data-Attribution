@@ -7,6 +7,7 @@ import numpy as np
 from diffusion_jax_refined.common.ddim_aux_path_log_ratio import (
     ddim_aux_coefficients,
     path_log_ratio_numpy,
+    unweighted_path_score_numpy,
 )
 
 
@@ -61,6 +62,24 @@ class DdimAuxPathLogRatioTest(unittest.TestCase):
             np.asarray([0.1, 0.05]),
         )
         self.assertEqual(result, (0.0, 0.0, 0.0))
+
+    def test_unweighted_score_removes_b_and_variance_coefficients(self) -> None:
+        eps_ref = np.asarray([[[1.0, -2.0]], [[0.5, 3.0]]])
+        eps_target = np.asarray([[[2.0, -1.0]], [[-0.5, 4.0]]])
+        total, squared, cross = unweighted_path_score_numpy(
+            eps_ref, eps_target
+        )
+        delta = eps_target - eps_ref
+        expected_squared = sum(
+            0.5 * np.mean(delta[index] ** 2) for index in range(len(delta))
+        )
+        expected_cross = sum(
+            -np.mean(eps_ref[index] * delta[index])
+            for index in range(len(delta))
+        )
+        self.assertAlmostEqual(squared, expected_squared)
+        self.assertAlmostEqual(cross, expected_cross)
+        self.assertAlmostEqual(total, expected_squared + expected_cross)
 
 
 if __name__ == "__main__":

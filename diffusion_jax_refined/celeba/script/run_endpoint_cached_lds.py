@@ -29,6 +29,7 @@ TARGETS = (
     "simple_loss_50x1",
     "vlb_nll",
     "ddim_aux_path_log_ratio",
+    "ddim_unweighted_path_score",
 )
 VARIANTS = (
     ("score", "raw"),
