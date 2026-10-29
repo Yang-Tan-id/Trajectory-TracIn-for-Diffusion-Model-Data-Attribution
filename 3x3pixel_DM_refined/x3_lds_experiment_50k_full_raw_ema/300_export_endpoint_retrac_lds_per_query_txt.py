@@ -1,9 +1,10 @@
 """Export per-query LDS values for Endpoint TracIn and ReTrac to text.
 
 The exporter consumes the existing q00-q99 LDS JSON summaries; it does not
-recompute attribution scores.  Endpoint TracIn is exported for all four
-normalization variants using the linear contraction.  ReTrac is exported for
-the raw-gradient and full-AdamW parameter transforms.
+recompute attribution scores. Endpoint TracIn is exported for RAW and Both-L2
+using the linear contraction and both parameter transforms. ReTrac is exported
+for its native Both-L2 normalization and both parameter transforms. There is
+no ReTrac/RAW artifact in the existing 100-timestamp x MC10 experiment.
 """
 
 from __future__ import annotations
@@ -29,10 +30,28 @@ TARGETS = (
 
 ENDPOINT_VARIANTS = (
     ("raw", "RAW"),
-    ("query_l2", "QUERY-L2"),
-    ("train_l2", "TRAIN-L2"),
     ("query_train_l2", "BOTH-L2"),
 )
+
+MANIFEST = """\
+3x3 LDS PER-QUERY EXPORT
+
+All sections use 100 query timestamps x MC10, q00-q99, and shared
+CountSketch4096 projections.
+
+Included:
+  Endpoint TracIn | raw-gradient | RAW
+  Endpoint TracIn | raw-gradient | BOTH-L2
+  Endpoint TracIn | Full-AdamW   | RAW
+  Endpoint TracIn | Full-AdamW   | BOTH-L2
+  ReTrac          | raw-gradient | BOTH-L2 (native ReTrac normalization)
+  ReTrac          | Full-AdamW   | BOTH-L2 (native ReTrac normalization)
+
+Not included:
+  ReTrac | RAW is unavailable: the existing ReTrac experiment normalizes both
+  query and training features. The unnormalized artifact is Diffusion-TracIn,
+  not ReTrac, so it is intentionally not relabeled here.
+"""
 
 
 def load_json(path: Path) -> dict:
@@ -156,13 +175,13 @@ def main() -> None:
     retrac_raw = retrac_section(
         retrac_data,
         "diffusion_retrac",
-        "RETRAC 100 timestamps x MC10 | RAW-GRADIENT | NORMALIZED LINEAR",
+        "RETRAC 100 timestamps x MC10 | RAW-GRADIENT | BOTH-L2 | LINEAR",
         "negative",
     )
     retrac_adamw = retrac_section(
         retrac_data,
         "diffusion_retrac_adamw_full",
-        "RETRAC 100 timestamps x MC10 | FULL-ADAMW | NORMALIZED LINEAR",
+        "RETRAC 100 timestamps x MC10 | FULL-ADAMW | BOTH-L2 | LINEAR",
         "positive",
     )
 
@@ -175,7 +194,7 @@ def main() -> None:
     for name, sections in files.items():
         write_text(args.output_dir / name, sections)
 
-    combined = endpoint_raw + endpoint_adamw + [retrac_raw, retrac_adamw]
+    combined = [MANIFEST] + endpoint_raw + endpoint_adamw + [retrac_raw, retrac_adamw]
     write_text(args.output_dir / "endpoint_retrac_mc10_all_per_query.txt", combined)
 
 
