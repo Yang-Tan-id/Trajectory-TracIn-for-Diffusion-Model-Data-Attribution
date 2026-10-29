@@ -1,4 +1,4 @@
-"""Launch raw-gradient endpoint-loss TracIn with query100x1/train100x1."""
+"""Launch raw-gradient endpoint-loss TracIn with configurable MC counts."""
 
 import argparse
 import subprocess
@@ -21,7 +21,11 @@ def main():
     parser.add_argument("--batch-size", type=int, default=640)
     parser.add_argument("--grad-microbatch-size", type=int, default=128)
     parser.add_argument("--query-batch-size", type=int, default=16)
+    parser.add_argument("--query-mc", type=int, default=1)
+    parser.add_argument("--train-mc", type=int, default=1)
     args = parser.parse_args()
+    if args.query_mc <= 0 or args.train_mc <= 0:
+        parser.error("--query-mc and --train-mc must be positive")
     gpus = parse_gpus(args.gpus)
     assignments = (
         ("prompted", 0, 2, gpus[0]),
@@ -30,11 +34,15 @@ def main():
         ("unprompted", 1, 2, gpus[3]),
     )
     LOG_DIR.mkdir(parents=True, exist_ok=True)
-    log_path = LOG_DIR / "endpoint_tracin_raw_gradient_100t_mc1_100q_4gpu.log"
+    log_path = LOG_DIR / (
+        "endpoint_tracin_raw_gradient_100t_"
+        f"querymc{args.query_mc}_trainmc{args.train_mc}_100q_4gpu.log"
+    )
     active = {}
     with open(log_path, "a", buffering=1) as stream:
         stream.write(
-            "\n[launcher] endpoint simple-loss TracIn; query100x1; train100x1; "
+            "\n[launcher] endpoint simple-loss TracIn; "
+            f"query100x{args.query_mc}; train100x{args.train_mc}; "
             "independent noise; raw gradients; norm4; three contractions\n"
         )
         for family, shard_index, shard_count, gpu in assignments:
@@ -51,8 +59,8 @@ def main():
                 "--grad-microbatch-size", str(args.grad_microbatch_size),
                 "--query-batch-size", str(args.query_batch_size),
                 "--parameter-transform", "raw_gradient",
-                "--query-mc", "1",
-                "--train-mc", "1",
+                "--query-mc", str(args.query_mc),
+                "--train-mc", str(args.train_mc),
             ]
             stream.write(f"[launcher] {label}: {' '.join(command)}\n")
             process = subprocess.Popen(
@@ -83,14 +91,18 @@ def main():
                 "233_merge_eval_endpoint_tracin_adamw_mc10.py",
                 "--timestamp-shard-count", "2",
                 "--parameter-transform", "raw_gradient",
-                "--query-mc", "1",
-                "--train-mc", "1",
+                "--query-mc", str(args.query_mc),
+                "--train-mc", str(args.train_mc),
             ],
             stdout=stream,
             stderr=subprocess.STDOUT,
             check=True,
         )
-    print("[done] endpoint raw-gradient query100x1/train100x1 q00-q99", flush=True)
+    print(
+        "[done] endpoint raw-gradient "
+        f"query100x{args.query_mc}/train100x{args.train_mc} q00-q99",
+        flush=True,
+    )
 
 
 if __name__ == "__main__":
