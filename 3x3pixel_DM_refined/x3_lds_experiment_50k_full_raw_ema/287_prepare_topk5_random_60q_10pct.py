@@ -18,12 +18,12 @@ REMOVAL_FRACTION = 0.10
 TOPK = int(round(N_TRAIN * REMOVAL_FRACTION))
 REMOVAL_FRACTION_TAG = "remove_10pct"
 RANDOM_SEED_BASE = 60_000_000
-OUT_ROOT = ROOT / "topk_removal_pint_endpoint_retrac_random_60q_10pct"
+OUT_ROOT = ROOT / "topk_removal_pint_endpoint_retrac_random_60q_10pct_correct_direction"
 
-# prediction_sign is the sign used by the LDS table that motivated this run.
-# Ranking descending prediction_sign * saved_score therefore removes the points
-# predicted to have the largest positive effect, rather than blindly removing
-# the numerically largest stored scores.
+# prediction_sign maps a retained-subset score sum to the LDS target.  Removal
+# changes that prediction with the opposite sign, so the ranking quantity is
+# -prediction_sign * saved_score.  In particular, LDS sign=-1 means removing
+# the largest saved scores, exactly as in the earlier raw-gradient Top-K run.
 METHODS = (
     {
         "tag": "pint_raw",
@@ -131,11 +131,13 @@ def main() -> None:
                 ranking = f"uniform_without_replacement_seed_{random_seed}"
             else:
                 scores, score_path = score_cache[(spec["tag"], query_id)]
-                oriented = float(spec["prediction_sign"]) * scores
-                removed = np.argsort(-oriented, kind="stable")[:TOPK].astype(np.int64)
-                ranking_values = oriented[removed]
+                removal_scores = -float(spec["prediction_sign"]) * scores
+                removed = np.argsort(-removal_scores, kind="stable")[:TOPK].astype(
+                    np.int64
+                )
+                ranking_values = removal_scores[removed]
                 ranking = (
-                    "descending_prediction_sign_times_saved_score;"
+                    "descending_negative_prediction_sign_times_saved_score;"
                     f"prediction_sign={int(spec['prediction_sign']):+d}"
                 )
 
@@ -160,6 +162,20 @@ def main() -> None:
                 "method": spec["method"] or "random_removal",
                 "method_description": spec["description"],
                 "prediction_sign": spec["prediction_sign"],
+                "removal_score_definition": (
+                    None
+                    if spec["prediction_sign"] is None
+                    else "-prediction_sign * saved_score"
+                ),
+                "ranking_saved_score_direction": (
+                    None
+                    if spec["prediction_sign"] is None
+                    else (
+                        "descending"
+                        if int(spec["prediction_sign"]) == -1
+                        else "ascending"
+                    )
+                ),
                 "score_param_source": "raw",
                 "eval_param_source": "ema",
                 "lambda": None,

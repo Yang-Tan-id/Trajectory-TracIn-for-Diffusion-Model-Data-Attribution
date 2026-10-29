@@ -15,7 +15,9 @@ from exp_config import ROOT
 QUERY_IDS = tuple(range(60))
 FRACTION_TAG = "remove_10pct"
 OLD_ROOT = ROOT / "topk_removal_retrac_endtracin_tracindas_100q"
-NEW_ROOT = ROOT / "topk_removal_pint_endpoint_retrac_random_60q_10pct"
+NEW_ROOT = (
+    ROOT / "topk_removal_pint_endpoint_retrac_random_60q_10pct_correct_direction"
+)
 OLD_TAG = "tracin_das_aligned_timestamp_square"
 NEW_TAG = "pint_raw"
 METRICS = (
@@ -35,6 +37,18 @@ def load_json(path: Path) -> dict:
         raise FileNotFoundError(path)
     with open(path) as handle:
         return json.load(handle)
+
+
+def saved_score_direction(job: dict) -> str:
+    explicit = job.get("ranking_saved_score_direction")
+    if explicit is not None:
+        return str(explicit)
+    ranking = str(job.get("ranking", ""))
+    if ranking.startswith("descending_saved_score"):
+        return "descending"
+    if ranking.startswith("ascending_saved_score"):
+        return "ascending"
+    return f"unknown:{ranking}"
 
 
 def main() -> None:
@@ -57,6 +71,10 @@ def main() -> None:
     adamw_rankings = sorted({str(item["ranking"]) for item in adamw_jobs.values()})
     raw_methods = sorted({str(item["method"]) for item in raw_jobs.values()})
     adamw_methods = sorted({str(item["method"]) for item in adamw_jobs.values()})
+    raw_directions = sorted({saved_score_direction(item) for item in raw_jobs.values()})
+    adamw_directions = sorted(
+        {saved_score_direction(item) for item in adamw_jobs.values()}
+    )
 
     overlaps = []
     rows = []
@@ -84,7 +102,7 @@ def main() -> None:
             row[f"adamw_minus_raw_{metric}"] = adamw_value - raw_value
         rows.append(row)
 
-    ranking_matched = raw_rankings == adamw_rankings
+    ranking_matched = raw_directions == adamw_directions
     summary = {
         "query_ids": list(QUERY_IDS),
         "difference_definition": "Full-AdamW PINT minus old raw-gradient PINT",
@@ -92,6 +110,8 @@ def main() -> None:
         "new_method": adamw_methods,
         "old_ranking": raw_rankings,
         "new_ranking": adamw_rankings,
+        "old_saved_score_direction": raw_directions,
+        "new_saved_score_direction": adamw_directions,
         "ranking_contract_matched": ranking_matched,
         "controlled_transform_only_comparison": ranking_matched,
         "warning": (
@@ -159,6 +179,8 @@ def main() -> None:
         handle.write(f"new method: {adamw_methods}\n")
         handle.write(f"old ranking: {raw_rankings}\n")
         handle.write(f"new ranking: {adamw_rankings}\n")
+        handle.write(f"old saved-score direction: {raw_directions}\n")
+        handle.write(f"new saved-score direction: {adamw_directions}\n")
         handle.write(f"ranking contract matched: {ranking_matched}\n")
         if summary["warning"]:
             handle.write(f"WARNING: {summary['warning']}\n")

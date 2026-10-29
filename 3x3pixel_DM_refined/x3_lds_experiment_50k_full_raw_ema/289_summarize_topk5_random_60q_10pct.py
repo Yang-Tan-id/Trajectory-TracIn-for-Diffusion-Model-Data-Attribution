@@ -224,6 +224,10 @@ def main() -> None:
             "All values are true EMA-model removal effects. p-values are paired, "
             "two-sided Wilcoxon tests against the query-matched random control.\n\n"
         )
+        handle.write(
+            "Ranking uses -LDS-sign times saved score, because removal changes a "
+            "retained-subset prediction in the opposite direction.\n\n"
+        )
         for metric in KEY_METRICS:
             handle.write(f"METRIC: {metric}\n")
             handle.write(
