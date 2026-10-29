@@ -1,4 +1,4 @@
-"""Export per-query LDS values for Endpoint TracIn and ReTrac to text.
+"""Export per-query LDS values for PINT, Endpoint TracIn, and ReTrac to text.
 
 The exporter consumes the existing q00-q99 LDS JSON summaries; it does not
 recompute attribution scores. Endpoint TracIn is exported for RAW and Both-L2
@@ -40,6 +40,10 @@ All sections use 100 query timestamps x MC10, q00-q99, and shared
 CountSketch4096 projections.
 
 Included:
+  PINT            | raw-gradient | RAW
+  PINT            | raw-gradient | BOTH-L2
+  PINT            | Full-AdamW   | RAW
+  PINT            | Full-AdamW   | BOTH-L2
   Endpoint TracIn | raw-gradient | RAW
   Endpoint TracIn | raw-gradient | BOTH-L2
   Endpoint TracIn | Full-AdamW   | RAW
@@ -130,6 +134,27 @@ def endpoint_sections(path: Path, transform_label: str, sign_name: str) -> list[
     return sections
 
 
+def pint_sections(path: Path, transform: str, transform_label: str) -> list[str]:
+    data = load_json(path)
+    query_ids = [int(value) for value in data["query_ids"]]
+    sections = []
+    for variant, variant_label in ENDPOINT_VARIANTS:
+        result = data["variants"][transform][variant]["timestamp_sum_squared"]
+        sections.append(
+            format_table(
+                title=(
+                    f"PINT / TRACIN-DAS 100 timestamps | {transform_label} | "
+                    f"{variant_label} | TIMESTAMP-SUM-SQUARED"
+                ),
+                artifact=result["method"],
+                sign_name="negative",
+                query_ids=query_ids,
+                target_results=result["targets"],
+            )
+        )
+    return sections
+
+
 def retrac_section(data: dict, key: str, title: str, sign_name: str) -> str:
     query_ids = [int(value) for value in data["query_ids"]]
     result = data["methods"][key]
@@ -165,6 +190,10 @@ def main() -> None:
         LDS_DIR / "endpoint_tracin_adamw_full_100t_mc10_norm4_q00_q99.json"
     )
     retrac_path = LDS_DIR / "diffusion_tracin_vs_retrac_adamw_full_replayed_100q.json"
+    pint_path = LDS_DIR / "tracin_das_norm4_gradient_and_adamw_full_q00_q99.json"
+
+    pint_raw = pint_sections(pint_path, "gradient", "RAW-GRADIENT")
+    pint_adamw = pint_sections(pint_path, "adamw_full", "FULL-ADAMW")
 
     # Raw-gradient scores use the negative LDS sign; full-AdamW scores use the
     # positive LDS sign.  These are the same directions used by corrected Top-K.
@@ -186,6 +215,8 @@ def main() -> None:
     )
 
     files = {
+        "pint_mc1_raw_gradient_per_query.txt": pint_raw,
+        "pint_mc1_adamw_full_per_query.txt": pint_adamw,
         "endpoint_tracin_mc10_raw_gradient_per_query.txt": endpoint_raw,
         "endpoint_tracin_mc10_adamw_full_per_query.txt": endpoint_adamw,
         "retrac_mc10_raw_gradient_per_query.txt": [retrac_raw],
@@ -194,8 +225,15 @@ def main() -> None:
     for name, sections in files.items():
         write_text(args.output_dir / name, sections)
 
-    combined = [MANIFEST] + endpoint_raw + endpoint_adamw + [retrac_raw, retrac_adamw]
-    write_text(args.output_dir / "endpoint_retrac_mc10_all_per_query.txt", combined)
+    combined = (
+        [MANIFEST]
+        + pint_raw
+        + pint_adamw
+        + endpoint_raw
+        + endpoint_adamw
+        + [retrac_raw, retrac_adamw]
+    )
+    write_text(args.output_dir / "pint_endpoint_retrac_all_per_query.txt", combined)
 
 
 if __name__ == "__main__":
