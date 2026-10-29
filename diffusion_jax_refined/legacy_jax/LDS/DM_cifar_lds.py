@@ -960,11 +960,16 @@ class CifarTargetEvaluator:
 
         @jax.jit
         def predict_base(params, xt_values, t_values_arg):
-            def one_prediction(x, t_scalar):
+            def one_prediction(_carry, inputs):
+                x, t_scalar = inputs
                 t = jnp.full((x.shape[0],), t_scalar, dtype=jnp.int32)
-                return self._eps_apply(self.base_adapter, params, x, t)
+                prediction = self._eps_apply(self.base_adapter, params, x, t)
+                return None, prediction
 
-            return jax.vmap(one_prediction)(xt_values, t_values_arg)
+            _, predictions = jax.lax.scan(
+                one_prediction, None, (xt_values, t_values_arg)
+            )
+            return predictions
 
         eps_base = predict_base(base_params, xt_probes, t_values)
         return xt_probes, t_values, eps_base
@@ -972,15 +977,22 @@ class CifarTargetEvaluator:
     def _predicted_noise_kl_objective(
         self, target_params, xt_probes, t_values, eps_base
     ):
-        def one_prediction(x, t_scalar):
+        def accumulate(total_squared_error, inputs):
+            x, t_scalar, eps_base_value = inputs
             t = jnp.full((x.shape[0],), t_scalar, dtype=jnp.int32)
-            return self._eps_apply(
+            eps_target = self._eps_apply(
                 self._target_adapter_for_jit, target_params, x, t
             )
+            squared_error = jnp.sum((eps_target - eps_base_value) ** 2)
+            return total_squared_error + squared_error, None
 
-        eps_target = jax.vmap(one_prediction)(xt_probes, t_values)
+        total_squared_error, _ = jax.lax.scan(
+            accumulate,
+            jnp.asarray(0.0, dtype=xt_probes.dtype),
+            (xt_probes, t_values, eps_base),
+        )
         # Mean per output coordinate of KL[N(eps_target, I) || N(eps_base, I)].
-        return 0.5 * jnp.mean((eps_target - eps_base) ** 2)
+        return 0.5 * total_squared_error / float(xt_probes.size)
 
     def _sample_model_space_trajectory(self, adapter: CIFARAdapter, seed: int, timesteps_to_save: Sequence[int]) -> np.ndarray:
         """Generate model-space x_t snapshots for the target checkpoint without saving them."""
