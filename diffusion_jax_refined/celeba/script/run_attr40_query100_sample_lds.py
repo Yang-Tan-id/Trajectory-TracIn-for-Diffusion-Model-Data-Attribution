@@ -241,6 +241,8 @@ def main() -> None:
         "--query-ids", ",".join(str(value) for value in query_ids),
         "--output-dir", str(output_dir),
     ]
+    if cache_namespace:
+        export_command.extend(["--cache-namespace", cache_namespace])
     if args.execute and not args.skip_eval:
         subprocess.run(export_command, cwd=CELEBA_ROOT, env=base_env, check=True)
     else:

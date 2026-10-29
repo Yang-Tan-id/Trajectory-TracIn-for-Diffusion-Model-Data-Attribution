@@ -66,6 +66,16 @@ class TestPredictedNoiseKl(unittest.TestCase):
         self.assertIn("x0 = self.x0_ref", probe_source)
         self.assertNotIn("x0 = self.x0_ref[0]", probe_source)
 
+    def test_celeba_exporter_can_select_one_cache_namespace(self):
+        source = (
+            Path(__file__).resolve().parents[1]
+            / "celeba"
+            / "script"
+            / "export_attr40_query100_lds_csv.py"
+        ).read_text()
+        self.assertIn('"--cache-namespace"', source)
+        self.assertIn("query_root = query_root / args.cache_namespace", source)
+
 
 if __name__ == "__main__":
     unittest.main()

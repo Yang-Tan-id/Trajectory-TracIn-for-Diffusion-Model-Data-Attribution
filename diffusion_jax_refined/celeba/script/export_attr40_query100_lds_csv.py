@@ -45,6 +45,14 @@ def main() -> None:
         "--target-functions",
         default="endpoint_counterfactual,traj_counterfactual,simple_loss,noise_trajectory",
     )
+    parser.add_argument(
+        "--cache-namespace",
+        default="",
+        help=(
+            "Optional exact directory below lds_target_cache/<sampler>. "
+            "Use this when multiple probe versions contain the same target."
+        ),
+    )
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args()
     records = json.loads(args.query_file.read_text())["queries"]
@@ -76,6 +84,8 @@ def main() -> None:
             / "lds_target_cache"
             / "ddim_eta0"
         )
+        if args.cache_namespace:
+            query_root = query_root / args.cache_namespace
         for target in targets:
             matches = sorted(query_root.glob(f"**/{target}/target_*.json"))
             expected = 64 * len(subset_seeds)
@@ -130,6 +140,10 @@ def main() -> None:
             }
         )
     write_rows(args.output_dir / "celeba_attr40_query100_manifest.csv", manifest_rows)
+    if args.cache_namespace:
+        (args.output_dir / "cache_namespace.txt").write_text(
+            args.cache_namespace + "\n"
+        )
     print(f"saved {len(rows)} LDS rows under {args.output_dir}")
 
 
