@@ -7,7 +7,7 @@ task_file="${3:?task file is required}"
 
 repo="${REPO_ROOT:?REPO_ROOT is required}"
 celeba="$repo/diffusion_jax_refined/celeba"
-worker="$celeba/script/run_endpoint_top500_removal.py"
+worker="${REMOVAL_WORKER:-$celeba/script/run_endpoint_top500_removal.py}"
 query_file="$celeba/queries_attr40_val25_x4.json"
 
 mapfile -t tasks < "$task_file"

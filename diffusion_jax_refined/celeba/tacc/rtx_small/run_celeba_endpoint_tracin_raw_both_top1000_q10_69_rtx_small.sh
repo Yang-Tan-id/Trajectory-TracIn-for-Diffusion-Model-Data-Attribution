@@ -21,7 +21,7 @@ done
 [[ -f "$repo/$marker" ]] || { echo "ERROR: repository not found" >&2; exit 2; }
 
 celeba="$repo/diffusion_jax_refined/celeba"
-worker="$celeba/script/run_endpoint_top500_removal.py"
+worker="${REMOVAL_WORKER:-$celeba/script/run_endpoint_top500_removal.py}"
 slot_worker="$celeba/tacc/rtx_small/run_celeba_endpoint_tracin_raw_both_top1000_q10_69_slot.sh"
 query_file="$celeba/queries_attr40_val25_x4.json"
 method="endpoint_tracin_raw_gradient_linear_both_l2_full10k_pos"
@@ -30,6 +30,7 @@ source /scratch/11447/yangtan7447/miniforge3/etc/profile.d/conda.sh
 conda activate "${CONDA_ENV:-/scratch/11447/yangtan7447/conda-envs/trajectory-tracin}"
 
 export REPO_ROOT="$repo"
+export REMOVAL_WORKER="$worker"
 export EXPERIMENT_TAG="${EXPERIMENT_TAG:-attr40_experiment1}"
 export TRAIN_SEED="${TRAIN_SEED:-42}"
 export JAX_EPOCHS="${JAX_EPOCHS:-200}"
