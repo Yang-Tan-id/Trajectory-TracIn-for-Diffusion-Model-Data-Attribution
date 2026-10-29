@@ -18,6 +18,8 @@ from common.config_loader import load_config, require_attr
 TARGET_FUNCTION_CHOICES = (
     "noise_trajectory",
     "predicted_noise_kl",
+    "simple_loss_50x1",
+    "vlb_nll",
     "projected_trajectory",
     "simple_loss",
     "trajectory_state_mse",
@@ -223,11 +225,14 @@ def main() -> None:
     invalid_targets = [target for target in target_functions if target not in TARGET_FUNCTION_CHOICES]
     if invalid_targets:
         parser.error(f"invalid --target-function value(s): {', '.join(invalid_targets)}")
-    evaluator_target_function = (
-        "traj_contarfactual"
-        if "traj_contarfactual" in target_functions
-        else target_functions[0]
-    )
+    if "traj_contarfactual" in target_functions:
+        evaluator_target_function = "traj_contarfactual"
+    elif "predicted_noise_kl" in target_functions:
+        # This target also prepares the shared forward-noise probes and caches
+        # the full-model prediction needed by predicted-noise KL.
+        evaluator_target_function = "predicted_noise_kl"
+    else:
+        evaluator_target_function = target_functions[0]
 
     model_dirs = _paths(args.lds_model_dirs)
     if not model_dirs:

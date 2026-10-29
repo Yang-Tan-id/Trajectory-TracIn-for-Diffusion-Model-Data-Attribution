@@ -17,6 +17,8 @@ TARGETS = (
     "simple_loss",
     "noise_trajectory",
     "predicted_noise_kl",
+    "simple_loss_50x1",
+    "vlb_nll",
 )
 @dataclass(frozen=True)
 class DatasetConfig:

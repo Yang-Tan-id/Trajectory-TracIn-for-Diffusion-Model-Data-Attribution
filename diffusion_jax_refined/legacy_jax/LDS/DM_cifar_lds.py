@@ -185,6 +185,8 @@ from DM_counterfactual_retrain_from_attribution import (
 TARGET_FUNCTION_CHOICES = (
     "noise_trajectory",
     "predicted_noise_kl",
+    "simple_loss_50x1",
+    "vlb_nll",
     "projected_trajectory",
     "simple_loss",
     "trajectory_state_mse",
@@ -723,6 +725,8 @@ class CifarTargetEvaluator:
         if self.target_function in (
             "noise_trajectory",
             "predicted_noise_kl",
+            "simple_loss_50x1",
+            "vlb_nll",
             "projected_trajectory",
             "simple_loss",
             "trajectory_state_mse",
@@ -742,13 +746,17 @@ class CifarTargetEvaluator:
                 self.t_seq = self.t_seq[-1:]
             self.xt_ref = jax.device_put(jnp.asarray(self.xt_ref, dtype=jnp.float32), self.device)
             self.t_seq = np.asarray(self.t_seq, dtype=np.int32)
-            if self.target_function == "predicted_noise_kl":
+            if self.target_function in (
+                "predicted_noise_kl",
+                "simple_loss_50x1",
+                "vlb_nll",
+            ):
                 final_state_path = os.path.join(
                     str(self.target_meta["seed_dir"]), "final_state.npy"
                 )
                 if not os.path.isfile(final_state_path):
                     raise FileNotFoundError(
-                        "predicted_noise_kl requires the generated query endpoint: "
+                        "forward-noise targets require the generated query endpoint: "
                         f"{final_state_path}"
                     )
                 final_state = np.asarray(
@@ -801,11 +809,22 @@ class CifarTargetEvaluator:
         self._predicted_noise_kl_fn = jax.jit(
             self._predicted_noise_kl_objective
         )
+        self._simple_loss_50x1_fn = jax.jit(
+            self._simple_loss_50x1_objective
+        )
+        self._vlb_nll_fn = jax.jit(self._vlb_nll_objective)
+        self._forward_noise_metrics_fn = jax.jit(
+            self._forward_noise_metrics_objective
+        )
 
         self.predicted_noise_kl_xt = None
         self.predicted_noise_kl_t = None
         self.predicted_noise_kl_eps_base = None
-        if self.target_function == "predicted_noise_kl":
+        if self.target_function in (
+            "predicted_noise_kl",
+            "simple_loss_50x1",
+            "vlb_nll",
+        ):
             (
                 self.predicted_noise_kl_xt,
                 self.predicted_noise_kl_t,
@@ -935,7 +954,9 @@ class CifarTargetEvaluator:
             self.device,
         )
         schedule = self.base_adapter.schedule
-        x0 = self.x0_ref[0]
+        # Keep the explicit batch axis: x0_ref is (1,H,W,C). Dropping it
+        # makes the image height look like a batch of 64 to the UNet.
+        x0 = self.x0_ref
 
         @jax.jit
         def make_probes(t_values_arg, rng_keys_arg):
@@ -993,6 +1014,134 @@ class CifarTargetEvaluator:
         )
         # Mean per output coordinate of KL[N(eps_target, I) || N(eps_base, I)].
         return 0.5 * total_squared_error / float(xt_probes.size)
+
+    def _simple_loss_50x1_objective(self, target_params, xt_probes, t_values):
+        """Unweighted epsilon MSE on the shared 50x1 forward-noise probes."""
+        schedule = self.base_adapter.schedule
+        x0 = self.x0_ref
+
+        def accumulate(total_squared_error, inputs):
+            x, t_scalar = inputs
+            t = jnp.full((x.shape[0],), t_scalar, dtype=jnp.int32)
+            sqrt_abar = self.base_adapter.module.extract(
+                schedule.sqrt_alphas_cumprod, t, x.shape
+            )
+            sqrt_one_minus_abar = self.base_adapter.module.extract(
+                schedule.sqrt_one_minus_alphas_cumprod, t, x.shape
+            )
+            true_noise = (x - sqrt_abar * x0) / sqrt_one_minus_abar
+            predicted_noise = self._eps_apply(
+                self._target_adapter_for_jit, target_params, x, t
+            )
+            squared_error = jnp.sum((predicted_noise - true_noise) ** 2)
+            return total_squared_error + squared_error, None
+
+        total_squared_error, _ = jax.lax.scan(
+            accumulate,
+            jnp.asarray(0.0, dtype=xt_probes.dtype),
+            (xt_probes, t_values),
+        )
+        return total_squared_error / float(xt_probes.size)
+
+    def _vlb_nll_objective(self, target_params, xt_probes, t_values):
+        """Model-dependent DDPM VLB-NLL, omitting rank-invariant constants."""
+        schedule = self.base_adapter.schedule
+        x0 = self.x0_ref
+
+        def accumulate(total_weighted_error, inputs):
+            x, t_scalar = inputs
+            t = jnp.full((x.shape[0],), t_scalar, dtype=jnp.int32)
+            sqrt_abar = self.base_adapter.module.extract(
+                schedule.sqrt_alphas_cumprod, t, x.shape
+            )
+            sqrt_one_minus_abar = self.base_adapter.module.extract(
+                schedule.sqrt_one_minus_alphas_cumprod, t, x.shape
+            )
+            true_noise = (x - sqrt_abar * x0) / sqrt_one_minus_abar
+            predicted_noise = self._eps_apply(
+                self._target_adapter_for_jit, target_params, x, t
+            )
+            beta_t = schedule.betas[t_scalar]
+            alpha_t = schedule.alphas[t_scalar]
+            abar_t = schedule.alphas_cumprod[t_scalar]
+            # The repository's ancestral sampler uses sigma_t^2 = beta_t.
+            weight = beta_t / (2.0 * alpha_t * (1.0 - abar_t))
+            weighted_error = weight * jnp.sum(
+                (predicted_noise - true_noise) ** 2
+            )
+            return total_weighted_error + weighted_error, None
+
+        total_weighted_error, _ = jax.lax.scan(
+            accumulate,
+            jnp.asarray(0.0, dtype=xt_probes.dtype),
+            (xt_probes, t_values),
+        )
+        # Uniform stratified quadrature of the full T-term sum, per output
+        # coordinate. Additive VLB constants are checkpoint-independent and
+        # therefore irrelevant to LDS Spearman correlation.
+        dimensions_per_probe = float(xt_probes[0].size)
+        total_timesteps = float(self.base_adapter.cfg.timesteps)
+        return (
+            total_timesteps
+            / float(xt_probes.shape[0])
+            * total_weighted_error
+            / dimensions_per_probe
+        )
+
+    def _forward_noise_metrics_objective(
+        self, target_params, xt_probes, t_values, eps_base
+    ):
+        """Compute all shared-probe metrics in one target-model UNet pass."""
+        schedule = self.base_adapter.schedule
+        x0 = self.x0_ref
+
+        def accumulate(totals, inputs):
+            total_squared_error, total_weighted_error, total_base_deviation = totals
+            x, t_scalar, eps_base_value = inputs
+            t = jnp.full((x.shape[0],), t_scalar, dtype=jnp.int32)
+            sqrt_abar = self.base_adapter.module.extract(
+                schedule.sqrt_alphas_cumprod, t, x.shape
+            )
+            sqrt_one_minus_abar = self.base_adapter.module.extract(
+                schedule.sqrt_one_minus_alphas_cumprod, t, x.shape
+            )
+            true_noise = (x - sqrt_abar * x0) / sqrt_one_minus_abar
+            predicted_noise = self._eps_apply(
+                self._target_adapter_for_jit, target_params, x, t
+            )
+            squared_error = jnp.sum((predicted_noise - true_noise) ** 2)
+            beta_t = schedule.betas[t_scalar]
+            alpha_t = schedule.alphas[t_scalar]
+            abar_t = schedule.alphas_cumprod[t_scalar]
+            weight = beta_t / (2.0 * alpha_t * (1.0 - abar_t))
+            return (
+                total_squared_error + squared_error,
+                total_weighted_error + weight * squared_error,
+                total_base_deviation
+                + jnp.sum((predicted_noise - eps_base_value) ** 2),
+            ), None
+
+        zero = jnp.asarray(0.0, dtype=xt_probes.dtype)
+        (
+            total_squared_error,
+            total_weighted_error,
+            total_base_deviation,
+        ), _ = jax.lax.scan(
+            accumulate,
+            (zero, zero, zero),
+            (xt_probes, t_values, eps_base),
+        )
+        simple_loss = total_squared_error / float(xt_probes.size)
+        vlb_nll = (
+            float(self.base_adapter.cfg.timesteps)
+            / float(xt_probes.shape[0])
+            * total_weighted_error
+            / float(xt_probes[0].size)
+        )
+        predicted_noise_kl = (
+            0.5 * total_base_deviation / float(xt_probes.size)
+        )
+        return simple_loss, vlb_nll, predicted_noise_kl
 
     def _sample_model_space_trajectory(self, adapter: CIFARAdapter, seed: int, timesteps_to_save: Sequence[int]) -> np.ndarray:
         """Generate model-space x_t snapshots for the target checkpoint without saving them."""
@@ -1212,6 +1361,77 @@ class CifarTargetEvaluator:
         target_adapter = self._make_adapter(checkpoint)
         counterfactual_targets = set(targets) & {"endpoint_contarfactual", "traj_contarfactual"}
         values: Dict[str, Tuple[float, Dict[str, object]]] = {}
+        paired_forward_targets = {"simple_loss_50x1", "vlb_nll"}
+        if paired_forward_targets.issubset(targets):
+            # These targets use identical probes and model predictions. Compute
+            # them together so adding VLB/KL does not multiply the 50 UNet passes.
+            self._target_adapter_for_jit = target_adapter
+            simple_value, vlb_value, predicted_kl_value = (
+                self._forward_noise_metrics_fn(
+                    target_adapter.state.ema_params,
+                    self.predicted_noise_kl_xt,
+                    self.predicted_noise_kl_t,
+                    self.predicted_noise_kl_eps_base,
+                )
+            )
+            common_details = {
+                "off_trajectory": True,
+                "num_directions": int(self.predicted_noise_kl_num_directions),
+                "timesteps": [
+                    int(item)
+                    for item in np.asarray(
+                        jax.device_get(self.predicted_noise_kl_t)
+                    ).tolist()
+                ],
+                "mc_seed": int(self.predicted_noise_kl_mc_seed),
+                "shared_model_forward_pass": True,
+            }
+            values["simple_loss_50x1"] = (
+                float(simple_value),
+                {
+                    **common_details,
+                    "target_function": "simple_loss_50x1",
+                    "definition": (
+                        "Mean epsilon-prediction MSE on shared, uniformly "
+                        "spaced forward-noise probes generated from the query endpoint."
+                    ),
+                    "reduction": "mean_t,H,W,C epsilon squared error",
+                },
+            )
+            values["vlb_nll"] = (
+                float(vlb_value),
+                {
+                    **common_details,
+                    "target_function": "vlb_nll",
+                    "definition": (
+                        "Uniformly stratified estimate of the model-dependent, "
+                        "per-coordinate DDPM variational-bound NLL using "
+                        "sigma_t^2=beta_t."
+                    ),
+                    "reverse_variance": "beta_t",
+                    "quadrature": "T/K * sum over K uniform timesteps",
+                    "omitted_terms": (
+                        "checkpoint-independent Gaussian variance constants and prior KL"
+                    ),
+                },
+            )
+            if "predicted_noise_kl" in targets:
+                values["predicted_noise_kl"] = (
+                    float(predicted_kl_value),
+                    {
+                        **common_details,
+                        "target_function": "predicted_noise_kl",
+                        "definition": (
+                            "Mean per-coordinate KL proxy between subset and "
+                            "full-model predicted-noise fields on the same "
+                            "forward-noised query endpoint probes."
+                        ),
+                        "reduction": (
+                            "0.5 * mean_t,H,W,C squared epsilon deviation"
+                        ),
+                        "full_model_predictions_cached_per_query": True,
+                    },
+                )
         if counterfactual_targets:
             if self.sample_seed is None:
                 raise ValueError("trajectory counterfactual targets require --attribution-sample-seed/seed metadata.")
@@ -1231,7 +1451,7 @@ class CifarTargetEvaluator:
         original_target = self.target_function
         try:
             for target in targets:
-                if target in counterfactual_targets:
+                if target in counterfactual_targets or target in values:
                     continue
                 self.target_function = target
                 values[target] = self._evaluate_with_adapter(target_adapter)
@@ -1290,6 +1510,57 @@ class CifarTargetEvaluator:
                 "mc_seed": int(self.predicted_noise_kl_mc_seed),
                 "reduction": "0.5 * mean_t,H,W,C squared epsilon deviation",
                 "full_model_predictions_cached_per_query": True,
+            }
+        elif self.target_function == "simple_loss_50x1":
+            value = self._simple_loss_50x1_fn(
+                target_params,
+                self.predicted_noise_kl_xt,
+                self.predicted_noise_kl_t,
+            )
+            details = {
+                "target_function": "simple_loss_50x1",
+                "definition": (
+                    "Mean epsilon-prediction MSE on 50 shared, uniformly "
+                    "spaced forward-noise probes generated from the query endpoint."
+                ),
+                "off_trajectory": True,
+                "num_directions": int(self.predicted_noise_kl_num_directions),
+                "timesteps": [
+                    int(item)
+                    for item in np.asarray(
+                        jax.device_get(self.predicted_noise_kl_t)
+                    ).tolist()
+                ],
+                "mc_seed": int(self.predicted_noise_kl_mc_seed),
+                "reduction": "mean_t,H,W,C epsilon squared error",
+            }
+        elif self.target_function == "vlb_nll":
+            value = self._vlb_nll_fn(
+                target_params,
+                self.predicted_noise_kl_xt,
+                self.predicted_noise_kl_t,
+            )
+            details = {
+                "target_function": "vlb_nll",
+                "definition": (
+                    "Uniformly stratified estimate of the model-dependent, "
+                    "per-coordinate DDPM variational-bound NLL using the "
+                    "repository sampler variance sigma_t^2=beta_t."
+                ),
+                "off_trajectory": True,
+                "num_directions": int(self.predicted_noise_kl_num_directions),
+                "timesteps": [
+                    int(item)
+                    for item in np.asarray(
+                        jax.device_get(self.predicted_noise_kl_t)
+                    ).tolist()
+                ],
+                "mc_seed": int(self.predicted_noise_kl_mc_seed),
+                "reverse_variance": "beta_t",
+                "quadrature": "T/K * sum over K uniform timesteps",
+                "omitted_terms": (
+                    "checkpoint-independent Gaussian variance constants and prior KL"
+                ),
             }
         elif self.target_function == "projected_trajectory":
             value = self._projected_fn(
@@ -1509,6 +1780,9 @@ def main():
     args.target_function = normalize_target_function(args.target_function)
     if args.target_function in (
         "noise_trajectory",
+        "predicted_noise_kl",
+        "simple_loss_50x1",
+        "vlb_nll",
         "projected_trajectory",
         "simple_loss",
         "trajectory_state_mse",

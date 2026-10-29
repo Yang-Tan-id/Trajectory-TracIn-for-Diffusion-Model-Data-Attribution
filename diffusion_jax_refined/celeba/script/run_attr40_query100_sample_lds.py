@@ -101,10 +101,16 @@ def main() -> None:
         if value
     ]
     target_arg = ",".join(requested_targets)
-    if "predicted_noise_kl" in requested_targets:
+    if set(requested_targets) & {"simple_loss_50x1", "vlb_nll"}:
+        cache_namespace = (
+            f"forward_noise_k{args.predicted_noise_kl_num_directions}_"
+            f"seed{args.predicted_noise_kl_seed}_query_id_batch1_v2"
+        )
+    elif "predicted_noise_kl" in requested_targets:
+        # Preserve the namespace used by the completed predicted-noise run.
         cache_namespace = (
             f"predicted_noise_kl_k{args.predicted_noise_kl_num_directions}_"
-            f"seed{args.predicted_noise_kl_seed}_query_id_v1"
+            f"seed{args.predicted_noise_kl_seed}_query_id_batch1_v2"
         )
     else:
         cache_namespace = f"steps_{args.num_inference_steps}"

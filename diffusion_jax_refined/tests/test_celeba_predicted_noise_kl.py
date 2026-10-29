@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 
 import numpy as np
 
 from diffusion_jax_refined.common.predicted_noise_kl import (
+    fixed_beta_vlb_weights_numpy,
     predicted_noise_kl_numpy,
     query_probe_seed,
+    stratified_vlb_nll_numpy,
     uniform_timesteps,
 )
 
@@ -31,6 +34,37 @@ class TestPredictedNoiseKl(unittest.TestCase):
         self.assertEqual(seeds[0], 2026)
         self.assertEqual(len(set(seeds)), 10)
         self.assertEqual(seeds, [query_probe_seed(2026, q) for q in range(10)])
+
+    def test_fixed_beta_vlb_weights_match_closed_form(self):
+        betas = np.asarray([0.1, 0.2], dtype=np.float64)
+        weights = fixed_beta_vlb_weights_numpy(betas)
+        alphas = 1.0 - betas
+        abar = np.cumprod(alphas)
+        expected = betas / (2.0 * alphas * (1.0 - abar))
+        np.testing.assert_allclose(weights, expected)
+
+    def test_stratified_vlb_uses_schedule_weights(self):
+        betas = np.asarray([0.1, 0.2, 0.3, 0.4], dtype=np.float64)
+        timesteps = np.asarray([3, 1], dtype=np.int32)
+        losses = np.asarray([2.0, 5.0], dtype=np.float64)
+        weights = fixed_beta_vlb_weights_numpy(betas)
+        expected = len(betas) * np.mean(weights[timesteps] * losses)
+        self.assertAlmostEqual(
+            stratified_vlb_nll_numpy(losses, timesteps, betas), expected
+        )
+
+    def test_forward_probe_code_preserves_explicit_batch_axis(self):
+        source = (
+            Path(__file__).resolve().parents[1]
+            / "legacy_jax"
+            / "LDS"
+            / "DM_cifar_lds.py"
+        ).read_text()
+        probe_start = source.index("def _build_predicted_noise_kl_probes")
+        probe_stop = source.index("def _predicted_noise_kl_objective", probe_start)
+        probe_source = source[probe_start:probe_stop]
+        self.assertIn("x0 = self.x0_ref", probe_source)
+        self.assertNotIn("x0 = self.x0_ref[0]", probe_source)
 
 
 if __name__ == "__main__":
