@@ -186,6 +186,7 @@ def pixel_lpips_for_query(
     image_size: int,
     batch_size: int,
     lpips_model: Any,
+    label: str,
 ) -> tuple[np.ndarray, np.ndarray]:
     import torch
     from PIL import Image
@@ -205,8 +206,12 @@ def pixel_lpips_for_query(
         reference = preprocess(source.convert("RGB")).to(device)
     pixel_values: list[np.ndarray] = []
     lpips_values: list[np.ndarray] = []
+    completed = 0
+    started = time.monotonic()
     with torch.inference_mode():
-        for index_batch in batched(selected_indices, batch_size):
+        for batch_number, index_batch in enumerate(
+            batched(selected_indices, batch_size), start=1
+        ):
             candidates = []
             for index in index_batch:
                 path = path_by_index[int(index)]
@@ -218,6 +223,22 @@ def pixel_lpips_for_query(
             perceptual = lpips_model(values * 2.0 - 1.0, repeated * 2.0 - 1.0)
             pixel_values.append(rmse.float().cpu().numpy())
             lpips_values.append(perceptual.flatten().float().cpu().numpy())
+            completed += len(index_batch)
+            if batch_number % 10 == 0 or completed == len(selected_indices):
+                elapsed = time.monotonic() - started
+                rate = completed / elapsed if elapsed else 0.0
+                eta = (
+                    (len(selected_indices) - completed) / rate
+                    if rate
+                    else float("inf")
+                )
+                print(
+                    f"[pixel/lpips progress] {label} pairs={completed}/"
+                    f"{len(selected_indices)} percent="
+                    f"{100.0 * completed / len(selected_indices):.2f} "
+                    f"elapsed={elapsed:.1f}s eta={eta:.1f}s",
+                    flush=True,
+                )
     return np.concatenate(pixel_values), np.concatenate(lpips_values)
 
 
@@ -368,6 +389,7 @@ def main() -> None:
                 image_size=args.image_size,
                 batch_size=args.batch_size,
                 lpips_model=lpips_model,
+                label=f"Q{query}",
             )
             temporary = cache_path.with_suffix(".npz.tmp")
             with temporary.open("wb") as handle:
