@@ -9,25 +9,18 @@ import json
 import os
 from pathlib import Path
 import sys
+import time
+from typing import Any, Sequence
 
 import numpy as np
 
 
 SHAPES_ROOT = Path(__file__).resolve().parents[1]
 REFINE_ROOT = SHAPES_ROOT.parent
-CELEBA_SCRIPT = REFINE_ROOT / "celeba" / "script"
-for path in (SHAPES_ROOT / "script", CELEBA_SCRIPT):
+for path in (SHAPES_ROOT / "script",):
     if str(path) not in sys.path:
         sys.path.insert(0, str(path))
 
-from analyze_five_method_raw_vs_adamw_endpoint_perceptual import (
-    METRICS,
-    clip_features,
-    dino_features,
-    oriented_improvement,
-    pixel_lpips_for_query,
-)
-from analyze_pint_raw_vs_adamw_topk_endpoint_clip import label_swap
 from plot_endpoint_nine_row_top10 import (
     TRANSFORMS,
     banks_for_transform,
@@ -51,6 +44,204 @@ METHOD_KEYS = (
     ("RETRAC / BOTH-L2", "retrac_query_train_l2"),
 )
 TRANSFORM_NAMES = ("raw_gradient", "adamw_full")
+METRICS = (
+    ("clip_cosine", "CLIP cosine", +1),
+    ("dino_cosine", "DINO cosine", +1),
+    ("pixel_rmse", "Pixel RMSE", -1),
+    ("lpips", "LPIPS", -1),
+)
+
+
+def batched(values: Sequence[Any], size: int):
+    for start in range(0, len(values), size):
+        yield values[start : start + size]
+
+
+def uint8_image(value: np.ndarray) -> np.ndarray:
+    image = display_image(value)
+    if image.dtype == np.uint8:
+        return image
+    return np.rint(np.clip(image, 0.0, 1.0) * 255.0).astype(np.uint8)
+
+
+def clip_features(
+    images: Sequence[np.ndarray], model_name: str, batch_size: int, label: str
+) -> np.ndarray:
+    import torch
+    from PIL import Image
+    from transformers import CLIPModel, CLIPProcessor
+
+    if not torch.cuda.is_available():
+        raise RuntimeError("CLIP evaluation requires a CUDA GPU")
+    device = torch.device("cuda")
+    processor = CLIPProcessor.from_pretrained(model_name)
+    model = CLIPModel.from_pretrained(model_name).eval().half().to(device)
+    output = []
+    total = len(images)
+    started = time.monotonic()
+    for batch_number, batch in enumerate(batched(images, batch_size), start=1):
+        pil = [Image.fromarray(uint8_image(image), mode="RGB") for image in batch]
+        pixels = processor(images=pil, return_tensors="pt")["pixel_values"]
+        with torch.inference_mode():
+            features = model.get_image_features(
+                pixel_values=pixels.to(device, dtype=torch.float16)
+            )
+            features = torch.nn.functional.normalize(features.float(), dim=-1)
+        output.append(features.cpu().numpy())
+        completed = min(batch_number * batch_size, total)
+        elapsed = time.monotonic() - started
+        rate = completed / elapsed if elapsed else 0.0
+        eta = (total - completed) / rate if rate else float("inf")
+        print(
+            f"[clip progress] {label} images={completed}/{total} "
+            f"percent={100.0 * completed / total:.2f} "
+            f"elapsed={elapsed:.1f}s eta={eta:.1f}s",
+            flush=True,
+        )
+    return np.concatenate(output, axis=0)
+
+
+def dino_features(
+    images: Sequence[np.ndarray],
+    repository: str,
+    model_name: str,
+    batch_size: int,
+    label: str,
+) -> np.ndarray:
+    import torch
+    from PIL import Image
+    from torchvision import transforms
+
+    if not torch.cuda.is_available():
+        raise RuntimeError("DINO evaluation requires a CUDA GPU")
+    device = torch.device("cuda")
+    model = torch.hub.load(repository, model_name).eval().to(device)
+    preprocess = transforms.Compose(
+        [
+            transforms.Resize(
+                256, interpolation=transforms.InterpolationMode.BICUBIC
+            ),
+            transforms.CenterCrop(224),
+            transforms.ToTensor(),
+            transforms.Normalize(
+                mean=(0.485, 0.456, 0.406),
+                std=(0.229, 0.224, 0.225),
+            ),
+        ]
+    )
+    output = []
+    total = len(images)
+    started = time.monotonic()
+    for batch_number, batch in enumerate(batched(images, batch_size), start=1):
+        values = torch.stack(
+            [
+                preprocess(Image.fromarray(uint8_image(image), mode="RGB"))
+                for image in batch
+            ]
+        ).to(device)
+        with torch.inference_mode():
+            features = model(values).float()
+            features = torch.nn.functional.normalize(features, dim=-1)
+        output.append(features.cpu().numpy())
+        completed = min(batch_number * batch_size, total)
+        elapsed = time.monotonic() - started
+        rate = completed / elapsed if elapsed else 0.0
+        eta = (total - completed) / rate if rate else float("inf")
+        print(
+            f"[dino progress] {label} images={completed}/{total} "
+            f"percent={100.0 * completed / total:.2f} "
+            f"elapsed={elapsed:.1f}s eta={eta:.1f}s",
+            flush=True,
+        )
+    return np.concatenate(output, axis=0)
+
+
+def pixel_lpips_for_query(
+    endpoint_image: np.ndarray,
+    selected_indices: Sequence[int],
+    train_images: np.ndarray,
+    *,
+    batch_size: int,
+    lpips_model: Any,
+    label: str,
+) -> tuple[np.ndarray, np.ndarray]:
+    import torch
+    from torchvision import transforms
+
+    device = torch.device("cuda")
+    to_tensor = transforms.ToTensor()
+    reference = to_tensor(uint8_image(endpoint_image)).to(device)
+    pixel_values: list[np.ndarray] = []
+    lpips_values: list[np.ndarray] = []
+    completed = 0
+    started = time.monotonic()
+    with torch.inference_mode():
+        for batch_number, index_batch in enumerate(
+            batched(selected_indices, batch_size), start=1
+        ):
+            values = torch.stack(
+                [to_tensor(uint8_image(train_images[int(index)])) for index in index_batch]
+            ).to(device)
+            repeated = reference.unsqueeze(0).expand(values.shape[0], -1, -1, -1)
+            rmse = torch.sqrt(torch.mean((values - repeated) ** 2, dim=(1, 2, 3)))
+            perceptual = lpips_model(values * 2.0 - 1.0, repeated * 2.0 - 1.0)
+            pixel_values.append(rmse.float().cpu().numpy())
+            lpips_values.append(perceptual.flatten().float().cpu().numpy())
+            completed += len(index_batch)
+            if batch_number % 10 == 0 or completed == len(selected_indices):
+                elapsed = time.monotonic() - started
+                rate = completed / elapsed if elapsed else 0.0
+                eta = (
+                    (len(selected_indices) - completed) / rate
+                    if rate
+                    else float("inf")
+                )
+                print(
+                    f"[pixel/lpips progress] {label} pairs={completed}/"
+                    f"{len(selected_indices)} percent="
+                    f"{100.0 * completed / len(selected_indices):.2f} "
+                    f"elapsed={elapsed:.1f}s eta={eta:.1f}s",
+                    flush=True,
+                )
+    return np.concatenate(pixel_values), np.concatenate(lpips_values)
+
+
+def oriented_improvement(
+    raw: np.ndarray, adamw: np.ndarray, direction: int
+) -> np.ndarray:
+    if direction not in (-1, +1):
+        raise ValueError("metric direction must be -1 or +1")
+    return direction * (adamw - raw)
+
+
+def label_swap(
+    diff: np.ndarray,
+    permutations: int,
+    seed: int,
+    two_sided: bool,
+    label: str,
+) -> float:
+    observed = float(diff.mean())
+    rng = np.random.default_rng(seed)
+    extreme = 0
+    completed = 0
+    while completed < permutations:
+        size = min(20_000, permutations - completed)
+        signs = rng.choice(np.asarray([-1.0, 1.0]), size=(size, len(diff)))
+        values = (signs * diff).mean(axis=1)
+        if two_sided:
+            extreme += int(np.count_nonzero(np.abs(values) >= abs(observed)))
+        else:
+            extreme += int(np.count_nonzero(values >= observed))
+        completed += size
+        if completed % 100_000 == 0 or completed == permutations:
+            print(
+                f"[label-swap progress] {label} "
+                f"permutations={completed}/{permutations} "
+                f"percent={100.0 * completed / permutations:.2f}",
+                flush=True,
+            )
+    return (extreme + 1) / (permutations + 1)
 
 
 def parse_ids(text: str) -> list[int]:
