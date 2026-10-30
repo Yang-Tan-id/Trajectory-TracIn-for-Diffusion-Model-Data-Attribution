@@ -32,6 +32,48 @@ class CelebAFiveMethodEndpointPerceptualTest(unittest.TestCase):
             MODULE.oriented_improvement(raw, adamw, -1), [0.1, 0.1]
         )
 
+    def test_extreme_selection_respects_common_orientation(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            scores = np.arange(10_000, dtype=np.float64)
+            np.save(root / "scores.npy", scores)
+            np.save(root / "score_indices.npy", np.arange(10_000))
+            self.assertEqual(
+                MODULE.select_extreme_k(
+                    root, k=2, ranking_sign=+1, extreme="top"
+                ),
+                {9998, 9999},
+            )
+            self.assertEqual(
+                MODULE.select_extreme_k(
+                    root, k=2, ranking_sign=+1, extreme="bottom"
+                ),
+                {0, 1},
+            )
+
+    def test_bottom_reverses_adamw_ascending_storage(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            scores = -np.arange(10_000, dtype=np.float64)
+            np.save(root / "scores.npy", scores)
+            np.save(root / "score_indices.npy", np.arange(10_000))
+            self.assertEqual(
+                MODULE.select_extreme_k(
+                    root, k=2, ranking_sign=-1, extreme="top"
+                ),
+                {9998, 9999},
+            )
+            self.assertEqual(
+                MODULE.select_extreme_k(
+                    root, k=2, ranking_sign=-1, extreme="bottom"
+                ),
+                {0, 1},
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
