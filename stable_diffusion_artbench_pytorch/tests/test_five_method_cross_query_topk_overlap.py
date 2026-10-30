@@ -62,6 +62,15 @@ class FiveMethodCrossQueryTopKOverlapTest(unittest.TestCase):
             {10, 13},
         )
 
+    def test_same_query_overlap_definition(self) -> None:
+        raw = {1, 2, 3, 4}
+        adamw = {3, 4, 5, 6}
+        overlap_count = len(raw & adamw)
+        self.assertEqual(overlap_count, 2)
+        self.assertEqual(overlap_count / len(raw), 0.5)
+        self.assertEqual(1.0 - overlap_count / len(raw), 0.5)
+        self.assertEqual(overlap_count / len(raw | adamw), 1.0 / 3.0)
+
 
 if __name__ == "__main__":
     unittest.main()

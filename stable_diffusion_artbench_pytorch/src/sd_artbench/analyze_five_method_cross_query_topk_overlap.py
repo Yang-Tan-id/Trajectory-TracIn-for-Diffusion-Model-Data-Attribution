@@ -304,6 +304,49 @@ def main() -> None:
             }
         )
 
+    transform_overlap_rows: list[dict[str, object]] = []
+    transform_overlap_summary: list[dict[str, object]] = []
+    for method, *_ in METHODS:
+        overlaps: list[float] = []
+        jaccards: list[float] = []
+        for query in query_indices:
+            raw_set = selections[(method, "raw_gradient")][query]
+            adamw_set = selections[(method, "adamw_full")][query]
+            overlap_count = len(raw_set & adamw_set)
+            overlap = overlap_count / args.topk
+            jaccard = overlap_count / (2 * args.topk - overlap_count)
+            overlaps.append(overlap)
+            jaccards.append(jaccard)
+            transform_overlap_rows.append(
+                {
+                    "method": method,
+                    "query_index": query,
+                    "topk": args.topk,
+                    "overlap_count": overlap_count,
+                    "overlap_fraction": overlap,
+                    "changed_count": args.topk - overlap_count,
+                    "changed_fraction": 1.0 - overlap,
+                    "symmetric_difference_count": 2 * (args.topk - overlap_count),
+                    "jaccard": jaccard,
+                }
+            )
+        stats = describe(overlaps)
+        transform_overlap_summary.append(
+            {
+                "method": method,
+                "queries": len(query_indices),
+                "topk": args.topk,
+                "overlap_mean": stats[0],
+                "overlap_median": stats[1],
+                "overlap_std": stats[2],
+                "overlap_min": stats[3],
+                "overlap_max": stats[4],
+                "changed_fraction_mean": 1.0 - stats[0],
+                "changed_count_mean": args.topk * (1.0 - stats[0]),
+                "jaccard_mean": statistics.fmean(jaccards),
+            }
+        )
+
     lines = [
         "ARTBENCH RAW-GRADIENT VS ADAMW CROSS-QUERY TOP-K UNIQUENESS",
         f"queries={len(query_indices)} ({min(query_indices)}..{max(query_indices)}) topk={args.topk} candidates={universe_size}",
@@ -329,11 +372,45 @@ def main() -> None:
             f"{float(row['adamw_minus_raw_unique']):+11.2%} "
             f"{int(row['adamw_lower_overlap_pairs']):5d}/{int(row['query_pairs']):<7d}"
         )
+    lines.extend(
+        [
+            "",
+            "SAME-QUERY RAW-GRADIENT VS ADAMW TOP-K CHANGE",
+            "Changed fraction is the fraction of Raw-gradient Top-K entries replaced by AdamW.",
+            "",
+            (
+                f"{'METHOD':30s} {'OVERLAP':>9s} {'MEDIAN':>9s} "
+                f"{'STD':>8s} {'MIN':>8s} {'MAX':>8s} "
+                f"{'CHANGED':>9s} {'MEAN #':>9s} {'JACCARD':>9s}"
+            ),
+            "-" * 108,
+        ]
+    )
+    for row in transform_overlap_summary:
+        lines.append(
+            f"{str(row['method']):30s} "
+            f"{float(row['overlap_mean']):9.2%} "
+            f"{float(row['overlap_median']):9.2%} "
+            f"{float(row['overlap_std']):8.2%} "
+            f"{float(row['overlap_min']):8.2%} "
+            f"{float(row['overlap_max']):8.2%} "
+            f"{float(row['changed_fraction_mean']):9.2%} "
+            f"{float(row['changed_count_mean']):9.1f} "
+            f"{float(row['jaccard_mean']):9.2%}"
+        )
     report = "\n".join(lines) + "\n"
     print("\n" + report, end="")
 
     write_csv(output_dir / "summary.csv", summary_rows)
     write_csv(output_dir / "raw_gradient_vs_adamw.csv", comparison_rows)
+    write_csv(
+        output_dir / "same_query_raw_vs_adamw_summary.csv",
+        transform_overlap_summary,
+    )
+    write_csv(
+        output_dir / "same_query_raw_vs_adamw_per_query.csv",
+        transform_overlap_rows,
+    )
     write_csv(output_dir / "pairwise_cross_query_overlap.csv", pair_rows)
     write_csv(output_dir / "per_query_uniqueness.csv", per_query_rows)
     report_path = output_dir / "report.txt"
