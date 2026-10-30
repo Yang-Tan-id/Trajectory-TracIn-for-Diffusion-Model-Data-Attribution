@@ -1,9 +1,9 @@
-"""Compare Raw-gradient and AdamW Top-K endpoint perceptual similarity.
+"""Compare Raw-gradient and AdamW extreme-K endpoint perceptual similarity.
 
 For every query and attribution configuration, this script compares each of
-the selected training images with the full-data endpoint for that query.  CLIP
-and DINO are reported as cosine similarities (larger is better); pixel RMSE
-and LPIPS are reported as distances (smaller is better).
+the selected Top-K and/or Bottom-K training images with the full-data endpoint
+for that query.  CLIP and DINO are reported as cosine similarities (larger is
+better); pixel RMSE and LPIPS are reported as distances (smaller is better).
 """
 
 from __future__ import annotations
@@ -110,14 +110,13 @@ def dino_features(
 
 
 def load_or_compute_features(
-    output_dir: Path,
+    cache_path: Path,
     candidate_indices: np.ndarray,
     query_indices: Sequence[int],
     train_paths: Sequence[Path],
     endpoint_paths: Sequence[Path],
     args: argparse.Namespace,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    cache_path = output_dir / "semantic_features.npz"
     if cache_path.is_file() and not args.recompute_features:
         with np.load(cache_path, allow_pickle=False) as cache:
             if not np.array_equal(cache["candidate_indices"], candidate_indices):
@@ -140,6 +139,7 @@ def load_or_compute_features(
         print(f"[cache] reused {cache_path}", flush=True)
         return result  # type: ignore[return-value]
 
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
     train_clip = clip_features(
         train_paths, args.clip_model, args.batch_size, "training"
     )
@@ -258,6 +258,21 @@ def oriented_improvement(raw: np.ndarray, adamw: np.ndarray, direction: int) -> 
     return direction * (adamw - raw)
 
 
+def select_extreme_k(
+    scores: np.ndarray,
+    indices: np.ndarray,
+    *,
+    k: int,
+    ranking_sign: int,
+    extreme: str,
+) -> set[int]:
+    """Select Top-K or Bottom-K after orienting larger as more influential."""
+    if extreme not in ("top", "bottom"):
+        raise ValueError("extreme must be 'top' or 'bottom'")
+    oriented_sign = ranking_sign if extreme == "top" else -ranking_sign
+    return select_topk(scores, indices, topk=k, ranking_sign=oriented_sign)
+
+
 def parse_args() -> argparse.Namespace:
     config = ArtBenchConfig()
     root = config.index_root.parent.parent
@@ -279,6 +294,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--query-indices", type=parse_ints, default=list(range(60)))
     parser.add_argument("--topk", type=int, default=1000)
+    parser.add_argument(
+        "--selection",
+        choices=("top", "bottom", "both"),
+        default="top",
+        help="evaluate the most influential, least influential, or both sets",
+    )
     parser.add_argument("--clip-model", default="openai/clip-vit-base-patch32")
     parser.add_argument("--dino-repository", default="facebookresearch/dino:main")
     parser.add_argument("--dino-model", default="dino_vits16")
@@ -287,15 +308,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--permutations", type=int, default=1_000_000)
     parser.add_argument("--output-dir", type=Path)
+    parser.add_argument(
+        "--feature-cache",
+        type=Path,
+        help="optional semantic_features.npz from an earlier compatible run",
+    )
     parser.add_argument("--recompute-features", action="store_true")
     return parser.parse_args()
 
 
 def main() -> None:
+    args = parse_args()
+
     import lpips
     import torch
 
-    args = parse_args()
     config = ArtBenchConfig()
     project = config.index_root.parent.parent
     if not torch.cuda.is_available():
@@ -304,13 +331,16 @@ def main() -> None:
         raise ValueError(f"--topk must be in [1, {config.train_size - 1}]")
     if args.batch_size < 1 or args.image_size < 1 or args.permutations < 1:
         raise ValueError("sizes and permutations must be positive")
+    selection_tag = "top_bottom" if args.selection == "both" else args.selection
     output_dir = args.output_dir or (
         project
         / "outputs/analysis"
-        / f"five_method_raw_vs_adamw_top{args.topk}_endpoint_perceptual_"
+        / f"five_method_raw_vs_adamw_{selection_tag}{args.topk}_endpoint_perceptual_"
         f"q{min(args.query_indices)}_q{max(args.query_indices)}"
     )
     output_dir.mkdir(parents=True, exist_ok=True)
+    feature_cache = args.feature_cache or output_dir / "semantic_features.npz"
+    extremes = ("top", "bottom") if args.selection == "both" else (args.selection,)
 
     artifacts = {
         "pollute": load_artifact(args.endpoint_root / "endpoint_pollute_timestamp_sum_squared.npz"),
@@ -341,18 +371,23 @@ def main() -> None:
         if not path.is_file():
             raise FileNotFoundError(path)
 
-    selected: dict[tuple[str, str, int], set[int]] = {}
+    selected: dict[tuple[str, str, str, int], set[int]] = {}
     for method, artifact_name, variant, raw_sign, adamw_sign in METHODS:
         artifact = artifacts[artifact_name]
         for transform, sign in zip(TRANSFORMS, (raw_sign, adamw_sign), strict=True):
             bank = score_bank(artifact, transform=transform, variant=variant)
             for query in args.query_indices:
-                selected[(method, transform, query)] = select_topk(
-                    bank[query], artifact["indices"], topk=args.topk, ranking_sign=sign
-                )
+                for extreme in extremes:
+                    selected[(extreme, method, transform, query)] = select_extreme_k(
+                        bank[query],
+                        artifact["indices"],
+                        k=args.topk,
+                        ranking_sign=sign,
+                        extreme=extreme,
+                    )
 
     train_clip, endpoint_clip, train_dino, endpoint_dino = load_or_compute_features(
-        output_dir,
+        feature_cache,
         candidate_indices,
         args.query_indices,
         train_paths,
@@ -369,10 +404,15 @@ def main() -> None:
     for query_position, query in enumerate(args.query_indices):
         union = sorted(
             set().union(
-                *(selected[(method, transform, query)] for method, *_ in METHODS for transform in TRANSFORMS)
+                *(
+                    selected[(extreme, method, transform, query)]
+                    for extreme in extremes
+                    for method, *_ in METHODS
+                    for transform in TRANSFORMS
+                )
             )
         )
-        cache_path = output_dir / f"pixel_lpips_q{query:03d}.npz"
+        cache_path = output_dir / f"pixel_lpips_{selection_tag}_q{query:03d}.npz"
         if cache_path.is_file():
             with np.load(cache_path, allow_pickle=False) as cache:
                 cached_indices = np.asarray(cache["indices"], dtype=np.int64)
@@ -401,89 +441,164 @@ def main() -> None:
                 flush=True,
             )
         local_position = {index: position for position, index in enumerate(union)}
-        for method, *_ in METHODS:
-            for transform in TRANSFORMS:
-                indices = sorted(selected[(method, transform, query)])
-                global_slots = np.asarray([feature_position[index] for index in indices])
-                local_slots = np.asarray([local_position[index] for index in indices])
-                clip_values = train_clip[global_slots] @ endpoint_clip[query_position]
-                dino_values = train_dino[global_slots] @ endpoint_dino[query_position]
-                rows.append(
-                    {
-                        "query_index": query,
-                        "method": method,
-                        "transform": transform,
-                        "topk": args.topk,
-                        "clip_cosine": float(clip_values.mean()),
-                        "dino_cosine": float(dino_values.mean()),
-                        "pixel_rmse": float(pixel[local_slots].mean()),
-                        "lpips": float(perceptual[local_slots].mean()),
-                    }
-                )
+        for extreme in extremes:
+            for method, *_ in METHODS:
+                for transform in TRANSFORMS:
+                    indices = sorted(selected[(extreme, method, transform, query)])
+                    global_slots = np.asarray([feature_position[index] for index in indices])
+                    local_slots = np.asarray([local_position[index] for index in indices])
+                    clip_values = train_clip[global_slots] @ endpoint_clip[query_position]
+                    dino_values = train_dino[global_slots] @ endpoint_dino[query_position]
+                    rows.append(
+                        {
+                            "selection": extreme,
+                            "query_index": query,
+                            "method": method,
+                            "transform": transform,
+                            "k": args.topk,
+                            "clip_cosine": float(clip_values.mean()),
+                            "dino_cosine": float(dino_values.mean()),
+                            "pixel_rmse": float(pixel[local_slots].mean()),
+                            "lpips": float(perceptual[local_slots].mean()),
+                        }
+                    )
 
     lookup = {
-        (str(row["method"]), int(row["query_index"]), str(row["transform"])): row
+        (
+            str(row["selection"]),
+            str(row["method"]),
+            int(row["query_index"]),
+            str(row["transform"]),
+        ): row
         for row in rows
     }
     summary_rows: list[dict[str, object]] = []
     lines = [
-        "ARTBENCH FIVE-METHOD RAW-GRADIENT VS ADAMW TOP-K ENDPOINT PERCEPTUAL SIMILARITY",
-        f"queries={len(args.query_indices)} topk={args.topk}",
+        "ARTBENCH FIVE-METHOD RAW-GRADIENT VS ADAMW EXTREME-K ENDPOINT PERCEPTUAL SIMILARITY",
+        f"queries={len(args.query_indices)} k={args.topk} selection={args.selection}",
         "CLIP/DINO: higher is better. Pixel-RMSE/LPIPS: lower is better.",
     ]
-    for metric_index, (metric, label, direction) in enumerate(METRICS):
-        lines.extend(
-            [
-                "",
-                label.upper(),
-                f"{'METHOD':30s} {'RAW-GRAD':>11s} {'ADAMW':>11s} {'IMPROVE':>11s} {'ADAMW WINS':>12s} {'P1':>11s} {'P2':>11s}",
-                "-" * 103,
-            ]
-        )
-        for method_index, (method, *_unused) in enumerate(METHODS):
-            raw = np.asarray(
-                [lookup[(method, query, "raw_gradient")][metric] for query in args.query_indices],
-                dtype=np.float64,
+    for extreme_index, extreme in enumerate(extremes):
+        lines.extend(["", f"{'=' * 44} {extreme.upper()}-{args.topk} {'=' * 44}"])
+        for metric_index, (metric, label, direction) in enumerate(METRICS):
+            lines.extend(
+                [
+                    "",
+                    label.upper(),
+                    f"{'METHOD':30s} {'RAW-GRAD':>11s} {'ADAMW':>11s} {'IMPROVE':>11s} {'ADAMW WINS':>12s} {'P1':>11s} {'P2':>11s}",
+                    "-" * 103,
+                ]
             )
-            adamw = np.asarray(
-                [lookup[(method, query, "adamw_full")][metric] for query in args.query_indices],
-                dtype=np.float64,
+            for method_index, (method, *_unused) in enumerate(METHODS):
+                raw = np.asarray(
+                    [lookup[(extreme, method, query, "raw_gradient")][metric] for query in args.query_indices],
+                    dtype=np.float64,
+                )
+                adamw = np.asarray(
+                    [lookup[(extreme, method, query, "adamw_full")][metric] for query in args.query_indices],
+                    dtype=np.float64,
+                )
+                improvement = oriented_improvement(raw, adamw, direction)
+                seed_offset = 1000 * extreme_index + 100 * metric_index + method_index
+                p1 = label_swap(
+                    improvement,
+                    permutations=args.permutations,
+                    seed=2026 + seed_offset,
+                    two_sided=False,
+                )
+                p2 = label_swap(
+                    improvement,
+                    permutations=args.permutations,
+                    seed=3026 + seed_offset,
+                    two_sided=True,
+                )
+                summary_rows.append(
+                    {
+                        "comparison": "adamw_vs_raw",
+                        "selection": extreme,
+                        "metric": metric,
+                        "direction": "higher" if direction > 0 else "lower",
+                        "method": method,
+                        "transform": "raw_gradient_vs_adamw_full",
+                        "queries": len(args.query_indices),
+                        "left_mean": float(raw.mean()),
+                        "right_mean": float(adamw.mean()),
+                        "oriented_improvement": float(improvement.mean()),
+                        "right_wins": int(np.count_nonzero(improvement > 0)),
+                        "left_wins": int(np.count_nonzero(improvement < 0)),
+                        "ties": int(np.count_nonzero(improvement == 0)),
+                        "paired_label_swap_p1": p1,
+                        "paired_label_swap_p2": p2,
+                    }
+                )
+                lines.append(
+                    f"{method:30s} {raw.mean():11.6f} {adamw.mean():11.6f} "
+                    f"{improvement.mean():+11.6f} "
+                    f"{np.count_nonzero(improvement > 0):5d}/{len(improvement):<6d} "
+                    f"{p1:11.6g} {p2:11.6g}"
+                )
+
+    if args.selection == "both":
+        lines.extend(["", "=" * 38 + " TOP VS BOTTOM " + "=" * 38])
+        for metric_index, (metric, label, direction) in enumerate(METRICS):
+            lines.extend(
+                [
+                    "",
+                    label.upper(),
+                    f"{'METHOD / TRANSFORM':46s} {'TOP':>11s} {'BOTTOM':>11s} {'TOP BETTER':>11s} {'TOP WINS':>10s} {'P1':>11s} {'P2':>11s}",
+                    "-" * 119,
+                ]
             )
-            improvement = oriented_improvement(raw, adamw, direction)
-            p1 = label_swap(
-                improvement,
-                permutations=args.permutations,
-                seed=2026 + 100 * metric_index + method_index,
-                two_sided=False,
-            )
-            p2 = label_swap(
-                improvement,
-                permutations=args.permutations,
-                seed=3026 + 100 * metric_index + method_index,
-                two_sided=True,
-            )
-            summary_rows.append(
-                {
-                    "metric": metric,
-                    "direction": "higher" if direction > 0 else "lower",
-                    "method": method,
-                    "queries": len(args.query_indices),
-                    "raw_gradient_mean": float(raw.mean()),
-                    "adamw_mean": float(adamw.mean()),
-                    "oriented_adamw_improvement": float(improvement.mean()),
-                    "adamw_wins": int(np.count_nonzero(improvement > 0)),
-                    "raw_wins": int(np.count_nonzero(improvement < 0)),
-                    "ties": int(np.count_nonzero(improvement == 0)),
-                    "paired_label_swap_p1": p1,
-                    "paired_label_swap_p2": p2,
-                }
-            )
-            lines.append(
-                f"{method:30s} {raw.mean():11.6f} {adamw.mean():11.6f} "
-                f"{improvement.mean():+11.6f} "
-                f"{np.count_nonzero(improvement > 0):5d}/{len(improvement):<6d} "
-                f"{p1:11.6g} {p2:11.6g}"
-            )
+            for method_index, (method, *_unused) in enumerate(METHODS):
+                for transform_index, transform in enumerate(TRANSFORMS):
+                    top = np.asarray(
+                        [lookup[("top", method, query, transform)][metric] for query in args.query_indices],
+                        dtype=np.float64,
+                    )
+                    bottom = np.asarray(
+                        [lookup[("bottom", method, query, transform)][metric] for query in args.query_indices],
+                        dtype=np.float64,
+                    )
+                    improvement = direction * (top - bottom)
+                    seed_offset = 1000 * metric_index + 10 * method_index + transform_index
+                    p1 = label_swap(
+                        improvement,
+                        permutations=args.permutations,
+                        seed=5026 + seed_offset,
+                        two_sided=False,
+                    )
+                    p2 = label_swap(
+                        improvement,
+                        permutations=args.permutations,
+                        seed=6026 + seed_offset,
+                        two_sided=True,
+                    )
+                    summary_rows.append(
+                        {
+                            "comparison": "top_vs_bottom",
+                            "selection": "top_vs_bottom",
+                            "metric": metric,
+                            "direction": "higher" if direction > 0 else "lower",
+                            "method": method,
+                            "transform": transform,
+                            "queries": len(args.query_indices),
+                            "left_mean": float(bottom.mean()),
+                            "right_mean": float(top.mean()),
+                            "oriented_improvement": float(improvement.mean()),
+                            "right_wins": int(np.count_nonzero(improvement > 0)),
+                            "left_wins": int(np.count_nonzero(improvement < 0)),
+                            "ties": int(np.count_nonzero(improvement == 0)),
+                            "paired_label_swap_p1": p1,
+                            "paired_label_swap_p2": p2,
+                        }
+                    )
+                    display = f"{method} / {transform}"
+                    lines.append(
+                        f"{display:46s} {top.mean():11.6f} {bottom.mean():11.6f} "
+                        f"{improvement.mean():+11.6f} "
+                        f"{np.count_nonzero(improvement > 0):4d}/{len(improvement):<5d} "
+                        f"{p1:11.6g} {p2:11.6g}"
+                    )
 
     report = "\n".join(lines) + "\n"
     print("\n" + report, end="")
@@ -494,13 +609,15 @@ def main() -> None:
         json.dumps(
             {
                 "query_indices": args.query_indices,
-                "topk": args.topk,
+                "k": args.topk,
+                "selection": args.selection,
+                "feature_cache": str(feature_cache),
                 "clip_model": args.clip_model,
                 "dino_repository": args.dino_repository,
                 "dino_model": args.dino_model,
                 "lpips_network": args.lpips_net,
                 "image_size_for_pixel_and_lpips": args.image_size,
-                "definition": "mean training-image similarity/distance to the same-query full-data endpoint",
+                "definition": "mean selected training-image similarity/distance to the same-query full-data endpoint",
             },
             indent=2,
         )
