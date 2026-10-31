@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Export overlap/uniqueness for ten completed x3 true-removal arms."""
+"""Export overlap/uniqueness for the selected completed x3 removal arms."""
 
 from __future__ import annotations
 
@@ -33,12 +33,6 @@ METHODS = (
         "tracin_das_aligned_timestamp_square",
     ),
     ("PINT / RAW", "FULL-ADAMW", ADAMW_ROOT, "pint_raw"),
-    (
-        "PINT / BOTH-L2",
-        "RAW-GRADIENT",
-        ROOT / "topk_removal_raw_gradient_pint_both_endpoint_mc1_60q_10pct",
-        "pint_both_l2_raw_gradient",
-    ),
     ("PINT / BOTH-L2", "FULL-ADAMW", ADAMW_ROOT, "pint_both_l2"),
     (
         "ENDPOINT TRACIN / RAW",
@@ -145,7 +139,12 @@ def main() -> None:
         )
 
     paired: list[dict[str, object]] = []
-    conceptual_methods = tuple(dict.fromkeys(method for method, *_ in METHODS))
+    conceptual_methods = tuple(
+        method
+        for method in dict.fromkeys(method for method, *_ in METHODS)
+        if (method, "RAW-GRADIENT") in selections
+        and (method, "FULL-ADAMW") in selections
+    )
     for method in conceptual_methods:
         raw = selections[(method, "RAW-GRADIENT")]
         adamw = selections[(method, "FULL-ADAMW")]
