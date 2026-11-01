@@ -16,6 +16,10 @@ shapes="$repo/diffusion_jax_refined/3dshapes"
 python_bin="${PYTHON_BIN:-python}"
 query_file="$shapes/queries_in_distribution_plus_zero_seed_100_219.json"
 cache_namespace="simple_loss_50x1_t0_500_uniform_split_seed0"
+
+# Slurm may start the batch shell outside the repository.  Enter it before
+# importing diffusion_jax_refined to build the deterministic timestep list.
+cd "$repo"
 timesteps="$($python_bin -c 'from diffusion_jax_refined.common.predicted_noise_kl import uniform_timesteps; print(",".join(map(str, uniform_timesteps(501,50).tolist())))')"
 
 export PYTHONUNBUFFERED=1

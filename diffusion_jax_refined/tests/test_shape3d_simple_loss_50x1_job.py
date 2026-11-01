@@ -14,6 +14,7 @@ class Shape3DSimpleLoss50x1JobTest(unittest.TestCase):
             / "3dshapes/tacc/rtx_small/run_simple_loss_50x1_five_method_lds_q0_99.sh"
         ).read_text()
         self.assertIn("uniform_timesteps(501,50)", source)
+        self.assertLess(source.index('cd "$repo"'), source.index("uniform_timesteps(501,50)"))
         self.assertIn("--simple-loss-num-mc 50", source)
         self.assertIn("--uniform-split-simple-loss-probes", source)
         self.assertIn("--model-major-simple-loss", source)
