@@ -5,7 +5,7 @@
 #SBATCH -p rtx-small
 #SBATCH -A IRI26004
 #SBATCH -N 1
-#SBATCH -n 4
+#SBATCH -n 2
 #SBATCH --cpus-per-task=8
 #SBATCH -t 48:00:00
 
@@ -52,7 +52,7 @@ cd "$shapes"
   --query-ids "$query_ids" \
   --subset-seeds 0,1,2 \
   --target-functions simple_loss \
-  --gpus 0,1,2,3 \
+  --gpus 0,1 \
   --simple-loss-num-mc 100 \
   --simple-loss-mc-seed 0 \
   --simple-loss-timesteps "$timesteps" \
