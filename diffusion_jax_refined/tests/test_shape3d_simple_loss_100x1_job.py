@@ -56,6 +56,10 @@ class Shape3DSimpleLoss100x1JobTest(unittest.TestCase):
             '"delta_l2normalized_timestamp_sum_squared_aligned100x1_q0_99"',
             source,
         )
+        self.assertIn('"adamw": "ADAMW ONLY"', source)
+        self.assertIn(
+            "RAW means the unnormalized score variant", source
+        )
         self.assertNotIn(
             '"timestamp_sum_squared_q0_99"\n        )\n        pint_adamw',
             source,

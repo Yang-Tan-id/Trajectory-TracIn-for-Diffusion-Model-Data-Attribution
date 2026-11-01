@@ -380,13 +380,22 @@ def main() -> None:
         ): row
         for row in rows
     }
+    transform_title = {
+        "both": "RAW-GRADIENT AND ADAMW",
+        "raw-gradient": "RAW-GRADIENT ONLY",
+        "adamw": "ADAMW ONLY",
+    }[args.transforms]
     lines = [
-        f"{config.title} FIVE-METHOD LDS — RAW-GRADIENT AND ADAMW",
+        f"{config.title} FIVE-METHOD LDS — {transform_title}",
         "=" * 132,
         f"queries={len(query_ids)} range={min(query_ids)}..{max(query_ids)}",
         f"LDS subsets per query/target/configuration={args.expected_subsets}",
         f"expected records={expected} loaded records={len(rows)}",
         "reported LDS applies the method/transform direction multiplier shown in provenance.",
+        (
+            "In method labels, RAW means the unnormalized score variant; "
+            "it does not mean the Raw-gradient transform."
+        ),
         "Each cell is reported_lds_percent [number_of_subsets].",
         "",
     ]
