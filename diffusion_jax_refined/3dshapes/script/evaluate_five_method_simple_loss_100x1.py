@@ -117,6 +117,15 @@ def main() -> None:
         "raw-gradient": ("raw_gradient",),
         "adamw": ("adamw_full",),
     }[args.transforms]
+    available_configs = tuple(
+        (transform, method, namespace, preferred_sign)
+        for method in methods
+        for transform, namespace, preferred_sign in (
+            ("raw_gradient", method.raw_namespace, method.raw_sign),
+            ("adamw_full", method.adamw_namespace, method.adamw_sign),
+        )
+        if transform in selected_transforms and namespace is not None
+    )
     for query_id in query_ids:
         record = records[query_id]
         prompt = str(record["prompt"])
@@ -158,13 +167,7 @@ def main() -> None:
         true_f = np.asarray([row["true_f"] for row in targets], dtype=np.float64)
         query_scores = score_base / f"query_{tag}" / f"initial_seed_{seed}"
 
-        for method in methods:
-            for transform, namespace, preferred_sign in (
-                ("raw_gradient", method.raw_namespace, method.raw_sign),
-                ("adamw_full", method.adamw_namespace, method.adamw_sign),
-            ):
-                if transform not in selected_transforms:
-                    continue
+        for transform, method, namespace, preferred_sign in available_configs:
                 score_dir = query_scores / namespace / VARIANT_SCORE_DIR[method.variant]
                 inputs = resolve_score_inputs(str(score_dir))
                 indices, scores, sources = combine_attribution_scores(
@@ -221,12 +224,12 @@ def main() -> None:
                 )
                 completed += 1
                 print(
-                    f"[LDS {completed}/{len(query_ids) * len(methods) * len(selected_transforms)}] "
+                    f"[LDS {completed}/{len(query_ids) * len(available_configs)}] "
                     f"Q{query_id} "
                     f"{transform} {method.label}={100.0 * lds:+.3f}%",
                     flush=True,
                 )
-    print(f"[done] selected five-method LDS records={completed}", flush=True)
+    print(f"[done] selected LDS records={completed}", flush=True)
 
 
 if __name__ == "__main__":

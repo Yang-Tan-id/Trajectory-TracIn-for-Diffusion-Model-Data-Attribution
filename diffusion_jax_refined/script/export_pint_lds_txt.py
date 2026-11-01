@@ -37,8 +37,8 @@ class DatasetConfig:
 class MethodConfig:
     label: str
     variant: str
-    raw_namespace: str
-    adamw_namespace: str
+    raw_namespace: str | None
+    adamw_namespace: str | None
     raw_sign: str
     adamw_sign: str
     raw_multiplier: float
@@ -168,7 +168,11 @@ def method_configs(
     if dataset != "shape3d" or shape3d_pint_banks == "100x1":
         return methods
 
-    pint_10x1_namespace = (
+    pint_10x1_raw_namespace = (
+        "traj_tracin_recreate_raw_polluted_endpoint_delta_l2normalized_"
+        "timestamp_sum_squared_q0_99"
+    )
+    pint_10x1_adamw_namespace = (
         "traj_tracin_recreate_adamw_full_polluted_endpoint_delta_l2normalized_"
         "timestamp_sum_squared_q0_99"
     )
@@ -176,8 +180,8 @@ def method_configs(
         MethodConfig(
             "PINT-10x1 / RAW",
             "raw",
-            methods[0].raw_namespace,
-            pint_10x1_namespace,
+            pint_10x1_raw_namespace,
+            pint_10x1_adamw_namespace,
             methods[0].raw_sign,
             methods[0].adamw_sign,
             methods[0].raw_multiplier,
@@ -186,8 +190,8 @@ def method_configs(
         MethodConfig(
             "PINT-10x1 / BOTH-L2",
             "query_train_l2",
-            methods[1].raw_namespace,
-            pint_10x1_namespace,
+            pint_10x1_raw_namespace,
+            pint_10x1_adamw_namespace,
             methods[1].raw_sign,
             methods[1].adamw_sign,
             methods[1].raw_multiplier,
@@ -195,8 +199,8 @@ def method_configs(
         ),
     )
     pint_100x1 = (
-        replace(methods[0], label="PINT-100x1 / RAW"),
-        replace(methods[1], label="PINT-100x1 / BOTH-L2"),
+        replace(methods[0], label="PINT-100x1 / RAW", raw_namespace=None),
+        replace(methods[1], label="PINT-100x1 / BOTH-L2", raw_namespace=None),
     )
     return pint_10x1 + pint_100x1 + methods[2:]
 
@@ -360,6 +364,25 @@ def main() -> None:
         "raw-gradient": ("RAW-GRADIENT",),
         "adamw": ("ADAMW",),
     }[args.transforms]
+    available_configs = tuple(
+        (transform, method, namespace, sign, multiplier)
+        for method in methods
+        for transform, namespace, sign, multiplier in (
+            (
+                "RAW-GRADIENT",
+                method.raw_namespace,
+                method.raw_sign,
+                method.raw_multiplier,
+            ),
+            (
+                "ADAMW",
+                method.adamw_namespace,
+                method.adamw_sign,
+                method.adamw_multiplier,
+            ),
+        )
+        if transform in selected_transforms and namespace is not None
+    )
     for query_id in query_ids:
         record = records[query_id]
         prompt = str(record["prompt"])
@@ -370,61 +393,40 @@ def main() -> None:
             seed=seed,
             config=config,
         )
-        for method in methods:
-            for transform, namespace, sign, multiplier in (
-                (
-                    "RAW-GRADIENT",
-                    method.raw_namespace,
-                    method.raw_sign,
-                    method.raw_multiplier,
-                ),
-                (
-                    "ADAMW",
-                    method.adamw_namespace,
-                    method.adamw_sign,
-                    method.adamw_multiplier,
-                ),
-            ):
-                if transform not in selected_transforms:
-                    continue
-                for target in selected_targets:
-                    payload, summary_path = load_summary(
-                        query_root / f"{namespace}_{method.variant}" / target,
-                        args.expected_subsets,
-                        sign,
-                    )
-                    stored = float(payload["lds_percent"])
-                    stored_sign = prediction_sign(summary_path)
-                    effective_multiplier = (
-                        multiplier * sign_conversion(sign, stored_sign)
-                        if args.lds_orientation == "reported"
-                        else 1.0
-                    )
-                    rows.append(
-                        {
-                            "query_id": query_id,
-                            "initial_seed": seed,
-                            "method": method.label,
-                            "transform": transform,
-                            "variant": method.variant,
-                            "target": target,
-                            "stored_lds": stored,
-                            "reported_lds": effective_multiplier * stored,
-                            "report_multiplier": effective_multiplier,
-                            "num_subsets": int(payload["num_models"]),
-                            "preferred_sign": sign,
-                            "sign": stored_sign,
-                            "subset_group": summary_path.parent.name,
-                            "summary_path": str(summary_path),
-                        }
-                    )
+        for transform, method, namespace, sign, multiplier in available_configs:
+            for target in selected_targets:
+                payload, summary_path = load_summary(
+                    query_root / f"{namespace}_{method.variant}" / target,
+                    args.expected_subsets,
+                    sign,
+                )
+                stored = float(payload["lds_percent"])
+                stored_sign = prediction_sign(summary_path)
+                effective_multiplier = (
+                    multiplier * sign_conversion(sign, stored_sign)
+                    if args.lds_orientation == "reported"
+                    else 1.0
+                )
+                rows.append(
+                    {
+                        "query_id": query_id,
+                        "initial_seed": seed,
+                        "method": method.label,
+                        "transform": transform,
+                        "variant": method.variant,
+                        "target": target,
+                        "stored_lds": stored,
+                        "reported_lds": effective_multiplier * stored,
+                        "report_multiplier": effective_multiplier,
+                        "num_subsets": int(payload["num_models"]),
+                        "preferred_sign": sign,
+                        "sign": stored_sign,
+                        "subset_group": summary_path.parent.name,
+                        "summary_path": str(summary_path),
+                    }
+                )
 
-    expected = (
-        len(query_ids)
-        * len(methods)
-        * len(selected_transforms)
-        * len(selected_targets)
-    )
+    expected = len(query_ids) * len(available_configs) * len(selected_targets)
     if len(rows) != expected:
         raise RuntimeError(f"internal coverage error: {len(rows)}/{expected}")
 
@@ -463,8 +465,7 @@ def main() -> None:
     ]
     columns = tuple(
         (f"{transform} / {method.label}", transform, method.label)
-        for transform in selected_transforms
-        for method in methods
+        for transform, method, _, _, _ in available_configs
     )
     for target in selected_targets:
         lines.extend([target.upper(), "-" * 132])

@@ -57,7 +57,7 @@ export JAX_PLATFORMS=cpu
   --expected-probes 50 \
   --target-name simple_loss_50x1 \
   --shape3d-pint-banks both \
-  --transforms adamw
+  --transforms both
 
 cd "$repo"
 "$python_bin" diffusion_jax_refined/script/export_pint_lds_txt.py \
@@ -67,7 +67,7 @@ cd "$repo"
   --expected-subsets 192 \
   --targets endpoint_contarfactual,traj_contarfactual,simple_loss_50x1,noise_trajectory \
   --shape3d-pint-banks both \
-  --transforms adamw \
-  --output "$repo/shape3d_seven_config_lds_all_targets_simple_loss_50x1_t0_500_q0_99.txt"
+  --transforms both \
+  --output "$repo/shape3d_twelve_config_lds_all_targets_simple_loss_50x1_t0_500_q0_99.txt"
 
-echo "[done] $repo/shape3d_seven_config_lds_all_targets_simple_loss_50x1_t0_500_q0_99.txt"
+echo "[done] $repo/shape3d_twelve_config_lds_all_targets_simple_loss_50x1_t0_500_q0_99.txt"

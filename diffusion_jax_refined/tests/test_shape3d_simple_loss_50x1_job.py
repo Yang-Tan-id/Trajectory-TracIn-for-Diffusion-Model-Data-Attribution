@@ -19,7 +19,7 @@ class Shape3DSimpleLoss50x1JobTest(unittest.TestCase):
         self.assertIn("--model-major-simple-loss", source)
         self.assertIn("--expected-probes 50", source)
         self.assertIn("--target-name simple_loss_50x1", source)
-        self.assertEqual(source.count("--transforms adamw"), 2)
+        self.assertEqual(source.count("--transforms both"), 2)
         self.assertEqual(source.count("--shape3d-pint-banks both"), 2)
         self.assertIn(
             "endpoint_contarfactual,traj_contarfactual,simple_loss_50x1,noise_trajectory",
@@ -27,7 +27,7 @@ class Shape3DSimpleLoss50x1JobTest(unittest.TestCase):
         )
         self.assertIn("simple_loss_50x1_t0_500_uniform_split_seed0", source)
         self.assertIn(
-            "shape3d_seven_config_lds_all_targets_simple_loss_50x1_t0_500_q0_99.txt",
+            "shape3d_twelve_config_lds_all_targets_simple_loss_50x1_t0_500_q0_99.txt",
             source,
         )
 
@@ -41,6 +41,11 @@ class Shape3DSimpleLoss50x1JobTest(unittest.TestCase):
         source = (ROOT / "script/export_pint_lds_txt.py").read_text()
         self.assertIn('"PINT-10x1 / RAW"', source)
         self.assertIn('"PINT-100x1 / RAW"', source)
+        self.assertIn("raw_namespace=None", source)
+        self.assertIn(
+            '"traj_tracin_recreate_raw_polluted_endpoint_delta_l2normalized_"',
+            source,
+        )
         self.assertIn('"timestamp_sum_squared_q0_99"', source)
         self.assertIn("--shape3d-pint-banks", source)
 
