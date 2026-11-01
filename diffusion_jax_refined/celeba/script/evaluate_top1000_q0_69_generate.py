@@ -145,6 +145,36 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         writer.writerows(rows)
 
 
+def trajectory_file_matches(path: Path, expected_timesteps: np.ndarray) -> bool:
+    if not path.is_file():
+        return False
+    try:
+        with np.load(path) as payload:
+            states = np.asarray(payload["states"])
+            timesteps = np.asarray(payload["timesteps"], dtype=np.int32)
+    except (KeyError, OSError, ValueError):
+        return False
+    return (
+        states.shape[0] == len(expected_timesteps)
+        and np.array_equal(timesteps, expected_timesteps)
+    )
+
+
+def completed_query_has_step_count(query_output: Path, expected_steps: int) -> bool:
+    complete_path = query_output / "METRICS_GENERATION_COMPLETE"
+    metrics_path = query_output / "pixel_trajectory_metrics.csv"
+    if not complete_path.is_file() or not metrics_path.is_file():
+        return False
+    try:
+        with metrics_path.open(newline="", encoding="utf-8") as handle:
+            rows = list(csv.DictReader(handle))
+        return len(rows) == len(METHODS) and all(
+            int(row["trajectory_steps"]) == expected_steps for row in rows
+        )
+    except (KeyError, OSError, TypeError, ValueError):
+        return False
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--query-file", type=Path, required=True)
@@ -152,7 +182,7 @@ def main() -> None:
     parser.add_argument("--experiment", default="attr40_experiment1")
     parser.add_argument("--train-seed", type=int, default=42)
     parser.add_argument("--epochs", type=int, default=200)
-    parser.add_argument("--trajectory-steps", type=int, default=10)
+    parser.add_argument("--trajectory-steps", type=int, default=50)
     parser.add_argument("--prefer-device", default="gpu")
     parser.add_argument("--output-dir", type=Path)
     args = parser.parse_args()
@@ -184,9 +214,16 @@ def main() -> None:
         query_output = output_dir / f"query_{query_id:03d}_seed_{seed:03d}"
         query_output.mkdir(parents=True, exist_ok=True)
         complete_path = query_output / "METRICS_GENERATION_COMPLETE"
-        if complete_path.is_file():
+        if completed_query_has_step_count(query_output, args.trajectory_steps):
             print(f"[skip complete] Q{query_id}", flush=True)
             continue
+        if complete_path.is_file():
+            complete_path.unlink()
+            print(
+                f"[stale] Q{query_id} does not contain "
+                f"{args.trajectory_steps}-state metrics; regenerating",
+                flush=True,
+            )
 
         reference_root = (
             result_root
@@ -235,7 +272,10 @@ def main() -> None:
             checkpoint = local_checkpoint(run_dir, args.train_seed, args.epochs)
             output_npz = query_output / f"{method}_trajectory.npz"
             output_png = query_output / f"{method}_endpoint.png"
-            if output_npz.is_file() and output_png.is_file():
+            if (
+                output_png.is_file()
+                and trajectory_file_matches(output_npz, timesteps)
+            ):
                 with np.load(output_npz) as payload:
                     candidate = np.asarray(payload["states"], dtype=np.float32)
                 print(f"[reuse] Q{query_id} {METHOD_LABELS[method]}", flush=True)

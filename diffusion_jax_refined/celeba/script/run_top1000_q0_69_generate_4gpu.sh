@@ -29,7 +29,7 @@ for slot in "${!gpus[@]}"; do
   CUDA_VISIBLE_DEVICES="$gpu" "$py" "$script" \
     --query-file "$query_file" \
     --query-ids "$query_ids" \
-    --trajectory-steps 10 \
+    --trajectory-steps 50 \
     --output-dir "$output_dir" \
     >"$log" 2>&1 &
   pids+=("$!")

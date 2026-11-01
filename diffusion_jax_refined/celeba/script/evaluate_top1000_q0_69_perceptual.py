@@ -153,8 +153,10 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
 
 
 def write_report(path: Path, rows: list[dict[str, Any]]) -> None:
+    query_ids = sorted({int(row["query_id"]) for row in rows})
+    query_range = f"Q{query_ids[0]}-Q{query_ids[-1]}"
     lines = [
-        "CELEBA Q0-Q69 FULL-10K TOP-1000 REMOVAL — FIVE METRIC FAMILIES",
+        f"CELEBA {query_range} FULL-10K TOP-1000 REMOVAL — FIVE METRIC FAMILIES",
         "Larger values mean a larger change from the full-data model.",
         "",
         (
@@ -209,6 +211,11 @@ def main() -> None:
     print("[metric] LPIPS complete", flush=True)
 
     pixel_rows = read_pixel_rows(query_dirs)
+    trajectory_steps = {int(row["trajectory_steps"]) for row in pixel_rows}
+    if trajectory_steps != {50}:
+        raise ValueError(
+            f"expected 50-state trajectory metrics, found {sorted(trajectory_steps)}"
+        )
     by_key = {(int(row["query_id"]), row["method"]): row for row in pixel_rows}
     rows = []
     for query_id in args.query_ids:
@@ -240,6 +247,7 @@ def main() -> None:
                 "lpips_network": args.lpips_net,
                 "dino_repository": args.dino_repository,
                 "dino_model": args.dino_model,
+                "trajectory_steps": 50,
             },
             indent=2,
         )

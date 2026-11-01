@@ -7,6 +7,7 @@ ROOT = Path(__file__).resolve().parents[2]
 GENERATOR = ROOT / "diffusion_jax_refined/celeba/script/evaluate_top1000_q0_69_generate.py"
 PERCEPTUAL = ROOT / "diffusion_jax_refined/celeba/script/evaluate_top1000_q0_69_perceptual.py"
 RUNNER = ROOT / "diffusion_jax_refined/celeba/script/run_top1000_q0_69_generate_4gpu.sh"
+Q0_59_RUNNER = ROOT / "diffusion_jax_refined/celeba/script/run_top1000_q0_59_five_method_metrics_4gpu.sh"
 
 
 class CelebaTop1000MetricsTest(unittest.TestCase):
@@ -28,7 +29,7 @@ class CelebaTop1000MetricsTest(unittest.TestCase):
             self.assertIn(method, generator)
             self.assertIn(method, perceptual)
 
-    def test_generator_uses_local_checkpoint_and_ten_step_resume(self):
+    def test_generator_uses_local_checkpoint_and_fifty_step_resume(self):
         source = GENERATOR.read_text(encoding="utf-8")
         self.assertIn('run_dir / "model"', source)
         self.assertNotIn('metrics["removal_checkpoint"]', source)
@@ -39,6 +40,9 @@ class CelebaTop1000MetricsTest(unittest.TestCase):
         self.assertIn("per_step_mse", source)
         self.assertIn("endpoint_pixel_metrics", source)
         self.assertIn("display_image(reference)", source)
+        self.assertIn('default=50', source)
+        self.assertIn("completed_query_has_step_count", source)
+        self.assertIn("trajectory_file_matches", source)
 
     def test_all_requested_metrics_are_emitted(self):
         source = PERCEPTUAL.read_text(encoding="utf-8")
@@ -57,6 +61,15 @@ class CelebaTop1000MetricsTest(unittest.TestCase):
         source = RUNNER.read_text(encoding="utf-8")
         self.assertIn("GPU_IDS:-0,5,6,7", source)
         self.assertIn('count" == "70"', source)
+
+    def test_q0_59_runner_uses_full_fifty_state_trajectory(self):
+        source = Q0_59_RUNNER.read_text(encoding="utf-8")
+        self.assertIn("GPU_IDS:-0,1,2,3", source)
+        self.assertIn("query_id<60", source)
+        self.assertIn("--trajectory-steps 50", source)
+        self.assertIn("celeba_q0_59_five_method_metrics", source)
+        self.assertIn('count" == "60"', source)
+        self.assertIn("evaluate_top1000_q0_69_perceptual.py", source)
 
 
 if __name__ == "__main__":
