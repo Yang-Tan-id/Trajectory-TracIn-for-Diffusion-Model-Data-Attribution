@@ -15,15 +15,15 @@ repo="${REPO_ROOT:-${SLURM_SUBMIT_DIR:-$PWD}}"
 shapes="$repo/diffusion_jax_refined/3dshapes"
 python_bin="${PYTHON_BIN:-python}"
 query_file="$shapes/queries_in_distribution_plus_zero_seed_100_219.json"
-cache_namespace="simple_loss_50x1_uniform_split_seed0"
-timesteps="$($python_bin -c 'from diffusion_jax_refined.common.predicted_noise_kl import uniform_timesteps; print(",".join(map(str, uniform_timesteps(1000,50).tolist())))')"
+cache_namespace="simple_loss_50x1_t0_500_uniform_split_seed0"
+timesteps="$($python_bin -c 'from diffusion_jax_refined.common.predicted_noise_kl import uniform_timesteps; print(",".join(map(str, uniform_timesteps(501,50).tolist())))')"
 
 export PYTHONUNBUFFERED=1
 export TF_GPU_ALLOCATOR="${TF_GPU_ALLOCATOR:-cuda_malloc_async}"
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 export SIMPLE_LOSS_EVAL_CHUNK_SIZE="${SIMPLE_LOSS_EVAL_CHUNK_SIZE:-50}"
 
-echo "[definition] Shape3D simple-loss LDS target: CelebA-matched uniform 50x1"
+echo "[definition] Shape3D simple-loss LDS target: 50 uniform timesteps over inclusive range t=0..500 x MC1"
 echo "[definition] noise keys: jax.random.split(PRNGKey(0), 50), shared by every query/model"
 echo "[cache] $cache_namespace"
 echo "[order] checkpoint-major: one restore followed by all 100 queries"
@@ -66,6 +66,6 @@ cd "$repo"
   --expected-subsets 192 \
   --targets simple_loss_50x1 \
   --transforms adamw \
-  --output "$repo/shape3d_five_method_lds_simple_loss_50x1_q0_99.txt"
+  --output "$repo/shape3d_five_method_lds_simple_loss_50x1_t0_500_q0_99.txt"
 
-echo "[done] $repo/shape3d_five_method_lds_simple_loss_50x1_q0_99.txt"
+echo "[done] $repo/shape3d_five_method_lds_simple_loss_50x1_t0_500_q0_99.txt"
