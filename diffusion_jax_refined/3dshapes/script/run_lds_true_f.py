@@ -67,6 +67,7 @@ def main() -> None:
     parser.add_argument("--simple-loss-timesteps")
     parser.add_argument("--simple-loss-noise-seeds")
     parser.add_argument("--pair-simple-loss-probes", action="store_true")
+    parser.add_argument("--uniform-split-simple-loss-probes", action="store_true")
     parser.add_argument("--target-cache-namespace", default="")
     parser.add_argument(
         "--model-major-simple-loss",
@@ -177,6 +178,8 @@ def main() -> None:
                 "--target-cache-namespace",
                 args.target_cache_namespace,
             ]
+            if args.uniform_split_simple_loss_probes:
+                command.append("--uniform-split-probes")
             print(
                 f"[command] gpu={gpu} model-major shard="
                 f"{shard_index}/{len(gpu_ids)} queries={len(selected)}",

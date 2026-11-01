@@ -71,6 +71,8 @@ def main() -> None:
         "--cache-namespace", default="simple_loss_100x1_shared_seed0"
     )
     parser.add_argument("--expected-models", type=int, default=192)
+    parser.add_argument("--expected-probes", type=int, default=100)
+    parser.add_argument("--target-name", default="simple_loss_100x1")
     parser.add_argument(
         "--transforms",
         choices=("both", "raw-gradient", "adamw"),
@@ -132,10 +134,10 @@ def main() -> None:
             path = group / "simple_loss" / f"target_{model_id:04d}.json"
             payload = json.loads(path.read_text())
             details = payload.get("target_details", {})
-            if int(details.get("simple_loss_num_mc_terms", -1)) != 100:
-                raise ValueError(f"{path}: target is not 100x1 simple loss")
-            if not details.get("simple_loss_paired_timesteps_noise", False):
-                raise ValueError(f"{path}: probes are not paired 100x1")
+            if int(details.get("simple_loss_num_mc_terms", -1)) != args.expected_probes:
+                raise ValueError(
+                    f"{path}: target does not contain {args.expected_probes} probes"
+                )
             subset_dir = Path(payload["subset_dir"])
             targets.append(
                 {
@@ -184,7 +186,7 @@ def main() -> None:
                     query_eval
                     / "lds"
                     / f"{namespace}_{method.variant}"
-                    / "simple_loss_100x1"
+                    / args.target_name
                     / f"pred_kept_sign_{preferred_sign}"
                     / group.name
                 )
@@ -196,9 +198,9 @@ def main() -> None:
                         "algorithm": f"{namespace}_{method.variant}",
                         "method_label": method.label,
                         "transform": transform,
-                        "target_function": "simple_loss_100x1",
+                        "target_function": args.target_name,
                         "target_definition": (
-                            "mean simple denoising loss over 100 uniformly "
+                            f"mean simple denoising loss over {args.expected_probes} uniformly "
                             "spaced timesteps with one independent shared probe per timestep"
                         ),
                         "target_cache": str(group / "simple_loss"),

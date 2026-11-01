@@ -81,16 +81,22 @@ def cache_matches_probe_contract(
     cached: tuple[float, dict[str, object]] | None,
     timesteps: list[int],
     noise_seeds: list[int],
+    uniform_split_probes: bool,
 ) -> bool:
     if cached is None:
         return False
     _, details = cached
-    return (
+    common = (
         int(details.get("simple_loss_num_mc_terms", -1)) == len(timesteps)
-        and bool(details.get("simple_loss_paired_timesteps_noise", False))
-        and details.get("simple_loss_probe_construction") == "paired_zip"
         and [int(value) for value in details.get("simple_loss_sampled_timesteps", [])]
         == timesteps
+    )
+    if uniform_split_probes:
+        return common and details.get("simple_loss_probe_construction") == "uniform_timesteps_jax_split"
+    return (
+        common
+        and bool(details.get("simple_loss_paired_timesteps_noise", False))
+        and details.get("simple_loss_probe_construction") == "paired_zip"
         and [int(value) for value in details.get("simple_loss_noise_key_seeds", [])]
         == noise_seeds
     )
@@ -108,6 +114,7 @@ def main() -> None:
     parser.add_argument("--simple-loss-timesteps", required=True)
     parser.add_argument("--simple-loss-noise-seeds", required=True)
     parser.add_argument("--simple-loss-mc-seed", type=int, default=0)
+    parser.add_argument("--uniform-split-probes", action="store_true")
     parser.add_argument("--target-cache-namespace", required=True)
     args = parser.parse_args()
 
@@ -115,7 +122,7 @@ def main() -> None:
     subset_seeds = parse_ints(args.subset_seeds)
     timesteps = parse_ints(args.simple_loss_timesteps)
     noise_seeds = parse_ints(args.simple_loss_noise_seeds)
-    if len(timesteps) != len(noise_seeds):
+    if not args.uniform_split_probes and len(timesteps) != len(noise_seeds):
         raise ValueError("paired timestep/noise lists must have equal length")
     if not 0 <= args.model_shard_index < args.model_shard_count:
         raise ValueError("invalid model shard")
@@ -178,6 +185,7 @@ def main() -> None:
         simple_loss_mc_seed=args.simple_loss_mc_seed,
         trajectory_sampler="ddim_eta0",
         simple_loss_pair_timesteps_noise=True,
+        simple_loss_uniform_split_probes=args.uniform_split_probes,
     )
 
     total_pairs = len(subset_records) * len(queries)
@@ -213,7 +221,9 @@ def main() -> None:
                 target_function="simple_loss",
                 trajectory_sampler="ddim_eta0",
             )
-            if not cache_matches_probe_contract(cached, timesteps, noise_seeds):
+            if not cache_matches_probe_contract(
+                cached, timesteps, noise_seeds, args.uniform_split_probes
+            ):
                 missing.append((query, cache_path))
             else:
                 processed += 1

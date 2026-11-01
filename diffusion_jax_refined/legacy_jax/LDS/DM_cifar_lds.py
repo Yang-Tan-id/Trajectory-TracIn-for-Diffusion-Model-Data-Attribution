@@ -681,6 +681,7 @@ class CifarTargetEvaluator:
         predicted_noise_kl_mc_seed: int = 0,
         ddim_aux_eta: float = 1.0,
         simple_loss_pair_timesteps_noise: bool = False,
+        simple_loss_uniform_split_probes: bool = False,
     ):
         self.code_file = code_file
         self.base_checkpoint = base_checkpoint
@@ -701,6 +702,9 @@ class CifarTargetEvaluator:
         self.simple_loss_pair_timesteps_noise = bool(
             simple_loss_pair_timesteps_noise
         )
+        self.simple_loss_uniform_split_probes = bool(
+            simple_loss_uniform_split_probes
+        )
         self.predicted_noise_kl_num_directions = int(
             predicted_noise_kl_num_directions
         )
@@ -713,6 +717,13 @@ class CifarTargetEvaluator:
             raise ValueError("simple_loss_timesteps must contain at least one timestep.")
         if self.simple_loss_num_mc <= 0:
             raise ValueError("simple_loss_num_mc must be positive.")
+        if (
+            self.simple_loss_uniform_split_probes
+            and len(self.simple_loss_timesteps) != self.simple_loss_num_mc
+        ):
+            raise ValueError(
+                "uniform split simple-loss probes require one timestep per MC term"
+            )
         if self.simple_loss_pair_timesteps_noise:
             if self.simple_loss_noise_seeds is None:
                 raise ValueError(
@@ -1074,7 +1085,17 @@ class CifarTargetEvaluator:
         target_params = target_adapter.state.ema_params
         cond = self.base_adapter.make_condition(prompt=prompt, batch_size=1)
 
-        if self.simple_loss_noise_seeds is None:
+        if self.simple_loss_uniform_split_probes:
+            t_values_np = np.asarray(self.simple_loss_timesteps, dtype=np.int32)
+            key_seeds = None
+            rng_keys = jax.device_put(
+                jax.random.split(
+                    jax.random.PRNGKey(self.simple_loss_mc_seed),
+                    len(t_values_np),
+                ),
+                self.device,
+            )
+        elif self.simple_loss_noise_seeds is None:
             rng = np.random.default_rng(self.simple_loss_mc_seed)
             t_values_np = rng.choice(
                 np.asarray(self.simple_loss_timesteps, dtype=np.int32),
@@ -1100,13 +1121,14 @@ class CifarTargetEvaluator:
                 [seed for _, seed in probe_pairs], dtype=np.int32
             )
 
-        rng_keys = jax.device_put(
-            jnp.stack(
-                [jax.random.PRNGKey(int(seed)) for seed in key_seeds.tolist()],
-                axis=0,
-            ),
-            self.device,
-        )
+        if not self.simple_loss_uniform_split_probes:
+            rng_keys = jax.device_put(
+                jnp.stack(
+                    [jax.random.PRNGKey(int(seed)) for seed in key_seeds.tolist()],
+                    axis=0,
+                ),
+                self.device,
+            )
         t_values = jax.device_put(
             jnp.asarray(t_values_np, dtype=jnp.int32), self.device
         )
@@ -1143,7 +1165,7 @@ class CifarTargetEvaluator:
             ],
             "simple_loss_noise_key_seeds": [
                 int(seed) for seed in key_seeds.tolist()
-            ],
+            ] if key_seeds is not None else None,
             "simple_loss_num_mc_terms": int(len(t_values_np)),
             "simple_loss_eval_chunk_size": (
                 int(chunk_size) if chunk_size else int(len(t_values_np))
@@ -1154,9 +1176,13 @@ class CifarTargetEvaluator:
                 self.simple_loss_pair_timesteps_noise
             ),
             "simple_loss_probe_construction": (
-                "paired_zip"
-                if self.simple_loss_pair_timesteps_noise
-                else "cartesian_product"
+                "uniform_timesteps_jax_split"
+                if self.simple_loss_uniform_split_probes
+                else (
+                    "paired_zip"
+                    if self.simple_loss_pair_timesteps_noise
+                    else "cartesian_product"
+                )
             ),
         }
         return float(value), details
