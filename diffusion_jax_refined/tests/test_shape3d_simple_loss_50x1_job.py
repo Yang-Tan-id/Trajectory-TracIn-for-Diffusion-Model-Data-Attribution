@@ -20,14 +20,29 @@ class Shape3DSimpleLoss50x1JobTest(unittest.TestCase):
         self.assertIn("--expected-probes 50", source)
         self.assertIn("--target-name simple_loss_50x1", source)
         self.assertEqual(source.count("--transforms adamw"), 2)
+        self.assertEqual(source.count("--shape3d-pint-banks both"), 2)
+        self.assertIn(
+            "endpoint_contarfactual,traj_contarfactual,simple_loss_50x1,noise_trajectory",
+            source,
+        )
         self.assertIn("simple_loss_50x1_t0_500_uniform_split_seed0", source)
-        self.assertIn("simple_loss_50x1_t0_500_q0_99.txt", source)
+        self.assertIn(
+            "shape3d_seven_config_lds_all_targets_simple_loss_50x1_t0_500_q0_99.txt",
+            source,
+        )
 
     def test_core_uses_jax_split_keys(self) -> None:
         source = (ROOT / "legacy_jax/LDS/DM_cifar_lds.py").read_text()
         self.assertIn("simple_loss_uniform_split_probes", source)
         self.assertIn('"uniform_timesteps_jax_split"', source)
         self.assertIn("jax.random.split(", source)
+
+    def test_exporter_has_both_shape3d_pint_banks(self) -> None:
+        source = (ROOT / "script/export_pint_lds_txt.py").read_text()
+        self.assertIn('"PINT-10x1 / RAW"', source)
+        self.assertIn('"PINT-100x1 / RAW"', source)
+        self.assertIn('"timestamp_sum_squared_q0_99"', source)
+        self.assertIn("--shape3d-pint-banks", source)
 
 
 if __name__ == "__main__":

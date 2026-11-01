@@ -79,6 +79,11 @@ def main() -> None:
         default="both",
         help="Evaluate both score transforms or only the selected transform.",
     )
+    parser.add_argument(
+        "--shape3d-pint-banks",
+        choices=("100x1", "both"),
+        default="100x1",
+    )
     args = parser.parse_args()
 
     legacy_root = REFINE_ROOT / "legacy_jax"
@@ -94,7 +99,9 @@ def main() -> None:
 
     records = json.loads(args.query_file.read_text())["queries"]
     query_ids = parse_ids(args.query_ids)
-    methods = method_configs("shape3d")
+    methods = method_configs(
+        "shape3d", shape3d_pint_banks=args.shape3d_pint_banks
+    )
     result_root = SHAPES_ROOT / "result" / args.experiment
     eval_root = result_root / "eval" / "prompted_solo"
     score_base = (

@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 from pathlib import Path
 import re
@@ -65,7 +65,11 @@ CONFIGS = {
 }
 
 
-def method_configs(dataset: str) -> tuple[MethodConfig, ...]:
+def method_configs(
+    dataset: str, *, shape3d_pint_banks: str = "100x1"
+) -> tuple[MethodConfig, ...]:
+    if shape3d_pint_banks not in {"100x1", "both"}:
+        raise ValueError(f"unsupported Shape3D PINT bank selection: {shape3d_pint_banks}")
     if dataset == "shape3d":
         pint_raw = (
             "traj_tracin_recreate_raw_polluted_endpoint_delta_l2normalized_"
@@ -116,7 +120,7 @@ def method_configs(dataset: str) -> tuple[MethodConfig, ...]:
         pint_signs = ("m1", "p1")
         baseline_signs = ("m1", "p1")
         pint_multipliers = (1.0, 1.0)
-    return (
+    methods = (
         MethodConfig(
             "PINT / RAW",
             "raw",
@@ -161,6 +165,40 @@ def method_configs(dataset: str) -> tuple[MethodConfig, ...]:
             -1.0,
         ),
     )
+    if dataset != "shape3d" or shape3d_pint_banks == "100x1":
+        return methods
+
+    pint_10x1_namespace = (
+        "traj_tracin_recreate_adamw_full_polluted_endpoint_delta_l2normalized_"
+        "timestamp_sum_squared_q0_99"
+    )
+    pint_10x1 = (
+        MethodConfig(
+            "PINT-10x1 / RAW",
+            "raw",
+            methods[0].raw_namespace,
+            pint_10x1_namespace,
+            methods[0].raw_sign,
+            methods[0].adamw_sign,
+            methods[0].raw_multiplier,
+            methods[0].adamw_multiplier,
+        ),
+        MethodConfig(
+            "PINT-10x1 / BOTH-L2",
+            "query_train_l2",
+            methods[1].raw_namespace,
+            pint_10x1_namespace,
+            methods[1].raw_sign,
+            methods[1].adamw_sign,
+            methods[1].raw_multiplier,
+            methods[1].adamw_multiplier,
+        ),
+    )
+    pint_100x1 = (
+        replace(methods[0], label="PINT-100x1 / RAW"),
+        replace(methods[1], label="PINT-100x1 / BOTH-L2"),
+    )
+    return pint_10x1 + pint_100x1 + methods[2:]
 
 
 def prompt_tag(prompt: str, config: DatasetConfig) -> str:
@@ -187,6 +225,21 @@ def parse_args() -> argparse.Namespace:
         choices=("both", "raw-gradient", "adamw"),
         default="both",
         help="Export both transforms or only one transform.",
+    )
+    parser.add_argument(
+        "--shape3d-pint-banks",
+        choices=("100x1", "both"),
+        default="100x1",
+        help="For Shape3D, export the 100x1 PINT bank or both 10x1 and 100x1.",
+    )
+    parser.add_argument(
+        "--lds-orientation",
+        choices=("reported", "stored"),
+        default="reported",
+        help=(
+            "Use legacy method/transform direction multipliers (reported), or "
+            "emit the Spearman correlation stored by the LDS evaluator unchanged."
+        ),
     )
     parser.add_argument("--output", type=Path)
     return parser.parse_args()
@@ -283,7 +336,9 @@ def main() -> None:
     result_root = (
         args.result_root or dataset_root / "result" / config.experiment
     ).expanduser().resolve()
-    methods = method_configs(args.dataset)
+    methods = method_configs(
+        args.dataset, shape3d_pint_banks=args.shape3d_pint_banks
+    )
     query_ids = parse_query_ids(args.query_ids)
     selected_targets = tuple(
         value for value in args.targets.replace(",", " ").split() if value
@@ -340,8 +395,10 @@ def main() -> None:
                     )
                     stored = float(payload["lds_percent"])
                     stored_sign = prediction_sign(summary_path)
-                    effective_multiplier = multiplier * sign_conversion(
-                        sign, stored_sign
+                    effective_multiplier = (
+                        multiplier * sign_conversion(sign, stored_sign)
+                        if args.lds_orientation == "reported"
+                        else 1.0
                     )
                     rows.append(
                         {
@@ -391,7 +448,12 @@ def main() -> None:
         f"queries={len(query_ids)} range={min(query_ids)}..{max(query_ids)}",
         f"LDS subsets per query/target/configuration={args.expected_subsets}",
         f"expected records={expected} loaded records={len(rows)}",
-        "reported LDS applies the method/transform direction multiplier shown in provenance.",
+        (
+            "LDS values are the Spearman correlations stored by the evaluator "
+            "without a direction multiplier."
+            if args.lds_orientation == "stored"
+            else "reported LDS applies the method/transform direction multiplier shown in provenance."
+        ),
         (
             "In method labels, RAW means the unnormalized score variant; "
             "it does not mean the Raw-gradient transform."

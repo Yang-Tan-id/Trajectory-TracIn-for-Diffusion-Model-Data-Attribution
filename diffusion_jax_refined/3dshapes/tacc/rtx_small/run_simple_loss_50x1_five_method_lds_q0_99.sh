@@ -56,6 +56,7 @@ export JAX_PLATFORMS=cpu
   --expected-models 192 \
   --expected-probes 50 \
   --target-name simple_loss_50x1 \
+  --shape3d-pint-banks both \
   --transforms adamw
 
 cd "$repo"
@@ -64,8 +65,9 @@ cd "$repo"
   --repo-root "$repo" \
   --query-ids 0-99 \
   --expected-subsets 192 \
-  --targets simple_loss_50x1 \
+  --targets endpoint_contarfactual,traj_contarfactual,simple_loss_50x1,noise_trajectory \
+  --shape3d-pint-banks both \
   --transforms adamw \
-  --output "$repo/shape3d_five_method_lds_simple_loss_50x1_t0_500_q0_99.txt"
+  --output "$repo/shape3d_seven_config_lds_all_targets_simple_loss_50x1_t0_500_q0_99.txt"
 
-echo "[done] $repo/shape3d_five_method_lds_simple_loss_50x1_t0_500_q0_99.txt"
+echo "[done] $repo/shape3d_seven_config_lds_all_targets_simple_loss_50x1_t0_500_q0_99.txt"
