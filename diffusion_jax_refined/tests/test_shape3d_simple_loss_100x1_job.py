@@ -72,6 +72,10 @@ class Shape3DSimpleLoss100x1JobTest(unittest.TestCase):
         self.assertLess(checkpoint_loop, adapter_load)
         self.assertLess(adapter_load, query_loop)
         self.assertIn("evaluate_simple_loss_with_adapter", source)
+        self.assertIn("cache_matches_probe_contract", source)
+        self.assertIn('simple_loss_num_mc_terms", -1', source)
+        self.assertIn("simple_loss_sampled_timesteps", source)
+        self.assertIn("simple_loss_noise_key_seeds", source)
 
 
 if __name__ == "__main__":

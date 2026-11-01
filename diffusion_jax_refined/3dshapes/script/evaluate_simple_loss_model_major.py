@@ -77,6 +77,25 @@ def load_endpoint(sample_dir: Path, seed: int) -> np.ndarray:
     return np.asarray(trajectory[-1:, 0:1], dtype=np.float32).copy()
 
 
+def cache_matches_probe_contract(
+    cached: tuple[float, dict[str, object]] | None,
+    timesteps: list[int],
+    noise_seeds: list[int],
+) -> bool:
+    if cached is None:
+        return False
+    _, details = cached
+    return (
+        int(details.get("simple_loss_num_mc_terms", -1)) == len(timesteps)
+        and bool(details.get("simple_loss_paired_timesteps_noise", False))
+        and details.get("simple_loss_probe_construction") == "paired_zip"
+        and [int(value) for value in details.get("simple_loss_sampled_timesteps", [])]
+        == timesteps
+        and [int(value) for value in details.get("simple_loss_noise_key_seeds", [])]
+        == noise_seeds
+    )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--experiment", default="experiment1")
@@ -194,7 +213,7 @@ def main() -> None:
                 target_function="simple_loss",
                 trajectory_sampler="ddim_eta0",
             )
-            if cached is None:
+            if not cache_matches_probe_contract(cached, timesteps, noise_seeds):
                 missing.append((query, cache_path))
             else:
                 processed += 1
