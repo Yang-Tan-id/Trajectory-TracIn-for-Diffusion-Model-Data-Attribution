@@ -42,6 +42,8 @@ class Shape3DSimpleLoss100x1JobTest(unittest.TestCase):
         )
         self.assertNotIn('"query_l2":', source)
         self.assertNotIn('"train_l2":', source)
+        self.assertIn('choices=("both", "raw-gradient", "adamw")', source)
+        self.assertIn("if transform not in selected_transforms", source)
 
     def test_shape3d_pint_scores_are_aligned_100x1(self) -> None:
         source = (

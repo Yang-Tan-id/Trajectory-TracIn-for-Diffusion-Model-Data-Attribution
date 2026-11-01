@@ -71,6 +71,12 @@ def main() -> None:
         "--cache-namespace", default="simple_loss_100x1_shared_seed0"
     )
     parser.add_argument("--expected-models", type=int, default=192)
+    parser.add_argument(
+        "--transforms",
+        choices=("both", "raw-gradient", "adamw"),
+        default="both",
+        help="Evaluate both score transforms or only the selected transform.",
+    )
     args = parser.parse_args()
 
     legacy_root = REFINE_ROOT / "legacy_jax"
@@ -97,6 +103,11 @@ def main() -> None:
     )
 
     completed = 0
+    selected_transforms = {
+        "both": ("raw_gradient", "adamw_full"),
+        "raw-gradient": ("raw_gradient",),
+        "adamw": ("adamw_full",),
+    }[args.transforms]
     for query_id in query_ids:
         record = records[query_id]
         prompt = str(record["prompt"])
@@ -143,6 +154,8 @@ def main() -> None:
                 ("raw_gradient", method.raw_namespace, method.raw_sign),
                 ("adamw_full", method.adamw_namespace, method.adamw_sign),
             ):
+                if transform not in selected_transforms:
+                    continue
                 score_dir = query_scores / namespace / VARIANT_SCORE_DIR[method.variant]
                 inputs = resolve_score_inputs(str(score_dir))
                 indices, scores, sources = combine_attribution_scores(
@@ -199,7 +212,8 @@ def main() -> None:
                 )
                 completed += 1
                 print(
-                    f"[LDS {completed}/{len(query_ids) * 10}] Q{query_id} "
+                    f"[LDS {completed}/{len(query_ids) * len(methods) * len(selected_transforms)}] "
+                    f"Q{query_id} "
                     f"{transform} {method.label}={100.0 * lds:+.3f}%",
                     flush=True,
                 )
