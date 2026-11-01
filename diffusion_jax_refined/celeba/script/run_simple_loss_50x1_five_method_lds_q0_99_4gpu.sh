@@ -18,10 +18,12 @@ report="$repo/celeba_five_method_lds_q0_99_all.txt"
 mkdir -p "$output_dir"
 cd "$repo"
 export PYTHONUNBUFFERED=1
+export LDS_ALLOW_PROMPT_MISMATCH="${LDS_ALLOW_PROMPT_MISMATCH:-1}"
 
 echo "[definition] CelebA simple-loss LDS target: original 50 uniformly spaced timesteps x MC1"
 echo "[definition] timesteps=np.linspace(999,0,50,dtype=int32); base probe seed=2026"
 echo "[definition] query seed=2026+100003*query_id; probes shared across all 192 models"
+echo "[compatibility] using legacy 80-character query paths; prompt mismatch check disabled"
 echo "[scope] Q0-Q99; only five listed methods x raw-gradient/AdamW are scored"
 echo "[gpus] $gpu_ids"
 echo "[output] $output_dir"

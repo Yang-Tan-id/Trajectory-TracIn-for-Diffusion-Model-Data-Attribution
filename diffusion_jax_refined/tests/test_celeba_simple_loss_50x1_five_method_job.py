@@ -27,6 +27,7 @@ class TestCelebaSimpleLoss50x1FiveMethodJob(unittest.TestCase):
         self.assertIn("probe_count=50", self.job)
         self.assertIn("probe_seed=2026", self.job)
         self.assertIn('target="simple_loss_50x1"', self.job)
+        self.assertIn('LDS_ALLOW_PROMPT_MISMATCH="${LDS_ALLOW_PROMPT_MISMATCH:-1}"', self.job)
 
     def test_only_five_method_variants_are_scored(self) -> None:
         self.assertIn('method_configs("celeba")', self.evaluator)

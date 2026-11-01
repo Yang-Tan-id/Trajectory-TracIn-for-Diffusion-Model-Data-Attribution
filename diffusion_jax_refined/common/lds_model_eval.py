@@ -362,7 +362,10 @@ def main() -> None:
         evaluator.target_meta.get("seed_info", {}).get("prompt")
         or evaluator.target_meta.get("manifest", {}).get("prompt")
     )
-    if saved_prompt is not None:
+    allow_prompt_mismatch = os.environ.get(
+        "LDS_ALLOW_PROMPT_MISMATCH", "0"
+    ) in ("1", "true", "True", "yes", "Yes")
+    if saved_prompt is not None and not allow_prompt_mismatch:
         expected_tokens = sorted(part.strip() for part in str(prompt).split(",") if part.strip())
         saved_tokens = sorted(part.strip() for part in str(saved_prompt).split(",") if part.strip())
         if expected_tokens != saved_tokens:
