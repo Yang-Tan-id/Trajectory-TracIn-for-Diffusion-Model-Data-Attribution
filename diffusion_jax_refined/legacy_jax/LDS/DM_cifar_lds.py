@@ -724,7 +724,10 @@ class CifarTargetEvaluator:
             raise ValueError(
                 "uniform split simple-loss probes require one timestep per MC term"
             )
-        if self.simple_loss_pair_timesteps_noise:
+        if (
+            self.simple_loss_pair_timesteps_noise
+            and not self.simple_loss_uniform_split_probes
+        ):
             if self.simple_loss_noise_seeds is None:
                 raise ValueError(
                     "paired simple-loss probes require simple_loss_noise_seeds"

@@ -43,7 +43,10 @@ class Shape3DSimpleLoss100x1JobTest(unittest.TestCase):
         self.assertNotIn('"query_l2":', source)
         self.assertNotIn('"train_l2":', source)
         self.assertIn('choices=("both", "raw-gradient", "adamw")', source)
-        self.assertIn("if transform not in selected_transforms", source)
+        self.assertIn(
+            "if transform in selected_transforms and namespace is not None",
+            source,
+        )
 
     def test_shape3d_pint_scores_are_aligned_100x1(self) -> None:
         source = (
@@ -60,6 +63,8 @@ class Shape3DSimpleLoss100x1JobTest(unittest.TestCase):
         self.assertIn(
             "RAW means the unnormalized score variant", source
         )
+        self.assertIn('choices=("reported", "stored")', source)
+        self.assertIn('args.lds_orientation == "reported"', source)
         self.assertNotIn(
             '"timestamp_sum_squared_q0_99"\n        )\n        pint_adamw',
             source,

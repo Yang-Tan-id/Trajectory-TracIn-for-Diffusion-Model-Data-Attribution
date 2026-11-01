@@ -184,7 +184,7 @@ def main() -> None:
         simple_loss_num_mc=len(timesteps),
         simple_loss_mc_seed=args.simple_loss_mc_seed,
         trajectory_sampler="ddim_eta0",
-        simple_loss_pair_timesteps_noise=True,
+        simple_loss_pair_timesteps_noise=not args.uniform_split_probes,
         simple_loss_uniform_split_probes=args.uniform_split_probes,
     )
 

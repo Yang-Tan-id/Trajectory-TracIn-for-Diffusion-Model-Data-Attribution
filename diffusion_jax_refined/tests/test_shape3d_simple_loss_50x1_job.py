@@ -47,6 +47,15 @@ class Shape3DSimpleLoss50x1JobTest(unittest.TestCase):
         self.assertIn("simple_loss_uniform_split_probes", source)
         self.assertIn('"uniform_timesteps_jax_split"', source)
         self.assertIn("jax.random.split(", source)
+        self.assertIn("and not self.simple_loss_uniform_split_probes", source)
+
+        model_major = (
+            ROOT / "3dshapes/script/evaluate_simple_loss_model_major.py"
+        ).read_text()
+        self.assertIn(
+            "simple_loss_pair_timesteps_noise=not args.uniform_split_probes",
+            model_major,
+        )
 
     def test_exporter_has_both_shape3d_pint_banks(self) -> None:
         source = (ROOT / "script/export_pint_lds_txt.py").read_text()
