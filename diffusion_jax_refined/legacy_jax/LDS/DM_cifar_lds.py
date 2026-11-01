@@ -171,6 +171,7 @@ import jax
 import jax.numpy as jnp
 
 from common.predicted_noise_kl import uniform_timesteps
+from common.simple_loss_probes import manual_simple_loss_probe_pairs
 from common.ddim_aux_path_log_ratio import ddim_aux_coefficients
 
 from DM__training_CIFAR10_pixel import TrainConfig, train
@@ -1346,13 +1347,6 @@ class CifarTargetEvaluator:
                 saved.append(final_x_np)
             elif t_value in timestep_to_position:
                 saved.append(xt_seq_np[timestep_to_position[t_value]])
-            elif self.simple_loss_pair_timesteps_noise:
-                t_values_np = np.asarray(
-                    self.simple_loss_timesteps, dtype=np.int32
-                )
-                key_seeds = np.asarray(
-                    self.simple_loss_noise_seeds, dtype=np.int32
-                )
             else:
                 raise ValueError(
                     f"Saved reference timestep {t_value} is not in the "
@@ -1849,14 +1843,17 @@ class CifarTargetEvaluator:
                 )
                 key_seeds = rng.integers(0, np.iinfo(np.int32).max, size=self.simple_loss_num_mc, dtype=np.int32)
             else:
-                t_values_np = []
-                key_seeds = []
-                for t_value in self.simple_loss_timesteps:
-                    for seed in self.simple_loss_noise_seeds:
-                        t_values_np.append(int(t_value))
-                        key_seeds.append(int(seed))
-                t_values_np = np.asarray(t_values_np, dtype=np.int32)
-                key_seeds = np.asarray(key_seeds, dtype=np.int32)
+                probe_pairs = manual_simple_loss_probe_pairs(
+                    self.simple_loss_timesteps,
+                    self.simple_loss_noise_seeds,
+                    paired=self.simple_loss_pair_timesteps_noise,
+                )
+                t_values_np = np.asarray(
+                    [timestep for timestep, _ in probe_pairs], dtype=np.int32
+                )
+                key_seeds = np.asarray(
+                    [seed for _, seed in probe_pairs], dtype=np.int32
+                )
             rng_keys = [jax.random.PRNGKey(int(seed)) for seed in key_seeds.tolist()]
             t_values = jax.device_put(jnp.asarray(t_values_np, dtype=jnp.int32), self.device)
             rng_keys = jax.device_put(jnp.stack(rng_keys, axis=0), self.device)
@@ -1873,6 +1870,11 @@ class CifarTargetEvaluator:
                 "simple_loss_manual_grid": self.simple_loss_noise_seeds is not None,
                 "simple_loss_paired_timesteps_noise": (
                     self.simple_loss_pair_timesteps_noise
+                ),
+                "simple_loss_probe_construction": (
+                    "paired_zip"
+                    if self.simple_loss_pair_timesteps_noise
+                    else "cartesian_product"
                 ),
             }
         elif self.target_function == "trajectory_state_mse":
