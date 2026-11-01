@@ -11,14 +11,32 @@
 
 set -euo pipefail
 
-repo="${REPO_ROOT:-${SLURM_SUBMIT_DIR:-$PWD}}"
-shapes="$repo/diffusion_jax_refined/3dshapes"
+source_repo="${REPO_ROOT:-${SLURM_SUBMIT_DIR:-$PWD}}"
 python_bin="${PYTHON_BIN:-python}"
-query_file="$shapes/queries_in_distribution_plus_zero_seed_100_219.json"
 cache_namespace="simple_loss_50x1_t0_500_uniform_split_seed0"
 
-# Slurm may start the batch shell outside the repository.  Enter it before
-# importing diffusion_jax_refined to build the deterministic timestep list.
+# Execute Python from node-local storage.  Only the large mutable result and
+# dataset trees remain on /work through symlinks.  This avoids the recurrent
+# Stampede3 /work metadata I/O failures during Python imports.
+runtime_root="${SLURM_TMPDIR:-/tmp/${USER}/shape3d_sl50_${SLURM_JOB_ID:-$$}}"
+repo="$runtime_root/repo"
+mkdir -p "$repo"
+tar -C "$source_repo" \
+  --exclude='__pycache__' \
+  --exclude='*.pyc' \
+  --exclude='diffusion_jax_refined/3dshapes/result' \
+  -cf - \
+  diffusion_jax_refined/common \
+  diffusion_jax_refined/legacy_jax \
+  diffusion_jax_refined/script \
+  diffusion_jax_refined/3dshapes | tar -C "$repo" -xf -
+ln -s "$source_repo/diffusion_jax_refined/3dshapes/result" \
+  "$repo/diffusion_jax_refined/3dshapes/result"
+ln -s "$source_repo/diffusion_jax_refined/dataset" \
+  "$repo/diffusion_jax_refined/dataset"
+
+shapes="$repo/diffusion_jax_refined/3dshapes"
+query_file="$shapes/queries_in_distribution_plus_zero_seed_100_219.json"
 cd "$repo"
 timesteps="$($python_bin -c 'from diffusion_jax_refined.common.predicted_noise_kl import uniform_timesteps; print(",".join(map(str, uniform_timesteps(501,50).tolist())))')"
 
@@ -29,6 +47,7 @@ export SIMPLE_LOSS_EVAL_CHUNK_SIZE="${SIMPLE_LOSS_EVAL_CHUNK_SIZE:-50}"
 
 echo "[definition] Shape3D simple-loss LDS target: 50 uniform timesteps over inclusive range t=0..500 x MC1"
 echo "[definition] noise keys: jax.random.split(PRNGKey(0), 50), shared by every query/model"
+echo "[runtime] node-local code=$repo; persistent results=$source_repo/diffusion_jax_refined/3dshapes/result"
 echo "[cache] $cache_namespace"
 echo "[order] checkpoint-major: one restore followed by all 100 queries"
 
@@ -72,6 +91,6 @@ cd "$repo"
   --targets endpoint_contarfactual,traj_contarfactual,simple_loss_50x1,noise_trajectory \
   --shape3d-pint-banks both \
   --transforms both \
-  --output "$repo/shape3d_twelve_config_lds_all_targets_simple_loss_50x1_t0_500_q0_99.txt"
+  --output "$source_repo/shape3d_twelve_config_lds_all_targets_simple_loss_50x1_t0_500_q0_99.txt"
 
-echo "[done] $repo/shape3d_twelve_config_lds_all_targets_simple_loss_50x1_t0_500_q0_99.txt"
+echo "[done] $source_repo/shape3d_twelve_config_lds_all_targets_simple_loss_50x1_t0_500_q0_99.txt"
