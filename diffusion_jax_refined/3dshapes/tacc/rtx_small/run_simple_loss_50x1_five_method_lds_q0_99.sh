@@ -44,10 +44,13 @@ export PYTHONUNBUFFERED=1
 export TF_GPU_ALLOCATOR="${TF_GPU_ALLOCATOR:-cuda_malloc_async}"
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
 export SIMPLE_LOSS_EVAL_CHUNK_SIZE="${SIMPLE_LOSS_EVAL_CHUNK_SIZE:-50}"
+export LDS_TRUE_F_LOG_ROOT="${LDS_TRUE_F_LOG_ROOT:-$(dirname "$0")/worker_logs_${SLURM_JOB_ID:-$$}}"
+mkdir -p "$LDS_TRUE_F_LOG_ROOT"
 
 echo "[definition] Shape3D simple-loss LDS target: 50 uniform timesteps over inclusive range t=0..500 x MC1"
 echo "[definition] noise keys: jax.random.split(PRNGKey(0), 50), shared by every query/model"
 echo "[runtime] node-local code=$repo; persistent results=$source_repo/diffusion_jax_refined/3dshapes/result"
+echo "[logs] worker logs=$LDS_TRUE_F_LOG_ROOT"
 echo "[cache] $cache_namespace"
 echo "[order] checkpoint-major: one restore followed by all 100 queries"
 

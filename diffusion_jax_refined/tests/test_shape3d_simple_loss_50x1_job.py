@@ -18,6 +18,7 @@ class Shape3DSimpleLoss50x1JobTest(unittest.TestCase):
         self.assertIn('runtime_root="${SLURM_TMPDIR', source)
         self.assertIn("diffusion_jax_refined/3dshapes/result'", source)
         self.assertIn('ln -s "$source_repo/diffusion_jax_refined/3dshapes/result"', source)
+        self.assertIn("LDS_TRUE_F_LOG_ROOT", source)
         self.assertIn("--simple-loss-num-mc 50", source)
         self.assertIn("--uniform-split-simple-loss-probes", source)
         self.assertIn("--model-major-simple-loss", source)
@@ -34,6 +35,12 @@ class Shape3DSimpleLoss50x1JobTest(unittest.TestCase):
             "shape3d_twelve_config_lds_all_targets_simple_loss_50x1_t0_500_q0_99.txt",
             source,
         )
+
+    def test_worker_failure_is_copied_to_outer_stderr(self) -> None:
+        source = (ROOT / "3dshapes/script/run_lds_true_f.py").read_text()
+        self.assertIn('os.environ.get(\n            "LDS_TRUE_F_LOG_ROOT"', source)
+        self.assertIn("FAILED WORKER", source)
+        self.assertIn("text[-12000:]", source)
 
     def test_core_uses_jax_split_keys(self) -> None:
         source = (ROOT / "legacy_jax/LDS/DM_cifar_lds.py").read_text()

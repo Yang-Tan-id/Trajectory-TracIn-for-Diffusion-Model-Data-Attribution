@@ -114,7 +114,11 @@ def main() -> None:
 
     result_root = SHAPES_ROOT / "result" / args.experiment
     sample_root = result_root / "sample_ddim_eta0_1000"
-    log_root = result_root / "logs" / "lds_true_f"
+    log_root = Path(
+        os.environ.get(
+            "LDS_TRUE_F_LOG_ROOT", str(result_root / "logs" / "lds_true_f")
+        )
+    )
     log_root.mkdir(parents=True, exist_ok=True)
 
     base_env = os.environ.copy()
@@ -188,15 +192,32 @@ def main() -> None:
             if not args.execute:
                 print(" ".join(command), flush=True)
                 return
-            with log_path.open("w") as log:
-                subprocess.run(
-                    command,
-                    cwd=SHAPES_ROOT,
-                    env=worker_env,
-                    stdout=log,
-                    stderr=subprocess.STDOUT,
-                    check=True,
-                )
+            try:
+                with log_path.open("w") as log:
+                    subprocess.run(
+                        command,
+                        cwd=SHAPES_ROOT,
+                        env=worker_env,
+                        stdout=log,
+                        stderr=subprocess.STDOUT,
+                        check=True,
+                    )
+            except subprocess.CalledProcessError:
+                try:
+                    text = log_path.read_text(errors="replace")
+                    print(
+                        f"\n===== FAILED WORKER gpu={gpu} log={log_path} =====\n"
+                        f"{text[-12000:]}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                except Exception as log_error:
+                    print(
+                        f"failed to read worker log {log_path}: {log_error}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+                raise
             return
         for query_id, prompt, seed in selected:
             command = [
