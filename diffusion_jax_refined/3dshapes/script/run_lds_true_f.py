@@ -29,13 +29,18 @@ def lds_model_dirs(
     train_seed: int,
     subset_seeds: list[int],
 ) -> list[Path]:
+    root_override = os.environ.get("LDS_MODEL_ROOT_OVERRIDE", "").strip()
     root = (
-        SHAPES_ROOT
-        / "result"
-        / experiment
-        / "lds_model"
-        / "prompted_solo"
-        / f"train_seed_{train_seed}"
+        Path(root_override)
+        if root_override
+        else (
+            SHAPES_ROOT
+            / "result"
+            / experiment
+            / "lds_model"
+            / "prompted_solo"
+            / f"train_seed_{train_seed}"
+        )
     )
     return [root / f"m_64_k_2500_subset_seed_{seed}" for seed in subset_seeds]
 
@@ -63,6 +68,11 @@ def main() -> None:
     parser.add_argument("--simple-loss-noise-seeds")
     parser.add_argument("--pair-simple-loss-probes", action="store_true")
     parser.add_argument("--target-cache-namespace", default="")
+    parser.add_argument(
+        "--model-major-simple-loss",
+        action="store_true",
+        help="Load each checkpoint once and evaluate all selected simple-loss queries.",
+    )
     args = parser.parse_args()
 
     query_ids = parse_ints(args.query_ids)
@@ -136,6 +146,55 @@ def main() -> None:
     def worker(shard_index: int, gpu: str) -> None:
         worker_env = base_env | {"CUDA_VISIBLE_DEVICES": gpu}
         log_path = log_root / f"gpu_{gpu}.log"
+        if args.model_major_simple_loss:
+            if target_functions != ["simple_loss"]:
+                raise ValueError(
+                    "--model-major-simple-loss requires --target-functions simple_loss"
+                )
+            command = [
+                args.python_bin,
+                "script/evaluate_simple_loss_model_major.py",
+                "--experiment",
+                args.experiment,
+                "--train-seed",
+                str(args.train_seed),
+                "--query-file",
+                str(args.query_file.resolve()),
+                "--query-ids",
+                ",".join(str(query_id) for query_id in query_ids),
+                "--subset-seeds",
+                ",".join(str(seed) for seed in subset_seeds),
+                "--model-shard-index",
+                str(shard_index),
+                "--model-shard-count",
+                str(len(gpu_ids)),
+                "--simple-loss-timesteps",
+                args.simple_loss_timesteps or "",
+                "--simple-loss-noise-seeds",
+                args.simple_loss_noise_seeds or "",
+                "--simple-loss-mc-seed",
+                str(args.simple_loss_mc_seed),
+                "--target-cache-namespace",
+                args.target_cache_namespace,
+            ]
+            print(
+                f"[command] gpu={gpu} model-major shard="
+                f"{shard_index}/{len(gpu_ids)} queries={len(selected)}",
+                flush=True,
+            )
+            if not args.execute:
+                print(" ".join(command), flush=True)
+                return
+            with log_path.open("w") as log:
+                subprocess.run(
+                    command,
+                    cwd=SHAPES_ROOT,
+                    env=worker_env,
+                    stdout=log,
+                    stderr=subprocess.STDOUT,
+                    check=True,
+                )
+            return
         for query_id, prompt, seed in selected:
             command = [
                 args.python_bin,

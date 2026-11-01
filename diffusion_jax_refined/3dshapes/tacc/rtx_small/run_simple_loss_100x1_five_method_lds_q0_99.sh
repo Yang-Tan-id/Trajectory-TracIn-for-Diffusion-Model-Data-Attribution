@@ -37,11 +37,14 @@ noise_seeds="$($python_bin -c 'print(",".join(map(str, range(100000, 100100))))'
 export PYTHONUNBUFFERED=1
 export TF_GPU_ALLOCATOR="${TF_GPU_ALLOCATOR:-cuda_malloc_async}"
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
+export SIMPLE_LOSS_EVAL_CHUNK_SIZE="${SIMPLE_LOSS_EVAL_CHUNK_SIZE:-50}"
 
 echo "[definition] Shape3D simple-loss LDS target: 100 uniformly spaced timestamps x MC1"
 echo "[definition] probes are paired and shared across all 192 subset models"
 echo "[scope] Q0-Q99; only five listed methods x raw-gradient/AdamW are scored"
 echo "[cache] $cache_namespace"
+echo "[memory] simple-loss probe chunk size=$SIMPLE_LOSS_EVAL_CHUNK_SIZE"
+echo "[order] checkpoint-major: one restore followed by all 100 queries"
 
 cd "$shapes"
 "$python_bin" script/run_lds_true_f.py \
@@ -58,6 +61,7 @@ cd "$shapes"
   --simple-loss-timesteps "$timesteps" \
   --simple-loss-noise-seeds "$noise_seeds" \
   --pair-simple-loss-probes \
+  --model-major-simple-loss \
   --target-cache-namespace "$cache_namespace" \
   --python-bin "$python_bin"
 

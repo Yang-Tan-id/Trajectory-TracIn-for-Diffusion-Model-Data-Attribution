@@ -1037,7 +1037,9 @@ class CifarTargetEvaluator:
         # Traj TracIn always applies 1/K over snapshots and sums checkpoints.
         return jnp.mean(vals)
 
-    def _simple_loss_objective(self, target_params, x0_ref, t_values, rng_keys):
+    def _simple_loss_objective(
+        self, target_params, x0_ref, t_values, rng_keys, cond
+    ):
         x0 = x0_ref[0]
         schedule = self.base_adapter.schedule
 
@@ -1048,11 +1050,116 @@ class CifarTargetEvaluator:
                 self.base_adapter.module.extract(schedule.sqrt_alphas_cumprod, t, x0.shape) * x0
                 + self.base_adapter.module.extract(schedule.sqrt_one_minus_alphas_cumprod, t, x0.shape) * noise
             )
-            pred = self._eps_apply(self._target_adapter_for_jit, target_params, xt, t)
+            pred = self._target_adapter_for_jit.model.apply(
+                {"params": target_params}, xt, t, cond, train=False
+            )
             return jnp.mean((pred - noise) ** 2)
 
         losses = jax.vmap(one_loss)(t_values, rng_keys)
         return jnp.mean(losses)
+
+    def evaluate_simple_loss_with_adapter(
+        self,
+        target_adapter: CIFARAdapter,
+        x0_ref,
+        prompt: str,
+    ) -> Tuple[float, Dict[str, object]]:
+        """Evaluate simple loss for one query without reloading a checkpoint.
+
+        ``target_adapter`` may be reused across any number of queries.  Query
+        conditioning is an explicit JIT input so the first prompt cannot be
+        captured and accidentally reused for later queries.
+        """
+        self._target_adapter_for_jit = target_adapter
+        target_params = target_adapter.state.ema_params
+        cond = self.base_adapter.make_condition(prompt=prompt, batch_size=1)
+
+        if self.simple_loss_noise_seeds is None:
+            rng = np.random.default_rng(self.simple_loss_mc_seed)
+            t_values_np = rng.choice(
+                np.asarray(self.simple_loss_timesteps, dtype=np.int32),
+                size=self.simple_loss_num_mc,
+                replace=True,
+            )
+            key_seeds = rng.integers(
+                0,
+                np.iinfo(np.int32).max,
+                size=self.simple_loss_num_mc,
+                dtype=np.int32,
+            )
+        else:
+            probe_pairs = manual_simple_loss_probe_pairs(
+                self.simple_loss_timesteps,
+                self.simple_loss_noise_seeds,
+                paired=self.simple_loss_pair_timesteps_noise,
+            )
+            t_values_np = np.asarray(
+                [timestep for timestep, _ in probe_pairs], dtype=np.int32
+            )
+            key_seeds = np.asarray(
+                [seed for _, seed in probe_pairs], dtype=np.int32
+            )
+
+        rng_keys = jax.device_put(
+            jnp.stack(
+                [jax.random.PRNGKey(int(seed)) for seed in key_seeds.tolist()],
+                axis=0,
+            ),
+            self.device,
+        )
+        t_values = jax.device_put(
+            jnp.asarray(t_values_np, dtype=jnp.int32), self.device
+        )
+        x0_ref = jax.device_put(jnp.asarray(x0_ref, dtype=jnp.float32), self.device)
+
+        chunk_size = int(os.environ.get("SIMPLE_LOSS_EVAL_CHUNK_SIZE", "0"))
+        if chunk_size < 0:
+            raise ValueError("SIMPLE_LOSS_EVAL_CHUNK_SIZE must be nonnegative")
+        if chunk_size and len(t_values_np) > chunk_size:
+            weighted_sum = 0.0
+            for start in range(0, len(t_values_np), chunk_size):
+                stop = min(start + chunk_size, len(t_values_np))
+                chunk_value = self._simple_loss_fn(
+                    target_params,
+                    x0_ref,
+                    t_values[start:stop],
+                    rng_keys[start:stop],
+                    cond,
+                )
+                weighted_sum += float(chunk_value) * (stop - start)
+            value = weighted_sum / float(len(t_values_np))
+        else:
+            value = self._simple_loss_fn(
+                target_params, x0_ref, t_values, rng_keys, cond
+            )
+
+        details = {
+            "target_function": "simple_loss",
+            "simple_loss_timestep_candidates": [
+                int(t) for t in self.simple_loss_timesteps
+            ],
+            "simple_loss_sampled_timesteps": [
+                int(t) for t in t_values_np.tolist()
+            ],
+            "simple_loss_noise_key_seeds": [
+                int(seed) for seed in key_seeds.tolist()
+            ],
+            "simple_loss_num_mc_terms": int(len(t_values_np)),
+            "simple_loss_eval_chunk_size": (
+                int(chunk_size) if chunk_size else int(len(t_values_np))
+            ),
+            "simple_loss_mc_seed": int(self.simple_loss_mc_seed),
+            "simple_loss_manual_grid": self.simple_loss_noise_seeds is not None,
+            "simple_loss_paired_timesteps_noise": (
+                self.simple_loss_pair_timesteps_noise
+            ),
+            "simple_loss_probe_construction": (
+                "paired_zip"
+                if self.simple_loss_pair_timesteps_noise
+                else "cartesian_product"
+            ),
+        }
+        return float(value), details
 
     def _build_predicted_noise_kl_probes(self):
         """Build query-specific off-trajectory probes and cache full-model outputs."""
@@ -1834,49 +1941,11 @@ class CifarTargetEvaluator:
                 "definition": "F(subset_checkpoint) - F(full_checkpoint)",
             }
         elif self.target_function == "simple_loss":
-            rng = np.random.default_rng(self.simple_loss_mc_seed)
-            if self.simple_loss_noise_seeds is None:
-                t_values_np = rng.choice(
-                    np.asarray(self.simple_loss_timesteps, dtype=np.int32),
-                    size=self.simple_loss_num_mc,
-                    replace=True,
-                )
-                key_seeds = rng.integers(0, np.iinfo(np.int32).max, size=self.simple_loss_num_mc, dtype=np.int32)
-            else:
-                probe_pairs = manual_simple_loss_probe_pairs(
-                    self.simple_loss_timesteps,
-                    self.simple_loss_noise_seeds,
-                    paired=self.simple_loss_pair_timesteps_noise,
-                )
-                t_values_np = np.asarray(
-                    [timestep for timestep, _ in probe_pairs], dtype=np.int32
-                )
-                key_seeds = np.asarray(
-                    [seed for _, seed in probe_pairs], dtype=np.int32
-                )
-            rng_keys = [jax.random.PRNGKey(int(seed)) for seed in key_seeds.tolist()]
-            t_values = jax.device_put(jnp.asarray(t_values_np, dtype=jnp.int32), self.device)
-            rng_keys = jax.device_put(jnp.stack(rng_keys, axis=0), self.device)
-            # Multi-target evaluation keeps the full reference trajectory loaded.
-            # The simple-loss target is defined on its final x_0 endpoint only.
-            value = self._simple_loss_fn(target_params, self.xt_ref[-1:], t_values, rng_keys)
-            details = {
-                "target_function": "simple_loss",
-                "simple_loss_timestep_candidates": [int(t) for t in self.simple_loss_timesteps],
-                "simple_loss_sampled_timesteps": [int(t) for t in t_values_np.tolist()],
-                "simple_loss_noise_key_seeds": [int(s) for s in key_seeds.tolist()],
-                "simple_loss_num_mc_terms": int(len(t_values_np)),
-                "simple_loss_mc_seed": int(self.simple_loss_mc_seed),
-                "simple_loss_manual_grid": self.simple_loss_noise_seeds is not None,
-                "simple_loss_paired_timesteps_noise": (
-                    self.simple_loss_pair_timesteps_noise
-                ),
-                "simple_loss_probe_construction": (
-                    "paired_zip"
-                    if self.simple_loss_pair_timesteps_noise
-                    else "cartesian_product"
-                ),
-            }
+            return self.evaluate_simple_loss_with_adapter(
+                target_adapter,
+                self.xt_ref[-1:],
+                self.prompt,
+            )
         elif self.target_function == "trajectory_state_mse":
             value_float, details = self._trajectory_state_mse(target_adapter)
             return value_float, details

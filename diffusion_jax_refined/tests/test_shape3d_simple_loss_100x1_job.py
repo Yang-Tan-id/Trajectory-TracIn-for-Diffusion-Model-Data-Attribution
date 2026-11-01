@@ -23,6 +23,11 @@ class Shape3DSimpleLoss100x1JobTest(unittest.TestCase):
         self.assertIn("--pair-simple-loss-probes", source)
         self.assertIn("--target-cache-namespace", source)
         self.assertIn("--gpus 0,1", source)
+        self.assertIn('SIMPLE_LOSS_EVAL_CHUNK_SIZE:-50', source)
+        self.assertIn("--model-major-simple-loss", source)
+        self.assertNotIn("LDS_MODEL_ROOT_OVERRIDE", source)
+        self.assertNotIn("/dev/shm/shape3d_lds_", source)
+        self.assertNotIn("rsync -aL", source)
         self.assertIn("evaluate_five_method_simple_loss_100x1.py", source)
         self.assertIn("shape3d_five_method_lds_q0_99_all.txt", source)
 
@@ -52,6 +57,21 @@ class Shape3DSimpleLoss100x1JobTest(unittest.TestCase):
             timesteps, seeds, paired=False
         )
         self.assertEqual(len(cartesian), 10000)
+
+    def test_model_major_runner_loads_checkpoint_outside_query_loop(self) -> None:
+        source = (
+            ROOT / "3dshapes/script/evaluate_simple_loss_model_major.py"
+        ).read_text()
+        checkpoint_loop = source.index(
+            "for model_position, (model_id, subset_dir) in enumerate"
+        )
+        adapter_load = source.index(
+            "target_adapter = evaluator._make_adapter(checkpoint)"
+        )
+        query_loop = source.index("for query, cache_path in missing")
+        self.assertLess(checkpoint_loop, adapter_load)
+        self.assertLess(adapter_load, query_loop)
+        self.assertIn("evaluate_simple_loss_with_adapter", source)
 
 
 if __name__ == "__main__":
