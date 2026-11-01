@@ -57,6 +57,12 @@ def main() -> None:
     )
     parser.add_argument("--gpus", default="0,1")
     parser.add_argument("--python-bin", default=os.environ.get("PYTHON_BIN", sys.executable))
+    parser.add_argument("--simple-loss-num-mc", type=int, default=10)
+    parser.add_argument("--simple-loss-mc-seed", type=int, default=0)
+    parser.add_argument("--simple-loss-timesteps")
+    parser.add_argument("--simple-loss-noise-seeds")
+    parser.add_argument("--pair-simple-loss-probes", action="store_true")
+    parser.add_argument("--target-cache-namespace", default="")
     args = parser.parse_args()
 
     query_ids = parse_ints(args.query_ids)
@@ -110,12 +116,20 @@ def main() -> None:
         DIFFUSION_TRAJECTORY_SAMPLER="ddim_eta0",
         LDS_TRAJECTORY_SAMPLER="ddim_eta0",
         LDS_DEVICE="gpu",
-        LDS_SIMPLE_LOSS_NUM_MC=os.environ.get("LDS_SIMPLE_LOSS_NUM_MC", "10"),
-        LDS_SIMPLE_LOSS_MC_SEED=os.environ.get("LDS_SIMPLE_LOSS_MC_SEED", "0"),
+        LDS_SIMPLE_LOSS_NUM_MC=str(args.simple_loss_num_mc),
+        LDS_SIMPLE_LOSS_MC_SEED=str(args.simple_loss_mc_seed),
+        LDS_SIMPLE_LOSS_PAIR_TIMESTEPS_NOISE=(
+            "1" if args.pair_simple_loss_probes else "0"
+        ),
+        LDS_TARGET_CACHE_NAMESPACE=str(args.target_cache_namespace),
         JAX_NUM_DEVICES="1",
         JAX_PLATFORMS="cuda",
         PYTHONUNBUFFERED="1",
     )
+    if args.simple_loss_timesteps:
+        base_env["LDS_SIMPLE_LOSS_TIMESTEPS"] = args.simple_loss_timesteps
+    if args.simple_loss_noise_seeds:
+        base_env["LDS_SIMPLE_LOSS_NOISE_SEEDS"] = args.simple_loss_noise_seeds
     model_dirs_arg = ",".join(str(path) for path in model_dirs)
     target_arg = ",".join(target_functions)
 

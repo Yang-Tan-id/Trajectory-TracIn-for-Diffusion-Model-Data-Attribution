@@ -679,6 +679,7 @@ class CifarTargetEvaluator:
         predicted_noise_kl_num_directions: int = 50,
         predicted_noise_kl_mc_seed: int = 0,
         ddim_aux_eta: float = 1.0,
+        simple_loss_pair_timesteps_noise: bool = False,
     ):
         self.code_file = code_file
         self.base_checkpoint = base_checkpoint
@@ -696,6 +697,9 @@ class CifarTargetEvaluator:
         self.simple_loss_noise_seeds = None if simple_loss_noise_seeds is None else [int(s) for s in simple_loss_noise_seeds]
         self.simple_loss_num_mc = int(simple_loss_num_mc)
         self.simple_loss_mc_seed = int(simple_loss_mc_seed)
+        self.simple_loss_pair_timesteps_noise = bool(
+            simple_loss_pair_timesteps_noise
+        )
         self.predicted_noise_kl_num_directions = int(
             predicted_noise_kl_num_directions
         )
@@ -708,6 +712,15 @@ class CifarTargetEvaluator:
             raise ValueError("simple_loss_timesteps must contain at least one timestep.")
         if self.simple_loss_num_mc <= 0:
             raise ValueError("simple_loss_num_mc must be positive.")
+        if self.simple_loss_pair_timesteps_noise:
+            if self.simple_loss_noise_seeds is None:
+                raise ValueError(
+                    "paired simple-loss probes require simple_loss_noise_seeds"
+                )
+            if len(self.simple_loss_timesteps) != len(self.simple_loss_noise_seeds):
+                raise ValueError(
+                    "paired simple-loss timesteps/noise seeds must have equal length"
+                )
         if not 1 <= self.predicted_noise_kl_num_directions <= 1000:
             raise ValueError(
                 "predicted_noise_kl_num_directions must be in [1, 1000]."
@@ -1333,6 +1346,13 @@ class CifarTargetEvaluator:
                 saved.append(final_x_np)
             elif t_value in timestep_to_position:
                 saved.append(xt_seq_np[timestep_to_position[t_value]])
+            elif self.simple_loss_pair_timesteps_noise:
+                t_values_np = np.asarray(
+                    self.simple_loss_timesteps, dtype=np.int32
+                )
+                key_seeds = np.asarray(
+                    self.simple_loss_noise_seeds, dtype=np.int32
+                )
             else:
                 raise ValueError(
                     f"Saved reference timestep {t_value} is not in the "
@@ -1851,6 +1871,9 @@ class CifarTargetEvaluator:
                 "simple_loss_num_mc_terms": int(len(t_values_np)),
                 "simple_loss_mc_seed": int(self.simple_loss_mc_seed),
                 "simple_loss_manual_grid": self.simple_loss_noise_seeds is not None,
+                "simple_loss_paired_timesteps_noise": (
+                    self.simple_loss_pair_timesteps_noise
+                ),
             }
         elif self.target_function == "trajectory_state_mse":
             value_float, details = self._trajectory_state_mse(target_adapter)

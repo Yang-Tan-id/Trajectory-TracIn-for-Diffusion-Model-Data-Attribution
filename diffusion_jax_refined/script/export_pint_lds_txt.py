@@ -15,6 +15,7 @@ TARGETS = (
     "endpoint_contarfactual",
     "traj_contarfactual",
     "simple_loss",
+    "simple_loss_100x1",
     "noise_trajectory",
     "predicted_noise_kl",
     "simple_loss_50x1",

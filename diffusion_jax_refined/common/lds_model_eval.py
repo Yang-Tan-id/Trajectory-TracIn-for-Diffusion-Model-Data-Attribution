@@ -353,6 +353,10 @@ def main() -> None:
             os.environ.get("LDS_PREDICTED_NOISE_KL_MC_SEED", "0")
         ),
         ddim_aux_eta=float(os.environ.get("LDS_DDIM_AUX_ETA", "1.0")),
+        simple_loss_pair_timesteps_noise=os.environ.get(
+            "LDS_SIMPLE_LOSS_PAIR_TIMESTEPS_NOISE", "0"
+        )
+        in ("1", "true", "True", "yes", "Yes"),
     )
     saved_prompt = (
         evaluator.target_meta.get("seed_info", {}).get("prompt")
