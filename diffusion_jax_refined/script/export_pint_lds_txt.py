@@ -19,6 +19,7 @@ TARGETS = (
     "noise_trajectory",
     "predicted_noise_kl",
     "simple_loss_50x1",
+    "simple_loss_10x1",
     "vlb_nll",
     "ddim_aux_path_log_ratio",
     "ddim_unweighted_path_score",
