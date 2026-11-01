@@ -43,6 +43,22 @@ class Shape3DSimpleLoss100x1JobTest(unittest.TestCase):
         self.assertNotIn('"query_l2":', source)
         self.assertNotIn('"train_l2":', source)
 
+    def test_shape3d_pint_scores_are_aligned_100x1(self) -> None:
+        source = (
+            ROOT.parent / "diffusion_jax_refined/script/export_pint_lds_txt.py"
+        ).read_text()
+        self.assertIn(
+            '"timestamp_sum_squared_aligned100x1_q0_99"', source
+        )
+        self.assertIn(
+            '"delta_l2normalized_timestamp_sum_squared_aligned100x1_q0_99"',
+            source,
+        )
+        self.assertNotIn(
+            '"timestamp_sum_squared_q0_99"\n        )\n        pint_adamw',
+            source,
+        )
+
     def test_paired_probe_builder_produces_100_not_10000(self) -> None:
         timesteps = tuple(range(999, 899, -1))
         seeds = tuple(range(100000, 100100))

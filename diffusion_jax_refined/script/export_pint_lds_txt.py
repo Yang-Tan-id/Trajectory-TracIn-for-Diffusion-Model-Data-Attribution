@@ -69,11 +69,11 @@ def method_configs(dataset: str) -> tuple[MethodConfig, ...]:
     if dataset == "shape3d":
         pint_raw = (
             "traj_tracin_recreate_raw_polluted_endpoint_delta_l2normalized_"
-            "timestamp_sum_squared_q0_99"
+            "timestamp_sum_squared_aligned100x1_q0_99"
         )
         pint_adamw = (
             "traj_tracin_recreate_adamw_full_polluted_endpoint_"
-            "delta_l2normalized_timestamp_sum_squared_q0_99"
+            "delta_l2normalized_timestamp_sum_squared_aligned100x1_q0_99"
         )
         tracin_raw = "traj_tracin_endpoint_tracin_train100x1_query100x1_q0_99"
         tracin_adamw = (
