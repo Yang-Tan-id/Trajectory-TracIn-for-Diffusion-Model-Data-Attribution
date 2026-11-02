@@ -298,7 +298,7 @@ def main() -> None:
     parser.add_argument(
         "--difference-vmax",
         type=float,
-        default=1.0,
+        default=0.04,
         help=(
             "fixed upper bound shared by every absolute-difference heatmap; "
             "values above it are saturated"
