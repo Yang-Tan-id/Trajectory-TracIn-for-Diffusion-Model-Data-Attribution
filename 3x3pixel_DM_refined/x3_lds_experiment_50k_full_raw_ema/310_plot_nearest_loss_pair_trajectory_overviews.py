@@ -142,6 +142,7 @@ def save_plots(
     save_steps: list[int],
     trajectory_a: list[torch.Tensor],
     trajectory_b: list[torch.Tensor],
+    difference_vmax: float,
 ) -> dict[str, float]:
     rgb_a = [rgb_image(state) for state in trajectory_a]
     rgb_b = [rgb_image(state) for state in trajectory_b]
@@ -156,8 +157,7 @@ def save_plots(
         ],
         dtype=np.float64,
     )
-    difference_max = max(float(np.max(values)) for values in differences)
-    difference_max = max(difference_max, np.finfo(np.float32).eps)
+    difference_max = max(float(difference_vmax), np.finfo(np.float32).eps)
     diffusion_times = np.linspace(T - 1, 0, DDIM_STEPS).astype(int)[save_steps]
 
     figure, axes = plt.subplots(
@@ -262,7 +262,7 @@ def main() -> None:
     parser.add_argument("--source", choices=("ema", "raw"), default="ema")
     parser.add_argument(
         "--pairs",
-        help="comma-separated query:subset_a:subset_b; defaults to the five requested pairs",
+        help="comma-separated query:subset_a:subset_b; defaults to the six requested pairs",
     )
     parser.add_argument("--snapshots", type=int, default=15)
     parser.add_argument(
@@ -287,6 +287,7 @@ def main() -> None:
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     summary = {}
+    pending_plots = []
 
     for query_id, (subset_a, subset_b) in pairs.items():
         query = queries[query_id]
@@ -306,18 +307,58 @@ def main() -> None:
                 generate(model, schedule, condition, x_t, device, save_steps)
             )
             del model
+        pending_plots.append(
+            {
+                "query_id": query_id,
+                "subset_a": subset_a,
+                "subset_b": subset_b,
+                "loss_a": float(losses[query_id, subset_a]),
+                "loss_b": float(losses[query_id, subset_b]),
+                "trajectory_a": generated[0],
+                "trajectory_b": generated[1],
+            }
+        )
+        print(f"[generated] q{query_id:02d} pair={subset_a:03d}/{subset_b:03d}", flush=True)
+
+    global_difference_vmax = max(
+        float(
+            (state_a - state_b)
+            .abs()[0]
+            .mean(dim=0)
+            .max()
+            .detach()
+            .cpu()
+        )
+        for item in pending_plots
+        for state_a, state_b in zip(item["trajectory_a"], item["trajectory_b"])
+    )
+    global_difference_vmax = max(
+        global_difference_vmax, float(np.finfo(np.float32).eps)
+    )
+    print(
+        f"[shared difference scale] vmin=0 vmax={global_difference_vmax:.6e}",
+        flush=True,
+    )
+
+    for item in pending_plots:
+        query_id = item["query_id"]
+        subset_a = item["subset_a"]
+        subset_b = item["subset_b"]
         summary[f"q{query_id:02d}"] = save_plots(
             output_dir=output_dir,
             query_id=query_id,
             source=args.source,
             subset_a=subset_a,
             subset_b=subset_b,
-            loss_a=float(losses[query_id, subset_a]),
-            loss_b=float(losses[query_id, subset_b]),
+            loss_a=item["loss_a"],
+            loss_b=item["loss_b"],
             save_steps=save_steps,
-            trajectory_a=generated[0],
-            trajectory_b=generated[1],
+            trajectory_a=item["trajectory_a"],
+            trajectory_b=item["trajectory_b"],
+            difference_vmax=global_difference_vmax,
         )
+        summary[f"q{query_id:02d}"]["shared_difference_vmin"] = 0.0
+        summary[f"q{query_id:02d}"]["shared_difference_vmax"] = global_difference_vmax
         print(
             f"[plotted] q{query_id:02d} pair={subset_a:03d}/{subset_b:03d} "
             f"loss-gap={summary[f'q{query_id:02d}']['loss_gap']:.3e} "
