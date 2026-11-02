@@ -124,10 +124,14 @@ def main() -> None:
         )
         output["queries"][f"q{query_id:02d}"] = records
 
-    stem = (
-        f"top{args.top_pairs}_nearest_simple_loss_pairs_"
-        f"{args.source}_q" + "_q".join(f"{query_id:02d}" for query_id in query_ids)
-    )
+    contiguous = query_ids == list(range(min(query_ids), max(query_ids) + 1))
+    if contiguous:
+        query_tag = f"q{min(query_ids):02d}_q{max(query_ids):02d}"
+    elif len(query_ids) <= 12:
+        query_tag = "_".join(f"q{query_id:02d}" for query_id in query_ids)
+    else:
+        query_tag = f"{len(query_ids)}queries"
+    stem = f"top{args.top_pairs}_nearest_simple_loss_pairs_{args.source}_{query_tag}"
     txt_path = LDS_DIR / f"{stem}.txt"
     json_path = LDS_DIR / f"{stem}.json"
     txt_path.write_text("\n".join(lines) + "\n")
