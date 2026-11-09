@@ -16,7 +16,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 QUERY_INDICES = (6, 8, 12, 22, 39, 54)
 COLUMNS = (
-    ("Endpoint", ("full-data.png",)),
+    ("Output", ("full-data.png",)),
     ("PINT", ("endpoint_pollute_query_train_l2.png",)),
     ("TracInCP", ("endpoint_tracin_raw.png",)),
     ("GAS", ("endpoint_tracin_query_train_l2.png",)),
