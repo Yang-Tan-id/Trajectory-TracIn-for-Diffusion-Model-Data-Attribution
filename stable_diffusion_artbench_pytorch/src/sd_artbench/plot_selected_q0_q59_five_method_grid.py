@@ -2,8 +2,8 @@
 """Create the selected-query ArtBench five-method endpoint grid.
 
 The grid intentionally omits query identifiers and sampling seeds.  Rows are
-ordered by ``QUERY_INDICES`` and columns are PINT, TracInCP, GAS, ReTrac, and
-Random.
+ordered by ``QUERY_INDICES``.  The full-data endpoint is shown first and is
+visually separated from the five counterfactual methods.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 QUERY_INDICES = (6, 8, 12, 22, 39, 54)
 COLUMNS = (
+    ("Endpoint", ("full-data.png",)),
     ("PINT", ("endpoint_pollute_query_train_l2.png",)),
     ("TracInCP", ("endpoint_tracin_raw.png",)),
     ("GAS", ("endpoint_tracin_query_train_l2.png",)),
@@ -51,7 +52,18 @@ def parse_args() -> argparse.Namespace:
         / "artbench_selected_q6_q8_q12_q22_q39_q54_five_method_endpoints.png",
     )
     parser.add_argument("--tile-size", type=int, default=256)
-    parser.add_argument("--gap", type=int, default=7)
+    parser.add_argument(
+        "--gap",
+        type=int,
+        default=18,
+        help="Horizontal and vertical gap between method tiles.",
+    )
+    parser.add_argument(
+        "--endpoint-gap",
+        type=int,
+        default=44,
+        help="Horizontal gap after Endpoint; must be at least twice --gap.",
+    )
     return parser.parse_args()
 
 
@@ -113,20 +125,26 @@ def main() -> None:
         raise ValueError("tile-size must be at least 128")
     if args.gap < 0:
         raise ValueError("gap must be nonnegative")
+    if args.endpoint_gap < 2 * args.gap:
+        raise ValueError("endpoint-gap must be at least twice gap")
 
     outer = 14
     header_height = 64
-    column_width = args.tile_size + args.gap
     row_height = args.tile_size + args.gap
-    width = outer * 2 + len(COLUMNS) * column_width - args.gap
+    horizontal_gaps = args.endpoint_gap + args.gap * (len(COLUMNS) - 2)
+    width = outer * 2 + len(COLUMNS) * args.tile_size + horizontal_gaps
     height = outer * 2 + header_height + len(QUERY_INDICES) * row_height - args.gap
 
     canvas = Image.new("RGB", (width, height), "#F7F7F7")
     draw = ImageDraw.Draw(canvas)
     header_font = font(18, bold=True)
 
-    for column, (label, _filenames) in enumerate(COLUMNS):
-        left = outer + column * column_width
+    column_lefts = [outer]
+    for column in range(1, len(COLUMNS)):
+        preceding_gap = args.endpoint_gap if column == 1 else args.gap
+        column_lefts.append(column_lefts[-1] + args.tile_size + preceding_gap)
+
+    for left, (label, _filenames) in zip(column_lefts, COLUMNS):
         centered_text(
             draw,
             (left, outer, left + args.tile_size, outer + header_height),
@@ -137,8 +155,7 @@ def main() -> None:
     for row, query_index in enumerate(QUERY_INDICES):
         query_dir = args.image_root / f"query-{query_index:03d}"
         top = outer + header_height + row * row_height
-        for column, (_label, filenames) in enumerate(COLUMNS):
-            left = outer + column * column_width
+        for left, (_label, filenames) in zip(column_lefts, COLUMNS):
             path = resolve_image(query_dir, filenames)
             canvas.paste(fit_tile(path, args.tile_size), (left, top))
             draw.rectangle(
@@ -152,6 +169,7 @@ def main() -> None:
     print(f"[saved] {args.output}")
     print("[rows] " + ",".join(f"Q{query}" for query in QUERY_INDICES))
     print("[columns] " + " | ".join(label for label, _ in COLUMNS))
+    print(f"[gaps] methods={args.gap}px endpoint={args.endpoint_gap}px")
     print("[row labels] omitted")
     print("[seeds] omitted")
 
