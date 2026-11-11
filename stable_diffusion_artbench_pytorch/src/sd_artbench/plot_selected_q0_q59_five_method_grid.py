@@ -35,6 +35,20 @@ COLUMNS = (
 )
 
 
+def parse_query_indices(value: str) -> tuple[int, ...]:
+    indices = tuple(int(item.strip()) for item in value.split(",") if item.strip())
+    if not indices:
+        raise argparse.ArgumentTypeError("expected at least one query index")
+    if len(set(indices)) != len(indices):
+        raise argparse.ArgumentTypeError("query indices must be unique")
+    invalid = [index for index in indices if not 0 <= index <= 59]
+    if invalid:
+        raise argparse.ArgumentTypeError(
+            f"query indices must be in Q0--Q59; invalid={invalid}"
+        )
+    return indices
+
+
 def parse_args() -> argparse.Namespace:
     project = Path(__file__).resolve().parents[2]
     parser = argparse.ArgumentParser(description=__doc__)
@@ -50,6 +64,12 @@ def parse_args() -> argparse.Namespace:
         default=project
         / "outputs/topk-removal-five-method-metrics-q0-59"
         / "artbench_selected_q6_q8_q12_q22_q39_q54_five_method_endpoints.png",
+    )
+    parser.add_argument(
+        "--query-indices",
+        type=parse_query_indices,
+        default=QUERY_INDICES,
+        help="Comma-separated Q0--Q59 indices in the desired row order.",
     )
     parser.add_argument("--tile-size", type=int, default=256)
     parser.add_argument(
@@ -133,7 +153,12 @@ def main() -> None:
     row_height = args.tile_size + args.gap
     horizontal_gaps = args.endpoint_gap + args.gap * (len(COLUMNS) - 2)
     width = outer * 2 + len(COLUMNS) * args.tile_size + horizontal_gaps
-    height = outer * 2 + header_height + len(QUERY_INDICES) * row_height - args.gap
+    height = (
+        outer * 2
+        + header_height
+        + len(args.query_indices) * row_height
+        - args.gap
+    )
 
     canvas = Image.new("RGB", (width, height), "#F7F7F7")
     draw = ImageDraw.Draw(canvas)
@@ -152,7 +177,7 @@ def main() -> None:
             text_font=header_font,
         )
 
-    for row, query_index in enumerate(QUERY_INDICES):
+    for row, query_index in enumerate(args.query_indices):
         query_dir = args.image_root / f"query-{query_index:03d}"
         top = outer + header_height + row * row_height
         for left, (_label, filenames) in zip(column_lefts, COLUMNS):
@@ -167,7 +192,7 @@ def main() -> None:
     args.output.parent.mkdir(parents=True, exist_ok=True)
     canvas.save(args.output, quality=95)
     print(f"[saved] {args.output}")
-    print("[rows] " + ",".join(f"Q{query}" for query in QUERY_INDICES))
+    print("[rows] " + ",".join(f"Q{query}" for query in args.query_indices))
     print("[columns] " + " | ".join(label for label, _ in COLUMNS))
     print(f"[gaps] methods={args.gap}px endpoint={args.endpoint_gap}px")
     print("[row labels] omitted")
