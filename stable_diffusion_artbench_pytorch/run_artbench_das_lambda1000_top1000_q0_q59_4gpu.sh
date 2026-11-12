@@ -6,11 +6,12 @@ cd "$art_root"
 
 python_bin="${PYTHON_BIN:-python}"
 gpu_ids="${GPU_IDS:-0,1,2,3}"
-query_ids="$(seq -s, 0 59)"
+query_ids="${QUERY_IDS:-$(seq -s, 0 59)}"
+query_count="$(awk -F, '{print NF}' <<<"$query_ids")"
 removal_root="${DAS_REMOVAL_ROOT:-$art_root/outputs/topk-removal-das-lambda1000-q0-59}"
 metric_root="${DAS_METRIC_ROOT:-$art_root/outputs/topk-removal-das-lambda1000-q0-59/metrics}"
 
-echo "[definition] ArtBench DAS lambda=1000 Top-1000 removal; Q0-Q59"
+echo "[definition] ArtBench DAS lambda=1000 Top-1000 removal; queries=$query_ids"
 echo "[training] 100 epochs; remove 1000/5000; four-GPU static shards"
 echo "[removal root] $removal_root"
 
@@ -41,6 +42,6 @@ CUDA_VISIBLE_DEVICES="${EVAL_GPU_ID:-0}" "$python_bin" \
 "$python_bin" -m sd_artbench.combine_das_removal_metrics \
   --input-dir "$metric_root" \
   --output "$metric_root/das_lambda1000_top1000_all_metrics_q0_q59.txt" \
-  --expected-queries 60
+  --expected-queries "$query_count"
 
 echo "[done] $metric_root/das_lambda1000_top1000_all_metrics_q0_q59.txt"

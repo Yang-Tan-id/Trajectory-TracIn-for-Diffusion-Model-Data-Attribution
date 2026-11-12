@@ -47,8 +47,10 @@ def main() -> None:
     if len(left) != args.expected_queries:
         raise ValueError(f"expected {args.expected_queries} records, found {len(left)}")
     keys = sorted(left)
+    query_ids = sorted({query for query, _method in keys})
+    query_label = ",".join(f"Q{query}" for query in query_ids)
     lines = [
-        "ARTBENCH DAS LAMBDA=1000 TOP-1000 REMOVAL — Q0-Q59",
+        f"ARTBENCH DAS LAMBDA=1000 TOP-1000 REMOVAL — {query_label}",
         "=" * 132,
         f"queries={args.expected_queries}; removal=1000/5000; retraining=100 epochs",
         "All distances are measured against the corresponding full-data model output; larger means a larger removal effect.",
@@ -68,7 +70,7 @@ def main() -> None:
         lines.append(
             f"Q{query:<6d} " + " ".join(f"{values[field]:>11.7f}" for field in FIELDS)
         )
-    lines.extend(["", "MEAN OVER 60 QUERIES", "-" * 132])
+    lines.extend(["", f"MEAN OVER {args.expected_queries} QUERIES", "-" * 132])
     lines.append(
         " " * 7
         + " ".join(

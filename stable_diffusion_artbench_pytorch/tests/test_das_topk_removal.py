@@ -36,6 +36,7 @@ def test_das_topk_is_descending_stable():
 def test_launcher_contract():
     text = LAUNCHER.read_text(encoding="utf-8")
     assert "seq -s, 0 59" in text
+    assert 'QUERY_IDS:-$(seq -s, 0 59)' in text
     assert "--methods das_lambda_1000" in text
     assert "--top-k 1000" in text
     assert "evaluate_topk_removal_trajectory_mse" in text
