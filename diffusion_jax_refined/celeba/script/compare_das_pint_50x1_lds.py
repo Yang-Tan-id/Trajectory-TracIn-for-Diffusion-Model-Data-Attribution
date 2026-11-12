@@ -61,7 +61,7 @@ def main() -> None:
         type=Path,
         default=CELEBA_ROOT / "queries_attr40_val25_x4.json",
     )
-    parser.add_argument("--query-ids", default="0-71")
+    parser.add_argument("--query-ids", default="0-99")
     parser.add_argument("--das-csv", type=Path, default=None)
     parser.add_argument("--true-f-csv", type=Path, default=None)
     parser.add_argument("--output", type=Path, default=None)
@@ -70,14 +70,14 @@ def main() -> None:
     query_ids = parse_ids(args.query_ids)
     result_root = CELEBA_ROOT / "result" / args.experiment
     das_csv = args.das_csv or (
-        result_root / "celeba_das_50x1_mc1_lambda_sweep_lds_q0_71.csv"
+        result_root / "celeba_das_50x1_mc1_lambda_sweep_lds_q0_99.csv"
     )
     true_f_csv = args.true_f_csv or (
         result_root / "query100_lds_csv_ddim50"
         / "celeba_attr40_query100_lds_true_f_long.csv"
     )
     output = args.output or (
-        result_root / "celeba_das_vs_pint_50x1_lds_q0_71.csv"
+        result_root / "celeba_das_vs_pint_50x1_lds_q0_99.csv"
     )
 
     das_rows = [

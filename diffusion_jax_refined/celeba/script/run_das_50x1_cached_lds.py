@@ -72,7 +72,7 @@ def main() -> None:
     parser.add_argument("--experiment", default="attr40_experiment1")
     parser.add_argument("--train-seed", type=int, default=42)
     parser.add_argument("--query-file", type=Path, required=True)
-    parser.add_argument("--query-ids", default=",".join(str(i) for i in range(72)))
+    parser.add_argument("--query-ids", default=",".join(str(i) for i in range(100)))
     parser.add_argument("--namespace", default="das_50x1_mc1")
     parser.add_argument("--lambdas", default="")
     parser.add_argument("--true-f-csv", type=Path, default=None)
