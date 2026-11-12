@@ -71,6 +71,7 @@ timestep_shards=(
 shards=()
 
 echo "[definition] CelebA DAS: 50 DDIM timesteps x MC1; $num_points training points"
+echo "[parameters] ${DAS_PARAMETER_SOURCE:-raw}"
 if [[ -n "$score_indices_path" ]]; then
   echo "[candidates] explicit indices: $score_indices_path"
 else

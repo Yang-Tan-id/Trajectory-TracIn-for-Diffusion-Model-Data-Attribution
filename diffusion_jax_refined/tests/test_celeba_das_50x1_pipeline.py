@@ -26,6 +26,7 @@ class CelebaDAS50x1PipelineTest(unittest.TestCase):
         self.assertEqual(config["timesteps"], tuple(range(19, 1000, 20)))
         self.assertEqual(len(config["timesteps"]), 50)
         self.assertEqual(config["num_mc_noise"], 1)
+        self.assertEqual(config["parameter_source"], "raw")
         self.assertEqual(config["max_train_points"], 5000)
         self.assertTrue(config["score_indices_path"].endswith("attribution_5k_indices.npy"))
         self.assertFalse(config["use_sherman_morrison_denominator"])
@@ -34,10 +35,13 @@ class CelebaDAS50x1PipelineTest(unittest.TestCase):
         text = (
             CELEBA / "script" / "run_das_50x1_lambda_sweep_full10k_4gpu.sh"
         ).read_text()
-        self.assertIn('DAS_NAMESPACE="${DAS_NAMESPACE:-das_50x1_mc1_full10k}"', text)
-        self.assertIn('DAS_QUERY_ARTIFACT_NAMESPACE="${DAS_QUERY_ARTIFACT_NAMESPACE:-das_50x1_mc1}"', text)
+        self.assertIn('export DAS_PARAMETER_SOURCE="ema"', text)
+        self.assertIn('DAS_NAMESPACE="${DAS_NAMESPACE:-das_50x1_mc1_full10k_ema}"', text)
+        self.assertIn('DAS_QUERY_ARTIFACT_NAMESPACE="${DAS_QUERY_ARTIFACT_NAMESPACE:-$DAS_NAMESPACE}"', text)
         self.assertIn("export DAS_MAX_TRAIN_POINTS=10000", text)
         self.assertIn('export DAS_SCORE_INDICES_PATH=""', text)
+        config_text = (CELEBA / "dataset_config_das_attr40.py").read_text()
+        self.assertIn('os.environ.get("DAS_PARAMETER_SOURCE", "raw")', config_text)
 
     def test_runner_validates_dynamic_candidate_count(self) -> None:
         text = (CELEBA / "script" / "run_das_50x1_lambda_sweep_4gpu.sh").read_text()

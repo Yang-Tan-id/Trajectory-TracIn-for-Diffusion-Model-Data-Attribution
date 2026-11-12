@@ -54,7 +54,7 @@ ATTRIBUTION_CONFIGS = {
         **COMMON_CIFAR,
         "baseline_dir": CHECKPOINT_DIR,
         "reference_ckpt": REFERENCE_CKPT,
-        "parameter_source": "raw",
+        "parameter_source": os.environ.get("DAS_PARAMETER_SOURCE", "raw"),
         "attribution_sample_dir": ATTRIBUTION_SAMPLE_DIR,
         "attribution_sample_seed": INITIAL_SEED,
         "attribution_sample_index": 0,
