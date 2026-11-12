@@ -120,6 +120,7 @@ def main() -> None:
     assignments = [selected[index::len(gpu_ids)] for index in range(len(gpu_ids))]
 
     def query_worker(gpu: str, tasks: list[tuple[int, str, int]]) -> None:
+        jobs = []
         for query_id, prompt, seed in tasks:
             prompt_tag = _prompt_path_tag(prompt)
             sample_dir = (
@@ -133,20 +134,33 @@ def main() -> None:
             if args.skip_query_gradient or artifact.is_file():
                 print(f"[skip] DAS query Q{query_id}: {artifact}", flush=True)
                 continue
-            env = base_env | {
-                "CUDA_VISIBLE_DEVICES": gpu,
-                "QUERY": prompt,
-                "INITIAL_SEED": str(seed),
-                "SAMPLE_SEED": str(seed),
-                "ATTRIBUTION_SAMPLE_DIR": str(sample_dir),
-                "QUERY_GRADIENT_ARTIFACT_PATH": str(artifact),
-            }
-            run(
-                [args.python_bin, "data_attribution/das/02_query_gradient.py"],
-                env=env,
-                log=log_root / f"query_gpu_{gpu}.log",
-                execute=args.execute,
+            jobs.append(
+                {
+                    "label": f"Q{query_id}",
+                    "prompt": prompt,
+                    "seed": seed,
+                    "sample_dir": str(sample_dir),
+                    "artifact": str(artifact),
+                }
             )
+        if not jobs:
+            return
+        first = jobs[0]
+        env = base_env | {
+            "CUDA_VISIBLE_DEVICES": gpu,
+            "QUERY": str(first["prompt"]),
+            "INITIAL_SEED": str(first["seed"]),
+            "SAMPLE_SEED": str(first["seed"]),
+            "ATTRIBUTION_SAMPLE_DIR": str(first["sample_dir"]),
+            "QUERY_GRADIENT_ARTIFACT_PATH": str(first["artifact"]),
+            "DAS_QUERY_BATCH_JOBS": json.dumps(jobs),
+        }
+        run(
+            [args.python_bin, "data_attribution/das/02_query_gradient.py"],
+            env=env,
+            log=log_root / f"query_gpu_{gpu}.log",
+            execute=args.execute,
+        )
 
     with ThreadPoolExecutor(max_workers=len(gpu_ids)) as pool:
         futures = [

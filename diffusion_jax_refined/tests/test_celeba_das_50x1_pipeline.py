@@ -64,6 +64,18 @@ class CelebaDAS50x1PipelineTest(unittest.TestCase):
             text,
         )
 
+    def test_query_stage_batches_queries_timestamp_major(self) -> None:
+        engine = (
+            ROOT / "diffusion_jax_refined" / "legacy_jax" / "das" / "algorithm.py"
+        ).read_text()
+        runner = (
+            CELEBA / "script" / "run_das_50x1_queries_and_scores.py"
+        ).read_text()
+        self.assertIn('DAS_QUERY_BATCH_JOBS', engine)
+        self.assertIn('stage_query_features_by_job', engine)
+        self.assertIn('jax.vmap(', engine)
+        self.assertIn('"DAS_QUERY_BATCH_JOBS": json.dumps(jobs)', runner)
+
 
 if __name__ == "__main__":
     unittest.main()

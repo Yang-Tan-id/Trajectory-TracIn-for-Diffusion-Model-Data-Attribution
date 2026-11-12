@@ -4,7 +4,7 @@ import time
 import json
 import pickle
 import hashlib
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, replace
 from typing import Any, Dict, List, Tuple, Optional, Sequence
 
 import numpy as np
@@ -1432,6 +1432,10 @@ def compute_batched_das_train_artifact_term(
 def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
     stage_mode = os.environ.get("DAS_STAGE_MODE", "").strip().lower()
     stage_artifact_path = os.environ.get("DAS_STAGE_ARTIFACT_PATH")
+    query_batch_jobs_raw = os.environ.get("DAS_QUERY_BATCH_JOBS", "").strip()
+    query_batch_jobs = json.loads(query_batch_jobs_raw) if query_batch_jobs_raw else []
+    if query_batch_jobs and stage_mode != "query":
+        raise ValueError("DAS_QUERY_BATCH_JOBS is only valid in query stage mode")
     if stage_mode and stage_mode not in ("train", "query"):
         raise ValueError("DAS_STAGE_MODE must be unset, 'train', or 'query'.")
     if stage_mode and not stage_artifact_path:
@@ -1457,7 +1461,37 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
     x0_ref = None
     resolved_manifest_ckpt = None
     manifest_ckpt = None
-    if cfg.attribution_sample_dir is not None and stage_mode != "train":
+    batched_query_endpoints = []
+    if query_batch_jobs:
+        for job_index, job in enumerate(query_batch_jobs):
+            for required_key in ("prompt", "seed", "sample_dir", "artifact"):
+                if required_key not in job:
+                    raise KeyError(
+                        f"DAS query batch job {job_index} is missing {required_key!r}"
+                    )
+            job_cfg = replace(
+                cfg,
+                attribution_sample_dir=str(job["sample_dir"]),
+                attribution_sample_seed=int(job["seed"]),
+                query=str(job["prompt"]),
+            )
+            endpoint, endpoint_meta = load_attribution_endpoint(job_cfg)
+            inferred_query = infer_query_from_attribution_meta(endpoint_meta)
+            prompt = inferred_query if inferred_query is not None else str(job["prompt"])
+            normalized_job = dict(job)
+            normalized_job["prompt"] = prompt
+            query_batch_jobs[job_index] = normalized_job
+            batched_query_endpoints.append(endpoint)
+        x0_ref = batched_query_endpoints[0]
+        cfg.attribution_sample_dir = str(query_batch_jobs[0]["sample_dir"])
+        cfg.attribution_sample_seed = int(query_batch_jobs[0]["seed"])
+        cfg.query = query_batch_jobs[0]["prompt"]
+        print(
+            "[setup] timestamp-major DAS query batch enabled | "
+            f"queries={len(query_batch_jobs)}",
+            flush=True,
+        )
+    elif cfg.attribution_sample_dir is not None and stage_mode != "train":
         print(f"[setup] loading precomputed attribution sample: {cfg.attribution_sample_dir}")
         x0_ref, precomputed_sample_meta = load_attribution_endpoint(cfg)
         inferred_query = infer_query_from_attribution_meta(precomputed_sample_meta)
@@ -1583,6 +1617,23 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
         query_cond = repeat_condition_to_batch(query_cond, int(x0_ref.shape[0]))
         x0_ref = array_to_device(x0_ref, device)
     query_cond = array_to_device(query_cond, device)
+    batched_query_x0 = None
+    batched_query_cond = None
+    if query_batch_jobs:
+        batched_query_x0 = array_to_device(
+            jnp.stack(batched_query_endpoints, axis=0), device
+        )
+        conds = []
+        for endpoint, job in zip(batched_query_endpoints, query_batch_jobs):
+            cond = adapter.make_query_cond(ds, job["prompt"], cfg)
+            conds.append(repeat_condition_to_batch(cond, int(endpoint.shape[0])))
+        batched_query_cond = array_to_device(jnp.stack(conds, axis=0), device)
+        print(
+            "[setup] batched query tensors ready | "
+            f"x0={tuple(batched_query_x0.shape)} | "
+            f"cond={tuple(batched_query_cond.shape)}",
+            flush=True,
+        )
     print(f"[setup] query conditioning ready | shape={tuple(query_cond.shape)}")
     print(
         "[device-check] "
@@ -1698,8 +1749,10 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
     stage_grams = []
     stage_grams_undamped = []
     stage_query_features = []
+    stage_query_features_by_job = [[] for _ in query_batch_jobs]
     stage_residuals = []
     stage_query_residuals = []
+    stage_query_residuals_by_job = [[] for _ in query_batch_jobs]
     stage_ckpt_indices = []
     stage_timestep_values = []
     stage_mc_indices = []
@@ -1891,7 +1944,18 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
 
                 rng_q = array_to_device(make_jax_key(cfg.seed, "pdas_q", ckpt_i, t_value, mc_i), device)
                 noise_q = None
-                if stage_mode != "train" and query_input_mode == "endpoint_renoise":
+                batched_noise_q = None
+                if query_batch_jobs and query_input_mode == "endpoint_renoise":
+                    noise_q = jax.random.normal(
+                        rng_q,
+                        batched_query_x0.shape[1:],
+                        dtype=batched_query_x0.dtype,
+                    )
+                    batched_noise_q = jnp.broadcast_to(
+                        noise_q,
+                        batched_query_x0.shape,
+                    )
+                elif stage_mode != "train" and query_input_mode == "endpoint_renoise":
                     _, noise_q = sample_xt_and_noise_jax(schedule, x0_ref, t=t_tensor, rng=rng_q)
                 projection_mc_key = (
                     "mc_normalized"
@@ -1938,7 +2002,45 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
 
                 if stage_mode != "train":
                     print("[mc] compiling/running query phi...", flush=True)
-                    if query_input_mode == "generation_trajectory":
+                    if query_batch_jobs:
+                        if query_input_mode != "endpoint_renoise":
+                            raise ValueError(
+                                "timestamp-major DAS query batches currently require "
+                                "query_input_mode=endpoint_renoise"
+                            )
+                        batched_query_phi_fn = jax.jit(
+                            jax.vmap(
+                                phi_fn,
+                                in_axes=(None, 0, 0, None, 0, None),
+                            )
+                        )
+                        query_residual_batch, phi_q_batch = batched_query_phi_fn(
+                            params_k,
+                            batched_query_x0,
+                            batched_query_cond,
+                            t_tensor,
+                            batched_noise_q,
+                            output_probe,
+                        )
+                        phi_q_batch.block_until_ready()
+                        phi_q_batch_np = np.asarray(phi_q_batch, dtype=np.float32)
+                        residual_batch_np = np.asarray(
+                            query_residual_batch, dtype=np.float32
+                        ).reshape(-1)
+                        for job_index in range(len(query_batch_jobs)):
+                            stage_query_features_by_job[job_index].append(
+                                phi_q_batch_np[job_index]
+                            )
+                            stage_query_residuals_by_job[job_index].append(
+                                float(residual_batch_np[job_index])
+                            )
+                        print(
+                            "[mc] batched query projected eps-gradients ready | "
+                            f"queries={len(query_batch_jobs)}",
+                            flush=True,
+                        )
+                        continue
+                    elif query_input_mode == "generation_trajectory":
                         # Reuse the same projector and output probe seeds as
                         # the train term so both features share coordinates.
                         trajectory_phi_fn = make_projected_trajectory_query_grad_fn(
@@ -2414,6 +2516,57 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
         return
 
     if stage_mode == "query":
+        if query_batch_jobs:
+            # The batched branch appends features before the ordinary stage
+            # bookkeeping below, so derive the shared term identifiers from
+            # the configured traversal order.
+            ckpt_indices = np.repeat(
+                np.arange(len(baseline_ckpts), dtype=np.int32),
+                len(timesteps) * num_mc_noise,
+            )
+            timestep_values = np.tile(
+                np.repeat(np.asarray(timesteps, dtype=np.int32), num_mc_noise),
+                len(baseline_ckpts),
+            )
+            mc_indices = np.tile(
+                np.arange(num_mc_noise, dtype=np.int32),
+                len(baseline_ckpts) * len(timesteps),
+            )
+            expected_terms = len(baseline_ckpts) * len(timesteps) * num_mc_noise
+            for job_index, job in enumerate(query_batch_jobs):
+                if len(stage_query_features_by_job[job_index]) != expected_terms:
+                    raise RuntimeError(
+                        f"DAS batched query {job.get('label', job_index)} produced "
+                        f"{len(stage_query_features_by_job[job_index])}/{expected_terms} terms"
+                    )
+                artifact = str(job["artifact"])
+                ensure_dir(os.path.dirname(artifact))
+                np.savez_compressed(
+                    artifact,
+                    query_features=np.stack(
+                        stage_query_features_by_job[job_index], axis=0
+                    ).astype(np.float32),
+                    query_residuals=np.asarray(
+                        stage_query_residuals_by_job[job_index], dtype=np.float32
+                    ),
+                    ckpt_indices=ckpt_indices,
+                    timesteps=timestep_values,
+                    mc_indices=mc_indices,
+                    damping=np.asarray(float(damping), dtype=np.float32),
+                    proj_dim=np.asarray(int(proj_dim), dtype=np.int32),
+                    mc_samples_per_term=np.asarray(int(num_mc_noise), dtype=np.int32),
+                    mc_aggregation=np.asarray("none"),
+                    mc_normalize_eps=np.asarray(mc_normalize_eps, dtype=np.float32),
+                    query_input_mode=np.asarray(query_input_mode),
+                    trajectory_xt_path=np.asarray(""),
+                    trajectory_t_path=np.asarray(""),
+                )
+                print(
+                    f"[saved] DAS batched query artifact {job.get('label', job_index)}: "
+                    f"{artifact}",
+                    flush=True,
+                )
+            return
         ensure_dir(os.path.dirname(stage_artifact_path))
         np.savez_compressed(
             stage_artifact_path,
