@@ -26,6 +26,13 @@ class DasTop10PlotTest(unittest.TestCase):
         self.assertIn('np.random.SeedSequence([args.random_seed, query])', source)
         self.assertIn('default=2026', source)
 
+    def test_includes_full_data_output_as_separate_reference(self):
+        source = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn('"--endpoint-image-root"', source)
+        self.assertIn('"full-data.png"', source)
+        self.assertIn('output_label = "Output"', source)
+        self.assertIn('output_gap = 40', source)
+
 
 if __name__ == "__main__":
     unittest.main()

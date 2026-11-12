@@ -72,6 +72,14 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=project / "outputs/analysis/top10_five_methods_plus_das_lambda1000",
     )
+    parser.add_argument(
+        "--endpoint-image-root",
+        type=Path,
+        default=(
+            project / "outputs/topk-removal-five-method-metrics-q0-59/combined"
+        ),
+        help="Directory containing query-NNN/full-data.png outputs.",
+    )
     parser.add_argument("--top-k", type=int, default=10)
     parser.add_argument("--tile-size", type=int, default=160)
     parser.add_argument("--random-seed", type=int, default=2026)
@@ -179,6 +187,7 @@ def selections(args: argparse.Namespace) -> dict[str, dict[int, np.ndarray]]:
 
 def render(
     output: Path,
+    reference_output: Path,
     query: int,
     selected: dict[str, dict[int, np.ndarray]],
     paths: dict[int, Path],
@@ -188,17 +197,52 @@ def render(
     gap = 6
     outer = 14
     label_width = 132
+    output_gap = 40
     header_height = 42
     row_count = len(METHODS)
-    width = outer * 2 + label_width + top_k * tile_size + (top_k - 1) * gap
+    width = (
+        outer * 2
+        + label_width
+        + tile_size
+        + output_gap
+        + top_k * tile_size
+        + (top_k - 1) * gap
+    )
     height = outer * 2 + header_height + row_count * tile_size + (row_count - 1) * gap
     canvas = Image.new("RGB", (width, height), "#F7F7F7")
     draw = ImageDraw.Draw(canvas)
     row_font = font(17, bold=True)
     rank_font = font(14, bold=True)
 
+    output_left = outer + label_width
+    output_top = outer + header_height + (height - outer * 2 - header_height - tile_size) // 2
+    output_label = "Output"
+    output_bounds = draw.textbbox((0, 0), output_label, font=row_font)
+    draw.text(
+        (
+            output_left + (tile_size - (output_bounds[2] - output_bounds[0])) / 2,
+            outer + 8,
+        ),
+        output_label,
+        font=row_font,
+        fill="#202124",
+    )
+    canvas.paste(fit_tile(reference_output, tile_size), (output_left, output_top))
+    draw.rectangle(
+        (
+            output_left,
+            output_top,
+            output_left + tile_size - 1,
+            output_top + tile_size - 1,
+        ),
+        outline="#4C78A8",
+        width=3,
+    )
+
+    grid_left = output_left + tile_size + output_gap
+
     for rank in range(top_k):
-        left = outer + label_width + rank * (tile_size + gap)
+        left = grid_left + rank * (tile_size + gap)
         text = f"#{rank + 1}"
         bounds = draw.textbbox((0, 0), text, font=rank_font)
         draw.text(
@@ -217,7 +261,7 @@ def render(
             fill="#202124",
         )
         for column, metadata_index in enumerate(selected[label][query]):
-            left = outer + label_width + column * (tile_size + gap)
+            left = grid_left + column * (tile_size + gap)
             canvas.paste(fit_tile(paths[int(metadata_index)], tile_size), (left, top))
             draw.rectangle(
                 (left, top, left + tile_size - 1, top + tile_size - 1),
@@ -237,7 +281,18 @@ def main() -> None:
     paths = {int(index): Path(row["image_path"]) for index, row in metadata.iterrows()}
     for query in args.query_indices:
         output = args.output_dir / f"artbench_q{query:02d}_top{args.top_k}_six_methods.png"
-        render(output, query, selected, paths, args.tile_size, args.top_k)
+        reference_output = (
+            args.endpoint_image_root / f"query-{query:03d}" / "full-data.png"
+        )
+        render(
+            output,
+            reference_output,
+            query,
+            selected,
+            paths,
+            args.tile_size,
+            args.top_k,
+        )
         print(f"[saved] Q{query} {output}", flush=True)
     print("[rows] PINT | TracInCP | GAS | ReTrac | Random | DAS", flush=True)
 
