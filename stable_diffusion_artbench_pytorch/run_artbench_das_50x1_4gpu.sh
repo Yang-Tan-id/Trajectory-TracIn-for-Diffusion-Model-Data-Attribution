@@ -9,6 +9,7 @@ namespace="${DAS_NAMESPACE:-artbench_das_50x1_full5000_sm}"
 output_root="${DAS_OUTPUT_ROOT:-$project/outputs/attribution/$namespace}"
 query_ids="${QUERY_IDS:-$(seq -s, 0 59)}"
 lambdas="${DAS_LAMBDAS:-0.1 0.2 0.5 1 2 5 10 20 50 100 200 500 1000 2000 5000 10000}"
+run_lds="${DAS_RUN_LDS:-0}"
 
 IFS=',' read -r -a gpu_ids <<<"$gpus"
 [[ ${#gpu_ids[@]} -eq 4 ]] || { echo "GPU_IDS must contain four GPUs" >&2; exit 2; }
@@ -18,8 +19,10 @@ required=(
   "$project/dataset/metadata/ArtBench-10.csv"
   "$project/dataset/indices/idx-train.pkl"
   "$project/outputs/artbench2-queries-60/manifest.json"
-  "$project/outputs/artbench2-lds/evaluation/four_targets_q0_59/true_f_four_targets.csv"
 )
+if [[ "$run_lds" == "1" ]]; then
+  required+=("$project/outputs/artbench2-lds/evaluation/four_targets_q0_59/true_f_four_targets.csv")
+fi
 for path in "${required[@]}"; do
   [[ -s "$path" ]] || { echo "MISSING: $path" >&2; exit 1; }
 done
@@ -100,6 +103,12 @@ for slot in 0 1 2 3; do
   pids+=("$!")
 done
 for pid in "${pids[@]}"; do wait "$pid"; done
+
+if [[ "$run_lds" != "1" ]]; then
+  echo "[done] DAS train/query artifacts and lambda-sweep scores: $output_root"
+  echo "[skip] LDS was not requested; set DAS_RUN_LDS=1 after true-f is available"
+  exit 0
+fi
 
 for value in "${lambda_values[@]}"; do
   "$python_bin" -m sd_artbench.artbench_das --mode lds \

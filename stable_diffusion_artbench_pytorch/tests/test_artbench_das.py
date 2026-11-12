@@ -29,3 +29,5 @@ def test_launcher_uses_four_disjoint_ddim_shards_and_q0_q59():
     assert 'seq -s, 0 59' in text
     assert 'artbench_das_50x1_full5000_sm' in text
     assert 'DAS_TRAIN_BATCH_SIZE:-2' in text
+    assert 'DAS_RUN_LDS:-0' in text
+    assert 'set DAS_RUN_LDS=1 after true-f is available' in text
