@@ -97,7 +97,7 @@ def render_report(payload: dict) -> str:
         f"queries = {len(payload['query_ids'])}",
         "",
     ]
-    for method in METHODS:
+    for method in payload["methods"]:
         lines.extend(
             [
                 f"METHOD: {method}",
@@ -130,7 +130,7 @@ def render_report(payload: dict) -> str:
         lines.append("")
 
     lines.append("PER-QUERY LDS")
-    for method in METHODS:
+    for method in payload["methods"]:
         for lam in payload["lambdas"]:
             lines.append(f"\nMETHOD={method} lambda={lam:g}")
             row = payload["results"][method][str(lam)]
@@ -175,16 +175,36 @@ def main() -> None:
                 f"membership={membership.shape}"
             )
 
+    available_methods = []
+    for method in METHODS:
+        probe = (
+            ATTR_DIR
+            / method
+            / f"q{query_ids[0]:02d}"
+            / f"lambda_{lambda_tag(float(DAS_LAMBDAS[0]))}"
+            / "scores.npy"
+        )
+        if probe.is_file():
+            available_methods.append(method)
+        else:
+            print(
+                f"[skip] {method}: score bank is absent (first missing file: {probe})",
+                flush=True,
+            )
+    if not available_methods:
+        raise FileNotFoundError("neither das_ema nor das_raw score bank is available")
+
     payload = {
         "query_ids": query_ids,
+        "methods": available_methods,
         "lambdas": [float(value) for value in DAS_LAMBDAS],
         "prediction_sign": -1,
         "simple_loss_bank": {"timestamps": 100, "mc": 4},
         "metric_paths": {key: str(value) for key, value in METRIC_PATHS.items()},
-        "results": {method: {} for method in METHODS},
+        "results": {method: {} for method in available_methods},
     }
 
-    for method in METHODS:
+    for method in available_methods:
         for lam_raw in DAS_LAMBDAS:
             lam = float(lam_raw)
             scores = load_scores(method, lam, query_ids)
