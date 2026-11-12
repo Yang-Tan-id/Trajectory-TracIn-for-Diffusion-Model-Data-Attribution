@@ -42,6 +42,7 @@ class CelebaDAS50x1PipelineTest(unittest.TestCase):
         self.assertEqual(values, list(range(19, 1000, 20)))
         self.assertEqual(len(values), len(set(values)))
         self.assertIn("DAS_SHERMAN_MORRISON_DENOMINATOR=0", text)
+        self.assertIn('DAS_GRAD_BATCH_SIZE="${DAS_GRAD_BATCH_SIZE:-8}"', text)
 
     def test_das_engine_accepts_an_explicit_index_file(self) -> None:
         text = (
@@ -50,6 +51,14 @@ class CelebaDAS50x1PipelineTest(unittest.TestCase):
         self.assertIn("score_indices_path: Optional[str] = None", text)
         self.assertIn("np.load(path)", text)
         self.assertIn("DAS score index file contains duplicates", text)
+
+    def test_staged_train_path_uses_true_vmap_microbatches(self) -> None:
+        text = (
+            ROOT / "diffusion_jax_refined" / "legacy_jax" / "das" / "algorithm.py"
+        ).read_text()
+        self.assertIn("def compute_batched_das_train_artifact_term(", text)
+        self.assertIn('"[stage-train] using vmapped exact per-example gradients | "', text)
+        self.assertIn("jax.vmap(phi_fn", text)
 
 
 if __name__ == "__main__":

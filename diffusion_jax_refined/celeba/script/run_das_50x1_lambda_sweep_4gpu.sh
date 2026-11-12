@@ -45,6 +45,7 @@ export ATTRIBUTION_SAMPLE_MODEL_MODE=prompted_solo
 export ATTRIBUTION_SCORE_MODEL_MODE=prompted_solo
 export DAS_NUM_MC_NOISE=1
 export DAS_PROJ_DIM=4096
+export DAS_GRAD_BATCH_SIZE="${DAS_GRAD_BATCH_SIZE:-8}"
 export DAS_DAMPING_SWEEP=1
 export DAS_DAMPING_SWEEP_VALUES="$lambdas"
 export DAS_SHERMAN_MORRISON_DENOMINATOR=0
@@ -65,6 +66,7 @@ shards=()
 echo "[definition] CelebA DAS: 50 DDIM timesteps x MC1; 5000 fixed attribution points"
 echo "[lambda] $lambdas"
 echo "[queries] $query_ids"
+echo "[vmap microbatch] $DAS_GRAD_BATCH_SIZE"
 echo "[python] $python_bin"
 
 if [[ ! -s "$train_artifact" ]]; then

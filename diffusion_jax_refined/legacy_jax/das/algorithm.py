@@ -1330,6 +1330,98 @@ def compute_batched_das_term(
     return scores_by_damping, float(np.mean(residual_cache))
 
 
+def compute_batched_das_train_artifact_term(
+    *,
+    adapter,
+    ds,
+    picked,
+    params,
+    phi_fn,
+    t_tensor,
+    output_probe,
+    cfg,
+    ckpt_i: int,
+    t_value: int,
+    mc_i: int,
+    device,
+    description: str,
+):
+    """Build one staged DAS train term with true vmapped per-example grads."""
+    batch_size = max(1, int(cfg.per_example_grad_batch_size))
+    num_points = len(picked)
+    num_batches = (num_points + batch_size - 1) // batch_size
+    proj_dim = int(cfg.proj_dim)
+
+    batched_phi_fn = jax.jit(
+        jax.vmap(phi_fn, in_axes=(None, 0, 0, None, 0, None))
+    )
+    phi_cache = np.empty((num_points, proj_dim), dtype=np.float32)
+    residual_cache = np.empty((num_points,), dtype=np.float32)
+    gram_device = array_to_device(
+        jnp.zeros((proj_dim, proj_dim), dtype=jnp.float32), device
+    )
+
+    started = time.perf_counter()
+    iterator = iter_with_tqdm(
+        range(num_batches),
+        total=num_batches,
+        desc=description,
+        enabled=bool(cfg.use_tqdm),
+    )
+    for batch_idx in iterator:
+        start = batch_idx * batch_size
+        batch_indices = picked[start : start + batch_size]
+        x_items = []
+        cond_items = []
+        keys = []
+        for idx in batch_indices:
+            x0_i, cond_i = adapter.get_item(ds, idx)
+            x_items.append(x0_i)
+            cond_items.append(cond_i)
+            keys.append(
+                make_jax_key(cfg.seed, "pdas_tr", ckpt_i, t_value, mc_i, idx)
+            )
+
+        x_batch = array_to_device(jnp.stack(x_items, axis=0), device)
+        cond_batch = array_to_device(jnp.stack(cond_items, axis=0), device)
+        key_batch = array_to_device(jnp.stack(keys, axis=0), device)
+        noise_batch = jax.vmap(
+            lambda key, x: jax.random.normal(key, x.shape, dtype=x.dtype)
+        )(key_batch, x_batch)
+        residual_batch, phi_batch = batched_phi_fn(
+            params,
+            x_batch,
+            cond_batch,
+            t_tensor,
+            noise_batch,
+            output_probe,
+        )
+        gram_device = gram_device + phi_batch.T @ phi_batch
+
+        phi_np = np.asarray(phi_batch, dtype=np.float32)
+        residual_np = np.asarray(residual_batch, dtype=np.float32).reshape(-1)
+        end = start + len(batch_indices)
+        phi_cache[start:end] = phi_np
+        residual_cache[start:end] = residual_np
+
+        if (not cfg.use_tqdm) and should_print_progress(
+            batch_idx + 1,
+            num_batches,
+            max(1, int(cfg.progress_every_batches)),
+        ):
+            elapsed = time.perf_counter() - started
+            print(
+                f"    [VMAP train] batch {batch_idx + 1}/{num_batches} | "
+                f"samples={end}/{num_points} | elapsed={format_seconds(elapsed)} | "
+                f"eta={format_eta(batch_idx + 1, num_batches, elapsed, warmup_steps=2)}"
+            )
+        if hasattr(iterator, "set_postfix"):
+            iterator.set_postfix(samples=f"{end}/{num_points}")
+
+    gram = np.asarray(gram_device, dtype=np.float32)
+    return phi_cache, residual_cache, gram
+
+
 # ============================================================
 # Main
 # ============================================================
@@ -1935,33 +2027,84 @@ def run_endpoint_das_projected_jax(cfg: EndpointProjectedDASJAXConfig):
                     continue
 
                 if stage_mode == "train":
-                    phi_cache = np.empty((M, proj_dim), dtype=np.float32)
-                    residual_cache = np.empty((M,), dtype=np.float32)
-                    H_proj = np.zeros((proj_dim, proj_dim), dtype=np.float32)
-                    stage_iter = iter_with_tqdm(
-                        range(num_batches),
-                        total=num_batches,
-                        desc=f"DAS stage {stage_mode} ckpt {ckpt_i+1}/{len(baseline_ckpts)} t={t_value} mc={mc_i+1}",
-                        enabled=bool(cfg.use_tqdm),
-                    )
-                    for batch_idx in stage_iter:
-                        start = batch_idx * bs
-                        batch = picked[start:start + bs]
-                        for local_j, idx in enumerate(batch):
-                            x0_i, cond_i = adapter.get_item(ds, idx)
-                            x0_i = array_to_device(x0_i, device)
-                            cond_i = array_to_device(cond_i, device)
-                            rng_i = array_to_device(make_jax_key(cfg.seed, "pdas_tr", ckpt_i, t_value, mc_i, idx), device)
-                            _, noise_i = sample_xt_and_noise_jax(schedule, x0_i, t=t_tensor, rng=rng_i)
-                            residual_i, phi_i = phi_fn(params_k, x0_i, cond_i, t_tensor, noise_i, output_probe)
-                            phi_i.block_until_ready()
-                            phi_np = np.asarray(phi_i, dtype=np.float32)
-                            phi_cache[start + local_j] = phi_np
-                            residual_cache[start + local_j] = float(residual_i)
-                            if not aggregate_mc_normalized:
-                                H_proj += np.outer(phi_np, phi_np).astype(np.float32)
-                        if hasattr(stage_iter, "set_postfix"):
-                            stage_iter.set_postfix(samples=f"{min(start + len(batch), M)}/{M}")
+                    if cfg.use_batched_per_example_grads:
+                        print(
+                            "[stage-train] using vmapped exact per-example gradients | "
+                            f"microbatch={int(cfg.per_example_grad_batch_size)}",
+                            flush=True,
+                        )
+                        phi_cache, residual_cache, H_proj = (
+                            compute_batched_das_train_artifact_term(
+                                adapter=adapter,
+                                ds=ds,
+                                picked=picked,
+                                params=params_k,
+                                phi_fn=phi_fn,
+                                t_tensor=t_tensor,
+                                output_probe=output_probe,
+                                cfg=cfg,
+                                ckpt_i=ckpt_i,
+                                t_value=t_value,
+                                mc_i=mc_i,
+                                device=device,
+                                description=(
+                                    f"DAS stage train VMAP ckpt {ckpt_i+1}/"
+                                    f"{len(baseline_ckpts)} t={t_value} mc={mc_i+1}"
+                                ),
+                            )
+                        )
+                    else:
+                        phi_cache = np.empty((M, proj_dim), dtype=np.float32)
+                        residual_cache = np.empty((M,), dtype=np.float32)
+                        H_proj = np.zeros((proj_dim, proj_dim), dtype=np.float32)
+                        stage_iter = iter_with_tqdm(
+                            range(num_batches),
+                            total=num_batches,
+                            desc=(
+                                f"DAS stage {stage_mode} ckpt {ckpt_i+1}/"
+                                f"{len(baseline_ckpts)} t={t_value} mc={mc_i+1}"
+                            ),
+                            enabled=bool(cfg.use_tqdm),
+                        )
+                        for batch_idx in stage_iter:
+                            start = batch_idx * bs
+                            batch = picked[start:start + bs]
+                            for local_j, idx in enumerate(batch):
+                                x0_i, cond_i = adapter.get_item(ds, idx)
+                                x0_i = array_to_device(x0_i, device)
+                                cond_i = array_to_device(cond_i, device)
+                                rng_i = array_to_device(
+                                    make_jax_key(
+                                        cfg.seed,
+                                        "pdas_tr",
+                                        ckpt_i,
+                                        t_value,
+                                        mc_i,
+                                        idx,
+                                    ),
+                                    device,
+                                )
+                                _, noise_i = sample_xt_and_noise_jax(
+                                    schedule, x0_i, t=t_tensor, rng=rng_i
+                                )
+                                residual_i, phi_i = phi_fn(
+                                    params_k,
+                                    x0_i,
+                                    cond_i,
+                                    t_tensor,
+                                    noise_i,
+                                    output_probe,
+                                )
+                                phi_i.block_until_ready()
+                                phi_np = np.asarray(phi_i, dtype=np.float32)
+                                phi_cache[start + local_j] = phi_np
+                                residual_cache[start + local_j] = float(residual_i)
+                                if not aggregate_mc_normalized:
+                                    H_proj += np.outer(phi_np, phi_np).astype(np.float32)
+                            if hasattr(stage_iter, "set_postfix"):
+                                stage_iter.set_postfix(
+                                    samples=f"{min(start + len(batch), M)}/{M}"
+                                )
                     if aggregate_mc_factorized:
                         if train_gradient_sum is None:
                             train_gradient_sum = np.zeros_like(phi_cache, dtype=np.float64)
