@@ -5,11 +5,13 @@ project="${ARTBENCH_ROOT:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 python_bin="${PYTHON_BIN:-python}"
 export PYTHONPATH="$project/src${PYTHONPATH:+:$PYTHONPATH}"
 gpus="${GPU_IDS:-0,1,2,3}"
-namespace="${DAS_NAMESPACE:-artbench_das_50x1_full5000_sm}"
+namespace="${DAS_NAMESPACE:-artbench_das_50x1_full5000_dual32768_sm}"
 output_root="${DAS_OUTPUT_ROOT:-$project/outputs/attribution/$namespace}"
 query_ids="${QUERY_IDS:-$(seq -s, 0 59)}"
 lambdas="${DAS_LAMBDAS:-0.1 0.2 0.5 1 2 5 10 20 50 100 200 500 1000 2000 5000 10000}"
 run_lds="${DAS_RUN_LDS:-0}"
+proj_dim="${DAS_PROJ_DIM:-32768}"
+[[ "$proj_dim" == "32768" ]] || { echo "DAS_PROJ_DIM must be 32768 for the shared ArtBench projection" >&2; exit 2; }
 
 IFS=',' read -r -a gpu_ids <<<"$gpus"
 [[ ${#gpu_ids[@]} -eq 4 ]] || { echo "GPU_IDS must contain four GPUs" >&2; exit 2; }
@@ -36,8 +38,8 @@ assert torch.cuda.is_available(), "ArtBench DAS requires CUDA"
 print(f"[preflight] torch={torch.__version__} GPUs={torch.cuda.device_count()}")
 PY
 
-train_artifact="$output_root/train_artifact.npz"
 query_artifact="$output_root/query_artifact_q0_q59.npz"
+cross_artifact="$output_root/cross_kernel_q0_q59.npz"
 timestep_shards=(
   "999,919,839,759,679,599,519,439,359,279,199,119,39"
   "979,899,819,739,659,579,499,419,339,259,179,99,19"
@@ -46,25 +48,28 @@ timestep_shards=(
 )
 
 echo "[definition] ArtBench DAS: latent residual, LoRA-only exact gradients"
-echo "[definition] 50 DDIM timesteps x MC1; full 5000; projection 4096"
+echo "[definition] 50 DDIM timesteps x MC1; full 5000; projection $proj_dim"
+echo "[preprocessing] FP16 train features + FP32 dual eigensystem; cached train-query cross-kernel"
 echo "[definition] squared contraction; Sherman-Morrison denominator enabled"
 echo "[queries] $query_ids"
 
-if [[ ! -s "$train_artifact" ]]; then
-  pids=()
-  for slot in 0 1 2 3; do
-    shard="$output_root/train_shards/train_${slot}.npz"
-    [[ -s "$shard" ]] && continue
-    CUDA_VISIBLE_DEVICES="${gpu_ids[$slot]}" "$python_bin" -m sd_artbench.artbench_das \
-      --mode train --timesteps "${timestep_shards[$slot]}" --proj-dim 4096 \
-      --batch-size "${DAS_TRAIN_BATCH_SIZE:-2}" --output "$shard" \
-      >"$output_root/logs/train_gpu_${gpu_ids[$slot]}.log" 2>&1 &
-    pids+=("$!")
-  done
-  for pid in "${pids[@]}"; do wait "$pid"; done
-  "$python_bin" -m sd_artbench.artbench_das --mode merge --merge-kind train \
-    --inputs "$output_root"/train_shards/train_*.npz --output "$train_artifact"
-fi
+pids=()
+for slot in 0 1 2 3; do
+  shard="$output_root/train_shards/train_${slot}.npz"
+  [[ -s "$shard" ]] && continue
+  CUDA_VISIBLE_DEVICES="${gpu_ids[$slot]}" "$python_bin" -m sd_artbench.artbench_das \
+    --mode train --timesteps "${timestep_shards[$slot]}" --proj-dim "$proj_dim" \
+    --batch-size "${DAS_TRAIN_BATCH_SIZE:-2}" --output "$shard" \
+    >"$output_root/logs/train_gpu_${gpu_ids[$slot]}.log" 2>&1 &
+  pids+=("$!")
+done
+for pid in "${pids[@]}"; do wait "$pid"; done
+for slot in 0 1 2 3; do
+  [[ -s "$output_root/train_shards/train_${slot}.npz" ]] || {
+    echo "MISSING TRAIN SHARD: $slot" >&2
+    exit 1
+  }
+done
 
 if [[ ! -s "$query_artifact" ]]; then
   pids=()
@@ -78,7 +83,7 @@ PY
     shard="$output_root/query_shards/query_${slot}.npz"
     [[ -s "$shard" ]] && continue
     CUDA_VISIBLE_DEVICES="${gpu_ids[$slot]}" "$python_bin" -m sd_artbench.artbench_das \
-      --mode query --query-ids "$ids" --proj-dim 4096 \
+      --mode query --query-ids "$ids" --proj-dim "$proj_dim" \
       --query-batch-size "${DAS_QUERY_BATCH_SIZE:-4}" --output "$shard" \
       >"$output_root/logs/query_gpu_${gpu_ids[$slot]}.log" 2>&1 &
     pids+=("$!")
@@ -86,6 +91,21 @@ PY
   for pid in "${pids[@]}"; do wait "$pid"; done
   "$python_bin" -m sd_artbench.artbench_das --mode merge --merge-kind query \
     --inputs "$output_root"/query_shards/query_*.npz --output "$query_artifact"
+fi
+
+if [[ ! -s "$cross_artifact" ]]; then
+  pids=()
+  for slot in 0 1 2 3; do
+    shard="$output_root/cross_${slot}.npz"
+    CUDA_VISIBLE_DEVICES="${gpu_ids[$slot]}" "$python_bin" -m sd_artbench.artbench_das \
+      --mode cross --train-artifact "$output_root/train_shards/train_${slot}.npz" \
+      --query-artifact "$query_artifact" --proj-dim "$proj_dim" --output "$shard" \
+      >"$output_root/logs/cross_gpu_${gpu_ids[$slot]}.log" 2>&1 &
+    pids+=("$!")
+  done
+  for pid in "${pids[@]}"; do wait "$pid"; done
+  "$python_bin" -m sd_artbench.artbench_das --mode merge --merge-kind cross \
+    --inputs "$output_root"/cross_*.npz --output "$cross_artifact"
 fi
 
 IFS=' ' read -r -a lambda_values <<<"$lambdas"
@@ -97,7 +117,8 @@ for slot in 0 1 2 3; do
   done
   assigned="${assigned%,}"
   CUDA_VISIBLE_DEVICES="${gpu_ids[$slot]}" "$python_bin" -m sd_artbench.artbench_das \
-    --mode score --train-artifact "$train_artifact" --query-artifact "$query_artifact" \
+    --mode score --train-artifacts "$output_root"/train_shards/train_*.npz \
+    --cross-artifact "$cross_artifact" --proj-dim "$proj_dim" \
     --lambdas "$assigned" --output-dir "$output_root/scores" \
     >"$output_root/logs/score_gpu_${gpu_ids[$slot]}.log" 2>&1 &
   pids+=("$!")

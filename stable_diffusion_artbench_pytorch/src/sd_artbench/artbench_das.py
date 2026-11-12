@@ -139,26 +139,36 @@ def train_mode(args):
         raise ValueError(f"ArtBench DAS requires all 5000 points, found {len(dataset)}")
     latents, hidden = cache_training_inputs(runtime, dataset)
     projector = CountSketchProjector(args.proj_dim, stable_seed("artbench-das", checkpoint.name))
-    all_features, all_residuals, all_grams = [], [], []
+    all_features, all_residuals, all_eigenvalues, all_eigenvectors = [], [], [], []
     for timestep in args.timesteps:
         features, residuals = projected_term(
             runtime, latents, hidden, timestep=timestep, projector=projector,
             sample_keys=list(range(len(dataset))), batch_size=args.batch_size, train=True,
         )
-        all_features.append(features)
+        # FP16 keeps the reusable 50 x 5000 x 32768 feature cache near 15.3 GiB.
+        # The solve itself stays FP32.
+        cached_features = features.astype(np.float16)
+        all_features.append(cached_features)
         all_residuals.append(residuals)
-        feature_device = torch.from_numpy(features).to(runtime.device)
-        all_grams.append((feature_device.T @ feature_device).cpu().numpy())
-        del feature_device
+        # Build K from exactly the quantized Phi that cross_mode will reuse.
+        feature_device = torch.from_numpy(cached_features).to(runtime.device, dtype=torch.float32)
+        dual_gram = feature_device @ feature_device.T
+        eigenvalues, eigenvectors = torch.linalg.eigh(dual_gram)
+        all_eigenvalues.append(eigenvalues.cpu().numpy())
+        all_eigenvectors.append(eigenvectors.cpu().numpy())
+        del feature_device, dual_gram, eigenvalues, eigenvectors
     save_npz(
         args.output,
         train_features=np.stack(all_features), residuals=np.stack(all_residuals),
-        gram_undamped=np.stack(all_grams), timesteps=np.asarray(args.timesteps),
+        dual_eigenvalues=np.stack(all_eigenvalues),
+        dual_eigenvectors=np.stack(all_eigenvectors),
+        timesteps=np.asarray(args.timesteps),
         train_metadata_indices=np.asarray(dataset.metadata_indices),
         manifest_json=np.asarray(json.dumps({
             "dataset": "artbench2", "checkpoint": checkpoint.name, "mc": 1,
             "proj_dim": args.proj_dim, "residual": "latent_noise_prediction_projection",
             "gradient_parameters": "lora_only", "normalized_projected_gradients": True,
+            "solver": "dual_eigendecomposition",
         }, sort_keys=True)),
     )
     print(f"[saved] {args.output}", flush=True)
@@ -197,16 +207,24 @@ def merge_mode(args):
             fields = {
                 "train_features": np.concatenate([p["train_features"] for p in payloads])[order],
                 "residuals": np.concatenate([p["residuals"] for p in payloads])[order],
-                "gram_undamped": np.concatenate([p["gram_undamped"] for p in payloads])[order],
+                "dual_eigenvalues": np.concatenate([p["dual_eigenvalues"] for p in payloads])[order],
+                "dual_eigenvectors": np.concatenate([p["dual_eigenvectors"] for p in payloads])[order],
                 "timesteps": np.concatenate([p["timesteps"] for p in payloads])[order],
                 "train_metadata_indices": payloads[0]["train_metadata_indices"],
             }
-        else:
+        elif args.merge_kind == "query":
             query_ids = np.concatenate([p["query_ids"] for p in payloads])
             order = np.argsort(query_ids)
             fields = {
                 "query_features": np.concatenate([p["query_features"] for p in payloads], axis=1)[:, order],
                 "query_ids": query_ids[order], "timesteps": payloads[0]["timesteps"],
+            }
+        else:
+            order = np.argsort(np.concatenate([p["timesteps"] for p in payloads]))[::-1]
+            fields = {
+                "cross_kernel": np.concatenate([p["cross_kernel"] for p in payloads])[order],
+                "timesteps": np.concatenate([p["timesteps"] for p in payloads])[order],
+                "query_ids": payloads[0]["query_ids"],
             }
         save_npz(args.output, **fields)
     finally:
@@ -215,37 +233,90 @@ def merge_mode(args):
     print(f"[saved] {args.output}", flush=True)
 
 
-def score_mode(args):
-    with np.load(args.train_artifact, allow_pickle=False) as train_p, np.load(args.query_artifact, allow_pickle=False) as query_p:
-        train = np.asarray(train_p["train_features"], dtype=np.float32)
-        residual = np.asarray(train_p["residuals"], dtype=np.float32)
-        gram = np.asarray(train_p["gram_undamped"], dtype=np.float32)
-        indices = np.asarray(train_p["train_metadata_indices"], dtype=np.int64)
-        query = np.asarray(query_p["query_features"], dtype=np.float32)
+def cross_mode(args):
+    """Cache Phi @ q once so every damping value reuses the expensive 32768-D product."""
+    with np.load(args.train_artifact, allow_pickle=False) as train_p, np.load(
+        args.query_artifact, allow_pickle=False
+    ) as query_p:
+        train = np.asarray(train_p["train_features"])
+        train_timesteps = np.asarray(train_p["timesteps"], dtype=np.int64)
+        query = np.asarray(query_p["query_features"])
+        query_timesteps = np.asarray(query_p["timesteps"], dtype=np.int64)
         query_ids = np.asarray(query_p["query_ids"], dtype=np.int64)
-    if train.shape != (50, 5000, 4096) or query.shape[0] != 50:
+    if train.shape[1:] != (5000, args.proj_dim) or query.shape[2] != args.proj_dim:
         raise ValueError(f"unexpected train/query shapes: {train.shape}, {query.shape}")
+    query_positions = {int(timestep): position for position, timestep in enumerate(query_timesteps)}
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
-    eye = torch.eye(train.shape[2], device=device)
+    cross = []
+    for position, timestep in enumerate(tqdm(train_timesteps, desc="DAS dual cross-kernel")):
+        query_position = query_positions[int(timestep)]
+        train_t = torch.from_numpy(train[position].astype(np.float32)).to(device)
+        query_t = torch.from_numpy(query[query_position].astype(np.float32)).to(device)
+        cross.append((train_t @ query_t.T).cpu().numpy())
+        del train_t, query_t
+    save_npz(
+        args.output,
+        cross_kernel=np.stack(cross),
+        timesteps=train_timesteps,
+        query_ids=query_ids,
+    )
+    print(f"[saved] {args.output}", flush=True)
+
+
+def load_dual_solver_shards(paths):
+    payloads = [np.load(path, allow_pickle=False) for path in paths]
+    try:
+        timesteps = np.concatenate([p["timesteps"] for p in payloads])
+        order = np.argsort(timesteps)[::-1]
+        residual = np.concatenate([p["residuals"] for p in payloads])[order]
+        eigenvalues = np.concatenate([p["dual_eigenvalues"] for p in payloads])[order]
+        eigenvectors = np.concatenate([p["dual_eigenvectors"] for p in payloads])[order]
+        indices = np.asarray(payloads[0]["train_metadata_indices"], dtype=np.int64)
+        return timesteps[order], residual, eigenvalues, eigenvectors, indices
+    finally:
+        for payload in payloads:
+            payload.close()
+
+
+def dual_term_scores(eigenvalues, eigenvectors, cross, residual, damping, device):
+    """Exact primal DAS prediction and leave-one-out denominator in dual space."""
+    values = torch.from_numpy(eigenvalues).to(device).clamp_min(0.0)
+    vectors = torch.from_numpy(eigenvectors).to(device)
+    cross_t = torch.from_numpy(cross).to(device)
+    inverse = (values + damping).reciprocal()
+    solved = vectors @ ((vectors.T @ cross_t) * inverse[:, None])
+    # 1 - diag(Phi (Phi^T Phi + lambda I)^-1 Phi^T)
+    # equals lambda * diag((Phi Phi^T + lambda I)^-1).
+    denominator = damping * (vectors.square() @ inverse)
+    denominator = denominator.clamp_min(1e-6)
+    residual_t = torch.from_numpy(residual).to(device)
+    return solved * residual_t[:, None] / denominator[:, None]
+
+
+def score_mode(args):
+    timesteps, residual, eigenvalues, eigenvectors, indices = load_dual_solver_shards(
+        args.train_artifacts
+    )
+    with np.load(args.cross_artifact, allow_pickle=False) as cross_p:
+        cross = np.asarray(cross_p["cross_kernel"], dtype=np.float32)
+        cross_timesteps = np.asarray(cross_p["timesteps"], dtype=np.int64)
+        query_ids = np.asarray(cross_p["query_ids"], dtype=np.int64)
+    if (
+        eigenvectors.shape != (50, 5000, 5000)
+        or cross.shape[:2] != (50, 5000)
+        or not np.array_equal(timesteps, cross_timesteps)
+    ):
+        raise ValueError(
+            f"unexpected/misaligned dual artifacts: eig={eigenvectors.shape}, cross={cross.shape}"
+        )
+    device = torch.device(args.device if torch.cuda.is_available() else "cpu")
     for damping in args.lambdas:
-        scores = np.zeros((query.shape[1], train.shape[1]), dtype=np.float64)
+        scores = np.zeros((cross.shape[2], 5000), dtype=np.float64)
         for term in tqdm(range(50), desc=f"DAS lambda={damping:g}"):
-            matrix = torch.from_numpy(gram[term]).to(device) + damping * eye
-            train_t = torch.from_numpy(train[term]).to(device)
-            query_t = torch.from_numpy(query[term]).to(device)
-            rhs = torch.cat((query_t.T, train_t.T), dim=1)
-            solved = torch.linalg.solve(matrix, rhs)
-            query_solved = solved[:, :query.shape[1]]
-            train_solved = solved[:, query.shape[1]:].T
-            leverage = (train_t * train_solved).sum(1)
-            denominator = (1.0 - leverage).clamp(min=-1e30, max=1e30)
-            denominator = torch.where(
-                denominator.abs() < 1e-6,
-                torch.where(denominator >= 0, torch.full_like(denominator, 1e-6), torch.full_like(denominator, -1e-6)),
-                denominator,
+            raw = dual_term_scores(
+                eigenvalues[term], eigenvectors[term], cross[term], residual[term],
+                damping, device,
             )
-            raw = (train_t @ query_solved) * torch.from_numpy(residual[term]).to(device)[:, None]
-            raw = raw / denominator[:, None]
             scores += raw.T.double().square().cpu().numpy()
         scores /= 50.0
         output = args.output_dir / f"lambda_{damping:g}" / "scores.npz"
@@ -254,7 +325,8 @@ def score_mode(args):
             train_metadata_indices=indices,
             manifest_json=np.asarray(json.dumps({
                 "algorithm": "das", "damping": damping, "timesteps": 50, "mc": 1,
-                "proj_dim": 4096, "sherman_morrison_denominator": True,
+                "proj_dim": args.proj_dim, "sherman_morrison_denominator": True,
+                "solver": "dual_eigendecomposition",
                 "score_contraction": "squared", "residual": "latent_noise_prediction_projection",
             }, sort_keys=True)),
         )
@@ -297,7 +369,7 @@ def parser():
     config = ArtBenchConfig()
     project = config.index_root.parent.parent
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--mode", required=True, choices=("train", "query", "merge", "score", "lds"))
+    p.add_argument("--mode", required=True, choices=("train", "query", "merge", "cross", "score", "lds"))
     p.add_argument("--model", default="lambdalabs/miniSD-diffusers")
     p.add_argument("--checkpoint-root", type=Path, default=project / "outputs/artbench2-lora")
     p.add_argument("--metadata-csv", type=Path, default=config.metadata_csv)
@@ -306,7 +378,7 @@ def parser():
     p.add_argument("--query-manifest", type=Path, default=project / "outputs/artbench2-queries-60/manifest.json")
     p.add_argument("--query-ids", type=parse_ints, default=list(range(60)))
     p.add_argument("--timesteps", type=parse_ints, default=select_timesteps(50))
-    p.add_argument("--proj-dim", type=int, default=4096)
+    p.add_argument("--proj-dim", type=int, default=32768)
     p.add_argument("--rank", type=int, default=128)
     p.add_argument("--mixed-precision", choices=("no", "fp16", "bf16"), default="fp16")
     p.add_argument("--learning-rate", type=float, default=3e-4)
@@ -316,9 +388,11 @@ def parser():
     p.add_argument("--device", default="cuda")
     p.add_argument("--output", type=Path)
     p.add_argument("--inputs", type=Path, nargs="*")
-    p.add_argument("--merge-kind", choices=("train", "query"))
+    p.add_argument("--merge-kind", choices=("train", "query", "cross"))
     p.add_argument("--train-artifact", type=Path)
+    p.add_argument("--train-artifacts", type=Path, nargs="+")
     p.add_argument("--query-artifact", type=Path)
+    p.add_argument("--cross-artifact", type=Path)
     p.add_argument("--output-dir", type=Path)
     p.add_argument("--lambdas", type=parse_floats, default=list(DEFAULT_LAMBDAS))
     p.add_argument("--score-path", type=Path)
@@ -330,7 +404,10 @@ def parser():
 
 def main():
     args = parser().parse_args()
-    {"train": train_mode, "query": query_mode, "merge": merge_mode, "score": score_mode, "lds": lds_mode}[args.mode](args)
+    {
+        "train": train_mode, "query": query_mode, "merge": merge_mode,
+        "cross": cross_mode, "score": score_mode, "lds": lds_mode,
+    }[args.mode](args)
 
 
 if __name__ == "__main__":
