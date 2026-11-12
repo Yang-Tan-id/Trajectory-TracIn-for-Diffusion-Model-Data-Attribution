@@ -575,6 +575,7 @@ class EndpointProjectedDASJAXConfig:
     random_subset: bool = True
     score_index_ranges: Optional[Tuple[Tuple[int, int], ...]] = None
     score_index_base: int = 1
+    score_indices_path: Optional[str] = None
     progress_every_batches: int = 10
     use_tqdm: bool = True
 
@@ -1112,6 +1113,20 @@ def repeat_condition_to_batch(cond, batch_size: int):
 
 
 def build_candidate_items(cfg, N: int) -> List[int]:
+    if cfg.score_indices_path is not None:
+        path = os.path.abspath(os.path.expanduser(str(cfg.score_indices_path)))
+        if not os.path.isfile(path):
+            raise FileNotFoundError(f"DAS score index file does not exist: {path}")
+        values = np.asarray(np.load(path), dtype=np.int64).reshape(-1)
+        if values.size == 0:
+            raise ValueError(f"DAS score index file is empty: {path}")
+        if len(np.unique(values)) != len(values):
+            raise ValueError(f"DAS score index file contains duplicates: {path}")
+        if np.any(values < 0) or np.any(values >= N):
+            raise ValueError(
+                f"DAS score index file contains values outside [0, {N - 1}]: {path}"
+            )
+        return [int(value) for value in values]
     if cfg.score_index_ranges is not None:
         offset = int(cfg.score_index_base)
         picked = []
@@ -1134,6 +1149,9 @@ def build_candidate_items(cfg, N: int) -> List[int]:
 
 
 def score_subset_suffix(cfg) -> str:
+    if cfg.score_indices_path is not None:
+        stem = os.path.splitext(os.path.basename(str(cfg.score_indices_path)))[0]
+        return f"indices_{stem}"
     if cfg.score_index_ranges is not None:
         return "range_" + "__".join(f"{int(s)}_{int(e)}" for s, e in cfg.score_index_ranges)
     if cfg.random_subset:
