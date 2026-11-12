@@ -106,8 +106,8 @@ import numpy as np
 path = sys.argv[1]
 expected_t = np.arange(19, 1000, 20, dtype=np.int32)
 with np.load(path, allow_pickle=False) as payload:
-    assert payload["train_features"].shape[:2] == (50, 5000), payload["train_features"].shape
-    assert payload["train_features"].shape[2] == 4096, payload["train_features"].shape
+    train_features = payload["train_features"]
+    assert train_features.shape == (50, 5000, 4096), train_features.shape
     assert np.array_equal(payload["timesteps"], expected_t), payload["timesteps"]
     assert np.all(payload["mc_indices"] == 0), payload["mc_indices"]
     assert len(np.unique(payload["score_indices"])) == 5000
