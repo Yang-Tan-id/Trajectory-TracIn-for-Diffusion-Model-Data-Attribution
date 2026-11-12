@@ -144,9 +144,9 @@ def main() -> None:
         seed = int(record.get("initial_seed", record.get("seed")))
         query_root = score_root / f"query_{prompt_tag}" / f"initial_seed_{seed}"
         for method in pint_methods:
-            for transform, namespace, sign_tag in (
-                ("raw_gradient", method.raw_namespace, method.raw_sign),
-                ("adamw_full", method.adamw_namespace, method.adamw_sign),
+            for transform, namespace in (
+                ("raw_gradient", method.raw_namespace),
+                ("adamw_full", method.adamw_namespace),
             ):
                 if namespace is None:
                     continue
@@ -164,7 +164,12 @@ def main() -> None:
                     membership_cache[digest] = build_membership(
                         indices, subset_dirs, lds_model_root
                     )
-                sign = 1.0 if sign_tag == "p1" else -1.0
+                # PINT contracts timestamp contributions with a square for
+                # both training-feature transforms.  The AdamW update sign is
+                # therefore not a prediction-axis reversal.  For cached
+                # loss/deviation true-f targets, both variants use the same
+                # kept-subset reporting direction as DAS and Raw-PINT.
+                sign = -1.0
                 prediction = sign * (membership_cache[digest] @ scores)
                 for target in targets:
                     true_rows = targets_by_key.get((qid, target))
@@ -201,6 +206,7 @@ def main() -> None:
         f"queries={len(query_ids)} range={min(query_ids)}..{max(query_ids)}",
         "LDS subset models=192; identical cached true-f targets",
         "DAS lambda is selected by mean LDS separately for each target.",
+        "DAS and both PINT transforms use kept-subset prediction sign -1.",
         "",
     ]
     for target in targets:

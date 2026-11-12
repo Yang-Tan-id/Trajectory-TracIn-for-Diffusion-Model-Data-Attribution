@@ -83,6 +83,7 @@ class CelebaDAS50x1PipelineTest(unittest.TestCase):
         self.assertIn('parser.add_argument("--query-ids", default="0-71")', text)
         self.assertIn('method_configs("celeba")[:2]', text)
         self.assertIn('best_lambda[target] = max(candidates)[1]', text)
+        self.assertIn('sign = -1.0', text)
 
 
 if __name__ == "__main__":
