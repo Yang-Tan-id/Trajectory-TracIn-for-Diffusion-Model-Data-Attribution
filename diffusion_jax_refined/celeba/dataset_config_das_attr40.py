@@ -69,9 +69,9 @@ ATTRIBUTION_CONFIGS = {
         "batch_size": int(os.environ.get("DAS_BATCH_SIZE", "64")),
         "use_batched_per_example_grads": True,
         "per_example_grad_batch_size": int(os.environ.get("DAS_GRAD_BATCH_SIZE", "8")),
-        # This is the original projected DAS score.  The optional leave-one-out
-        # Sherman--Morrison correction is a separate variant and is disabled.
-        "use_sherman_morrison_denominator": False,
+        "use_sherman_morrison_denominator": os.environ.get(
+            "DAS_SHERMAN_MORRISON_DENOMINATOR", "1"
+        ).strip().lower() in {"1", "true", "yes", "on"},
         "max_num_ckpts": 1,
         "random_subset": False,
         "max_train_points": int(os.environ.get("DAS_MAX_TRAIN_POINTS", "5000")),

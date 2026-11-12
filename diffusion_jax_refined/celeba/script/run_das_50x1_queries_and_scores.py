@@ -54,6 +54,11 @@ def main() -> None:
     parser.add_argument("--gpus", default="0,1,2,3")
     parser.add_argument("--namespace", default="das_50x1_mc1")
     parser.add_argument(
+        "--train-artifact-namespace",
+        default="",
+        help="Reuse training features and Gram matrices from another namespace.",
+    )
+    parser.add_argument(
         "--query-artifact-namespace",
         default="",
         help="Reuse query gradients from another namespace; they are independent of the training candidate set.",
@@ -63,6 +68,7 @@ def main() -> None:
     parser.add_argument("--skip-score", action="store_true")
     parser.add_argument("--python-bin", default=os.environ.get("PYTHON_BIN", sys.executable))
     args = parser.parse_args()
+    train_artifact_namespace = args.train_artifact_namespace or args.namespace
     query_artifact_namespace = args.query_artifact_namespace or args.namespace
 
     query_ids = parse_ints(args.query_ids)
@@ -91,7 +97,7 @@ def main() -> None:
     )
     train_artifact = (
         result_root / "model" / "prompted_solo"
-        / f"seed_{args.train_seed}_train_gradient" / args.namespace
+        / f"seed_{args.train_seed}_train_gradient" / train_artifact_namespace
         / "train_datapoint_gradient_artifact.npz"
     )
     if args.execute:
@@ -113,8 +119,10 @@ def main() -> None:
         DAS_NUM_MC_NOISE="1",
         DAS_PROJ_DIM="4096",
         DAS_DAMPING_SWEEP="1",
-        DAS_SHERMAN_MORRISON_DENOMINATOR="0",
-        DAS_SCORE_DENOMINATOR_CACHE="0",
+        DAS_SHERMAN_MORRISON_DENOMINATOR=os.environ.get(
+            "DAS_SHERMAN_MORRISON_DENOMINATOR", "1"
+        ),
+        DAS_SCORE_DENOMINATOR_CACHE=os.environ.get("DAS_SCORE_DENOMINATOR_CACHE", "1"),
         DAS_QUERY_INPUT_MODE="endpoint_renoise",
         JAX_NUM_DEVICES="1",
         JAX_PLATFORMS="cuda",

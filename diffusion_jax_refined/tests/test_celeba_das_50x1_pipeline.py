@@ -29,7 +29,7 @@ class CelebaDAS50x1PipelineTest(unittest.TestCase):
         self.assertEqual(config["parameter_source"], "raw")
         self.assertEqual(config["max_train_points"], 5000)
         self.assertTrue(config["score_indices_path"].endswith("attribution_5k_indices.npy"))
-        self.assertFalse(config["use_sherman_morrison_denominator"])
+        self.assertTrue(config["use_sherman_morrison_denominator"])
 
     def test_full10k_runner_disables_fixed_index_file(self) -> None:
         text = (
@@ -60,8 +60,23 @@ class CelebaDAS50x1PipelineTest(unittest.TestCase):
                     values.extend(int(part) for part in body.split(","))
         self.assertEqual(values, list(range(19, 1000, 20)))
         self.assertEqual(len(values), len(set(values)))
-        self.assertIn("DAS_SHERMAN_MORRISON_DENOMINATOR=0", text)
+        self.assertIn(
+            'DAS_SHERMAN_MORRISON_DENOMINATOR="${DAS_SHERMAN_MORRISON_DENOMINATOR:-1}"',
+            text,
+        )
         self.assertIn('DAS_GRAD_BATCH_SIZE="${DAS_GRAD_BATCH_SIZE:-8}"', text)
+
+    def test_sherman_morrison_runner_reuses_features_but_isolates_scores(self) -> None:
+        text = (
+            CELEBA
+            / "script"
+            / "run_das_50x1_lambda_sweep_full10k_ema_sherman_morrison_4gpu.sh"
+        ).read_text()
+        self.assertIn("das_50x1_mc1_full10k_ema_sherman_morrison", text)
+        self.assertIn("DAS_TRAIN_ARTIFACT_NAMESPACE", text)
+        self.assertIn("DAS_QUERY_ARTIFACT_NAMESPACE", text)
+        self.assertIn("DAS_SHERMAN_MORRISON_DENOMINATOR=1", text)
+        self.assertIn("DAS_SCORE_DENOMINATOR_CACHE=1", text)
 
     def test_das_engine_accepts_an_explicit_index_file(self) -> None:
         text = (

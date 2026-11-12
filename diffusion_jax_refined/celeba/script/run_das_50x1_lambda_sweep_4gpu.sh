@@ -10,6 +10,7 @@ query_file="${QUERY_FILE:-$celeba/queries_attr40_val25_x4.json}"
 query_ids="${QUERY_IDS:-$(seq -s, 0 99)}"
 gpus="${GPU_IDS:-0,1,2,3}"
 namespace="${DAS_NAMESPACE:-das_50x1_mc1}"
+train_artifact_namespace="${DAS_TRAIN_ARTIFACT_NAMESPACE:-$namespace}"
 query_artifact_namespace="${DAS_QUERY_ARTIFACT_NAMESPACE:-$namespace}"
 num_points="${DAS_MAX_TRAIN_POINTS:-5000}"
 score_indices_path="${DAS_SCORE_INDICES_PATH-$repo/diffusion_jax_refined/dataset/celeba/10000_attr40/attribution_5k_indices.npy}"
@@ -22,7 +23,7 @@ if [[ "${#gpu_ids[@]}" -ne 4 ]]; then
 fi
 
 result_root="$celeba/result/$experiment"
-artifact_dir="$result_root/model/prompted_solo/seed_${train_seed}_train_gradient/$namespace"
+artifact_dir="$result_root/model/prompted_solo/seed_${train_seed}_train_gradient/$train_artifact_namespace"
 train_artifact="$artifact_dir/train_datapoint_gradient_artifact.npz"
 log_root="$result_root/logs/$namespace"
 mkdir -p "$artifact_dir" "$log_root"
@@ -55,8 +56,8 @@ export DAS_SCORE_INDICES_PATH="$score_indices_path"
 export DAS_GRAD_BATCH_SIZE="${DAS_GRAD_BATCH_SIZE:-8}"
 export DAS_DAMPING_SWEEP=1
 export DAS_DAMPING_SWEEP_VALUES="$lambdas"
-export DAS_SHERMAN_MORRISON_DENOMINATOR=0
-export DAS_SCORE_DENOMINATOR_CACHE=0
+export DAS_SHERMAN_MORRISON_DENOMINATOR="${DAS_SHERMAN_MORRISON_DENOMINATOR:-1}"
+export DAS_SCORE_DENOMINATOR_CACHE="${DAS_SCORE_DENOMINATOR_CACHE:-1}"
 export JAX_NUM_DEVICES=1
 export TF_GPU_ALLOCATOR="${TF_GPU_ALLOCATOR:-cuda_malloc_async}"
 export XLA_PYTHON_CLIENT_PREALLOCATE=false
@@ -78,6 +79,8 @@ else
   echo "[candidates] full dataset in native index order"
 fi
 echo "[lambda] $lambdas"
+echo "[sherman-morrison denominator] $DAS_SHERMAN_MORRISON_DENOMINATOR"
+echo "[train artifact namespace] $train_artifact_namespace"
 echo "[queries] $query_ids"
 echo "[vmap microbatch] $DAS_GRAD_BATCH_SIZE"
 echo "[python] $python_bin"
@@ -141,6 +144,7 @@ cd "$celeba"
   --query-ids "$query_ids" \
   --gpus "$gpus" \
   --namespace "$namespace" \
+  --train-artifact-namespace "$train_artifact_namespace" \
   --query-artifact-namespace "$query_artifact_namespace" \
   --damping-values "$lambdas" \
   --skip-score \
@@ -155,6 +159,7 @@ echo "[phase 3/4] lambda-sweep scores"
   --query-ids "$query_ids" \
   --gpus "$gpus" \
   --namespace "$namespace" \
+  --train-artifact-namespace "$train_artifact_namespace" \
   --query-artifact-namespace "$query_artifact_namespace" \
   --damping-values "$lambdas" \
   --skip-query-gradient \
