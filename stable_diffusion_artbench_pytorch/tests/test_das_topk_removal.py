@@ -9,6 +9,7 @@ from sd_artbench.das_topk_removal import load_query_scores, select_topk
 
 ROOT = Path(__file__).resolve().parents[1]
 LAUNCHER = ROOT / "run_artbench_das_lambda1000_top1000_q0_q59_4gpu.sh"
+REMOVAL = ROOT / "src/sd_artbench/das_topk_removal.py"
 
 
 def test_load_query_scores_uses_query_ids_not_row_number(tmp_path):
@@ -42,3 +43,10 @@ def test_launcher_contract():
     assert "evaluate_topk_removal_trajectory_mse" in text
     assert "evaluate_topk_removal_perceptual" in text
     assert "combine_das_removal_metrics" in text
+
+
+def test_retraining_requests_one_valid_checkpoint():
+    text = REMOVAL.read_text(encoding="utf-8")
+    assert 'parser.add_argument("--num-checkpoints", type=int, default=1)' in text
+    assert 'str(args.num_checkpoints)' in text
+    assert '"0",' not in text

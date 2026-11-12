@@ -51,6 +51,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-workers", type=int, default=8)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--mixed-precision", default="fp16")
+    parser.add_argument("--num-checkpoints", type=int, default=1)
     parser.add_argument("--prepare-only", action="store_true")
     return parser.parse_args()
 
@@ -157,6 +158,7 @@ def main() -> None:
             "num_workers": args.num_workers,
             "seed": args.seed,
             "mixed_precision": args.mixed_precision,
+            "num_checkpoints": args.num_checkpoints,
         },
     }
     atomic_json(manifest_path, manifest)
@@ -196,7 +198,7 @@ def main() -> None:
         "--mixed-precision",
         args.mixed_precision,
         "--num-checkpoints",
-        "0",
+        str(args.num_checkpoints),
     ]
     print("[train] " + " ".join(command), flush=True)
     subprocess.run(command, check=True, env=os.environ.copy())
