@@ -59,6 +59,10 @@ class CelebaDAS50x1PipelineTest(unittest.TestCase):
         self.assertIn("def compute_batched_das_train_artifact_term(", text)
         self.assertIn('"[stage-train] using vmapped exact per-example gradients | "', text)
         self.assertIn("jax.vmap(phi_fn", text)
+        self.assertIn(
+            "np.array(gram_device, dtype=np.float32, copy=True)",
+            text,
+        )
 
 
 if __name__ == "__main__":

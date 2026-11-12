@@ -1418,7 +1418,10 @@ def compute_batched_das_train_artifact_term(
         if hasattr(iterator, "set_postfix"):
             iterator.set_postfix(samples=f"{end}/{num_points}")
 
-    gram = np.asarray(gram_device, dtype=np.float32)
+    # np.asarray() can expose JAX's immutable host buffer as a read-only NumPy
+    # view.  The staged writer adds diagonal damping below, so materialize an
+    # owned, writable array at the device-to-host boundary.
+    gram = np.array(gram_device, dtype=np.float32, copy=True)
     return phi_cache, residual_cache, gram
 
 
