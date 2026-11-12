@@ -30,6 +30,21 @@ class CelebaDAS50x1PipelineTest(unittest.TestCase):
         self.assertTrue(config["score_indices_path"].endswith("attribution_5k_indices.npy"))
         self.assertFalse(config["use_sherman_morrison_denominator"])
 
+    def test_full10k_runner_disables_fixed_index_file(self) -> None:
+        text = (
+            CELEBA / "script" / "run_das_50x1_lambda_sweep_full10k_4gpu.sh"
+        ).read_text()
+        self.assertIn('DAS_NAMESPACE="${DAS_NAMESPACE:-das_50x1_mc1_full10k}"', text)
+        self.assertIn('DAS_QUERY_ARTIFACT_NAMESPACE="${DAS_QUERY_ARTIFACT_NAMESPACE:-das_50x1_mc1}"', text)
+        self.assertIn("export DAS_MAX_TRAIN_POINTS=10000", text)
+        self.assertIn('export DAS_SCORE_INDICES_PATH=""', text)
+
+    def test_runner_validates_dynamic_candidate_count(self) -> None:
+        text = (CELEBA / "script" / "run_das_50x1_lambda_sweep_4gpu.sh").read_text()
+        self.assertIn('num_points="${DAS_MAX_TRAIN_POINTS:-5000}"', text)
+        self.assertIn("(50, expected_points, 4096)", text)
+        self.assertIn("np.arange(10000)", text)
+
     def test_runner_has_four_disjoint_timestamp_shards(self) -> None:
         text = (CELEBA / "script" / "run_das_50x1_lambda_sweep_4gpu.sh").read_text()
         values = []

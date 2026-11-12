@@ -10,6 +10,9 @@ query_file="${QUERY_FILE:-$celeba/queries_attr40_val25_x4.json}"
 query_ids="${QUERY_IDS:-$(seq -s, 0 71)}"
 gpus="${GPU_IDS:-0,1,2,3}"
 namespace="${DAS_NAMESPACE:-das_50x1_mc1}"
+query_artifact_namespace="${DAS_QUERY_ARTIFACT_NAMESPACE:-$namespace}"
+num_points="${DAS_MAX_TRAIN_POINTS:-5000}"
+score_indices_path="${DAS_SCORE_INDICES_PATH-$repo/diffusion_jax_refined/dataset/celeba/10000_attr40/attribution_5k_indices.npy}"
 lambdas="${DAS_DAMPING_SWEEP_VALUES:-0.1 0.2 0.5 1 2 5 10 20 50 100 200 500 1000 2000 5000 10000}"
 
 IFS=',' read -r -a gpu_ids <<<"$gpus"
@@ -27,10 +30,12 @@ mkdir -p "$artifact_dir" "$log_root"
 required=(
   "$query_file"
   "$repo/diffusion_jax_refined/dataset/celeba/10000_attr40/dataset.npz"
-  "$repo/diffusion_jax_refined/dataset/celeba/10000_attr40/attribution_5k_indices.npy"
   "$result_root/model/prompted_jax/seed_${train_seed}_epoch_0200.ckpt"
   "$result_root/query100_lds_csv_ddim50/celeba_attr40_query100_lds_true_f_long.csv"
 )
+if [[ -n "$score_indices_path" ]]; then
+  required+=("$score_indices_path")
+fi
 for path in "${required[@]}"; do
   [[ -s "$path" ]] || { echo "MISSING: $path" >&2; exit 1; }
 done
@@ -45,6 +50,8 @@ export ATTRIBUTION_SAMPLE_MODEL_MODE=prompted_solo
 export ATTRIBUTION_SCORE_MODEL_MODE=prompted_solo
 export DAS_NUM_MC_NOISE=1
 export DAS_PROJ_DIM=4096
+export DAS_MAX_TRAIN_POINTS="$num_points"
+export DAS_SCORE_INDICES_PATH="$score_indices_path"
 export DAS_GRAD_BATCH_SIZE="${DAS_GRAD_BATCH_SIZE:-8}"
 export DAS_DAMPING_SWEEP=1
 export DAS_DAMPING_SWEEP_VALUES="$lambdas"
@@ -63,7 +70,12 @@ timestep_shards=(
 )
 shards=()
 
-echo "[definition] CelebA DAS: 50 DDIM timesteps x MC1; 5000 fixed attribution points"
+echo "[definition] CelebA DAS: 50 DDIM timesteps x MC1; $num_points training points"
+if [[ -n "$score_indices_path" ]]; then
+  echo "[candidates] explicit indices: $score_indices_path"
+else
+  echo "[candidates] full dataset in native index order"
+fi
 echo "[lambda] $lambdas"
 echo "[queries] $query_ids"
 echo "[vmap microbatch] $DAS_GRAD_BATCH_SIZE"
@@ -99,19 +111,23 @@ else
   echo "[skip] complete DAS train artifact exists: $train_artifact"
 fi
 
-"$python_bin" - "$train_artifact" <<'PY'
+"$python_bin" - "$train_artifact" "$num_points" <<'PY'
 import sys
 import numpy as np
 
 path = sys.argv[1]
+expected_points = int(sys.argv[2])
 expected_t = np.arange(19, 1000, 20, dtype=np.int32)
 with np.load(path, allow_pickle=False) as payload:
     train_features = payload["train_features"]
-    assert train_features.shape == (50, 5000, 4096), train_features.shape
+    assert train_features.shape == (50, expected_points, 4096), train_features.shape
     assert np.array_equal(payload["timesteps"], expected_t), payload["timesteps"]
     assert np.all(payload["mc_indices"] == 0), payload["mc_indices"]
-    assert len(np.unique(payload["score_indices"])) == 5000
-print("TRAIN ARTIFACT CHECK PASSED: 50x1, 5000 points, projection 4096")
+    score_indices = payload["score_indices"]
+    assert len(np.unique(score_indices)) == expected_points
+    if expected_points == 10000:
+        assert np.array_equal(score_indices, np.arange(10000)), score_indices
+print(f"TRAIN ARTIFACT CHECK PASSED: 50x1, {expected_points} points, projection 4096")
 PY
 
 echo "[phase 2/4] query artifacts"
@@ -124,6 +140,7 @@ cd "$celeba"
   --query-ids "$query_ids" \
   --gpus "$gpus" \
   --namespace "$namespace" \
+  --query-artifact-namespace "$query_artifact_namespace" \
   --damping-values "$lambdas" \
   --skip-score \
   --python-bin "$python_bin"
@@ -137,6 +154,7 @@ echo "[phase 3/4] lambda-sweep scores"
   --query-ids "$query_ids" \
   --gpus "$gpus" \
   --namespace "$namespace" \
+  --query-artifact-namespace "$query_artifact_namespace" \
   --damping-values "$lambdas" \
   --skip-query-gradient \
   --python-bin "$python_bin"
@@ -149,6 +167,7 @@ JAX_PLATFORMS=cpu "$python_bin" script/run_das_50x1_cached_lds.py \
   --query-ids "$query_ids" \
   --namespace "$namespace" \
   --lambdas "$lambdas" \
+  --expected-points "$num_points" \
   --prediction-sign -1
 
 first_query="${query_ids%%,*}"

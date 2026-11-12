@@ -41,6 +41,14 @@ DAS_DAMPING_SWEEP_VALUES = _float_list(
     (0.1, 0.2, 0.5, 1, 2, 5, 10, 20, 50, 100, 200, 500, 1000, 2000, 5000, 10000),
 )
 
+
+def _optional_path(name: str, default: str) -> str | None:
+    """Return None when an explicitly empty environment variable is supplied."""
+    if name not in os.environ:
+        return default
+    value = os.environ[name].strip()
+    return value or None
+
 ATTRIBUTION_CONFIGS = {
     "das": {
         **COMMON_CIFAR,
@@ -66,9 +74,11 @@ ATTRIBUTION_CONFIGS = {
         "use_sherman_morrison_denominator": False,
         "max_num_ckpts": 1,
         "random_subset": False,
-        "max_train_points": 5000,
-        "score_indices_path": str(ATTRIBUTION_INDICES_PATH),
-        "topk": 5000,
+        "max_train_points": int(os.environ.get("DAS_MAX_TRAIN_POINTS", "5000")),
+        "score_indices_path": _optional_path(
+            "DAS_SCORE_INDICES_PATH", str(ATTRIBUTION_INDICES_PATH)
+        ),
+        "topk": int(os.environ.get("DAS_TOPK", "5000")),
         "query": QUERY,
     },
 }

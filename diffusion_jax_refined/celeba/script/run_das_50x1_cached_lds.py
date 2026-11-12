@@ -78,6 +78,7 @@ def main() -> None:
     parser.add_argument("--true-f-csv", type=Path, default=None)
     parser.add_argument("--target-functions", default="")
     parser.add_argument("--prediction-sign", type=float, default=-1.0)
+    parser.add_argument("--expected-points", type=int, default=5000)
     parser.add_argument("--output", type=Path, default=None)
     args = parser.parse_args()
 
@@ -156,8 +157,10 @@ def main() -> None:
                 raise FileNotFoundError(directory)
             scores = np.asarray(np.load(scores_path), dtype=np.float64).reshape(-1)
             indices = np.asarray(np.load(indices_path), dtype=np.int64).reshape(-1)
-            if scores.shape != indices.shape or len(scores) != 5000:
-                raise ValueError(f"expected 5000 aligned DAS scores in {directory}")
+            if scores.shape != indices.shape or len(scores) != args.expected_points:
+                raise ValueError(
+                    f"expected {args.expected_points} aligned DAS scores in {directory}"
+                )
             key = indices.tobytes()
             if key not in membership_cache:
                 membership_cache[key] = rank_membership(
@@ -196,7 +199,7 @@ def main() -> None:
         "CELEBA DAS 50x1 (50 DDIM TIMESTEPS x MC1) LAMBDA SWEEP",
         "=" * 72,
         f"queries={len(query_ids)} range={min(query_ids)}..{max(query_ids)}",
-        "attribution points=5000; LDS subset models=192",
+        f"attribution points={args.expected_points}; LDS subset models=192",
         f"prediction sign={args.prediction_sign:g}",
         "",
     ]

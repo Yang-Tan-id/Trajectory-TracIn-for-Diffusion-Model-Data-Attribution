@@ -53,11 +53,17 @@ def main() -> None:
     parser.add_argument("--query-ids", default=",".join(str(i) for i in range(72)))
     parser.add_argument("--gpus", default="0,1,2,3")
     parser.add_argument("--namespace", default="das_50x1_mc1")
+    parser.add_argument(
+        "--query-artifact-namespace",
+        default="",
+        help="Reuse query gradients from another namespace; they are independent of the training candidate set.",
+    )
     parser.add_argument("--damping-values", default="")
     parser.add_argument("--skip-query-gradient", action="store_true")
     parser.add_argument("--skip-score", action="store_true")
     parser.add_argument("--python-bin", default=os.environ.get("PYTHON_BIN", sys.executable))
     args = parser.parse_args()
+    query_artifact_namespace = args.query_artifact_namespace or args.namespace
 
     query_ids = parse_ints(args.query_ids)
     gpu_ids = [str(value) for value in parse_ints(args.gpus)]
@@ -128,7 +134,7 @@ def main() -> None:
                 / f"model_prompted_solo__ckpt_{checkpoint.stem}"
             )
             artifact = (
-                sample_dir / f"seed_{seed:06d}_query_gradient_{args.namespace}"
+                sample_dir / f"seed_{seed:06d}_query_gradient_{query_artifact_namespace}"
                 / "das" / "query_gradient_artifact.npz"
             )
             if args.skip_query_gradient or artifact.is_file():
@@ -181,7 +187,7 @@ def main() -> None:
             / f"model_prompted_solo__ckpt_{checkpoint.stem}"
         )
         artifact = (
-            sample_dir / f"seed_{seed:06d}_query_gradient_{args.namespace}"
+            sample_dir / f"seed_{seed:06d}_query_gradient_{query_artifact_namespace}"
             / "das" / "query_gradient_artifact.npz"
         )
         if args.execute and not artifact.is_file():
@@ -230,7 +236,8 @@ def main() -> None:
 
     print(
         f"[done] queries={len(selected)} lambdas={len(lambdas)} "
-        f"timesteps=50 mc=1 points=5000 namespace={args.namespace}",
+        f"timesteps=50 mc=1 points={os.environ.get('DAS_MAX_TRAIN_POINTS', '5000')} "
+        f"namespace={args.namespace} query_namespace={query_artifact_namespace}",
         flush=True,
     )
 
