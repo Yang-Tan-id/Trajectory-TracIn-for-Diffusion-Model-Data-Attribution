@@ -76,6 +76,14 @@ class CelebaDAS50x1PipelineTest(unittest.TestCase):
         self.assertIn('jax.vmap(', engine)
         self.assertIn('"DAS_QUERY_BATCH_JOBS": json.dumps(jobs)', runner)
 
+    def test_das_pint_comparison_uses_all_aligned_queries(self) -> None:
+        text = (
+            CELEBA / "script" / "compare_das_pint_50x1_lds.py"
+        ).read_text()
+        self.assertIn('parser.add_argument("--query-ids", default="0-71")', text)
+        self.assertIn('method_configs("celeba")[:2]', text)
+        self.assertIn('best_lambda[target] = max(candidates)[1]', text)
+
 
 if __name__ == "__main__":
     unittest.main()
