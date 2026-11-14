@@ -55,6 +55,7 @@ class PintDasRemovalComparisonTest(unittest.TestCase):
                 das_perceptual_csv=perceptual_shards,
                 query_ids=list(range(4)),
                 output=root / "report.txt",
+                per_query_output=None,
                 pint_method="endpoint_pollute_query_train_l2",
                 das_method="das_lambda_1000",
             )
@@ -63,6 +64,8 @@ class PintDasRemovalComparisonTest(unittest.TestCase):
             self.assertIn("Endpoint RMSE", report)
             self.assertIn("DINO distance", report)
             self.assertIn("4/4", report)
+            self.assertIn("PER-QUERY VALUES", report)
+            self.assertIn("Q3", report)
 
 
 if __name__ == "__main__":

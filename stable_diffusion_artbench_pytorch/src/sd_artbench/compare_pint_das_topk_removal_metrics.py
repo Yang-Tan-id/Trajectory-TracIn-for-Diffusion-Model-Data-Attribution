@@ -48,6 +48,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--query-ids", type=parse_ids, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument(
+        "--per-query-output",
+        type=Path,
+        help="Long-format CSV; defaults beside --output.",
+    )
+    parser.add_argument(
         "--pint-method", default="endpoint_pollute_query_train_l2"
     )
     parser.add_argument("--das-method", default="das_lambda_1000")
@@ -73,7 +78,7 @@ def select(
     return selected
 
 
-def build_report(args: argparse.Namespace) -> str:
+def comparison_data(args: argparse.Namespace):
     query_ids = set(args.query_ids)
     baseline_trajectory = args.baseline_dir / "endpoint_trajectory_metrics.csv"
     baseline_perceptual = args.baseline_dir / "perceptual_metrics.csv"
@@ -101,6 +106,37 @@ def build_report(args: argparse.Namespace) -> str:
             raise ValueError(f"{label} missing queries: {missing}")
 
     ordered = sorted(query_ids)
+    sources = {
+        "trajectory": (pint_trajectory, das_trajectory),
+        "perceptual": (pint_perceptual, das_perceptual),
+    }
+    return ordered, sources
+
+
+def per_query_rows(args: argparse.Namespace) -> list[dict[str, object]]:
+    ordered, sources = comparison_data(args)
+    rows: list[dict[str, object]] = []
+    for query in ordered:
+        for label, field, family in METRICS:
+            pint_source, das_source = sources[family]
+            pint = float(pint_source[query][field])
+            das = float(das_source[query][field])
+            rows.append(
+                {
+                    "query_index": query,
+                    "metric": field,
+                    "metric_label": label,
+                    "pint": pint,
+                    "das": das,
+                    "das_minus_pint": das - pint,
+                    "winner": "PINT" if pint > das else "DAS" if das > pint else "TIE",
+                }
+            )
+    return rows
+
+
+def build_report(args: argparse.Namespace) -> str:
+    ordered, sources = comparison_data(args)
     lines = [
         f"ARTBENCH Q{ordered[0]}-Q{ordered[-1]} TOP-1000 REMOVAL — PINT VS DAS",
         "=" * 116,
@@ -115,10 +151,6 @@ def build_report(args: argparse.Namespace) -> str:
         ),
         "-" * 116,
     ]
-    sources = {
-        "trajectory": (pint_trajectory, das_trajectory),
-        "perceptual": (pint_perceptual, das_perceptual),
-    }
     for label, field, family in METRICS:
         pint_rows, das_rows = sources[family]
         pint = np.asarray([float(pint_rows[q][field]) for q in ordered])
@@ -132,16 +164,45 @@ def build_report(args: argparse.Namespace) -> str:
             f"{das_wins:>7}/{len(ordered):<3d}{test.statistic:>10.4f}"
             f"{test.pvalue:>12.5g}"
         )
+    rows = per_query_rows(args)
+    lines.extend(
+        [
+            "",
+            "PER-QUERY VALUES",
+            "=" * 76,
+            (
+                f"{'QUERY':<7} {'METRIC':<20} {'PINT':>12} {'DAS':>12} "
+                f"{'DAS-PINT':>12} {'WINNER':>9}"
+            ),
+            "-" * 76,
+        ]
+    )
+    for row in rows:
+        lines.append(
+            f"Q{int(row['query_index']):<6d}{str(row['metric_label']):<20}"
+            f"{float(row['pint']):>12.8f}{float(row['das']):>12.8f}"
+            f"{float(row['das_minus_pint']):>+12.8f}{str(row['winner']):>9}"
+        )
     return "\n".join(lines) + "\n"
 
 
 def main() -> None:
     args = parse_args()
     report = build_report(args)
+    rows = per_query_rows(args)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(report, encoding="utf-8")
+    per_query_output = args.per_query_output or args.output.with_name(
+        f"{args.output.stem}_per_query.csv"
+    )
+    per_query_output.parent.mkdir(parents=True, exist_ok=True)
+    with per_query_output.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
     print(report, end="")
     print(f"[saved] {args.output}")
+    print(f"[saved] {per_query_output}")
 
 
 if __name__ == "__main__":
