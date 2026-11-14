@@ -87,7 +87,7 @@ def main() -> None:
     parser.add_argument("--topk", type=int, default=1000)
     parser.add_argument(
         "--namespace",
-        default="das_50x1_mc1_full10k_ema_sherman_morrison",
+        default="das_50x1_mc1_full10k_ema",
     )
     parser.add_argument(
         "--lambdas",

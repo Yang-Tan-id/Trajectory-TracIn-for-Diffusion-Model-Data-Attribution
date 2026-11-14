@@ -15,9 +15,9 @@ SCRIPT = (
 
 
 class CelebaDASLambdaSweepTop1000PerceptualTest(unittest.TestCase):
-    def test_contract_is_full10k_sm_lambda_sweep(self) -> None:
+    def test_contract_is_full10k_ema_lambda_sweep(self) -> None:
         text = SCRIPT.read_text()
-        self.assertIn("das_50x1_mc1_full10k_ema_sherman_morrison", text)
+        self.assertIn('default="das_50x1_mc1_full10k_ema"', text)
         self.assertIn("default=list(range(100))", text)
         self.assertIn('"--lambdas",', text)
         self.assertIn('f"lambda_{lambda_tag(damping)}"', text)
