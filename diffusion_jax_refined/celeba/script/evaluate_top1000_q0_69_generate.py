@@ -29,6 +29,7 @@ from LDS.DM_cifar_lds import CifarTargetEvaluator
 
 
 METHODS = (
+    "das_ema_lambda200_full10k_pos",
     "endpoint_pollute_adamw_timestamp_both_l2_full10k_pos",
     "endpoint_tracin_adamw_linear_raw_full10k_neg",
     "endpoint_tracin_adamw_linear_both_l2_full10k_neg",
@@ -36,13 +37,15 @@ METHODS = (
     "random_full10k_seeded",
 )
 METHOD_LABELS = {
-    METHODS[0]: "PINT-BOTH-L2",
-    METHODS[1]: "TRACIN-RAW",
-    METHODS[2]: "TRACIN-BOTH-L2",
-    METHODS[3]: "RETRAC-BOTH-L2",
-    METHODS[4]: "RANDOM",
+    METHODS[0]: "DAS-EMA-L200",
+    METHODS[1]: "PINT-BOTH-L2",
+    METHODS[2]: "TRACIN-RAW",
+    METHODS[3]: "TRACIN-BOTH-L2",
+    METHODS[4]: "RETRAC-BOTH-L2",
+    METHODS[5]: "RANDOM",
 }
-RANDOM_METHOD = METHODS[4]
+RANDOM_METHOD = METHODS[5]
+DAS_METHOD = METHODS[0]
 
 
 def parse_ids(text: str) -> list[int]:
@@ -192,6 +195,7 @@ def main() -> None:
     removal_root = result_root / "endpoint_top1000_removal_q0_69"
     historical_root = result_root / "endpoint_top1000_removal_q0_9"
     random_root = result_root / "endpoint_random_top1000_removal_q0_69"
+    das_root = result_root / "das_top1000_removal_q0_69"
     output_dir = args.output_dir or (
         result_root / "analysis" / "endpoint_top1000_q0_69_five_method_metrics"
     )
@@ -266,7 +270,11 @@ def main() -> None:
             roots = (
                 (random_root,)
                 if method == RANDOM_METHOD
-                else (removal_root, historical_root)
+                else (
+                    (das_root,)
+                    if method == DAS_METHOD
+                    else (removal_root, historical_root)
+                )
             )
             run_dir = find_run_dir(roots, method, query_id)
             checkpoint = local_checkpoint(run_dir, args.train_seed, args.epochs)

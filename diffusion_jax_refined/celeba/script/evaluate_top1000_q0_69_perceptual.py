@@ -18,6 +18,7 @@ from transformers import CLIPModel, CLIPProcessor
 
 
 METHODS = (
+    "das_ema_lambda200_full10k_pos",
     "endpoint_pollute_adamw_timestamp_both_l2_full10k_pos",
     "endpoint_tracin_adamw_linear_raw_full10k_neg",
     "endpoint_tracin_adamw_linear_both_l2_full10k_neg",
@@ -25,11 +26,12 @@ METHODS = (
     "random_full10k_seeded",
 )
 METHOD_LABELS = {
-    METHODS[0]: "PINT-BOTH-L2",
-    METHODS[1]: "TRACIN-RAW",
-    METHODS[2]: "TRACIN-BOTH-L2",
-    METHODS[3]: "RETRAC-BOTH-L2",
-    METHODS[4]: "RANDOM",
+    METHODS[0]: "DAS-EMA-L200",
+    METHODS[1]: "PINT-BOTH-L2",
+    METHODS[2]: "TRACIN-RAW",
+    METHODS[3]: "TRACIN-BOTH-L2",
+    METHODS[4]: "RETRAC-BOTH-L2",
+    METHODS[5]: "RANDOM",
 }
 
 
